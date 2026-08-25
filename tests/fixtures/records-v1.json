@@ -1,0 +1,17 @@
+{
+  "contract": "kryndel-records",
+  "token": {
+    "kind": "LET",
+    "record": "Token",
+    "span": {
+      "column": 1,
+      "end": 3,
+      "line": 1,
+      "record": "Span",
+      "start": 0
+    },
+    "value": "let"
+  },
+  "version": 1,
+  "wire_type_key": "record"
+}

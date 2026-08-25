@@ -18,6 +18,11 @@ class Token:
     def __repr__(self) -> str:
         return f"Token({self.kind!r}, {self.value!r}, {self.span.line}:{self.span.column})"
 
+    def as_dict(self) -> dict[str, object]:
+        from .wire import to_wire
+
+        return to_wire(self)
+
 
 KEYWORDS: Final[dict[str, str]] = {
     "let": "LET",
