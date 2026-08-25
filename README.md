@@ -73,8 +73,10 @@ The implemented registry is local and offline:
 .kryndel/registry/request/1.0.0/checksum
 ```
 
-Supported commands are `init`, `add`, `remove`, `install`, `update`, `list`,
-`tree`, `check`, `build`, `run`, and `inspect`:
+Supported commands are `new`, `init`, `add`, `remove`, `install`, `update`,
+`list`, `tree`, `check`, `build`, `run`, `inspect`, `fmt`, `test`,
+`reproducible`, `inspect-bytecode`, `verify-bytecode`, `verify-artifact`,
+`abi`, and `clean`:
 
 ```bash
 PYTHONPATH=. python3 -m kryndel init demo
@@ -92,9 +94,17 @@ Installations are staged before replacement. Package source is copied but never
 executed; symlink escape, path traversal, malformed manifests, and checksum
 errors are rejected. Remote registries are not implemented or implied.
 
-`import request` and `import request.http` are parsed as package imports. The
-top-level package must be declared in the project manifest. Exported symbols
-and a complete module graph are intentionally a later milestone.
+Imports now resolve real installed source modules. The top-level package must be declared in the project manifest and installed offline. A package root is `src/lib.kry`; child modules use a unique `src/name.kry`, `src/name/mod.kry`, or the compatibility form `src/name/lib.kry`. Dotted paths resolve recursively, so `import request.http.client` searches the corresponding nested module path and rejects missing or ambiguous candidates. Imports are traversed deterministically and circular graphs are rejected.
+
+Declarations are private by default. The first visibility form is intentionally small:
+
+```kryndel
+pub fn get(value: Int) -> Int {
+    return value + 1
+}
+```
+
+Project compilation links exported functions under their fully qualified module names. A caller can use `request.http.client.get(41)`. Private functions remain available inside their defining module but cannot be called from another module. This milestone does not yet implement aliases, reexports, imported struct/enum types, traits, or generics.
 
 ## Artifacts and bytecode
 
@@ -116,28 +126,43 @@ PYTHONPATH=. python3 -m kryndel run examples/enums.kexe
 UTF-8 source
     -> lexer -> tokens and lexical diagnostics
     -> parser -> dataclass AST and recoverable parse diagnostics
-    -> checker -> names, nominal types, payloads, imports, exhaustiveness
-    -> compiler -> deterministic bytecode Module
+    -> checker -> names, types, module interfaces, imports, exhaustiveness
+    -> compiler -> deterministic linked bytecode Module
     -> VM/artifact -> checked execution or portable serialization
 ```
 
+The initial test contract is also language-shaped and host-independent:
+
+```kryndel
+@test
+fn test_answer() -> Void {
+    println(42)
+}
+```
+
+`kry test` discovers these zero-argument functions under `tests/**/*.kry` and
+executes them through the current VM. `kry fmt` currently normalizes trailing
+horizontal whitespace and the final newline without rewriting token spacing;
+`kry reproducible` compiles the selected source twice and compares bytecode;
+`kry verify-bytecode` and `kry verify-artifact` validate structural contracts.
+
 The Python bootstrap owns the lexer, recursive-descent parser, checker,
-compiler, VM, artifact container, CLI, and local package resolver. The source
-language contracts, spans, diagnostic JSON, bytecode JSON, KEXE checksum rules,
-manifest subset, lockfile, semver, and package checksum algorithm are language
-independent and are the future self-hosting boundaries.
+module graph, compiler, VM, artifact container, CLI, and local package resolver.
+The source language contracts, spans, diagnostic JSON, visibility rules,
+module-resolution rules, bytecode JSON, qualified function names, KEXE checksum
+rules, manifest subset, lockfile, semver, and package checksum algorithm are
+language-independent and are future self-hosting boundaries.
 
 ## Route to self-hosting
 
-The first self-hosted compiler only needs the current lexer subset (UTF-8
-characters, identifiers, literals, comments, operators, and spans), the
-recursive-descent parser subset (declarations, expressions, blocks, enums,
-payloads, and match), and deterministic JSON/bytecode serialization. Before
-rewriting those components in Kryndel, the project must stabilize diagnostic
-codes/spans, AST meaning, nominal type rules, bytecode v1, artifact checksums,
-manifest/lockfile formats, and reproducibility tests. Python remains the
-bootstrap implementation until a Kryndel compiler/runtime can build and run
-itself.
+The first self-hosted compiler must also reproduce module discovery,
+visibility/export rules, qualified function linkage, diagnostics, and bytecode
+serialization. Before rewriting those components in Kryndel, the project must
+stabilize diagnostic codes/spans, AST meaning, nominal type rules, bytecode v1,
+artifact checksums, manifest/lockfile formats, module graph fixtures, and
+reproducibility tests. Python remains the bootstrap implementation until a
+Kryndel compiler/runtime can build and run itself; Kryndel is not self-hosted
+at this milestone.
 
 ## Repository layout
 

@@ -8,10 +8,11 @@ import sys
 from pathlib import Path
 
 from .artifact import ArtifactError, read_artifact, write_artifact
-from .compiler import compile_file
+from .compiler import compile_file, compile_project, compile_source
 from .diagnostics import Diagnostic, DiagnosticError, Severity, Span
 from .packages import Lockfile, add_dependency, init_project, install, list_packages, read_manifest, remove_dependency, validate_imports
 from .version import __codename__, __version__
+from .tooling import abi_description, check_reproducible, format_file, run_kryndel_tests, verify_module
 from .vm import RuntimeKryndelError, VM
 
 
@@ -34,8 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = subparsers.add_parser("inspect", help="Inspect a portable .kexe artifact.")
     inspect.add_argument("artifact", type=Path)
     inspect.add_argument("--format", choices=("human", "json"), default="human")
-    init = subparsers.add_parser("init", help="Create a Kryndel project manifest.")
-    init.add_argument("path", nargs="?", type=Path, default=Path("."))
+    for name in ("init", "new"):
+        init = subparsers.add_parser(name, help="Create a Kryndel project manifest.")
+        init.add_argument("path", nargs="?", type=Path, default=Path("."))
     add = subparsers.add_parser("add", help="Declare a Kryndel dependency.")
     add.add_argument("name")
     add.add_argument("--version")
@@ -48,6 +50,21 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--locked", action="store_true")
     subparsers.add_parser("list", help="List locked Kryndel packages.")
     subparsers.add_parser("tree", help="Show the locked Kryndel dependency tree.")
+    fmt = subparsers.add_parser("fmt", help="Format Kryndel source files.")
+    fmt.add_argument("source", nargs="?", type=Path)
+    fmt.add_argument("--check", action="store_true")
+    subparsers.add_parser("test", help="Run tests written in Kryndel.")
+    reproducible = subparsers.add_parser("reproducible", help="Check deterministic compilation.")
+    reproducible.add_argument("source", nargs="?", type=Path)
+    for name, help_text in (
+        ("inspect-bytecode", "Inspect a bytecode JSON module."),
+        ("verify-bytecode", "Verify a bytecode JSON module."),
+        ("verify-artifact", "Verify a portable .kexe artifact."),
+    ):
+        command = subparsers.add_parser(name, help=help_text)
+        command.add_argument("path", nargs="?", type=Path)
+    subparsers.add_parser("abi", help="Print the stable Kryndel ABI description.")
+    subparsers.add_parser("clean", help="Remove generated project bytecode artifacts.")
     return parser
 
 
@@ -80,7 +97,7 @@ def _compile_project(source: Path, root: Path | None, locked: bool):
         allowed = set(manifest.dependencies)
         if locked:
             install(root, offline=True, locked=True)
-        validate_imports(root, source.read_text(encoding="utf-8"))
+        return compile_project(root, source.read_text(encoding="utf-8"), source, locked=False)
     return compile_file(source, allowed)
 
 
@@ -130,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     output_format = getattr(arguments, "format", "human")
     try:
-        if arguments.command == "init":
+        if arguments.command in {"init", "new"}:
             manifest = init_project(arguments.path)
             print(f"initialized {manifest.path.parent}")
             return 0
@@ -156,6 +173,75 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command == "tree":
             print("\n".join(_tree(Path.cwd())))
+            return 0
+        if arguments.command == "fmt":
+            root = _project_root(arguments.source) or Path.cwd().resolve()
+            if arguments.source is not None:
+                paths = [arguments.source]
+            else:
+                paths = sorted(root.glob("src/**/*.kry"))
+                if not paths:
+                    paths = sorted(root.glob("examples/**/*.kry"))
+            if not paths:
+                raise OSError("no Kryndel source files found")
+            statuses = [(path, format_file(path, check=arguments.check)) for path in paths]
+            if arguments.check and not all(status for _, status in statuses):
+                for path, status in statuses:
+                    if not status:
+                        print(f"would format {path}")
+                return 1
+            print(f"{'checked' if arguments.check else 'formatted'} {len(paths)} source file(s)")
+            return 0
+        if arguments.command == "test":
+            root = _project_root() or Path.cwd().resolve()
+            results = run_kryndel_tests(root)
+            for result in results:
+                print(f"test {result.path}::{result.name} ... ok")
+            print(f"{len(results)} Kryndel test(s) passed")
+            return 0
+        if arguments.command == "reproducible":
+            if arguments.source is None and _project_root() is None:
+                candidate = Path("examples/hello.kry")
+                if not candidate.is_file():
+                    raise OSError("a source file is required outside a Kryndel project")
+                source, root = candidate, None
+            else:
+                source, root = _source_path(arguments.source)
+            if not check_reproducible(source, root):
+                raise ValueError("compilation is not reproducible")
+            print(f"reproducible {source}")
+            return 0
+        if arguments.command == "abi":
+            print(json.dumps(abi_description(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.command in {"inspect-bytecode", "verify-bytecode", "verify-artifact"}:
+            path = arguments.path
+            if path is None:
+                path = Path("examples/hello.kry")
+                if not path.is_file():
+                    raise OSError("a bytecode or artifact path is required")
+                module = compile_source(path.read_text(encoding="utf-8"), str(path))
+            elif arguments.command == "verify-artifact":
+                module = read_artifact(path)
+            else:
+                from .bytecode import Module
+                module = Module.load(path)
+            verify_module(module)
+            if arguments.command == "inspect-bytecode":
+                print(json.dumps({"module": module.name, "entry": module.entry, "functions": sorted(module.functions)}, indent=2, sort_keys=True))
+            elif arguments.command == "verify-bytecode":
+                print(f"verified bytecode {path or 'examples/hello.kry'}")
+            else:
+                print(f"verified artifact {path}")
+            return 0
+        if arguments.command == "clean":
+            root = _project_root() or Path.cwd().resolve()
+            removed = 0
+            for path in sorted(root.rglob("*.kexe")):
+                if path.is_file():
+                    path.unlink()
+                    removed += 1
+            print(f"removed {removed} generated artifact(s)")
             return 0
         if arguments.command in {"check", "run", "dump", "build"}:
             if arguments.command == "run" and arguments.source is not None and arguments.source.suffix == ".kexe":

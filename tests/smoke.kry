@@ -1,0 +1,5 @@
+@test
+fn test_arithmetic() -> Void {
+    let answer: Int = 40 + 2
+    println(answer)
+}

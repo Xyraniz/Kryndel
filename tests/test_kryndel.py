@@ -8,7 +8,10 @@ from pathlib import Path
 
 from kryndel.artifact import read_artifact, write_artifact
 from kryndel.bytecode import Module
-from kryndel.compiler import compile_source
+from kryndel.compiler import compile_project, compile_source
+from kryndel.modules import ModuleGraph
+from kryndel.parser import parse
+from kryndel.tooling import format_file, run_kryndel_tests
 from kryndel.diagnostics import DiagnosticError
 from kryndel.cli import main as cli_main
 from kryndel.packages import (
@@ -467,6 +470,268 @@ class KryndelTests(unittest.TestCase):
             with self.assertRaises(DiagnosticError) as ambiguous:
                 validate_imports(project, "import request.http\n")
             self.assertIn("KRY5015", str(ambiguous.exception))
+
+    def _refresh_checksum(self, package: Path) -> None:
+        (package / "checksum").write_text(package_checksum(package) + "\n", encoding="utf-8")
+
+    def test_real_nested_import_links_public_function(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            package = self._write_package(base, "request", "1.0.0")
+            (package / "src" / "lib.kry").write_text("pub fn root() -> Int { return 1 }\n", encoding="utf-8")
+            (package / "src" / "http").mkdir()
+            (package / "src" / "http" / "mod.kry").write_text("pub fn get(value: Int) -> Int { return value + 1 }\n", encoding="utf-8")
+            (package / "src" / "http" / "client.kry").write_text("pub fn send(value: Int) -> Int { return value + 2 }\n", encoding="utf-8")
+            self._refresh_checksum(package)
+            add_dependency(project, "request", path=Path("..") / "request")
+            install(project, offline=True)
+            source = "import request.http.client\nprintln(request.http.client.send(40))\n"
+            module = compile_project(project, source, project / "src" / "main.kry")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                VM(module).run()
+            self.assertEqual(output.getvalue(), "42\n")
+            self.assertIn("request.http.client.send", module.functions)
+
+    def test_import_module_missing_and_deep_ambiguity_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            package = self._write_package(base, "request", "1.0.0")
+            add_dependency(project, "request", path=Path("..") / "request")
+            install(project, offline=True)
+            with self.assertRaises(DiagnosticError) as missing:
+                validate_imports(project, "import request.http.client\n")
+            self.assertIn("KRY5014", str(missing.exception))
+            (package / "src" / "http").mkdir()
+            (package / "src" / "http" / "mod.kry").write_text("pub fn get() -> Int { return 1 }\n", encoding="utf-8")
+            (package / "src" / "http" / "client").mkdir()
+            (package / "src" / "http" / "client.kry").write_text("pub fn get() -> Int { return 1 }\n", encoding="utf-8")
+            (package / "src" / "http" / "client" / "mod.kry").write_text("pub fn get() -> Int { return 1 }\n", encoding="utf-8")
+            self._refresh_checksum(package)
+            install(project, offline=True)
+            with self.assertRaises(DiagnosticError) as ambiguous:
+                validate_imports(project, "import request.http.client\n")
+            self.assertIn("KRY5015", str(ambiguous.exception))
+
+    def test_private_and_missing_imported_symbols_have_stable_codes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            package = self._write_package(base, "request", "1.0.0")
+            (package / "src" / "lib.kry").write_text(
+                "fn secret() -> Int { return 1 }\npub fn answer() -> Int { return 42 }\n",
+                encoding="utf-8",
+            )
+            self._refresh_checksum(package)
+            add_dependency(project, "request", path=Path("..") / "request")
+            install(project, offline=True)
+            with self.assertRaises(DiagnosticError) as private:
+                compile_project(project, "import request\nprintln(request.secret())\n", project / "src" / "main.kry")
+            self.assertIn("KRY3051", str(private.exception))
+            with self.assertRaises(DiagnosticError) as missing:
+                compile_project(project, "import request\nprintln(request.unknown())\n", project / "src" / "main.kry")
+            self.assertIn("KRY3050", str(missing.exception))
+            module = compile_project(project, "import request\nprintln(request.answer())\n", project / "src" / "main.kry")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                VM(module).run()
+            self.assertEqual(output.getvalue(), "42\n")
+
+    def test_import_cycle_and_local_package_collision_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            package = self._write_package(base, "request", "1.0.0")
+            add_dependency(project, "request", path=Path("..") / "request")
+            install(project, offline=True)
+            with self.assertRaises(DiagnosticError) as collision:
+                compile_project(project, "import request\nfn request() -> Void { }\n", project / "src" / "main.kry")
+            self.assertIn("KRY3052", str(collision.exception))
+            (package / "src" / "lib.kry").write_text("import request.http\n", encoding="utf-8")
+            (package / "src" / "http").mkdir()
+            (package / "src" / "http" / "mod.kry").write_text("import request\n", encoding="utf-8")
+            self._refresh_checksum(package)
+            install(project, offline=True)
+            with self.assertRaises(DiagnosticError) as cycle:
+                validate_imports(project, "import request\n")
+            self.assertIn("KRY5016", str(cycle.exception))
+
+    def test_public_declaration_syntax_and_deterministic_linking(self) -> None:
+        source = "pub fn answer() -> Int { return 42 }\nprintln(answer())\n"
+        standalone = compile_source(source, "public.kry")
+        self.assertIn("answer", standalone.functions)
+        with self.assertRaises(DiagnosticError) as invalid:
+            compile_source("pub let value = 1\n", "invalid-public.kry")
+        self.assertIn("KRY2014", str(invalid.exception))
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            package = self._write_package(base, "request", "1.0.0")
+            (package / "src" / "lib.kry").write_text("pub fn answer() -> Int { return 42 }\n", encoding="utf-8")
+            self._refresh_checksum(package)
+            add_dependency(project, "request", path=Path("..") / "request")
+            install(project, offline=True)
+            text = "import request\nprintln(request.answer())\n"
+            first = compile_project(project, text, project / "src" / "main.kry").dumps()
+            second = compile_project(project, text, project / "src" / "main.kry").dumps()
+            self.assertEqual(first, second)
+
+    def test_current_package_nested_module_is_resolved_and_linked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "app"
+            init_project(project)
+            (project / "src" / "lib.kry").write_text("pub fn root() -> Int { return 1 }\n", encoding="utf-8")
+            (project / "src" / "http").mkdir()
+            (project / "src" / "http" / "mod.kry").write_text("pub fn status() -> Int { return 200 }\n", encoding="utf-8")
+            module = compile_project(
+                project,
+                "import app.http\nprintln(app.http.status())\n",
+                project / "src" / "main.kry",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                VM(module).run()
+            self.assertEqual(output.getvalue(), "200\n")
+            self.assertIn("app.http.status", module.functions)
+
+    def test_duplicate_imports_are_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            package = self._write_package(base, "request", "1.0.0")
+            (package / "src" / "lib.kry").write_text("pub fn answer() -> Int { return 42 }\n", encoding="utf-8")
+            self._refresh_checksum(package)
+            add_dependency(project, "request", path=Path("..") / "request")
+            install(project, offline=True)
+            source = "import request\nimport request\nprintln(request.answer())\n"
+            module = compile_project(project, source, project / "src" / "main.kry")
+            self.assertEqual(list(module.functions).count("request.answer"), 1)
+
+    def test_parser_preserves_arbitrary_dotted_import_paths(self) -> None:
+        source = SourceFile("imports.kry", "import request.http.client\n")
+        tokens, lexical = lex(source)
+        program, parsing = parse(source, tokens)
+        self.assertFalse(lexical.has_errors)
+        self.assertFalse(parsing.has_errors)
+        self.assertEqual(program.items[0].path, "request.http.client")
+
+    def test_public_visibility_is_recorded_for_all_supported_declarations(self) -> None:
+        source = SourceFile(
+            "visibility.kry",
+            "pub struct Response { code: Int }\npub enum Error { Missing }\npub fn get() -> Int { return 1 }\n",
+        )
+        tokens, _ = lex(source)
+        program, diagnostics = parse(source, tokens)
+        self.assertFalse(diagnostics.has_errors)
+        declarations = program.items[:3]
+        self.assertTrue(all(getattr(item, "public", False) for item in declarations))
+
+    def test_imported_function_signature_is_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            package = self._write_package(base, "request", "1.0.0")
+            (package / "src" / "lib.kry").write_text("pub fn answer() -> Int { return 42 }\n", encoding="utf-8")
+            self._refresh_checksum(package)
+            add_dependency(project, "request", path=Path("..") / "request")
+            install(project, offline=True)
+            with self.assertRaises(DiagnosticError) as context:
+                compile_project(project, "import request\nprintln(request.answer(1))\n", project / "src" / "main.kry")
+            self.assertIn("KRY3012", str(context.exception))
+
+    def test_undeclared_nested_import_reports_package_and_module_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            init_project(project)
+            with self.assertRaises(DiagnosticError) as context:
+                validate_imports(project, "import missing.http.client\n", project / "src" / "main.kry")
+            message = str(context.exception)
+            self.assertIn("KRY5013", message)
+            self.assertIn("package: missing", message)
+            self.assertIn("module: missing.http.client", message)
+
+    def test_private_dependency_function_remains_callable_inside_its_module(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            package = self._write_package(base, "request", "1.0.0")
+            (package / "src" / "lib.kry").write_text(
+                "fn secret() -> Int { return 40 }\npub fn exposed() -> Int { return secret() + 2 }\n",
+                encoding="utf-8",
+            )
+            self._refresh_checksum(package)
+            add_dependency(project, "request", path=Path("..") / "request")
+            install(project, offline=True)
+            module = compile_project(project, "import request\nprintln(request.exposed())\n", project / "src" / "main.kry")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                VM(module).run()
+            self.assertEqual(output.getvalue(), "42\n")
+
+    def test_linked_dependency_functions_have_deterministic_sorted_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            package = self._write_package(base, "request", "1.0.0")
+            (package / "src" / "lib.kry").write_text(
+                "pub fn zed() -> Int { return 2 }\npub fn alpha() -> Int { return 1 }\n",
+                encoding="utf-8",
+            )
+            self._refresh_checksum(package)
+            add_dependency(project, "request", path=Path("..") / "request")
+            install(project, offline=True)
+            module = compile_project(project, "import request\nprintln(request.alpha())\n", project / "src" / "main.kry")
+            self.assertEqual(list(module.functions), ["main", "request.alpha", "request.zed"])
+
+    def test_kryndel_test_runner_and_formatter_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            init_project(project)
+            tests = project / "tests"
+            tests.mkdir()
+            test_file = tests / "basic.kry"
+            test_file.write_text("@test\nfn test_answer() -> Void { println(42) }\n", encoding="utf-8")
+            self.assertEqual([(result.path.name, result.name) for result in run_kryndel_tests(project)], [("basic.kry", "test_answer")])
+            source = project / "src" / "main.kry"
+            source.write_text("println(1)  \n\n", encoding="utf-8")
+            self.assertFalse(format_file(source, check=True))
+            self.assertTrue(format_file(source, check=False))
+            self.assertTrue(format_file(source, check=True))
+
+    def test_cli_reproducibility_and_verification_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            init_project(project)
+            source = project / "src" / "main.kry"
+            source.write_text("println(7)\n", encoding="utf-8")
+            old = Path.cwd()
+            try:
+                os.chdir(project)
+                self.assertEqual(cli_main(["fmt", "--check"]), 0)
+                self.assertEqual(cli_main(["test"]), 0)
+                self.assertEqual(cli_main(["reproducible"]), 0)
+                artifact = project / "program.kexe"
+                self.assertEqual(cli_main(["build", "src/main.kry", "-o", str(artifact)]), 0)
+                self.assertEqual(cli_main(["verify-artifact", str(artifact)]), 0)
+                module = compile_project(project, source.read_text(encoding="utf-8"), source)
+                bytecode = project / "module.json"
+                module.dump(bytecode)
+                self.assertEqual(cli_main(["inspect-bytecode", str(bytecode)]), 0)
+                self.assertEqual(cli_main(["verify-bytecode", str(bytecode)]), 0)
+                self.assertEqual(cli_main(["abi"]), 0)
+            finally:
+                os.chdir(old)
 
     def test_cli_package_commands_and_artifact_commands_have_codes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

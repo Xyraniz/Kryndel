@@ -48,6 +48,9 @@ class TypeChecker:
     program: ast.Program
     diagnostics: DiagnosticBag = field(default_factory=DiagnosticBag)
     allowed_imports: set[str] | None = None
+    imported_functions: dict[str, FunctionType] = field(default_factory=dict)
+    imported_modules: dict[str, frozenset[str]] = field(default_factory=dict)
+    public_modules: dict[str, frozenset[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.scopes: list[dict[str, Symbol]] = [{}]
@@ -60,8 +63,16 @@ class TypeChecker:
         self.enum_types: dict[str, EnumType] = {}
         self.current_function: FunctionInfo | None = None
         self.loop_depth = 0
+        self.imported_functions = dict(self.imported_functions)
+        self.imported_modules = dict(self.imported_modules)
+        self.public_modules = dict(self.public_modules)
+        self.imported_roots = {
+            module.split(".", 1)[0]
+            for module in set(self.imported_modules) | set(self.public_modules)
+        }
 
     def check(self) -> DiagnosticBag:
+        self.check_declaration_collisions()
         self.register_structs()
         self.register_enums()
         declarations = [item for item in self.program.items if isinstance(item, ast.FunctionDecl)]
@@ -85,6 +96,17 @@ class TypeChecker:
         for declaration in declarations:
             self.check_function(declaration)
         return self.diagnostics
+
+    def check_declaration_collisions(self) -> None:
+        for item in self.program.items:
+            name = getattr(item, "name", None)
+            if name in self.imported_roots:
+                self.error(
+                    f"local declaration {name!r} collides with an imported package name",
+                    item.span,
+                    "KRY3052",
+                    help="Rename the local declaration or use a different package name.",
+                )
 
     def register_structs(self) -> None:
         for declaration in (item for item in self.program.items if isinstance(item, ast.StructDecl)):
@@ -193,6 +215,13 @@ class TypeChecker:
                 )
             return
         if isinstance(statement, ast.LetStmt):
+            if statement.name in self.imported_roots:
+                self.error(
+                    f"local name {statement.name!r} collides with an imported package name",
+                    statement.span,
+                    "KRY3052",
+                    help="Rename the local binding before using the imported package path.",
+                )
             actual = self.check_expression(statement.initializer)
             declared = self.resolve_declared_type(statement.annotation.name) if statement.annotation else actual
             if statement.annotation:
@@ -476,7 +505,29 @@ class TypeChecker:
     def check_call(self, expression: ast.Call) -> Type:
         name = self.callable_name(expression.callee)
         info = self.functions.get(name or "")
+        if info is None and name in self.imported_functions:
+            info = FunctionInfo(self.imported_functions[name])
         if info is None:
+            if name:
+                module, separator, symbol = name.rpartition(".")
+                if separator and module in self.imported_modules:
+                    if symbol in self.imported_modules[module] and symbol not in self.public_modules.get(module, frozenset()):
+                        self.error(
+                            f"symbol {symbol!r} in module {module!r} is private",
+                            expression.callee.span,
+                            "KRY3051",
+                            help="Mark the declaration with pub or call an exported symbol.",
+                        )
+                    else:
+                        self.error(
+                            f"module {module!r} has no exported symbol {symbol!r}",
+                            expression.callee.span,
+                            "KRY3050",
+                            help="Check the module path and the exported declaration name.",
+                        )
+                    for argument in expression.arguments:
+                        self.check_expression(argument)
+                    return UNKNOWN
             self.error("expression is not callable", expression.callee.span, "KRY3011")
             for argument in expression.arguments:
                 self.check_expression(argument)
@@ -589,5 +640,19 @@ class TypeChecker:
         self.diagnostics.error(message, span, code=code, help=help)
 
 
-def check_types(source: SourceFile, program: ast.Program, allowed_imports: set[str] | None = None) -> DiagnosticBag:
-    return TypeChecker(source, program, allowed_imports=allowed_imports).check()
+def check_types(
+    source: SourceFile,
+    program: ast.Program,
+    allowed_imports: set[str] | None = None,
+    imported_functions: dict[str, FunctionType] | None = None,
+    imported_modules: dict[str, frozenset[str]] | None = None,
+    public_modules: dict[str, frozenset[str]] | None = None,
+) -> DiagnosticBag:
+    return TypeChecker(
+        source,
+        program,
+        allowed_imports=allowed_imports,
+        imported_functions=imported_functions or {},
+        imported_modules=imported_modules or {},
+        public_modules=public_modules or {},
+    ).check()

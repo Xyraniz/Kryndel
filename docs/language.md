@@ -54,12 +54,50 @@ returns, calls, field access, arithmetic, comparison, and short-circuit boolean
 operators. Struct construction requires each declared field once and stores
 fields in declaration order.
 
-## Imports
+## Imports, modules, and exports
 
-`import request` and `import request.http` are parsed. In a project, the first
-component must appear in `[dependencies]`; otherwise the checker emits
-`KRY5013`. This iteration does not yet expose imported symbols or implement a
-complete module graph.
+An import contains a package name followed by zero or more dotted module names:
+
+```kryndel
+import request
+import request.http
+import request.http.client
+```
+
+The package root is `src/lib.kry`. A child module resolves to exactly one of
+`src/name.kry`, `src/name/mod.kry`, or the compatibility form
+`src/name/lib.kry`; the rule is applied recursively to dotted paths. The
+resolver rejects missing modules with `KRY5014`, ambiguous candidates with
+`KRY5015`, and circular import graphs with `KRY5016`. The imported package must
+be declared in `[dependencies]` and installed; otherwise `KRY5013` or
+`KRY5014` is reported. Resolution is deterministic and package source is never
+executed during discovery.
+
+Declarations are private by default. The only supported export modifier is
+`pub` before a function, struct, or enum:
+
+```kryndel
+pub fn get(value: Int) -> Int {
+    return value + 1
+}
+```
+
+The current project linker exposes public functions through their qualified
+module path, for example `request.http.client.get(41)`. A private function is
+valid inside its defining module but produces `KRY3051` when called from an
+importer. A missing exported function produces `KRY3050`. Local declarations
+cannot collide with imported package roots (`KRY3052`). Aliases, reexports,
+imported nominal struct/enum types, traits, and generics are not implemented in
+this milestone.
+
+## Arrays, Option, Result, and runtime errors
+
+Arrays, tuples, `Option`/`Maybe`, `Result`/`Error`, safe indexing, and explicit
+container conversions remain future language work. The current bootstrap keeps
+these semantics out of the VM rather than presenting placeholder APIs. Runtime
+errors for the existing bytecode operations are represented by
+`RuntimeKryndelError`; malformed bytecode, stack underflow, invalid calls,
+and division by zero are diagnosed without exposing Python tracebacks.
 
 ## Diagnostics
 

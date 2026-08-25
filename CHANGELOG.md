@@ -17,16 +17,27 @@
 - `kry init`, `add`, `remove`, `install`, `update`, `list`, `tree`, project
   imports, `--format human|json`, and project-aware `check`, `build`, `run`,
   and `inspect` behavior.
-- Versioned bytecode v1 and manifest/lockfile specifications for the future
-  self-hosting boundary.
-- Regression tests expanded from 28 to 43.
+- Deterministic recursive module resolution for `src/lib.kry`, child `.kry`,
+  `mod.kry`, and compatibility `lib.kry` modules, including missing,
+  ambiguous, undeclared, and circular-import diagnostics.
+- Minimal visibility syntax with private-by-default declarations and `pub fn`,
+  `pub struct`, and `pub enum`; exported functions are checker-validated and
+  linked under qualified module names in bytecode v1.
+- Versioned bytecode v1, the linked-module ABI, and manifest/lockfile
+  specifications for the future self-hosting boundary.
+- `@test` discovery and the initial `kry test`, conservative `kry fmt`,
+  `kry reproducible`, `inspect-bytecode`, `verify-bytecode`,
+  `verify-artifact`, `abi`, `new`, and `clean` commands.
+- Regression tests expanded from 28 to 62, including nested modules,
+  public/private symbols, deterministic linking, cycles, ambiguity, and
+  project-aware execution.
 
 ### Explicit limitations
 
 - The bootstrap compiler and runtime are still Python implementations.
 - The registry is local/offline only; no remote transport is claimed.
-- Imports validate declared package names but do not yet expose imported
-  symbols or resolve a complete module graph.
+- Imported functions are linked and checked, but aliases, reexports, imported
+  nominal struct/enum types, traits, and generics are not implemented.
 - Match supports only enum variant patterns, positional bindings, blocks, and
   `_`; arbitrary patterns, guards, OR patterns, and struct destructuring remain
   future language work.
