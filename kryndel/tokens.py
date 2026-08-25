@@ -37,6 +37,8 @@ KEYWORDS: Final[dict[str, str]] = {
     "continue": "CONTINUE",
     "struct": "STRUCT",
     "enum": "ENUM",
+    "match": "MATCH",
+    "import": "IMPORT",
 }
 
 TWO_CHAR_TOKENS: Final[dict[str, str]] = {
@@ -47,6 +49,7 @@ TWO_CHAR_TOKENS: Final[dict[str, str]] = {
     ">=": "GTE",
     "&&": "ANDAND",
     "||": "OROR",
+    "=>": "FATARROW",
 }
 
 ONE_CHAR_TOKENS: Final[dict[str, str]] = {

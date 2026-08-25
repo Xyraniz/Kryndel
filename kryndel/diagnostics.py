@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import json
 from typing import Iterable
 
 
@@ -37,6 +38,54 @@ class Diagnostic:
     code: str | None = None
     notes: list[str] = field(default_factory=list)
     help: str | None = None
+    secondary_spans: list[tuple[Span, str]] = field(default_factory=list)
+    suggestion: str | None = None
+
+    @property
+    def phase(self) -> str:
+        number = int((self.code or "KRY0000")[3:]) if (self.code or "").startswith("KRY") and (self.code or "")[3:].isdigit() else 0
+        if number < 2000:
+            return "lexer"
+        if number < 3000:
+            return "parser"
+        if number < 4000:
+            return "semantic"
+        if number < 5000:
+            return "compiler"
+        if number < 6000:
+            return "package"
+        return "runtime"
+
+    def as_dict(self, filename: str = "<source>") -> dict[str, object]:
+        """Return a stable, editor-friendly representation of this diagnostic."""
+        return {
+            "code": self.code or "KRY0000",
+            "phase": self.phase,
+            "severity": self.severity.value,
+            "file": filename,
+            "span": {
+                "start": self.span.start,
+                "end": self.span.end,
+                "line": self.span.line,
+                "column": self.span.column,
+            },
+            "secondary_spans": [
+                {
+                    "label": label,
+                    "span": {
+                        "start": span.start,
+                        "end": span.end,
+                        "line": span.line,
+                        "column": span.column,
+                    },
+                }
+                for span, label in self.secondary_spans
+            ],
+            "message": self.message,
+            "help": self.help,
+            "notes": list(self.notes),
+            "suggestion": self.suggestion,
+        }
 
     def render(self, source: str, filename: str = "<source>") -> str:
         lines = source.splitlines() or [""]
@@ -55,6 +104,8 @@ class Diagnostic:
             output.append(f"      = note: {note}")
         if self.help:
             output.append(f"      = help: {self.help}")
+        if self.suggestion:
+            output.append(f"      = suggestion: {self.suggestion}")
         return "\n".join(output)
 
 
@@ -75,8 +126,21 @@ class DiagnosticBag:
         code: str | None = None,
         notes: Iterable[str] = (),
         help: str | None = None,
+        secondary_spans: Iterable[tuple[Span, str]] = (),
+        suggestion: str | None = None,
     ) -> None:
-        self.add(Diagnostic(Severity.ERROR, message, span, code, list(notes), help))
+        self.add(
+            Diagnostic(
+                Severity.ERROR,
+                message,
+                span,
+                code,
+                list(notes),
+                help,
+                list(secondary_spans),
+                suggestion,
+            )
+        )
 
     def warning(self, message: str, span: Span, *, code: str | None = None) -> None:
         self.add(Diagnostic(Severity.WARNING, message, span, code))
@@ -97,3 +161,12 @@ class DiagnosticError(Exception):
 
     def render(self) -> str:
         return "\n\n".join(d.render(self.source, self.filename) for d in self.diagnostics)
+
+    def as_json(self) -> str:
+        """Serialize diagnostics without timestamps, host paths, or unstable ordering."""
+        return json.dumps(
+            {"diagnostics": [item.as_dict(self.filename) for item in self.diagnostics]},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ) + "\n"

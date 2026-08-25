@@ -28,9 +28,16 @@ class StructType(Type):
 
 @dataclass(frozen=True)
 class EnumType(Type):
-    """A nominal enum with unit variants only."""
+    """A nominal enum with declaration-ordered positional payload metadata."""
 
     variants: tuple[str, ...] = ()
+    payloads: tuple[tuple[str, tuple[Type, ...]], ...] = ()
+
+    def payload_types(self, variant: str) -> tuple[Type, ...]:
+        for name, types in self.payloads:
+            if name == variant:
+                return types
+        return ()
 
 
 INT = Type("Int")

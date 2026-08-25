@@ -1,30 +1,41 @@
 # Changelog
 
-All notable changes to Kryndel are recorded here.
+## [Unreleased]
 
-The format follows the principles of Keep a Changelog, while the project remains in alpha and may still change language rules between minor releases.
+### Added
+
+- Structured diagnostics with stable JSON output, primary/secondary spans,
+  notes, help, and conservative suggestions.
+- Parser recovery coverage for independent syntax failures.
+- Positional enum payloads for primitive, struct, enum, and nested values.
+- Structural enum equality, deterministic payload `MAKE_ENUM`, safe VM payload
+  validation, and the first exhaustive enum `match` with local bindings and `_`.
+- Strict standard-library-only `kry.toml` parsing, semantic version
+  requirements, local/offline registry resolution, path dependencies,
+  transitive dependency graphs, deterministic `kry.lock`, checksums, staged
+  installation, and traversal/cycle/incompatibility protections.
+- `kry init`, `add`, `remove`, `install`, `update`, `list`, `tree`, project
+  imports, `--format human|json`, and project-aware `check`, `build`, `run`,
+  and `inspect` behavior.
+- Versioned bytecode v1 and manifest/lockfile specifications for the future
+  self-hosting boundary.
+- Regression tests expanded from 28 to 43.
+
+### Explicit limitations
+
+- The bootstrap compiler and runtime are still Python implementations.
+- The registry is local/offline only; no remote transport is claimed.
+- Imports validate declared package names but do not yet expose imported
+  symbols or resolve a complete module graph.
+- Match supports only enum variant patterns, positional bindings, blocks, and
+  `_`; arbitrary patterns, guards, OR patterns, and struct destructuring remain
+  future language work.
+- `.kexe` remains a portable Kryndel VM artifact, not a native executable.
 
 ## [0.1.0] - 2026-08-25
 
 ### Added
 
-- Hand-written lexer with nested block comments, string escapes, numeric literals, operators, and source spans.
-- Recursive-descent parser with precedence-aware expressions, functions, blocks, conditions, loops, returns, `break`, and `continue`.
-- Static type checker for `Int`, `Float`, `Bool`, `String`, `UiNode`, `Void`, and nominal user-defined structs.
-- Immutable bindings by default and explicit `let mut` reassignment.
-- Stack-based bytecode compiler and virtual machine.
-- User functions, recursion, arithmetic, comparisons, conversions, short-circuit logic, runtime call traces, and typed struct construction and field access.
-- Deterministic declarative UI tree with windows, containers, labels, buttons, callbacks, and textual rendering.
-- Checksummed KEXE portable artifact format.
-- `check`, `run`, `dump`, `build`, `inspect`, and `--version` CLI commands.
-- Standard-library-only test suite and runnable examples, including `examples/structs.kry`.
-- English language, architecture, and testing documentation.
-
-### Known limitations
-
-- KEXE is a Kryndel package, not a native PE or ELF executable.
-- The UI runtime renders a deterministic tree and does not open native windows yet.
-- Enums, generics, closures, modules, ownership, borrowing, lifetimes, async tasks, and a language server are not implemented. Struct field mutation is intentionally not specified yet.
-## Unreleased
-
-- Added end-to-end unit enums with nominal types, deterministic `MAKE_ENUM`, `EnumValue` printing, equality, and stable diagnostics. Payloads and `match` remain unsupported.
+- First Light bootstrap with lexer, recursive-descent parser, static checker,
+  deterministic bytecode VM, structs, unit enums, UI tree, KEXE artifacts,
+  CLI, and a 28-test standard-library-only suite.

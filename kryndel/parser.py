@@ -11,7 +11,7 @@ from .tokens import Token
 
 
 class ParseAbort(Exception):
-    pass
+    """Abort the current construct and recover at a statement boundary."""
 
 
 @dataclass
@@ -116,8 +116,17 @@ class Parser:
         self.expect("LBRACE", "expected { after enum name")
         variants: list[ast.EnumVariantDecl] = []
         while not self.check("RBRACE") and not self.check("EOF"):
-            variant = self.expect("IDENT", "expected a unit enum variant name", "KRY2012")
-            variants.append(ast.EnumVariantDecl(variant.span, str(variant.value), variant.span))
+            variant = self.expect("IDENT", "expected an enum variant name", "KRY2012")
+            payload_types: list[ast.TypeName] = []
+            if self.match("LPAREN"):
+                if not self.check("RPAREN"):
+                    while True:
+                        payload_types.append(self.parse_type_name())
+                        if not self.match("COMMA"):
+                            break
+                self.expect("RPAREN", "expected ) after enum payload types", "KRY2013")
+            end = payload_types[-1].span if payload_types else variant.span
+            variants.append(ast.EnumVariantDecl(self.merge(variant.span, end), str(variant.value), variant.span, payload_types))
         closing = self.expect("RBRACE", "expected } to close enum declaration")
         return ast.EnumDecl(self.merge(start, closing.span), str(name.value), variants)
 
@@ -142,6 +151,19 @@ class Parser:
             token = self.tokens[self.index - 1]
             self.optional_semicolon(token.span)
             return ast.ContinueStmt(token.span)
+        if self.match("MATCH"):
+            return self.parse_match(self.tokens[self.index - 1].span)
+        if self.match("IMPORT"):
+            start = self.tokens[self.index - 1].span
+            first = self.expect("IDENT", "expected a package name after import", "KRY2050")
+            path = [str(first.value)]
+            end = first.span
+            while self.match("DOT"):
+                member = self.expect("IDENT", "expected a module name after .", "KRY2051")
+                path.append(str(member.value))
+                end = member.span
+            end = self.optional_semicolon(end)
+            return ast.ImportStmt(self.merge(start, end), ".".join(path))
         if self.check("LBRACE"):
             return self.parse_block()
         expression = self.parse_expression()
@@ -183,6 +205,36 @@ class Parser:
         value = self.parse_expression()
         end = self.optional_semicolon(value.span)
         return ast.ReturnStmt(self.merge(start, end), value)
+
+    def parse_match(self, start: Span) -> ast.MatchStmt:
+        value = self.parse_expression()
+        self.expect("LBRACE", "expected { after match value", "KRY2052")
+        arms: list[ast.MatchArm] = []
+        while not self.check("RBRACE", "EOF"):
+            pattern_start = self.current.span
+            if self.check("IDENT") and self.current.value == "_":
+                self.advance()
+                pattern = ast.MatchPattern(pattern_start, None, None, [], True)
+            else:
+                enum_name = str(self.expect("IDENT", "expected an enum name in match pattern", "KRY2053").value)
+                self.expect("DOT", "expected . between enum and variant", "KRY2054")
+                variant = self.expect("IDENT", "expected a variant name in match pattern", "KRY2055")
+                bindings: list[str] = []
+                end = variant.span
+                if self.match("LPAREN"):
+                    if not self.check("RPAREN"):
+                        while True:
+                            binding = self.expect("IDENT", "expected a binding name in match pattern", "KRY2056")
+                            bindings.append(str(binding.value))
+                            if not self.match("COMMA"):
+                                break
+                    end = self.expect("RPAREN", "expected ) after match bindings", "KRY2057").span
+                pattern = ast.MatchPattern(self.merge(pattern_start, end), enum_name, str(variant.value), bindings)
+            self.expect("FATARROW", "expected => after match pattern", "KRY2058")
+            body = self.parse_block() if self.check("LBRACE") else self.parse_statement()
+            arms.append(ast.MatchArm(self.merge(pattern.span, body.span), pattern, body))
+        closing = self.expect("RBRACE", "expected } to close match", "KRY2059")
+        return ast.MatchStmt(self.merge(start, closing.span), value, arms)
 
     def parse_block(self) -> ast.Block:
         opening = self.expect("LBRACE", "expected { to start a block")
@@ -352,6 +404,13 @@ class Parser:
                 if isinstance(value.target, ast.Name) and value.target.value in enum_names:
                     return ast.EnumValue(value.span, value.target.value, value.name, value.target.span, value.name_span)
                 return value
+            if isinstance(value, ast.Call):
+                value.callee = expression(value.callee)
+                value.arguments = [expression(argument) for argument in value.arguments]
+                if isinstance(value.callee, ast.EnumValue):
+                    value.callee.payloads = value.arguments
+                    return value.callee
+                return value
             if isinstance(value, ast.Binary):
                 value.left, value.right = expression(value.left), expression(value.right)
             elif isinstance(value, ast.Unary):
@@ -385,6 +444,10 @@ class Parser:
             elif isinstance(value, ast.Block):
                 for nested in value.statements:
                     statement(nested)
+            elif isinstance(value, ast.MatchStmt):
+                value.value = expression(value.value)
+                for arm in value.arms:
+                    statement(arm.body)
 
         for item in program.items:
             if isinstance(item, ast.FunctionDecl):

@@ -1,14 +1,27 @@
 import io
 import json
+import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from kryndel.artifact import read_artifact, write_artifact
 from kryndel.bytecode import Module
 from kryndel.compiler import compile_source
 from kryndel.diagnostics import DiagnosticError
+from kryndel.cli import main as cli_main
+from kryndel.packages import (
+    Lockfile,
+    SemVer,
+    VersionRequirement,
+    add_dependency,
+    init_project,
+    install,
+    package_checksum,
+    read_manifest,
+    validate_imports,
+)
 from kryndel.source import SourceFile
 from kryndel.tokens import lex
 from kryndel.vm import EnumValue, RuntimeKryndelError, StructValue, VM
@@ -78,6 +91,20 @@ class KryndelTests(unittest.TestCase):
         with self.assertRaises(DiagnosticError) as context:
             compile_source("println(missing)", "unknown.kry")
         self.assertIn("KRY3008", str(context.exception))
+
+    def test_argument_arity_errors_include_actionable_help(self) -> None:
+        with self.assertRaises(DiagnosticError) as missing:
+            compile_source("println()\nfn take(value: Int) -> Int { return value }\nprintln(take())", "arity-missing.kry")
+        self.assertIn("Provide 1 more argument(s)", str(missing.exception))
+        with self.assertRaises(DiagnosticError) as extra:
+            compile_source("fn take(value: Int) -> Int { return value }\nprintln(take(1, 2))", "arity-extra.kry")
+        self.assertIn("Remove 1 extra argument(s)", str(extra.exception))
+
+    def test_unknown_type_suggestion_is_conservative(self) -> None:
+        with self.assertRaises(DiagnosticError) as context:
+            compile_source("let value: Intr = 1", "type-suggestion.kry")
+        self.assertIn("KRY3023", str(context.exception))
+        self.assertIn("Did you mean 'Int'?", str(context.exception))
 
     def test_immutable_assignment_is_rejected(self) -> None:
         with self.assertRaises(DiagnosticError) as context:
@@ -270,6 +297,196 @@ class KryndelTests(unittest.TestCase):
         with self.assertRaises(RuntimeKryndelError) as malformed:
             VM(Module("malformed", "main", {"main": function})).run()
         self.assertIn("malformed MAKE_ENUM metadata", str(malformed.exception))
+
+    def test_structured_diagnostic_json_contains_stable_fields(self) -> None:
+        with self.assertRaises(DiagnosticError) as context:
+            compile_source("let value: Int = \"wrong\"", "structured.kry")
+        payload = json.loads(context.exception.as_json())
+        diagnostic = payload["diagnostics"][0]
+        self.assertEqual(diagnostic["code"], "KRY3003")
+        self.assertEqual(diagnostic["phase"], "semantic")
+        self.assertEqual(diagnostic["file"], "structured.kry")
+        self.assertEqual(diagnostic["severity"], "error")
+        self.assertIn("span", diagnostic)
+        self.assertIn("suggestion", diagnostic)
+
+    def test_parser_recovers_multiple_independent_errors(self) -> None:
+        source = "let broken =\nlet other: Missing = 1\nfn bad( {\nlet third: Unknown = true"
+        with self.assertRaises(DiagnosticError) as context:
+            compile_source(source, "recovery.kry")
+        self.assertGreaterEqual(len(context.exception.diagnostics), 2)
+        self.assertTrue({item.code for item in context.exception.diagnostics} & {"KRY2007", "KRY3023"})
+
+    def test_enum_payloads_are_nominal_structural_and_deterministic(self) -> None:
+        source = "enum Message { Quit Move(Int, Int) Text(String) }\nprintln(Message.Move(10, 20))\nprintln(Message.Text(\"hello\") == Message.Text(\"hello\"))"
+        first = compile_source(source, "payload-one.kry")
+        second = compile_source(source, "payload-two.kry")
+        self.assertEqual(json.loads(first.dumps())["functions"], json.loads(second.dumps())["functions"])
+        self.assertEqual(self.run_source(source), "Message.Move(10, 20)\ntrue\n")
+
+    def test_enum_payloads_support_structs_and_nested_enums(self) -> None:
+        source = "struct Point { x: Int y: Int } enum Box { Empty Value(Point) Nested(Box) } println(Box.Value(Point { x: 2, y: 3 }))"
+        self.assertEqual(self.run_source(source), "Box.Value(Point { x: 2, y: 3 })\n")
+
+    def test_enum_payload_types_and_values_work_before_declaration(self) -> None:
+        source = "fn identity(value: Box) -> Box { return value } let value: Box = identity(Box.Inner(7)) println(value) enum Box { Inner(Int) }"
+        self.assertEqual(self.run_source(source), "Box.Inner(7)\n")
+
+    def test_enum_payload_arity_and_type_errors_are_stable(self) -> None:
+        with self.assertRaises(DiagnosticError) as arity:
+            compile_source("enum Maybe { None Some(Int) }\nlet value: Maybe = Maybe.Some()", "payload-arity.kry")
+        self.assertIn("KRY3043", str(arity.exception))
+        with self.assertRaises(DiagnosticError) as mismatch:
+            compile_source("enum Maybe { None Some(Int) }\nlet value: Maybe = Maybe.Some(\"x\")", "payload-type.kry")
+        self.assertIn("KRY3044", str(mismatch.exception))
+
+    def test_match_binds_payloads_and_wildcard_is_ordered(self) -> None:
+        source = "enum Maybe { None Some(Int) } let value: Maybe = Maybe.Some(42) match value { Maybe.None => println(\"none\") Maybe.Some(number) => println(number) }"
+        self.assertEqual(self.run_source(source), "42\n")
+        wildcard = "enum Color { Red Green } match Color.Red { _ => println(\"any\") Color.Green => println(\"never\") }"
+        self.assertEqual(self.run_source(wildcard), "any\n")
+
+    def test_match_exhaustiveness_duplicates_and_binding_arity(self) -> None:
+        with self.assertRaises(DiagnosticError) as missing:
+            compile_source("enum Color { Red Green Blue } match Color.Red { Color.Red => println(1) }", "match-missing.kry")
+        self.assertIn("KRY3049", str(missing.exception))
+        self.assertIn("Color.Green", str(missing.exception))
+        with self.assertRaises(DiagnosticError) as duplicate:
+            compile_source("enum Color { Red } match Color.Red { Color.Red => println(1) Color.Red => println(2) }", "match-duplicate.kry")
+        self.assertIn("KRY3046", str(duplicate.exception))
+        with self.assertRaises(DiagnosticError) as bindings:
+            compile_source("enum Maybe { Some(Int) } match Maybe.Some(1) { Maybe.Some => println(1) }", "match-bindings.kry")
+        self.assertIn("KRY3048", str(bindings.exception))
+
+    def test_malformed_payload_bytecode_is_a_runtime_diagnostic(self) -> None:
+        from kryndel.bytecode import BytecodeFunction, Instruction
+
+        function = BytecodeFunction("main", 0, [Instruction("MAKE_ENUM", {"type": "Maybe", "variant": "Some", "arity": 1}, 1)])
+        with self.assertRaises(RuntimeKryndelError) as context:
+            VM(Module("malformed", "main", {"main": function})).run()
+        self.assertIn("stack underflow", str(context.exception))
+
+    def _write_package(self, root: Path, name: str, version: str, dependencies: dict[str, str] | None = None) -> Path:
+        package = root if root.name == version else root / name
+        (package / "src").mkdir(parents=True)
+        (package / "src" / "lib.kry").write_text("println(1)\n", encoding="utf-8")
+        deps = dependencies or {}
+        lines = ["[package]", f'name = "{name}"', f'version = "{version}"', 'edition = "2026"', "", "[dependencies]"]
+        lines.extend(f'{key} = "{value}"' for key, value in sorted(deps.items()))
+        (package / "kry.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (package / "checksum").write_text(package_checksum(package) + "\n", encoding="utf-8")
+        return package
+
+    def test_manifest_parser_rejects_unsupported_syntax_and_accepts_subset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = init_project(root / "demo")
+            self.assertEqual(read_manifest(manifest.path).edition, "2026")
+            manifest.path.write_text('[package]\nname = "demo"\nversion = "0.1.0"\nedition = "2026"\n\n[unsupported]\nvalue = "x"\n', encoding="utf-8")
+            with self.assertRaises(DiagnosticError) as context:
+                read_manifest(manifest.path)
+            self.assertIn("KRY5001", str(context.exception))
+
+    def test_semver_requirements_and_invalid_versions(self) -> None:
+        self.assertTrue(VersionRequirement.parse("^1.2").matches(SemVer(1, 9, 0)))
+        self.assertFalse(VersionRequirement.parse("^1.2").matches(SemVer(2, 0, 0)))
+        self.assertTrue(VersionRequirement.parse("~1.2").matches(SemVer(1, 2, 9)))
+        self.assertFalse(VersionRequirement.parse(">=1.0.0,<2.0.0").matches(SemVer(2, 0, 0)))
+        with self.assertRaises(DiagnosticError) as context:
+            VersionRequirement.parse("not-semver")
+        self.assertIn("KRY5012", str(context.exception))
+
+    def test_local_registry_transitive_resolution_and_deterministic_lockfile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            init_project(root)
+            registry = root / ".kryndel" / "registry"
+            request = self._write_package(registry / "request" / "1.0.0", "request", "1.0.0", {"core": "1.0.0"})
+            core = self._write_package(registry / "core" / "1.0.0", "core", "1.0.0")
+            self.assertTrue(request.is_dir() and core.is_dir())
+            add_dependency(root, "request", version="1.0.0")
+            lock = install(root, offline=True)
+            self.assertEqual([entry.name for entry in lock.entries], ["core", "request"])
+            first = (root / "kry.lock").read_text(encoding="utf-8")
+            install(root, offline=True)
+            self.assertEqual(first, (root / "kry.lock").read_text(encoding="utf-8"))
+            self.assertTrue((root / ".kryndel" / "packages" / "request" / "kry.toml").is_file())
+
+    def test_local_path_dependency_checksum_cycle_and_traversal_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            dep = self._write_package(base, "request", "1.0.0")
+            add_dependency(project, "request", path=Path("..") / "request")
+            lock = install(project, offline=True)
+            self.assertEqual(lock.entries[0].source, "path")
+            (dep / "src" / "lib.kry").write_text("tampered\n", encoding="utf-8")
+            with self.assertRaises(DiagnosticError) as checksum:
+                install(project, offline=True)
+            self.assertIn("KRY5008", str(checksum.exception))
+            with self.assertRaises(DiagnosticError) as traversal:
+                add_dependency(project, "escape", path=base.parent)
+            self.assertIn("KRY5010", str(traversal.exception))
+
+    def test_circular_dependency_is_rejected_without_partial_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            self._write_package(base, "a", "1.0.0", {"b": "path:../b"})
+            self._write_package(base, "b", "1.0.0", {"a": "path:../a"})
+            add_dependency(project, "a", path=Path("..") / "a")
+            with self.assertRaises(DiagnosticError) as context:
+                install(project, offline=True)
+            self.assertIn("KRY5007", str(context.exception))
+            self.assertFalse((project / "kry.lock").exists())
+
+    def test_imports_require_declared_project_dependencies(self) -> None:
+        with self.assertRaises(DiagnosticError) as context:
+            compile_source("import request\nprintln(1)", "imports.kry", allowed_imports=set())
+        self.assertIn("KRY5013", str(context.exception))
+        self.assertEqual(self.run_source("import request\nprintln(1)"), "1\n")
+
+    def test_import_resolution_requires_installation_and_rejects_ambiguity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project = base / "project"
+            init_project(project)
+            package = self._write_package(base, "request", "1.0.0")
+            add_dependency(project, "request", path=Path("..") / "request")
+            with self.assertRaises(DiagnosticError) as missing:
+                validate_imports(project, "import request\n")
+            self.assertIn("KRY5014", str(missing.exception))
+            install(project, offline=True)
+            validate_imports(project, "import request\n")
+            installed = project / ".kryndel" / "packages" / "request"
+            (installed / "src" / "http.kry").write_text("", encoding="utf-8")
+            (installed / "src" / "http").mkdir()
+            (installed / "src" / "http" / "lib.kry").write_text("", encoding="utf-8")
+            with self.assertRaises(DiagnosticError) as ambiguous:
+                validate_imports(project, "import request.http\n")
+            self.assertIn("KRY5015", str(ambiguous.exception))
+
+    def test_cli_package_commands_and_artifact_commands_have_codes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "demo"
+            old = Path.cwd()
+            try:
+                cli_main(["init", str(root)])
+                (root / "src" / "main.kry").write_text("println(9)\n", encoding="utf-8")
+                os.chdir(root)
+                self.assertEqual(cli_main(["check"]), 0)
+                artifact = root / "program.kexe"
+                self.assertEqual(cli_main(["build", "src/main.kry", "-o", str(artifact)]), 0)
+                self.assertEqual(cli_main(["inspect", str(artifact)]), 0)
+                self.assertEqual(cli_main(["run", str(artifact)]), 0)
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    self.assertEqual(cli_main(["check", "missing.kry", "--format", "json"]), 1)
+                self.assertIn('"code": "KRY5000"', stderr.getvalue())
+            finally:
+                os.chdir(old)
 
 
 if __name__ == "__main__":
