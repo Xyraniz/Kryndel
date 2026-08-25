@@ -36,8 +36,10 @@ generics, ownership, borrowing, or lifetimes.
 
 The first Kryndel-native collection values are immutable homogeneous arrays and
 fixed-width tuples: `[1, 2]`, `(1, "two")`, `len(value)`, `left + right`, and
-safe `value[index]`. `Option` and `Result` are currently ordinary non-generic
-enums in `stdlib/core`; the compiler and VM remain the Python bootstrap.
+safe `value[index]`. `Option` and `Result` are ordinary non-generic enums in
+`stdlib/core`; their Kryndel-native modules expose constructors, predicates, and
+total `unwrap_or`/`get_or` fallback accessors. The compiler and VM remain the
+Python bootstrap.
 
 ## Diagnostics
 

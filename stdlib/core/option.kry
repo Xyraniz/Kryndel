@@ -1,3 +1,44 @@
 // Core Option contract for the non-generic 0.1 bootstrap.
 // None carries no value; Some carries an Int until generic types are specified.
 pub enum Option { None Some(Int) }
+
+// Safe constructors keep Option creation in Kryndel source.
+pub fn none() -> Option {
+    return Option.None
+}
+
+pub fn some(value: Int) -> Option {
+    return Option.Some(value)
+}
+
+pub fn is_some(value: Option) -> Bool {
+    let mut result: Bool = false
+    match value {
+        Option.None => result = false
+        Option.Some(_) => result = true
+    }
+    return result
+}
+
+pub fn is_none(value: Option) -> Bool {
+    let mut result: Bool = false
+    match value {
+        Option.None => result = true
+        Option.Some(_) => result = false
+    }
+    return result
+}
+
+// unwrap_or is deliberately total: absent values return the caller's fallback.
+pub fn unwrap_or(value: Option, fallback: Int) -> Int {
+    let mut result: Int = fallback
+    match value {
+        Option.None => result = fallback
+        Option.Some(number) => result = number
+    }
+    return result
+}
+
+pub fn get_or(value: Option, fallback: Int) -> Int {
+    return unwrap_or(value, fallback)
+}
