@@ -21,10 +21,22 @@ not counted as Kryndel-native implementation.
 | 12. Self-contained bundle | Not implemented | No compiler/runtime/bundle executable without Python, Rust, Node.js or external services |
 | 13. Formal self-hosting gate | Not passed | The required compiler, runtime, package manager, formatter and two rebuilds without Python do not yet exist |
 
-The next technically bounded task is to define the source-level filesystem
-boundary required by the manifest reader. It should introduce relative project
-paths, deterministic directory order, symlink rejection, `KRY6301`–`KRY6304`
-errors, and fixtures before attempting to rewrite the manifest parser in Kryndel.
+## Verified bootstrap increments after `eb51d99`
+
+The following eight increments are implemented, tested, documented, committed, and pushed as bootstrap compatibility seams. They do not change the native-status claims in the table above.
+
+| Increment | Evidence | Native status |
+| --- | --- | --- |
+| Core-v1 fixture audit | `kry core-report`, canonical fixture hashes, `docs/specs/core-v1.md` | Python bootstrap |
+| Controlled filesystem | `VirtualFileSystem`, `RootedFileSystem`, traversal/symlink tests, `docs/specs/host-boundary-v1.md` | host adapter plus VFS seam |
+| Nominal wire records | `Token.as_dict`, `Node.as_dict`, `records-v1.json` | Python serialization boundary |
+| Manifest filesystem seam | `read_manifest_from_filesystem`, `manifest-reader-v1.json` | Python parser |
+| Bytecode verifier | shared opcode set and `bytecode-verifier-v1.json` | Python verifier |
+| Lexer snapshot | `kry lex --fixture`, `lexer-v1.json` | Python lexer oracle |
+| Parser/AST snapshot | `kry parse --fixture`, `parser-v1.json` | Python parser oracle |
+| Graph/compiler snapshots | `kry graph`, `kry compiler-report`, `graph-v1.json`, `compiler-v1.json` | Python graph/compiler |
+
+The next technically bounded native task remains to implement the source-level filesystem boundary required by the manifest reader. It should reproduce relative project paths, deterministic directory order, symlink rejection, `KRY6301`–`KRY6304` errors, and the fixtures before attempting to rewrite the manifest parser in Kryndel.
 Until that boundary exists, the bootstrap manifest parser must remain the
 reference implementation and the project must not claim independence from
 Python.
