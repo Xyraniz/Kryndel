@@ -15,7 +15,7 @@ from .diagnostics import Diagnostic, DiagnosticError, Severity, Span
 from .source import SourceFile
 from .packages import Lockfile, add_dependency, init_project, install, list_packages, read_manifest, remove_dependency, validate_imports
 from .version import __codename__, __version__
-from .tooling import abi_description, check_reproducible, compare_lexer_fixture, document_project, format_file, host_boundary_report, lexer_snapshot, pack_project, run_kryndel_tests, verify_module
+from .tooling import abi_description, check_reproducible, compare_lexer_fixture, compare_parser_fixture, document_project, format_file, host_boundary_report, lexer_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
 from .vm import RuntimeKryndelError, VM
 
 
@@ -78,6 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     lex = subparsers.add_parser("lex", help="Emit deterministic lexer tokens and diagnostics.")
     lex.add_argument("source", type=Path)
     lex.add_argument("--fixture", type=Path)
+    parse_command = subparsers.add_parser("parse", help="Emit deterministic parser AST and diagnostics.")
+    parse_command.add_argument("source", type=Path)
+    parse_command.add_argument("--fixture", type=Path)
     subparsers.add_parser("host-report", help="Print the deterministic host-boundary inventory.")
     subparsers.add_parser("clean", help="Remove generated project bytecode artifacts.")
     return parser
@@ -252,6 +255,12 @@ def main(argv: list[str] | None = None) -> int:
             if arguments.fixture is not None:
                 compare_lexer_fixture(source, arguments.fixture)
             print(canonical_json(lexer_snapshot(source)), end="")
+            return 0
+        if arguments.command == "parse":
+            source = SourceFile.from_path(arguments.source)
+            if arguments.fixture is not None:
+                compare_parser_fixture(source, arguments.fixture)
+            print(canonical_json(parser_snapshot(source)), end="")
             return 0
         if arguments.command == "host-report":
             print(json.dumps(host_boundary_report(), ensure_ascii=False, indent=2, sort_keys=True))

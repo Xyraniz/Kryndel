@@ -237,6 +237,34 @@ def lexer_snapshot(source: SourceFile) -> dict[str, object]:
     }
 
 
+def parser_snapshot(source: SourceFile) -> dict[str, object]:
+    """Return a deterministic parser/AST snapshot with lexer and parser diagnostics."""
+    tokens, lexical = lex(source)
+    program, parsing = parse(source, tokens)
+    filename = Path(source.name).name or "<source>"
+    return {
+        "ast": program.as_dict(),
+        "contract": "kryndel-parser",
+        "diagnostics": [item.as_dict(filename) for item in [*lexical.items, *parsing.items]],
+        "file": filename,
+        "version": 1,
+    }
+
+
+def compare_parser_fixture(source: SourceFile, fixture_path: str | Path) -> None:
+    """Compare the bootstrap parser/AST output with a frozen fixture oracle."""
+    from .contracts import canonical_json
+
+    fixture = json.loads(Path(fixture_path).read_text(encoding="utf-8"))
+    expected = fixture.get("snapshot", fixture)
+    actual = parser_snapshot(source)
+    if expected != actual:
+        raise ValueError(
+            "parser fixture differs: "
+            + canonical_json({"actual": actual, "expected": expected})
+        )
+
+
 def compare_lexer_fixture(source: SourceFile, fixture_path: str | Path) -> None:
     """Compare the bootstrap lexer with a frozen fixture oracle byte for byte."""
     from .contracts import canonical_json
