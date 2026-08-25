@@ -10,6 +10,7 @@ from pathlib import Path
 from kryndel.artifact import read_artifact, write_artifact
 from kryndel.bytecode import Module
 from kryndel.compiler import compile_project, compile_source
+from kryndel.contracts import core_contract_report, validate_core_contract
 from kryndel.modules import ModuleGraph
 from kryndel.parser import parse
 from kryndel.tooling import abi_description, format_file, host_boundary_report, pack_project, run_kryndel_tests
@@ -37,6 +38,28 @@ class KryndelTests(unittest.TestCase):
         with redirect_stdout(output):
             VM(compile_source(source, "test.kry")).run()
         return output.getvalue()
+
+    def test_core_v1_report_is_deterministic_and_validates_all_fixtures(self) -> None:
+        root = Path(__file__).parents[1]
+        first = core_contract_report(root)
+        second = core_contract_report(root)
+        self.assertEqual(first, second)
+        self.assertEqual(first["contract"], "kryndel-core")
+        self.assertEqual(first["version"], 1)
+        self.assertEqual([item["path"] for item in first["fixtures"]], sorted(item["path"] for item in first["fixtures"]))
+        validate_core_contract(root)
+        self.assertEqual(cli_main(["core-report"]), 0)
+
+    def test_core_v1_rejects_noncanonical_fixture(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = root / "tests" / "fixtures" / "bytes-v1.json"
+        original = fixture.read_bytes()
+        try:
+            fixture.write_bytes(original.rstrip(b"\\n") + b" \\n")
+            with self.assertRaisesRegex(ValueError, "canonical"):
+                validate_core_contract(root)
+        finally:
+            fixture.write_bytes(original)
 
     def test_value_runtime_v1_fixture_is_deterministic_and_complete(self) -> None:
         fixture_path = Path(__file__).parent / "fixtures" / "value-runtime-v1.json"
