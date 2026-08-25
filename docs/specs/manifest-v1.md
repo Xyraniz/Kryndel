@@ -30,3 +30,14 @@ manifest and a matching `checksum` file. Installation copies validated files to
 `.kryndel/packages/<name>` using a temporary staging directory. Package files
 are never executed, and symlinks/path traversal outside the package are
 rejected. Remote registries are intentionally not claimed by v1.
+
+## Source package archive
+
+`kry pack` produces a `.krypkg` ZIP archive containing `kry.toml` and the
+sorted regular files below `src/`. It never executes source code, includes no
+absolute paths, excludes generated artifacts and symlinks, and sets every ZIP
+entry timestamp to `1980-01-01T00:00:00Z`. The archive order is lexical and its
+SHA-256 is printed as the observable package checksum. Packing identical source
+and manifest bytes twice must produce identical archive bytes and checksum.
+The archive is a source distribution for the current bootstrap; it is not a
+native executable and does not claim an independent runtime.

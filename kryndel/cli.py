@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from .compiler import compile_file, compile_project, compile_source
 from .diagnostics import Diagnostic, DiagnosticError, Severity, Span
 from .packages import Lockfile, add_dependency, init_project, install, list_packages, read_manifest, remove_dependency, validate_imports
 from .version import __codename__, __version__
-from .tooling import abi_description, check_reproducible, format_file, run_kryndel_tests, verify_module
+from .tooling import abi_description, check_reproducible, document_project, format_file, host_boundary_report, pack_project, run_kryndel_tests, verify_module
 from .vm import RuntimeKryndelError, VM
 
 
@@ -53,7 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
     fmt = subparsers.add_parser("fmt", help="Format Kryndel source files.")
     fmt.add_argument("source", nargs="?", type=Path)
     fmt.add_argument("--check", action="store_true")
-    subparsers.add_parser("test", help="Run tests written in Kryndel.")
+    test = subparsers.add_parser("test", help="Run tests written in Kryndel.")
+    test.add_argument("--format", choices=("human", "json"), default="human")
     reproducible = subparsers.add_parser("reproducible", help="Check deterministic compilation.")
     reproducible.add_argument("source", nargs="?", type=Path)
     for name, help_text in (
@@ -64,6 +66,13 @@ def build_parser() -> argparse.ArgumentParser:
         command = subparsers.add_parser(name, help=help_text)
         command.add_argument("path", nargs="?", type=Path)
     subparsers.add_parser("abi", help="Print the stable Kryndel ABI description.")
+    doc = subparsers.add_parser("doc", help="Emit deterministic source documentation.")
+    doc.add_argument("source", nargs="?", type=Path)
+    doc.add_argument("-o", "--output", type=Path)
+    doc.add_argument("--format", choices=("human", "json"), default="json")
+    pack = subparsers.add_parser("pack", help="Create a deterministic source package.")
+    pack.add_argument("-o", "--output", type=Path)
+    subparsers.add_parser("host-report", help="Print the deterministic host-boundary inventory.")
     subparsers.add_parser("clean", help="Remove generated project bytecode artifacts.")
     return parser
 
@@ -105,7 +114,8 @@ def _structured_error(error: Exception, filename: str = "<kryndel>") -> str:
     if isinstance(error, DiagnosticError):
         return error.as_json()
     if isinstance(error, RuntimeKryndelError):
-        code = "KRY6002" if "bytecode" in str(error) or "malformed" in str(error) else "KRY6000"
+        match = re.search(r"\b(KRY\d{4})\b", str(error))
+        code = match.group(1) if match else "KRY6002" if "bytecode" in str(error) or "malformed" in str(error) else "KRY6000"
     else:
         code = "KRY6001" if isinstance(error, ArtifactError) else "KRY5000"
     diagnostic = Diagnostic(Severity.ERROR, str(error), Span(0, 1, 1, 1), code=code)
@@ -194,11 +204,24 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command == "test":
             root = _project_root() or Path.cwd().resolve()
-            results = run_kryndel_tests(root)
-            for result in results:
-                print(f"test {result.path}::{result.name} ... ok")
-            print(f"{len(results)} Kryndel test(s) passed")
-            return 0
+            results = run_kryndel_tests(root, continue_on_failure=True)
+            passed = sum(result.status == "passed" for result in results)
+            failed = len(results) - passed
+            if output_format == "json":
+                payload = {
+                    "failed": failed,
+                    "format": "kryndel-test-results",
+                    "passed": passed,
+                    "tests": [result.as_dict(root) for result in results],
+                    "version": 1,
+                }
+                print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            else:
+                for result in results:
+                    suffix = "ok" if result.status == "passed" else f"FAILED: {result.error}"
+                    print(f"test {result.path}::{result.name} ... {suffix}")
+                print(f"{passed} Kryndel test(s) passed; {failed} failed")
+            return 1 if failed else 0
         if arguments.command == "reproducible":
             if arguments.source is None and _project_root() is None:
                 candidate = Path("examples/hello.kry")
@@ -213,6 +236,25 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command == "abi":
             print(json.dumps(abi_description(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.command == "host-report":
+            print(json.dumps(host_boundary_report(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.command == "doc":
+            root = _project_root(arguments.source) or Path.cwd().resolve()
+            payload = document_project(root, arguments.source)
+            rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            if arguments.output is not None:
+                arguments.output.write_text(rendered, encoding="utf-8", newline="\n")
+                print(f"documented {arguments.output}")
+            else:
+                print(rendered, end="")
+            return 0
+        if arguments.command == "pack":
+            root = _project_root() or Path.cwd().resolve()
+            target, checksum = pack_project(root, arguments.output)
+            print(f"packed {target}")
+            print(f"checksum {checksum}")
             return 0
         if arguments.command in {"inspect-bytecode", "verify-bytecode", "verify-artifact"}:
             path = arguments.path

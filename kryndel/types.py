@@ -86,6 +86,8 @@ BUILTIN_FUNCTIONS: dict[str, FunctionType] = {
     "bytes": FunctionType((ArrayType("Array", INT),), BYTES),
     "string_to_bytes": FunctionType((STRING,), BYTES),
     "bytes_to_string": FunctionType((BYTES,), STRING),
+    "assert": FunctionType((BOOL,), VOID),
+    "assert_eq": FunctionType((ANY, ANY), VOID),
     "abs": FunctionType((INT,), INT),
     "sqrt": FunctionType((FLOAT,), FLOAT),
     "clock": FunctionType((), FLOAT),

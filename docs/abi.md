@@ -62,7 +62,8 @@ metadata, invalid indexing, wrong sequence kind, bounds failure, and invalid
 `len` input. `KRY6201` reports invalid UTF-8 with the first byte offset and
 expected sequence length; `KRY6202` reports an invalid octet or nonrepresentable
 conversion; and `KRY6203` reports incompatible Bytes collection operations.
-The value/runtime contract, including UTF-8 and `KRY6201`–`KRY6305` families, is frozen in
+The value/runtime contract, including UTF-8, `KRY6201`–`KRY6305`, and assertion
+codes `KRY6401`/`KRY6402`, is frozen in
 [`specs/value-runtime-v1.md`](specs/value-runtime-v1.md). The executable
 implementation inventory is recorded in
 [`host-dependency-inventory.md`](host-dependency-inventory.md).
@@ -74,4 +75,7 @@ Python. It must reject unsupported versions, missing entry functions, malformed
 instruction metadata, invalid constant indices, invalid jumps, and malformed
 call metadata. `kry verify-bytecode` checks these structural invariants, while
 `kry verify-artifact` first validates the KEXE header and SHA-256 payload before
-checking the contained module.
+checking the contained module. The offline `kry host-report` command validates
+that every VM-dispatched intrinsic has a visible type signature, error metadata,
+fixture, and replacement plan; `kry test --format json` has the analogous
+versioned result contract for source tests.

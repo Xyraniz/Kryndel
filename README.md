@@ -85,9 +85,9 @@ The implemented registry is local and offline:
 ```
 
 Supported commands are `new`, `init`, `add`, `remove`, `install`, `update`,
-`list`, `tree`, `check`, `build`, `run`, `inspect`, `fmt`, `test`,
+`list`, `tree`, `check`, `build`, `run`, `inspect`, `fmt`, `test`, `doc`, `pack`,
 `reproducible`, `inspect-bytecode`, `verify-bytecode`, `verify-artifact`,
-`abi`, and `clean`:
+`abi`, `host-report`, and `clean`:
 
 ```bash
 PYTHONPATH=. python3 -m kryndel init demo
@@ -152,16 +152,27 @@ fn test_answer() -> Void {
 ```
 
 `kry test` discovers these zero-argument functions under `tests/**/*.kry` and
-executes them through the current VM. `kry fmt` currently normalizes trailing
-horizontal whitespace and the final newline without rewriting token spacing;
-`kry reproducible` compiles the selected source twice and compares bytecode;
-`kry verify-bytecode` and `kry verify-artifact` validate structural contracts.
+executes each file in an isolated VM. Assertions are available through
+`assert(Bool)` and `assert_eq(Any, Any)`, with typed source wrappers in
+`stdlib/testing/testing.kry`. Human results show every test; `kry test --format
+json` emits a deterministic versioned report and returns one if any test fails.
+`kry fmt` currently normalizes trailing horizontal whitespace and the final
+newline without rewriting token spacing; `kry reproducible` compiles the
+selected source twice and compares bytecode; `kry verify-bytecode` and
+`kry verify-artifact` validate structural contracts. `kry host-report` emits
+the offline inventory of every VM intrinsic and fails when dispatch, signature,
+error metadata, fixture, or replacement information is missing. `kry doc`
+emits deterministic source declarations, and `kry pack` writes a reproducible
+`.krypkg` source archive with a SHA-256 checksum; neither command executes
+source files.
 
 The Python bootstrap owns the lexer, recursive-descent parser, checker,
 module graph, compiler, VM, artifact container, CLI, and local package resolver.
-Bytes execution is currently part of that bootstrap VM: the language-level
+Bytes execution, assertions, host-report, doc, pack, and the current test runner
+are also bootstrap implementations behind visible contracts. Their language-level
 signatures and deterministic fixtures are frozen, but no self-hosted
-implementation is claimed.
+implementation is claimed. The complete implementation audit is in
+[`docs/roadmap-status.md`](docs/roadmap-status.md).
 The source language contracts, spans, diagnostic JSON, visibility rules,
 module-resolution rules, bytecode JSON, qualified function names, KEXE checksum
 rules, manifest subset, lockfile, semver, and package checksum algorithm are
@@ -183,7 +194,7 @@ at this milestone.
 ```text
 kryndel/       lexer, AST, parser, checker, compiler, VM, artifacts, packages, CLI
 examples/      runnable language examples
-docs/          language, architecture, testing, and versioned format contracts
+docs/          language, architecture, testing, roadmap, and versioned format contracts
 tests/         standard-library-only regression suite
 ```
 

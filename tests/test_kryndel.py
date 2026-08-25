@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from kryndel.bytecode import Module
 from kryndel.compiler import compile_project, compile_source
 from kryndel.modules import ModuleGraph
 from kryndel.parser import parse
-from kryndel.tooling import format_file, run_kryndel_tests
+from kryndel.tooling import abi_description, format_file, host_boundary_report, pack_project, run_kryndel_tests
 from kryndel.diagnostics import DiagnosticError
 from kryndel.cli import main as cli_main
 from kryndel.packages import (
@@ -55,6 +56,11 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(len(ArrayValue((1, 2, 3)).items), 3)
         self.assertEqual(len(TupleValue(("answer", 42)).items), 2)
         self.assertEqual(BytesValue((0x41, 0xF0, 0x9F, 0x98, 0x80)).hex, "41f09f9880")
+        mutable_input = [65, 255]
+        immutable_value = BytesValue(mutable_input)
+        mutable_input.append(0)
+        self.assertEqual(immutable_value.items, (65, 255))
+        self.assertIsInstance(immutable_value.items, tuple)
         self.assertEqual(VM.stringify(None), "nil")
 
     def test_bytes_utf8_api_executes_from_kryndel(self) -> None:
@@ -133,6 +139,49 @@ class KryndelTests(unittest.TestCase):
         concat_module = compile_source("fn concat(left: Bytes, right: Bytes) -> Bytes { return left + right }", "bytes-concat.kry")
         concat_result = VM(concat_module).execute("concat", [BytesValue((0x41,)), BytesValue((0xFF,))])
         self.assertEqual(concat_result.hex, fixture["operations"]["concat"]["result"])
+
+    def test_host_boundary_report_is_deterministic_and_complete(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "host-boundary-v1.json"
+        raw = fixture_path.read_text(encoding="utf-8")
+        report = host_boundary_report()
+        self.assertEqual(raw, json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        self.assertEqual(report["contract"], "kryndel-host-boundary")
+        self.assertEqual(report["version"], 1)
+        self.assertEqual(report["unlisted_intrinsics"], [])
+        self.assertEqual(report["state_counts"]["host temporal"], len(report["intrinsics"]))
+        self.assertEqual(abi_description()["runtime_errors"]["KRY6401"], "assertion condition is false")
+        self.assertEqual(abi_description()["runtime_errors"]["KRY6402"], "assertion values are unequal")
+        names = [item["name"] for item in report["intrinsics"]]
+        self.assertEqual(names, sorted(names))
+        self.assertEqual(len(names), len(set(names)))
+        for item in report["intrinsics"]:
+            self.assertTrue(item["signature"])
+            self.assertRegex(item["error_code"], r"^KRY\d{4}$")
+            self.assertTrue(item["host_module"])
+            self.assertTrue(item["fixture"])
+            self.assertIn(item["state"], {"Kryndel", "host temporal", "no implementado"})
+        for values in report["layers"].values():
+            self.assertEqual(sum(values.values()), 100)
+
+    def test_stdlib_testing_assertions_are_executable_and_structured(self) -> None:
+        root = Path(__file__).parents[1]
+        source = (root / "stdlib" / "testing" / "testing.kry").read_text(encoding="utf-8")
+        module = compile_source(source, "stdlib/testing/testing.kry")
+        runtime = VM(module)
+        self.assertIsNone(runtime.execute("assert_true", [True]))
+        self.assertIsNone(runtime.execute("assert_equal_int", [42, 42]))
+        self.assertIsNone(runtime.execute("assert_equal_string", ["same", "same"]))
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6401"):
+            runtime.execute("assert_true", [False])
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6402"):
+            runtime.execute("assert_equal_int", [1, 2])
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6402"):
+            runtime.execute("assert_equal_string", ["left", "right"])
+        fixture_path = root / "tests" / "fixtures" / "stdlib-testing-v1.json"
+        raw = fixture_path.read_text(encoding="utf-8")
+        fixture = json.loads(raw)
+        self.assertEqual(raw, json.dumps(fixture, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        self.assertEqual(fixture["source"], "stdlib/testing/testing.kry")
 
     def test_lexer_handles_comments_literals_and_operators(self) -> None:
         source = SourceFile("test.kry", '// comment\nlet value: Int = 42\n/* nested /* block */ comment */\n')
@@ -243,6 +292,8 @@ class KryndelTests(unittest.TestCase):
         collections_module = compile_source((root / "collections" / "sequences.kry").read_text(encoding="utf-8"), "stdlib/collections/sequences.kry")
         option_module = compile_source((root / "core" / "option.kry").read_text(encoding="utf-8"), "stdlib/core/option.kry")
         result_module = compile_source((root / "core" / "result.kry").read_text(encoding="utf-8"), "stdlib/core/result.kry")
+        bytes_core_module = compile_source((root / "core" / "bytes.kry").read_text(encoding="utf-8"), "stdlib/core/bytes.kry")
+        testing_module = compile_source((root / "testing" / "testing.kry").read_text(encoding="utf-8"), "stdlib/testing/testing.kry")
         utf8_module = compile_source((root / "string" / "utf8.kry").read_text(encoding="utf-8"), "stdlib/string/utf8.kry")
         bytes_module = compile_source((root / "collections" / "bytes.kry").read_text(encoding="utf-8"), "stdlib/collections/bytes.kry")
         self.assertEqual(VM(string_module).execute("length", ["Kryndel"]), 7)
@@ -253,6 +304,10 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(encoded, BytesValue((0x41, 0xF0, 0x9F, 0x98, 0x80)))
         self.assertEqual(VM(utf8_module).execute("decode", [encoded]), "A😀")
         self.assertEqual(VM(bytes_module).execute("octet", [encoded, 1]), 0xF0)
+        self.assertIsNone(VM(testing_module).execute("assert_equal_int", [7, 7]))
+        core_value = VM(bytes_core_module).execute("from_string", ["A😀"])
+        self.assertEqual(core_value, encoded)
+        self.assertEqual(VM(bytes_core_module).execute("get", [core_value, 1]), 0xF0)
         self.assertEqual(len(option_module.functions), 7)
         self.assertEqual(len(result_module.functions), 7)
 
@@ -921,6 +976,70 @@ class KryndelTests(unittest.TestCase):
             self.assertTrue(format_file(source, check=False))
             self.assertTrue(format_file(source, check=True))
 
+    def test_kryndel_test_runner_json_reports_failures_without_tracebacks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            init_project(project)
+            tests = project / "tests"
+            tests.mkdir()
+            (tests / "results.kry").write_text(
+                "@test\nfn test_good() -> Void { assert(true) }\n"
+                "@test\nfn test_bad() -> Void { assert(false) }\n",
+                encoding="utf-8",
+            )
+            old = Path.cwd()
+            output = io.StringIO()
+            try:
+                os.chdir(project)
+                with redirect_stdout(output):
+                    self.assertEqual(cli_main(["test", "--format", "json"]), 1)
+            finally:
+                os.chdir(old)
+            report = json.loads(output.getvalue())
+            self.assertEqual(report["format"], "kryndel-test-results")
+            self.assertEqual(report["passed"], 1)
+            self.assertEqual(report["failed"], 1)
+            failed = next(item for item in report["tests"] if item["status"] == "failed")
+            self.assertIn("KRY6401", failed["error"])
+            self.assertNotIn("Traceback", output.getvalue())
+
+    def test_doc_and_pack_commands_are_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            init_project(project)
+            source = project / "src" / "main.kry"
+            source.write_text(
+                "pub struct Point { x: Int y: Int }\n"
+                "pub fn answer(value: Int) -> Int { return value + 1 }\n"
+                "assert(false)\n",
+                encoding="utf-8",
+            )
+            old = Path.cwd()
+            try:
+                os.chdir(project)
+                documentation = project / "docs.json"
+                self.assertEqual(cli_main(["doc", "src/main.kry", "-o", str(documentation)]), 0)
+                payload = json.loads(documentation.read_text(encoding="utf-8"))
+                self.assertEqual(payload["contract"], "kryndel-documentation")
+                self.assertEqual([item["name"] for item in payload["files"][0]["declarations"]], ["Point", "answer"])
+                first = project / "first.krypkg"
+                second = project / "second.krypkg"
+                self.assertEqual(cli_main(["pack", "-o", str(first)]), 0)
+                self.assertEqual(cli_main(["pack", "-o", str(second)]), 0)
+                self.assertEqual(first.read_bytes(), second.read_bytes())
+                with zipfile.ZipFile(first) as archive:
+                    self.assertEqual(archive.namelist(), ["kry.toml", "src/main.kry"])
+                    self.assertTrue(all(not name.startswith("/") and ".." not in name.split("/") for name in archive.namelist()))
+                    self.assertTrue(all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist()))
+                outside = project.parent / "outside.kry"
+                outside.write_text("assert(false)\n", encoding="utf-8")
+                link = project / "src" / "link.kry"
+                link.symlink_to(outside)
+                with self.assertRaises(ValueError):
+                    pack_project(project, project / "unsafe.krypkg")
+            finally:
+                os.chdir(old)
+
     def test_cli_reproducibility_and_verification_commands(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "project"
@@ -942,6 +1061,10 @@ class KryndelTests(unittest.TestCase):
                 self.assertEqual(cli_main(["inspect-bytecode", str(bytecode)]), 0)
                 self.assertEqual(cli_main(["verify-bytecode", str(bytecode)]), 0)
                 self.assertEqual(cli_main(["abi"]), 0)
+                report_output = io.StringIO()
+                with redirect_stdout(report_output):
+                    self.assertEqual(cli_main(["host-report"]), 0)
+                self.assertEqual(json.loads(report_output.getvalue())["contract"], "kryndel-host-boundary")
             finally:
                 os.chdir(old)
 

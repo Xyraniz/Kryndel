@@ -82,6 +82,8 @@ Python exceptions and tracebacks are not part of the interface.
 | `KRY6303` | path escapes project root | filesystem boundary |
 | `KRY6304` | malformed program input | source/manifest readers |
 | `KRY6305` | malformed bytecode | bytecode reader/verifier |
+| `KRY6401` | assertion condition is false | test assertion boundary |
+| `KRY6402` | assertion values are unequal | test assertion boundary |
 
 `Option`/`Result` fallback operations are total and must not produce
 `KRY6204`: `unwrap_or` returns its fallback for `None`, and `get_or` returns
@@ -114,4 +116,6 @@ The dependency inventory in `docs/host-dependency-inventory.md` records the
 current implementation path and replacement plan. The bootstrap remains the
 implementation reference until differential fixtures pass for a Kryndel
 implementation. Bytes behavior is covered by `tests/fixtures/bytes-v1.json` and
-its deterministic runtime tests.
+its deterministic runtime tests. Assertion behavior is covered by
+`tests/fixtures/stdlib-testing-v1.json`; `assert` and `assert_eq` are visible
+bootstrap boundaries until a Kryndel-native test runner replaces them.

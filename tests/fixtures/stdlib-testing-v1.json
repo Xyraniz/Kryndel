@@ -1,0 +1,40 @@
+{
+  "contract": "kryndel-stdlib-testing",
+  "invalid": [
+    {
+      "error": "KRY6401",
+      "kind": "assert_true",
+      "value": false
+    },
+    {
+      "error": "KRY6402",
+      "kind": "assert_equal_int",
+      "left": 1,
+      "right": 2
+    },
+    {
+      "error": "KRY6402",
+      "kind": "assert_equal_string",
+      "left": "a",
+      "right": "b"
+    }
+  ],
+  "source": "stdlib/testing/testing.kry",
+  "valid": [
+    {
+      "kind": "assert_true",
+      "value": true
+    },
+    {
+      "kind": "assert_equal_int",
+      "left": 42,
+      "right": 42
+    },
+    {
+      "kind": "assert_equal_string",
+      "left": "kryndel",
+      "right": "kryndel"
+    }
+  ],
+  "version": 1
+}
