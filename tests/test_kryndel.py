@@ -11,6 +11,7 @@ from kryndel.artifact import read_artifact, write_artifact
 from kryndel.bytecode import Module
 from kryndel.compiler import compile_project, compile_source
 from kryndel.contracts import core_contract_report, validate_core_contract
+from kryndel.filesystem import RootedFileSystem, VirtualFileSystem
 from kryndel.modules import ModuleGraph
 from kryndel.parser import parse
 from kryndel.tooling import abi_description, format_file, host_boundary_report, pack_project, run_kryndel_tests
@@ -60,6 +61,35 @@ class KryndelTests(unittest.TestCase):
                 validate_core_contract(root)
         finally:
             fixture.write_bytes(original)
+
+    def test_filesystem_boundary_v1_is_deterministic_and_controlled(self) -> None:
+        virtual = VirtualFileSystem({"src/z.kry": b"z", "src/a.kry": b"a", "README.md": b"readme"})
+        self.assertEqual([item.path for item in virtual.list_dir("src")], ["src/a.kry", "src/z.kry"])
+        self.assertEqual(virtual.read_bytes("src/a.kry"), b"a")
+        self.assertEqual(virtual.stat("src").kind, "directory")
+        with self.assertRaisesRegex(DiagnosticError, "KRY6303"):
+            virtual.read_bytes("../escape")
+        with self.assertRaisesRegex(DiagnosticError, "KRY6303"):
+            virtual.read_bytes("/absolute")
+        with self.assertRaisesRegex(DiagnosticError, "KRY6302"):
+            virtual.read_bytes("missing")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            (root / "src" / "b.kry").write_bytes(b"b")
+            (root / "src" / "a.kry").write_bytes(b"a")
+            rooted = RootedFileSystem(root)
+            self.assertEqual([item.path for item in rooted.list_dir("src")], ["src/a.kry", "src/b.kry"])
+            rooted.write_bytes("src/out.bin", b"out")
+            self.assertEqual(rooted.read_bytes("src/out.bin"), b"out")
+            with self.assertRaisesRegex(DiagnosticError, "KRY6303"):
+                rooted.read_bytes("../outside")
+            outside = root.parent / "outside.txt"
+            outside.write_bytes(b"outside")
+            (root / "link.txt").symlink_to(outside)
+            with self.assertRaisesRegex(DiagnosticError, "KRY6303"):
+                rooted.read_bytes("link.txt")
 
     def test_value_runtime_v1_fixture_is_deterministic_and_complete(self) -> None:
         fixture_path = Path(__file__).parent / "fixtures" / "value-runtime-v1.json"
