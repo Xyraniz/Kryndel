@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .artifact import ArtifactError, read_artifact, write_artifact
 from .compiler import compile_file, compile_project, compile_source
+from .contracts import canonical_json, core_contract_report
 from .diagnostics import Diagnostic, DiagnosticError, Severity, Span
 from .packages import Lockfile, add_dependency, init_project, install, list_packages, read_manifest, remove_dependency, validate_imports
 from .version import __codename__, __version__
@@ -66,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
         command = subparsers.add_parser(name, help=help_text)
         command.add_argument("path", nargs="?", type=Path)
     subparsers.add_parser("abi", help="Print the stable Kryndel ABI description.")
+    subparsers.add_parser("core-report", help="Validate the deterministic core-v1 fixtures.")
     doc = subparsers.add_parser("doc", help="Emit deterministic source documentation.")
     doc.add_argument("source", nargs="?", type=Path)
     doc.add_argument("-o", "--output", type=Path)
@@ -235,7 +237,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"reproducible {source}")
             return 0
         if arguments.command == "abi":
-            print(json.dumps(abi_description(), ensure_ascii=False, indent=2, sort_keys=True))
+            print(canonical_json(abi_description()), end="")
+            return 0
+        if arguments.command == "core-report":
+            root = _project_root() or Path.cwd().resolve()
+            print(canonical_json(core_contract_report(root)), end="")
             return 0
         if arguments.command == "host-report":
             print(json.dumps(host_boundary_report(), ensure_ascii=False, indent=2, sort_keys=True))
