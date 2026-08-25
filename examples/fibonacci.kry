@@ -1,0 +1,18 @@
+fn fibonacci(n: Int) -> Int {
+    if n <= 1 {
+        return n
+    }
+
+    let mut previous: Int = 0
+    let mut current: Int = 1
+    let mut index: Int = 2
+    while index <= n {
+        let next: Int = previous + current
+        previous = current
+        current = next
+        index = index + 1
+    }
+    return current
+}
+
+println(fibonacci(10))
