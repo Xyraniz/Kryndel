@@ -1,0 +1,25 @@
+name: Kryndel CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Standard-library test suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Run tests
+        run: PYTHONPATH=. python3 -m unittest discover -s tests -v
+      - name: Compile examples
+        run: |
+          PYTHONPATH=. python3 -m kryndel check examples/hello.kry
+          PYTHONPATH=. python3 -m kryndel check examples/fibonacci.kry
+          PYTHONPATH=. python3 -m kryndel check examples/ui_tree.kry
+          PYTHONPATH=. python3 -m kryndel check examples/structs.kry
+          PYTHONPATH=. python3 -m kryndel check examples/enums.kry
