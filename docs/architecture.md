@@ -47,9 +47,11 @@ package and module notes without changing the existing source-span schema.
 | KRY3000–3999 | names, types, payloads, match |
 | KRY5000–5999 | manifests, semver, packages, locks, checksums |
 | KRY6000–6099 | runtime, malformed bytecode, artifacts |
+| KRY6100–6199 | sequence layouts, indexing, and collection runtime errors |
 
 Existing codes remain unchanged. New payload/match codes include `KRY3043`–
-`KRY3049`; imported-symbol codes are `KRY3050`–`KRY3052`; package/module
+`KRY3049`; imported-symbol codes are `KRY3050`–`KRY3052`; sequence semantic
+codes are `KRY3053`–`KRY3056`; package/module
 codes include `KRY5001`–`KRY5016`.
 
 ## Enums and match

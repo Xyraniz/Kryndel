@@ -371,6 +371,10 @@ class Parser:
                     str(member.value),
                     member.span,
                 )
+            elif self.match("LBRACKET"):
+                index = self.parse_expression()
+                closing = self.expect("RBRACKET", "expected ] after index")
+                expression = ast.Index(self.merge(expression.span, closing.span), expression, index)
             else:
                 break
         return expression
@@ -386,8 +390,28 @@ class Parser:
             return ast.Name(token.span, str(token.value))
         if self.match("LPAREN"):
             expression = self.parse_expression()
+            if self.match("COMMA"):
+                elements = [expression]
+                if not self.check("RPAREN"):
+                    while True:
+                        elements.append(self.parse_expression())
+                        if not self.match("COMMA"):
+                            break
+                closing = self.expect("RPAREN", "expected ) after tuple")
+                return ast.TupleLiteral(self.merge(token.span, closing.span), elements)
             self.expect("RPAREN", "expected ) after expression")
             return expression
+        if self.match("LBRACKET"):
+            elements: list[ast.Expr] = []
+            if not self.check("RBRACKET"):
+                while True:
+                    elements.append(self.parse_expression())
+                    if not self.match("COMMA"):
+                        break
+                    if self.check("RBRACKET"):
+                        break
+            closing = self.expect("RBRACKET", "expected ] after array")
+            return ast.ArrayLiteral(self.merge(token.span, closing.span), elements)
         self.diagnostics.error(
             "expected an expression",
             token.span,
@@ -463,6 +487,13 @@ class Parser:
             elif isinstance(value, ast.StructLiteral):
                 for field in value.fields:
                     field.value = expression(field.value)
+            elif isinstance(value, ast.ArrayLiteral):
+                value.elements = [expression(item) for item in value.elements]
+            elif isinstance(value, ast.TupleLiteral):
+                value.elements = [expression(item) for item in value.elements]
+            elif isinstance(value, ast.Index):
+                value.target = expression(value.target)
+                value.index = expression(value.index)
             return value
 
         def statement(value: ast.Stmt) -> None:

@@ -40,6 +40,20 @@ class EnumType(Type):
         return ()
 
 
+@dataclass(frozen=True)
+class ArrayType(Type):
+    """A homogeneous sequence; element metadata is part of the type."""
+
+    element: Type = Type("Unknown")
+
+
+@dataclass(frozen=True)
+class TupleType(Type):
+    """A fixed-width positional sequence with declaration-order elements."""
+
+    elements: tuple[Type, ...] = ()
+
+
 INT = Type("Int")
 FLOAT = Type("Float")
 BOOL = Type("Bool")
@@ -48,8 +62,10 @@ VOID = Type("Void")
 UI = Type("UiNode")
 ANY = Type("Any")
 UNKNOWN = Type("Unknown")
+ARRAY = Type("Array")
+TUPLE = Type("Tuple")
 
-PRIMITIVE_TYPES = {t.name: t for t in (INT, FLOAT, BOOL, STRING, VOID, UI)}
+PRIMITIVE_TYPES = {t.name: t for t in (INT, FLOAT, BOOL, STRING, VOID, UI, ARRAY, TUPLE)}
 
 
 @dataclass(frozen=True)
@@ -65,7 +81,7 @@ BUILTIN_FUNCTIONS: dict[str, FunctionType] = {
     "str": FunctionType((ANY,), STRING),
     "int": FunctionType((ANY,), INT),
     "float": FunctionType((ANY,), FLOAT),
-    "len": FunctionType((STRING,), INT),
+    "len": FunctionType((ANY,), INT),
     "abs": FunctionType((INT,), INT),
     "sqrt": FunctionType((FLOAT,), FLOAT),
     "clock": FunctionType((), FLOAT),
@@ -88,12 +104,26 @@ def resolve_type(name: str) -> Type:
 def compatible(expected: Type, actual: Type) -> bool:
     if expected in (ANY, UNKNOWN) or actual in (ANY, UNKNOWN):
         return True
+    if expected == ARRAY and isinstance(actual, ArrayType):
+        return True
+    if expected == TUPLE and isinstance(actual, TupleType):
+        return True
+    if actual == ARRAY and isinstance(expected, ArrayType):
+        return True
+    if actual == TUPLE and isinstance(expected, TupleType):
+        return True
     if expected == actual:
         return True
     if isinstance(expected, StructType) and isinstance(actual, StructType):
         return expected.name == actual.name
     if isinstance(expected, EnumType) and isinstance(actual, EnumType):
         return expected.name == actual.name
+    if isinstance(expected, ArrayType) and isinstance(actual, ArrayType):
+        return compatible(expected.element, actual.element)
+    if isinstance(expected, TupleType) and isinstance(actual, TupleType):
+        return len(expected.elements) == len(actual.elements) and all(
+            compatible(left, right) for left, right in zip(expected.elements, actual.elements)
+        )
     return expected == FLOAT and actual == INT
 
 

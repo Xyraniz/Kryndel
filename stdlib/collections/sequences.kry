@@ -1,0 +1,8 @@
+// Collection operations use the native Array and Tuple layouts.
+pub fn array_length(value: Array) -> Int {
+    return len(value)
+}
+
+pub fn tuple_length(value: Tuple) -> Int {
+    return len(value)
+}

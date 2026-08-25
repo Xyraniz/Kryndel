@@ -1,0 +1,3 @@
+// Core Result contract for the non-generic 0.1 bootstrap.
+// Ok carries an Int and Error carries a diagnostic String.
+pub enum Result { Ok(Int) Error(String) }

@@ -4,6 +4,13 @@
 
 ### Added
 
+- Kryndel-native immutable array and tuple literals, deterministic `MAKE_ARRAY`,
+  `MAKE_TUPLE`, and `INDEX` bytecode, safe indexing, concatenation, and stable
+  runtime errors KRY6101–KRY6105.
+- Executable `stdlib/core`, `stdlib/string`, and `stdlib/collections` source
+  fixtures, including the non-generic `Option` and `Result` enum contracts and
+  differential bootstrap tests.
+
 - Structured diagnostics with stable JSON output, primary/secondary spans,
   notes, help, and conservative suggestions.
 - Parser recovery coverage for independent syntax failures.

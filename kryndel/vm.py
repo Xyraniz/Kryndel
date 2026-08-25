@@ -37,6 +37,20 @@ class EnumValue:
     payloads: tuple[Any, ...] = ()
 
 
+@dataclass(frozen=True)
+class ArrayValue:
+    """Immutable homogeneous sequence with a stable Kryndel runtime tag."""
+
+    items: tuple[Any, ...] = ()
+
+
+@dataclass(frozen=True)
+class TupleValue:
+    """Immutable fixed-width positional value."""
+
+    items: tuple[Any, ...] = ()
+
+
 @dataclass
 class UINode:
     kind: str
@@ -112,6 +126,12 @@ class VM:
                     self.make_struct(stack, function, instruction)
                 elif op == "MAKE_ENUM":
                     self.make_enum(stack, function, instruction)
+                elif op == "MAKE_ARRAY":
+                    self.make_sequence(stack, function, instruction, ArrayValue)
+                elif op == "MAKE_TUPLE":
+                    self.make_sequence(stack, function, instruction, TupleValue)
+                elif op == "INDEX":
+                    self.index(stack, function, instruction)
                 elif op == "MATCH_ENUM":
                     self.match_enum(stack, function, instruction)
                 elif op == "BIND_ENUM":
@@ -211,6 +231,29 @@ class VM:
             del stack[-arity:]
         stack.append(EnumValue(type_name, variant_name, payloads))
 
+    def make_sequence(self, stack: list[Any], function: BytecodeFunction, instruction: Any, value_type: type) -> None:
+        count = instruction.arg
+        if not isinstance(count, int) or count < 0:
+            raise self.error(function, instruction, "KRY6101 invalid sequence arity")
+        self.require_stack(stack, function, instruction, count)
+        values = tuple(stack[-count:]) if count else ()
+        if count:
+            del stack[-count:]
+        stack.append(value_type(values))
+
+    def index(self, stack: list[Any], function: BytecodeFunction, instruction: Any) -> None:
+        self.require_stack(stack, function, instruction, 2)
+        index = stack.pop()
+        target = stack.pop()
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise self.error(function, instruction, "KRY6102 sequence index must be Int")
+        items = target.items if isinstance(target, (ArrayValue, TupleValue)) else target if isinstance(target, str) else None
+        if items is None:
+            raise self.error(function, instruction, "KRY6103 indexing requires String, Array, or Tuple")
+        if index < 0 or index >= len(items):
+            raise self.error(function, instruction, "KRY6104 sequence index out of bounds")
+        stack.append(items[index])
+
     def match_enum(self, stack: list[Any], function: BytecodeFunction, instruction: Any) -> None:
         metadata = instruction.arg
         if not isinstance(metadata, dict) or set(metadata) != {"type", "variant", "arity"}:
@@ -295,7 +338,10 @@ class VM:
         if name == "float":
             return float(arguments[0])
         if name == "len":
-            return len(arguments[0])
+            value = arguments[0]
+            if isinstance(value, (str, ArrayValue, TupleValue)):
+                return len(value) if isinstance(value, str) else len(value.items)
+            raise RuntimeKryndelError("KRY6105 len requires String, Array, or Tuple")
         if name == "abs":
             return abs(arguments[0])
         if name == "sqrt":
@@ -355,8 +401,16 @@ class VM:
             fields = ", ".join(f"{name}: {VM.stringify(field_value)}" for name, field_value in value.fields)
             return f"{value.type_name} {{ {fields} }}"
         if isinstance(value, EnumValue):
-            suffix = "" if not value.payloads else "(" + ", ".join(VM.stringify(item) for item in value.payloads) + ")"
+            def payload_text(item: Any) -> str:
+                if isinstance(item, str):
+                    return '"' + item.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"'
+                return VM.stringify(item)
+            suffix = "" if not value.payloads else "(" + ", ".join(payload_text(item) for item in value.payloads) + ")"
             return f"{value.type_name}.{value.variant_name}{suffix}"
+        if isinstance(value, ArrayValue):
+            return "[" + ", ".join(VM.stringify(item) for item in value.items) + "]"
+        if isinstance(value, TupleValue):
+            return "(" + ", ".join(VM.stringify(item) for item in value.items) + ")"
         if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return str(value)
@@ -377,6 +431,8 @@ class VM:
     def binary(operator: str, left: Any, right: Any, function: BytecodeFunction, instruction: Any) -> Any:
         try:
             if operator == "+":
+                if isinstance(left, ArrayValue) and isinstance(right, ArrayValue):
+                    return ArrayValue(left.items + right.items)
                 return left + right
             if operator == "-":
                 return left - right

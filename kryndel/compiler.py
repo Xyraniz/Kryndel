@@ -185,6 +185,21 @@ class FunctionCompiler:
             self.compile_expression(expression.target)
             self.emit("GET_FIELD", expression.name, expression.span.line)
             return
+        if isinstance(expression, ast.ArrayLiteral):
+            for element in expression.elements:
+                self.compile_expression(element)
+            self.emit("MAKE_ARRAY", len(expression.elements), expression.span.line)
+            return
+        if isinstance(expression, ast.TupleLiteral):
+            for element in expression.elements:
+                self.compile_expression(element)
+            self.emit("MAKE_TUPLE", len(expression.elements), expression.span.line)
+            return
+        if isinstance(expression, ast.Index):
+            self.compile_expression(expression.target)
+            self.compile_expression(expression.index)
+            self.emit("INDEX", None, expression.span.line)
+            return
         if isinstance(expression, ast.EnumValue):
             for payload in expression.payloads:
                 self.compile_expression(payload)

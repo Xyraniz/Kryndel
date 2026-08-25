@@ -27,7 +27,7 @@ from kryndel.packages import (
 )
 from kryndel.source import SourceFile
 from kryndel.tokens import lex
-from kryndel.vm import EnumValue, RuntimeKryndelError, StructValue, VM
+from kryndel.vm import ArrayValue, EnumValue, RuntimeKryndelError, StructValue, TupleValue, VM
 
 
 class KryndelTests(unittest.TestCase):
@@ -49,6 +49,71 @@ class KryndelTests(unittest.TestCase):
 
     def test_string_concatenation_and_conversion(self) -> None:
         self.assertEqual(self.run_source('println("Kry" + str(7))'), "Kry7\n")
+
+    def test_arrays_tuples_and_safe_indexing(self) -> None:
+        source = """
+        let values: Array = [1, 2] + [3]
+        let pair: Tuple = ("a", 7)
+        println(len(values))
+        println(values[1])
+        println(pair[0])
+        println("Kryndel"[2])
+        """
+        module = compile_source(source, "sequences.kry")
+        captured = io.StringIO()
+        VM(module, output=captured.write).run()
+        self.assertEqual(captured.getvalue(), "3\n2\na\ny\n")
+        values = VM(module).module.functions["main"].instructions
+        self.assertIn("MAKE_ARRAY", [instruction.op for instruction in values])
+        self.assertIn("MAKE_TUPLE", [instruction.op for instruction in values])
+        self.assertIn("INDEX", [instruction.op for instruction in values])
+
+    def test_sequence_runtime_layout_and_deterministic_bytecode(self) -> None:
+        source = "fn make() -> Array { return [1, 2] }\nfn pair() -> Tuple { return (1, 2) }\n"
+        first = compile_source(source, "sequences.kry")
+        second = compile_source(source, "sequences.kry")
+        self.assertEqual(first.dumps(), second.dumps())
+        runtime = VM(first)
+        self.assertEqual(first.functions["main"].instructions[-1].op, "RETURN")
+        self.assertIsInstance(runtime.execute("make", []), ArrayValue)
+        self.assertIsInstance(runtime.execute("pair", []), TupleValue)
+
+    def test_sequence_index_errors_have_stable_runtime_codes(self) -> None:
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6104"):
+            VM(compile_source("let x: Array = [1]\nprintln(x[1])\n", "index.kry")).run()
+        with self.assertRaisesRegex(DiagnosticError, "KRY3054"):
+            compile_source('println("x"[true])\n', "index-type.kry")
+
+    def test_option_and_result_are_real_kryndel_enums(self) -> None:
+        source = """
+        enum Option { None Some(Int) }
+        enum Result { Ok(Int) Error(String) }
+        let maybe: Option = Option.Some(9)
+        let result: Result = Result.Error("bad")
+        println(maybe)
+        println(result)
+        """
+        module = compile_source(source, "option-result.kry")
+        captured = io.StringIO()
+        VM(module, output=captured.write).run()
+        self.assertEqual(captured.getvalue(), "Option.Some(9)\nResult.Error(\"bad\")\n")
+        self.assertIsInstance(
+            VM(compile_source("enum Option { None }\nfn make() -> Option { return Option.None }\n", "option.kry")).execute("make", []),
+            EnumValue,
+        )
+
+    def test_kryndel_stdlib_sources_compile_and_execute(self) -> None:
+        root = Path(__file__).parents[1] / "stdlib"
+        string_module = compile_source((root / "string" / "string.kry").read_text(encoding="utf-8"), "stdlib/string/string.kry")
+        collections_module = compile_source((root / "collections" / "sequences.kry").read_text(encoding="utf-8"), "stdlib/collections/sequences.kry")
+        option_module = compile_source((root / "core" / "option.kry").read_text(encoding="utf-8"), "stdlib/core/option.kry")
+        result_module = compile_source((root / "core" / "result.kry").read_text(encoding="utf-8"), "stdlib/core/result.kry")
+        self.assertEqual(VM(string_module).execute("length", ["Kryndel"]), 7)
+        self.assertEqual(VM(string_module).execute("joined", ["Kry", "ndel"]), "Kryndel")
+        self.assertEqual(VM(collections_module).execute("array_length", [ArrayValue((1, 2))]), 2)
+        self.assertEqual(VM(collections_module).execute("tuple_length", [TupleValue((1, 2, 3))]), 3)
+        self.assertEqual(len(option_module.functions), 1)
+        self.assertEqual(len(result_module.functions), 1)
 
     def test_functions_and_recursion(self) -> None:
         source = """
