@@ -1,10 +1,14 @@
 # Kryndel
 
+## Unit enums
+
+Kryndel supports nominal enums with unit variants only. Values use explicit syntax such as `Color.Red` and print as `Color.Red`. Payloads and `match` are not implemented.
+
 > A strongly typed language for building native desktop software.
 
 Kryndel is an experimental programming language and compiler toolkit written from scratch in Python's standard library. It is designed around explicit types, predictable semantics, readable diagnostics, deterministic bytecode, and a small declarative UI model.
 
-The project is intentionally self-contained. It does not require third-party Python packages, a package manager, a web service, or a downloaded compiler toolchain. The current implementation compiles Kryndel source into a portable Kryndel bytecode module and executes it in the included virtual machine.
+The project is intentionally self-contained. It does not require third-party Python packages, a package manager, a web service, or a downloaded compiler toolchain. The current implementation compiles Kryndel source into a portable Kryndel bytecode module and executes it in the included virtual machine. The language currently includes nominal `struct` declarations, constructors, and field access in addition to its primitive types.
 
 ## Project status
 
@@ -60,6 +64,19 @@ fn fibonacci(n: Int) -> Int {
 println(fibonacci(10))
 ```
 
+Structs provide typed aggregate values without introducing a generic dictionary into the language runtime:
+
+```kryndel
+struct Point {
+    x: Int
+    y: Int
+}
+
+let point: Point = Point { y: 4, x: 3 }
+println(point.x)
+println(point.y)
+```
+
 The compiler rejects invalid programs before execution:
 
 ```kryndel
@@ -98,10 +115,10 @@ The API is kept deliberately small until event ownership, layout lifetime, threa
 | Area | Current behavior |
 | --- | --- |
 | Lexer | Identifiers, keywords, integers, floating-point values, strings, nested block comments, line comments, operators, and source spans. |
-| Parser | Recursive-descent parser with precedence-aware expressions, functions, blocks, conditions, loops, returns, `break`, and `continue`. |
-| Static typing | `Int`, `Float`, `Bool`, `String`, `UiNode`, `Void`, immutable bindings, mutable bindings, function signatures, assignment checks, and operator checks. |
-| Compiler | AST-to-bytecode compiler with lexical compiler scopes, functions, calls, jumps, short-circuit boolean operators, and deterministic constants. |
-| Runtime | Stack-based virtual machine, function calls, recursion, arithmetic, comparisons, conversions, strings, clock access, and guarded stack operations. |
+| Parser | Recursive-descent parser with precedence-aware expressions, functions, blocks, conditions, loops, returns, `break`, `continue`, struct declarations, constructors, and field access. |
+| Static typing | `Int`, `Float`, `Bool`, `String`, `UiNode`, `Void`, nominal struct types, complete and unique constructors, field compatibility, member access, immutable bindings, mutable bindings, function signatures, assignment checks, and operator checks. |
+| Compiler | AST-to-bytecode compiler with lexical compiler scopes, functions, calls, `MAKE_STRUCT`, `GET_FIELD`, jumps, short-circuit boolean operators, and deterministic constants and field metadata. |
+| Runtime | Stack-based virtual machine, function calls, recursion, arithmetic, comparisons, conversions, strings, `StructValue` instances, checked field loads, clock access, and guarded stack operations. |
 | Diagnostics | Stable `KRY` error codes, line and column locations, highlighted source spans, notes, and help text. |
 | UI | Platform-neutral window and widget tree with containers, text, buttons, callbacks, deterministic rendering, and runtime validation. |
 | Artifacts | Checksummed `KEXE` portable Kryndel executable packages with deterministic JSON bytecode payloads. |
@@ -189,7 +206,7 @@ Kryndel uses Python's built-in `unittest` runner. No test dependency is required
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite covers lexing, comments and literals, precedence, conversions, recursion, loops, short-circuit behavior, type failures, immutable assignment, runtime stack traces, UI rendering, bytecode determinism, and KEXE round trips with checksum validation.
+The suite covers lexing, comments and literals, precedence, conversions, recursion, loops, short-circuit behavior, struct construction and field access, invalid struct diagnostics, deterministic struct metadata, malformed-bytecode runtime errors, type failures, immutable assignment, runtime stack traces, UI rendering, bytecode determinism, and KEXE round trips with checksum validation.
 
 ## Design boundaries
 
@@ -208,7 +225,7 @@ This separation makes it possible to replace one backend without rewriting the l
 
 The next milestones are ordered by semantic risk rather than visual complexity:
 
-- Add explicit `struct`, `enum`, `Option`, and `Result` types.
+- Add enums, `Option`, and `Result` types with explicit representations and matching rules.
 - Introduce a typed intermediate representation between the AST and bytecode.
 - Add first-class closures with an explicit capture model.
 - Specify ownership and borrowing rules before implementing them.
