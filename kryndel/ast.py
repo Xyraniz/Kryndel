@@ -12,6 +12,11 @@ from .diagnostics import Span
 class Node:
     span: Span
 
+    def as_dict(self) -> dict[str, object]:
+        from .wire import to_wire
+
+        return to_wire(self)
+
 
 @dataclass
 class TypeName(Node):

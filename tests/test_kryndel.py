@@ -31,6 +31,7 @@ from kryndel.packages import (
 from kryndel.source import SourceFile
 from kryndel.tokens import lex
 from kryndel.vm import ArrayValue, BytesValue, EnumValue, RuntimeKryndelError, StructValue, TupleValue, VM
+from kryndel.wire import ast_record, token_records
 
 
 class KryndelTests(unittest.TestCase):
@@ -235,6 +236,27 @@ class KryndelTests(unittest.TestCase):
         fixture = json.loads(raw)
         self.assertEqual(raw, json.dumps(fixture, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         self.assertEqual(fixture["source"], "stdlib/testing/testing.kry")
+
+    def test_nominal_token_and_ast_records_are_deterministic(self) -> None:
+        source = SourceFile("records.kry", "let answer: Int = 42\n")
+        tokens, lexical = lex(source)
+        self.assertFalse(lexical.has_errors)
+        first_tokens = token_records(tokens)
+        second_tokens = token_records(tokens)
+        self.assertEqual(first_tokens, second_tokens)
+        self.assertEqual(first_tokens[0]["record"], "Token")
+        self.assertEqual(first_tokens[0]["value"], "let")
+        fixture = json.loads((Path(__file__).parent / "fixtures" / "records-v1.json").read_text(encoding="utf-8"))
+        self.assertEqual(first_tokens[0], fixture["token"])
+        program, parsing = parse(source, tokens)
+        self.assertFalse(parsing.has_errors)
+        first_ast = ast_record(program)
+        second_ast = ast_record(program)
+        self.assertEqual(first_ast, second_ast)
+        self.assertEqual(first_ast["record"], "Program")
+        self.assertEqual(first_ast["items"][0]["record"], "LetStmt")
+        rendered = json.dumps(first_ast, ensure_ascii=False, indent=2, sort_keys=True) + "\\n"
+        self.assertEqual(rendered, json.dumps(second_ast, ensure_ascii=False, indent=2, sort_keys=True) + "\\n")
 
     def test_lexer_handles_comments_literals_and_operators(self) -> None:
         source = SourceFile("test.kry", '// comment\nlet value: Int = 42\n/* nested /* block */ comment */\n')

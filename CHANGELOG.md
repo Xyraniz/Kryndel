@@ -6,6 +6,7 @@
 
 - Added the offline `kry core-report` contract audit. It canonicalizes and validates the value/runtime, Bytes, testing, and host-boundary v1 fixtures and reports stable byte lengths and SHA-256 checksums without claiming self-hosting. The contract is documented in `docs/specs/core-v1.md`.
 - Added `VirtualFileSystem` and `RootedFileSystem` under the host-boundary v1 contract. Relative-path normalization, deterministic listings, byte IO, missing-path diagnostics, traversal rejection, and symlink rejection are executable and tested without touching a user home or network.
+- Added deterministic nominal wire records for `Token`, AST nodes, and `Span`, including finite-value checks, source-order preservation, and the `records-v1.json` fixture used by differential tests. The bootstrap explicitly rejects arbitrary host objects at this boundary.
 
 - Versioned value/runtime v1 contract for strings, bytes, sequences, core
   enums, Void/nil, frames, calls, serializable errors, and the temporary host
