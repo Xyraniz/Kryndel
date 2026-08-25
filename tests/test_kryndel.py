@@ -8,13 +8,13 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from kryndel.artifact import read_artifact, write_artifact
-from kryndel.bytecode import Module
+from kryndel.bytecode import BytecodeFunction, Instruction, Module
 from kryndel.compiler import compile_project, compile_source
 from kryndel.contracts import core_contract_report, validate_core_contract
 from kryndel.filesystem import RootedFileSystem, VirtualFileSystem
 from kryndel.modules import ModuleGraph
 from kryndel.parser import parse
-from kryndel.tooling import abi_description, format_file, host_boundary_report, pack_project, run_kryndel_tests
+from kryndel.tooling import abi_description, format_file, host_boundary_report, pack_project, run_kryndel_tests, verify_module
 from kryndel.diagnostics import DiagnosticError
 from kryndel.cli import main as cli_main
 from kryndel.packages import (
@@ -703,6 +703,20 @@ class KryndelTests(unittest.TestCase):
         with self.assertRaises(DiagnosticError) as bindings:
             compile_source("enum Maybe { Some(Int) } match Maybe.Some(1) { Maybe.Some => println(1) }", "match-bindings.kry")
         self.assertIn("KRY3048", str(bindings.exception))
+
+    def test_bytecode_verifier_v1_rejects_frozen_malformed_cases(self) -> None:
+        fixture = json.loads((Path(__file__).parent / "fixtures" / "bytecode-verifier-v1.json").read_text(encoding="utf-8"))
+        cases = fixture["invalid"]
+        modules = [
+            Module("bad-op", "main", {"main": BytecodeFunction("main", 0, [Instruction("NOT_AN_OPCODE")])}),
+            Module("bad-parameters", "main", {"main": BytecodeFunction("main", 1, [Instruction("PUSH_NIL"), Instruction("RETURN")], parameters=[])}),
+            Module("bad-struct", "main", {"main": BytecodeFunction("main", 0, [Instruction("MAKE_STRUCT", {"type": "Point", "fields": ["x", "x"]})])}),
+            Module("bad-binding", "main", {"main": BytecodeFunction("main", 0, [Instruction("BIND_ENUM", {"source": "value", "bindings": ["x"], "arity": 2})])}),
+        ]
+        for case, module in zip(cases, modules):
+            with self.subTest(case=case["case"]), self.assertRaisesRegex(ValueError, case["message"]):
+                verify_module(module)
+        verify_module(compile_source("println(1)", "verified.kry"))
 
     def test_malformed_payload_bytecode_is_a_runtime_diagnostic(self) -> None:
         from kryndel.bytecode import BytecodeFunction, Instruction

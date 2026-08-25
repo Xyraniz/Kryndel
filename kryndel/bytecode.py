@@ -8,6 +8,36 @@ from pathlib import Path
 from typing import Any
 
 
+BYTECODE_VERSION = 1
+BYTECODE_OPCODES = frozenset(
+    {
+        "PUSH_CONST",
+        "PUSH_NIL",
+        "PUSH_CALLABLE",
+        "LOAD",
+        "STORE",
+        "STORE_RESULT",
+        "MAKE_STRUCT",
+        "MAKE_ENUM",
+        "MAKE_ARRAY",
+        "MAKE_TUPLE",
+        "INDEX",
+        "MATCH_ENUM",
+        "BIND_ENUM",
+        "GET_FIELD",
+        "POP",
+        "DUP",
+        "UNARY",
+        "BINARY",
+        "JUMP",
+        "JUMP_IF_FALSE",
+        "JUMP_IF_TRUE",
+        "CALL",
+        "RETURN",
+    }
+)
+
+
 @dataclass
 class Instruction:
     op: str
