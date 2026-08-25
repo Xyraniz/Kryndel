@@ -120,6 +120,9 @@ Runtime errors for the existing bytecode operations are represented by
 `RuntimeKryndelError`; malformed bytecode, stack underflow, invalid calls,
 division by zero, invalid sequence indexes, and unsupported sequence values are
 diagnosed without exposing Python tracebacks.
+`Bytes` is specified but not yet an executable type. The complete value, UTF-8,
+error, frame, call, and host-boundary contract is versioned in
+[`specs/value-runtime-v1.md`](specs/value-runtime-v1.md).
 
 
 ## Diagnostics

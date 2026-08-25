@@ -4,6 +4,10 @@
 
 ### Added
 
+- Versioned value/runtime v1 contract for strings, bytes, sequences, core
+  enums, Void/nil, frames, calls, serializable errors, and the temporary host
+  boundary, with deterministic valid/invalid fixtures and a measured host
+  dependency inventory. Bytes remain specified but intentionally unimplemented.
 - Kryndel-native immutable array and tuple literals, deterministic `MAKE_ARRAY`,
   `MAKE_TUPLE`, and `INDEX` bytecode, safe indexing, concatenation, and stable
   runtime errors KRY6101–KRY6105.

@@ -156,6 +156,7 @@ def abi_description() -> dict[str, object]:
         },
         "layouts": {
             "String": "host UTF-8 scalar sequence; length counts Unicode code points",
+            "Bytes": "reserved v1 immutable octet sequence; not executable in bootstrap",
             "Array": "immutable homogeneous sequence, MAKE_ARRAY arity then source-order values",
             "Tuple": "immutable fixed-width sequence, MAKE_TUPLE arity then source-order values",
             "Option": "nominal enum; None or Some(payload)",
@@ -167,5 +168,14 @@ def abi_description() -> dict[str, object]:
             "KRY6103": "indexing requires String, Array, or Tuple",
             "KRY6104": "sequence index out of bounds",
             "KRY6105": "len requires String, Array, or Tuple",
+            "KRY6201": "invalid UTF-8",
+            "KRY6202": "conversion is not representable",
+            "KRY6203": "incompatible collection operation",
+            "KRY6204": "value is absent",
+            "KRY6301": "IO failure",
+            "KRY6302": "file does not exist",
+            "KRY6303": "path escapes project root",
+            "KRY6304": "malformed program input",
+            "KRY6305": "malformed bytecode",
         },
     }
