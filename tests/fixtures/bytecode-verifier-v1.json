@@ -1,0 +1,22 @@
+{
+  "contract": "kryndel-bytecode-verifier",
+  "invalid": [
+    {
+      "case": "unknown_opcode",
+      "message": "unknown bytecode opcode"
+    },
+    {
+      "case": "parameter_metadata",
+      "message": "invalid arity or parameter metadata"
+    },
+    {
+      "case": "struct_metadata",
+      "message": "invalid MAKE_STRUCT metadata"
+    },
+    {
+      "case": "binding_metadata",
+      "message": "invalid BIND_ENUM metadata"
+    }
+  ],
+  "version": 1
+}

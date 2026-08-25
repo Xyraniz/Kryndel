@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import ast as kry_ast
+from .bytecode import BYTECODE_OPCODES, BYTECODE_VERSION
 from .compiler import compile_project, compile_source
 from .diagnostics import DiagnosticError
 from .packages import read_manifest
@@ -241,7 +242,7 @@ def verify_module(module) -> None:
     """Validate the structural invariants needed before VM execution."""
     from .bytecode import BytecodeFunction
 
-    if module.version != 1 or not isinstance(module.name, str) or not isinstance(module.entry, str):
+    if module.version != BYTECODE_VERSION or not isinstance(module.name, str) or not isinstance(module.entry, str):
         raise ValueError("unsupported or malformed bytecode module header")
     if module.entry not in module.functions:
         raise ValueError(f"bytecode entry function {module.entry!r} is missing")
@@ -249,13 +250,19 @@ def verify_module(module) -> None:
         function = module.functions[name]
         if not isinstance(function, BytecodeFunction) or function.name != name:
             raise ValueError(f"bytecode function key/name mismatch for {name!r}")
-        if function.arity < 0 or len(function.parameters) < function.arity:
+        if function.arity < 0 or len(function.parameters) != function.arity or any(not isinstance(parameter, str) or not parameter for parameter in function.parameters) or len(set(function.parameters)) != len(function.parameters):
             raise ValueError(f"invalid arity or parameter metadata for {name!r}")
         for instruction in function.instructions:
             if not isinstance(instruction.op, str) or not instruction.op:
                 raise ValueError(f"invalid instruction in {name!r}")
             if instruction.line < 0:
                 raise ValueError(f"invalid source line in {name!r}")
+            if instruction.op not in BYTECODE_OPCODES:
+                raise ValueError(f"unknown bytecode opcode {instruction.op!r} in {name!r}")
+            if instruction.op in {"PUSH_NIL", "POP", "DUP", "INDEX", "RETURN"} and instruction.arg is not None:
+                raise ValueError(f"invalid argument for {instruction.op} in {name!r}")
+            if instruction.op in {"LOAD", "STORE", "STORE_RESULT", "GET_FIELD", "UNARY", "BINARY", "PUSH_CALLABLE"} and (not isinstance(instruction.arg, str) or not instruction.arg):
+                raise ValueError(f"invalid string argument for {instruction.op} in {name!r}")
             if instruction.op == "PUSH_CONST":
                 if not isinstance(instruction.arg, int) or not 0 <= instruction.arg < len(function.constants):
                     raise ValueError(f"invalid constant index in {name!r}")
@@ -271,14 +278,17 @@ def verify_module(module) -> None:
                     or instruction.arg[1] < 0
                 ):
                     raise ValueError(f"invalid CALL metadata in {name!r}")
+            elif instruction.op == "MAKE_STRUCT":
+                if not isinstance(instruction.arg, dict) or set(instruction.arg) != {"type", "fields"} or not isinstance(instruction.arg["type"], str) or not isinstance(instruction.arg["fields"], list) or any(not isinstance(field, str) or not field for field in instruction.arg["fields"]) or len(set(instruction.arg["fields"])) != len(instruction.arg["fields"]):
+                    raise ValueError(f"invalid MAKE_STRUCT metadata in {name!r}")
             elif instruction.op == "MAKE_ENUM":
-                if not isinstance(instruction.arg, dict) or set(instruction.arg) not in ({"type", "variant"}, {"type", "variant", "arity"}):
+                if not isinstance(instruction.arg, dict) or set(instruction.arg) not in ({"type", "variant"}, {"type", "variant", "arity"}) or not isinstance(instruction.arg.get("type"), str) or not isinstance(instruction.arg.get("variant"), str) or ("arity" in instruction.arg and (not isinstance(instruction.arg["arity"], int) or instruction.arg["arity"] < 0)):
                     raise ValueError(f"invalid MAKE_ENUM metadata in {name!r}")
             elif instruction.op == "MATCH_ENUM":
-                if not isinstance(instruction.arg, dict) or set(instruction.arg) != {"type", "variant", "arity"}:
+                if not isinstance(instruction.arg, dict) or set(instruction.arg) != {"type", "variant", "arity"} or not isinstance(instruction.arg["type"], str) or not isinstance(instruction.arg["variant"], str) or not isinstance(instruction.arg["arity"], int) or instruction.arg["arity"] < 0:
                     raise ValueError(f"invalid MATCH_ENUM metadata in {name!r}")
             elif instruction.op == "BIND_ENUM":
-                if not isinstance(instruction.arg, dict) or set(instruction.arg) != {"source", "bindings", "arity"}:
+                if not isinstance(instruction.arg, dict) or set(instruction.arg) != {"source", "bindings", "arity"} or not isinstance(instruction.arg["source"], str) or not isinstance(instruction.arg["bindings"], list) or any(not isinstance(binding, str) or not binding for binding in instruction.arg["bindings"]) or len(set(instruction.arg["bindings"])) != len(instruction.arg["bindings"]) or not isinstance(instruction.arg["arity"], int) or instruction.arg["arity"] < 0 or instruction.arg["arity"] != len(instruction.arg["bindings"]):
                     raise ValueError(f"invalid BIND_ENUM metadata in {name!r}")
             elif instruction.op in {"MAKE_ARRAY", "MAKE_TUPLE"}:
                 if not isinstance(instruction.arg, int) or instruction.arg < 0:
