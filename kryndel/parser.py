@@ -56,13 +56,46 @@ class Parser:
         start = self.current.span
         while not self.check("EOF"):
             try:
+                public = False
+                test = False
+                visibility_start = None
+                test_start = None
+                if self.match("AT"):
+                    test_start = self.tokens[self.index - 1].span
+                    annotation = self.expect("IDENT", "expected an annotation name after @", "KRY2015")
+                    if annotation.value != "test":
+                        self.diagnostics.error(
+                            f"unknown annotation @{annotation.value}",
+                            annotation.span,
+                            code="KRY2015",
+                            help="The only supported function annotation is @test.",
+                        )
+                        raise ParseAbort
+                    test = True
+                if self.match("PUB"):
+                    public = True
+                    visibility_start = self.tokens[self.index - 1].span
                 if self.check("FN"):
-                    items.append(self.parse_function())
+                    items.append(self.parse_function(public, visibility_start, test, test_start))
                 elif self.check("STRUCT"):
-                    items.append(self.parse_struct())
+                    items.append(self.parse_struct(public, visibility_start))
                 elif self.check("ENUM"):
-                    items.append(self.parse_enum())
+                    items.append(self.parse_enum(public, visibility_start))
                 else:
+                    if public:
+                        self.diagnostics.error(
+                            "pub may only modify fn, struct, or enum declarations",
+                            visibility_start or self.current.span,
+                            code="KRY2014",
+                        )
+                        raise ParseAbort
+                    if test:
+                        self.diagnostics.error(
+                            "@test may only modify a fn declaration",
+                            test_start or self.current.span,
+                            code="KRY2015",
+                        )
+                        raise ParseAbort
                     items.append(self.parse_statement())
             except ParseAbort:
                 self.synchronize()
@@ -71,8 +104,15 @@ class Parser:
         self.rewrite_enum_values(program)
         return program
 
-    def parse_function(self) -> ast.FunctionDecl:
-        start = self.expect("FN", "expected fn").span
+    def parse_function(
+        self,
+        public: bool = False,
+        visibility_start: Span | None = None,
+        test: bool = False,
+        test_start: Span | None = None,
+    ) -> ast.FunctionDecl:
+        start = test_start or visibility_start or self.current.span
+        self.expect("FN", "expected fn")
         name = self.expect("IDENT", "expected a function name after fn", "KRY2002")
         self.expect("LPAREN", "expected ( after function name")
         parameters: list[ast.Parameter] = []
@@ -88,10 +128,11 @@ class Parser:
         self.expect("ARROW", "expected -> followed by the return type")
         return_type = self.parse_type_name()
         body = self.parse_block()
-        return ast.FunctionDecl(self.merge(start, body.span), str(name.value), parameters, return_type, body)
+        return ast.FunctionDecl(self.merge(start, body.span), str(name.value), parameters, return_type, body, public, test)
 
-    def parse_struct(self) -> ast.StructDecl:
-        start = self.expect("STRUCT", "expected struct").span
+    def parse_struct(self, public: bool = False, visibility_start: Span | None = None) -> ast.StructDecl:
+        start = visibility_start or self.current.span
+        self.expect("STRUCT", "expected struct")
         name = self.expect("IDENT", "expected a struct name after struct", "KRY2008")
         self.expect("LBRACE", "expected { after struct name")
         fields: list[ast.StructFieldDecl] = []
@@ -108,10 +149,11 @@ class Parser:
                 )
             )
         closing = self.expect("RBRACE", "expected } to close struct declaration")
-        return ast.StructDecl(self.merge(start, closing.span), str(name.value), fields)
+        return ast.StructDecl(self.merge(start, closing.span), str(name.value), fields, public)
 
-    def parse_enum(self) -> ast.EnumDecl:
-        start = self.expect("ENUM", "expected enum").span
+    def parse_enum(self, public: bool = False, visibility_start: Span | None = None) -> ast.EnumDecl:
+        start = visibility_start or self.current.span
+        self.expect("ENUM", "expected enum")
         name = self.expect("IDENT", "expected an enum name after enum", "KRY2011")
         self.expect("LBRACE", "expected { after enum name")
         variants: list[ast.EnumVariantDecl] = []
@@ -128,7 +170,7 @@ class Parser:
             end = payload_types[-1].span if payload_types else variant.span
             variants.append(ast.EnumVariantDecl(self.merge(variant.span, end), str(variant.value), variant.span, payload_types))
         closing = self.expect("RBRACE", "expected } to close enum declaration")
-        return ast.EnumDecl(self.merge(start, closing.span), str(name.value), variants)
+        return ast.EnumDecl(self.merge(start, closing.span), str(name.value), variants, public)
 
     def parse_type_name(self) -> ast.TypeName:
         token = self.expect("IDENT", "expected a type name", "KRY2004")
@@ -391,7 +433,7 @@ class Parser:
         while not self.check("EOF"):
             if self.match("SEMICOLON"):
                 return
-            if self.check("RBRACE", "FN", "STRUCT", "ENUM", "LET", "IF", "WHILE", "RETURN"):
+            if self.check("RBRACE", "FN", "STRUCT", "ENUM", "PUB", "AT", "LET", "IF", "WHILE", "RETURN"):
                 return
             self.advance()
 

@@ -39,6 +39,7 @@ KEYWORDS: Final[dict[str, str]] = {
     "enum": "ENUM",
     "match": "MATCH",
     "import": "IMPORT",
+    "pub": "PUB",
 }
 
 TWO_CHAR_TOKENS: Final[dict[str, str]] = {
@@ -72,6 +73,7 @@ ONE_CHAR_TOKENS: Final[dict[str, str]] = {
     "<": "LT",
     ">": "GT",
     "!": "BANG",
+    "@": "AT",
 }
 
 

@@ -125,6 +125,8 @@ class FunctionDecl(Node):
     parameters: list[Parameter]
     return_type: TypeName
     body: Block
+    public: bool = False
+    test: bool = False
 
 
 @dataclass
@@ -138,6 +140,7 @@ class StructFieldDecl(Node):
 class StructDecl(Node):
     name: str
     fields: list[StructFieldDecl] = field(default_factory=list)
+    public: bool = False
 
 
 @dataclass
@@ -151,6 +154,7 @@ class EnumVariantDecl(Node):
 class EnumDecl(Node):
     name: str
     variants: list[EnumVariantDecl] = field(default_factory=list)
+    public: bool = False
 
 
 @dataclass

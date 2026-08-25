@@ -31,6 +31,17 @@ a boolean. `BIND_ENUM` contains a source local, an ordered list of internal
 binding slots, and the arity. A runtime must reject malformed metadata and
 stack underflow instead of exposing host exceptions.
 
+## Linked project modules
+
+Project-aware compilation keeps the root entry name `main`. Functions imported
+from dependency modules are stored with their dotted module path, for example
+`request.http.client.get`. A `CALL` instruction uses that exact qualified name.
+The function-name string is therefore part of the module ABI for linked builds;
+function and instruction arrays remain deterministic, and module function maps
+are serialized with sorted object keys. Imported module top-level statements are
+not executed implicitly; only linked function declarations contribute bytecode.
+
 Version 1 is portable VM bytecode, not native machine code. A self-hosted
 compiler must emit this contract byte-for-byte for reproducible builds or
-explicitly select a future format version.
+explicitly select a future format version. Qualified names do not make a `.kexe`
+file a native executable.

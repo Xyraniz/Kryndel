@@ -388,25 +388,8 @@ def list_packages(root: str | Path) -> list[LockEntry]:
     return Lockfile.load(lock_path).entries
 
 
-def validate_imports(root: str | Path, source: str) -> None:
-    """Validate declared/installed package imports without executing package code."""
-    project = Path(root).resolve()
-    manifest = read_manifest(project)
-    pattern = re.compile(r"^\s*import\s+([A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)?)\s*(?:;|$)", re.MULTILINE)
-    for match in pattern.finditer(source):
-        path = match.group(1)
-        package_name, _, module_name = path.partition(".")
-        if package_name not in manifest.dependencies:
-            raise package_error(f"package {package_name!r} is not declared in kry.toml", "KRY5013", manifest.path, "Add the dependency with kry add.")
-        package_root = project / ".kryndel" / "packages" / package_name
-        if not package_root.is_dir():
-            raise package_error(f"declared package {package_name!r} is not installed", "KRY5014", package_root, "Run kry install --offline before checking imports.")
-        if not module_name:
-            continue
-        module = package_root / "src" / f"{module_name}.kry"
-        directory = package_root / "src" / module_name
-        candidates = [candidate for candidate in (module, directory / "lib.kry") if candidate.is_file()]
-        if len(candidates) > 1:
-            raise package_error(f"import {path!r} is ambiguous", "KRY5015", package_root / "src", "Keep exactly one module path for this import.")
-        if not candidates:
-            raise package_error(f"module {path!r} was not found in the installed package", "KRY5014", package_root / "src", "Export the module from the package src directory.")
+def validate_imports(root: str | Path, source: str, filename: str | Path | None = None) -> None:
+    """Resolve and validate the complete imported module graph without execution."""
+    from .modules import ModuleGraph
+
+    ModuleGraph(root, source, filename).load()

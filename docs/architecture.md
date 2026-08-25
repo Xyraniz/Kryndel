@@ -16,10 +16,14 @@ Lexer --------------------> tokens + KRY1xxx diagnostics
 Recursive-descent parser --> dataclass AST + KRY2xxx diagnostics
     |
     v
-Static checker -----------> names/types/imports + KRY3xxx diagnostics
-    |                         match exhaustiveness
+Module graph loader -------> parsed modules + import edges
+    |
     v
-Bytecode compiler ---------> deterministic Module v1
+Static checker ------------> names/types/module interfaces + imports
+                              KRY3xxx diagnostics and exhaustiveness
+    |
+    v
+Bytecode compiler ---------> deterministic linked Module v1
     |                 \\
     v                  v
    VM                KEXE artifact
@@ -33,7 +37,8 @@ phase and never executes package files.
 
 `Diagnostic` stores severity, code, primary span, secondary labelled spans,
 message, notes, help, and a suggestion. Human output renders source context;
-`DiagnosticError.as_json()` emits sorted, stable JSON.
+`DiagnosticError.as_json()` emits sorted, stable JSON. Module diagnostics add
+package and module notes without changing the existing source-span schema.
 
 | Range | Meaning |
 | --- | --- |
@@ -44,7 +49,8 @@ message, notes, help, and a suggestion. Human output renders source context;
 | KRY6000–6099 | runtime, malformed bytecode, artifacts |
 
 Existing codes remain unchanged. New payload/match codes include `KRY3043`–
-`KRY3049`; package codes include `KRY5001`–`KRY5013`.
+`KRY3049`; imported-symbol codes are `KRY3050`–`KRY3052`; package/module
+codes include `KRY5001`–`KRY5016`.
 
 ## Enums and match
 
@@ -75,27 +81,53 @@ exposes a Python traceback. The complete v1 contract is in
 KEXE wraps module JSON with a fixed magic, length, and SHA-256 payload digest.
 It is a portable VM artifact, not a native Windows executable.
 
-## Packages
+## Packages and modules
 
-`packages.py` implements a strict manifest subset, semantic version
-requirements, a local registry, path dependencies, dependency graph traversal,
+`packages.py` implements a strict manifest subset, semantic version requirements,
+a local registry, path dependencies, dependency graph traversal,
 cycle/incompatibility checks, checksum verification, deterministic JSON
 lockfiles, and staged installation. The resolver sorts package names and lock
 entries. Registry packages live under `.kryndel/registry/name/version`; installed
 files live under `.kryndel/packages/name`.
 
+`modules.py` resolves source modules after installation. The package root is
+`src/lib.kry`; a child path accepts exactly one of `src/name.kry`,
+`src/name/mod.kry`, or the compatibility form `src/name/lib.kry`. The same rule
+is applied recursively for dotted imports. Existing candidates are checked
+inside the installed package root, ambiguous candidates produce `KRY5015`, and
+missing candidates produce `KRY5014`. Imports are visited in sorted path order;
+cycles produce `KRY5016`. The resolver parses and checks source but never
+executes package top-level code.
+
+Declarations are private by default. The parser accepts only `pub fn`, `pub
+struct`, and `pub enum` as visibility modifiers. The current linker exposes
+public functions as qualified VM function names, such as
+`request.http.client.get`; private functions remain callable only from their
+own module. Aliases, reexports, imported nominal types, traits, and generics
+remain outside this milestone.
+
 No pip, Python package installation, database, login, remote service, or package
 installation script is involved. Remote registry transport is deliberately not
-implemented. Imports currently validate that the top-level package is declared;
-exported module symbols and ambiguity resolution remain future work.
+implemented.
+
+
+## Linked modules and Python boundary
+
+Project-aware compilation loads the root source and every resolved module,
+checks each module against its imported interface, and merges exported function
+bytecode into one deterministic v1 `Module`. Dependency module functions are
+namespaced; the project root keeps `main` as its entry point. Imported module
+top-level statements are not implicitly executed.
 
 ## Python boundary and self-hosting
 
 Currently Python owns all implementation code and the host filesystem/clock/
 stdout bridges. The language-independent contracts are source spans, AST
-semantics, diagnostic JSON, bytecode v1, KEXE checksums, manifest v1, lockfile
-ordering, semver, and package checksum calculation. A future Kryndel lexer
-needs identifiers, literals, comments, operators, and spans; a future parser
-needs declarations, expressions, blocks, enums, payloads, match, and recovery.
-The first self-hosted milestone must reproduce bytecode and diagnostics from
-the same fixtures before the Python bootstrap is retired.
+semantics, visibility, module resolution, diagnostic JSON, qualified function
+names, bytecode v1, KEXE checksums, manifest v1, lockfile ordering, semver, and
+package checksum calculation. A future Kryndel lexer needs identifiers,
+literals, comments, operators, and spans; a future parser needs declarations,
+expressions, blocks, enums, payloads, match, imports, and recovery. The first
+self-hosted milestone must reproduce module graphs, exported interfaces,
+bytecode, and diagnostics from the same fixtures before the Python bootstrap is
+retired. Kryndel is not self-hosted yet.

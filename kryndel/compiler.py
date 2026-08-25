@@ -21,6 +21,8 @@ class FunctionCompiler:
     arity: int
     structs: dict[str, ast.StructDecl] = field(default_factory=dict)
     enums: dict[str, ast.EnumDecl] = field(default_factory=dict)
+    namespace: str = ""
+    local_functions: set[str] = field(default_factory=set)
     function: BytecodeFunction = field(init=False)
     scopes: list[dict[str, str]] = field(default_factory=lambda: [{}])
     loop_stack: list[tuple[int, list[int], list[int]]] = field(default_factory=list)
@@ -246,7 +248,10 @@ class FunctionCompiler:
         if isinstance(expression, ast.Call):
             for argument in expression.arguments:
                 self.compile_expression(argument)
-            self.emit("CALL", (self.callable_name(expression.callee) or "<invalid>", len(expression.arguments)), expression.span.line)
+            name = self.callable_name(expression.callee) or "<invalid>"
+            if self.namespace and "." not in name and name in self.local_functions:
+                name = f"{self.namespace}.{name}"
+            self.emit("CALL", (name, len(expression.arguments)), expression.span.line)
             return
         raise RuntimeError(f"unhandled AST expression: {type(expression).__name__}")
 
@@ -270,23 +275,47 @@ class Compiler:
     source: SourceFile
     program: ast.Program
 
-    def compile(self) -> Module:
+    def compile(self, *, namespace: str = "", include_entry: bool = True) -> Module:
         structs = {
             item.name: item for item in self.program.items if isinstance(item, ast.StructDecl)
         }
         enums = {item.name: item for item in self.program.items if isinstance(item, ast.EnumDecl)}
-        entry_statements = [
-            item for item in self.program.items if not isinstance(item, (ast.FunctionDecl, ast.StructDecl, ast.EnumDecl))
-        ]
-        entry = FunctionCompiler(None, "main", 0, structs, enums).compile(entry_statements)
-        functions = {"main": entry}
-        for declaration in (item for item in self.program.items if isinstance(item, ast.FunctionDecl)):
-            function = FunctionCompiler(declaration, declaration.name, len(declaration.parameters), structs, enums).compile(
+        declarations = [item for item in self.program.items if isinstance(item, ast.FunctionDecl)]
+        local_functions = {item.name for item in declarations}
+        functions: dict[str, BytecodeFunction] = {}
+        if include_entry:
+            entry_name = f"{namespace}.main" if namespace else "main"
+            entry_statements = [
+                item for item in self.program.items
+                if not isinstance(item, (ast.FunctionDecl, ast.StructDecl, ast.EnumDecl))
+            ]
+            entry = FunctionCompiler(
+                None,
+                entry_name,
+                0,
+                structs,
+                enums,
+                namespace,
+                local_functions,
+            ).compile(entry_statements)
+            functions[entry_name] = entry
+        for declaration in declarations:
+            function_name = f"{namespace}.{declaration.name}" if namespace else declaration.name
+            function = FunctionCompiler(
+                declaration,
+                function_name,
+                len(declaration.parameters),
+                structs,
+                enums,
+                namespace,
+                local_functions,
+            ).compile(
                 declaration.body.statements,
                 [parameter.name for parameter in declaration.parameters],
             )
-            functions[declaration.name] = function
-        return Module(self.source.name, "main", functions)
+            functions[function_name] = function
+        entry_name = f"{namespace}.main" if namespace else "main"
+        return Module(self.source.name, entry_name, functions)
 
 
 def compile_source(text: str, filename: str = "<source>", allowed_imports: set[str] | None = None) -> Module:
@@ -303,3 +332,65 @@ def compile_source(text: str, filename: str = "<source>", allowed_imports: set[s
 def compile_file(path: str | Path, allowed_imports: set[str] | None = None) -> Module:
     source = SourceFile.from_path(path)
     return compile_source(source.text, source.name, allowed_imports)
+
+
+def compile_project(
+    root: str | Path,
+    text: str,
+    filename: str | Path | None = None,
+    *,
+    locked: bool = False,
+) -> Module:
+    """Compile the project root and its imported modules into one VM module."""
+    from .modules import ModuleGraph
+    from .packages import install
+
+    project = Path(root).resolve()
+    if locked:
+        install(project, offline=True, locked=True)
+    graph = ModuleGraph(project, text, filename).load()
+    interfaces = graph.interfaces()
+
+    def visible_interfaces(record):
+        imported_functions = {}
+        imported_modules = {}
+        public_modules = {}
+        for statement in record.imports:
+            module_id = statement.path
+            if module_id not in graph.records:
+                continue
+            imported_modules[module_id] = interfaces.all_functions.get(module_id, frozenset())
+            public_modules[module_id] = interfaces.public_functions.get(module_id, frozenset())
+            for name in sorted(interfaces.public_functions.get(module_id, frozenset())):
+                key = f"{module_id}.{name}"
+                if key in interfaces.function_types:
+                    imported_functions[key] = interfaces.function_types[key]
+        return imported_functions, imported_modules, public_modules
+
+    modules = [graph.root, *graph.dependency_modules]
+    for record in modules:
+        imported_functions, imported_modules, public_modules = visible_interfaces(record)
+        allowed = set(record.manifest.dependencies) | {record.package_name}
+        diagnostics = check_types(
+            SourceFile(str(record.path), record.text),
+            record.program,
+            allowed,
+            imported_functions,
+            imported_modules,
+            public_modules,
+        )
+        if diagnostics.items:
+            raise DiagnosticError(diagnostics.items, record.text, str(record.path))
+
+    root_module = Compiler(SourceFile(str(graph.root.path), graph.root.text), graph.root.program).compile()
+    functions = dict(root_module.functions)
+    for record in graph.dependency_modules:
+        module = Compiler(
+            SourceFile(str(record.path), record.text),
+            record.program,
+        ).compile(namespace=record.module_id, include_entry=False)
+        for name in sorted(module.functions):
+            if name in functions:
+                raise ValueError(f"duplicate linked function name {name!r}")
+            functions[name] = module.functions[name]
+    return Module(root_module.name, root_module.entry, dict(sorted(functions.items())))
