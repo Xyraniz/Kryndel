@@ -15,6 +15,7 @@ from . import ast as kry_ast
 from .bytecode import BYTECODE_OPCODES, BYTECODE_VERSION
 from .compiler import compile_project, compile_source
 from .diagnostics import DiagnosticError
+from .modules import ModuleGraph
 from .packages import read_manifest
 from .parser import parse
 from .source import SourceFile
@@ -263,6 +264,52 @@ def compare_parser_fixture(source: SourceFile, fixture_path: str | Path) -> None
             "parser fixture differs: "
             + canonical_json({"actual": actual, "expected": expected})
         )
+
+
+def module_graph_snapshot(project: str | Path, source: SourceFile) -> dict[str, object]:
+    """Return a path-independent module graph and exported-interface snapshot."""
+    graph = ModuleGraph(project, source.text, source.name).load()
+    modules = []
+    for key in sorted(graph.records):
+        record = graph.records[key]
+        relative = record.path.relative_to(record.package_root).as_posix()
+        modules.append(
+            {
+                "imports": sorted(statement.path for statement in record.imports),
+                "module_id": record.module_id,
+                "package": record.package_name,
+                "path": relative,
+                "public_symbols": sorted(
+                    item.name
+                    for item in record.program.items
+                    if isinstance(item, (kry_ast.FunctionDecl, kry_ast.StructDecl, kry_ast.EnumDecl)) and item.public
+                ),
+            }
+        )
+    interfaces = graph.interfaces()
+    function_types = {
+        name: {
+            "parameters": [parameter.name for parameter in function.parameters],
+            "return": function.return_type.name,
+        }
+        for name, function in sorted(interfaces.function_types.items())
+    }
+    return {
+        "contract": "kryndel-module-graph",
+        "function_types": function_types,
+        "modules": modules,
+        "version": 1,
+    }
+
+
+def compiler_snapshot(source: SourceFile) -> dict[str, object]:
+    """Return deterministic linked bytecode for a source snapshot."""
+    module = compile_source(source.text, Path(source.name).name or "<source>")
+    return {
+        "bytecode": json.loads(module.dumps()),
+        "contract": "kryndel-compiler",
+        "version": 1,
+    }
 
 
 def compare_lexer_fixture(source: SourceFile, fixture_path: str | Path) -> None:

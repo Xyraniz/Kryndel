@@ -1,0 +1,2 @@
+pub fn answer() -> Int { return 42 }
+println(answer())
