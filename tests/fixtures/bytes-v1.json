@@ -1,0 +1,84 @@
+{
+  "construction": {
+    "from_array": {
+      "hex": "0041ff",
+      "input": [
+        0,
+        65,
+        255
+      ]
+    },
+    "from_string": {
+      "hex": "41f09f9880",
+      "value": "A😀"
+    }
+  },
+  "contract": "kryndel-bytes",
+  "invalid": [
+    {
+      "byte_offset": 0,
+      "error": "KRY6201",
+      "hex": "c0af",
+      "kind": "UTF8",
+      "sequence_length": 2
+    },
+    {
+      "byte_offset": 0,
+      "error": "KRY6201",
+      "hex": "e282",
+      "kind": "UTF8",
+      "sequence_length": 3
+    },
+    {
+      "byte_offset": 1,
+      "error": "KRY6201",
+      "hex": "4180",
+      "kind": "UTF8",
+      "sequence_length": 1
+    },
+    {
+      "array_index": 0,
+      "error": "KRY6202",
+      "input": [
+        256
+      ],
+      "kind": "Octet"
+    },
+    {
+      "error": "KRY6202",
+      "input": [
+        -1
+      ],
+      "kind": "Octet"
+    },
+    {
+      "error": "KRY6102",
+      "index": true,
+      "kind": "Index"
+    },
+    {
+      "error": "KRY6104",
+      "index": 3,
+      "kind": "Index"
+    }
+  ],
+  "layout": "Bytes(items: ordered<Int octets>)",
+  "operations": {
+    "concat": {
+      "left": "41",
+      "result": "41ff",
+      "right": "ff"
+    },
+    "index": {
+      "0": 65,
+      "4": 128,
+      "hex": "41f09f9880"
+    },
+    "length_octets": 5
+  },
+  "serialization": {
+    "stringify": "Bytes(41f09f9880)",
+    "value": "41f09f9880"
+  },
+  "version": 1
+}

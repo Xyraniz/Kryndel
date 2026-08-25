@@ -14,6 +14,7 @@ from .types import (
     ArrayType,
     BOOL,
     BUILTIN_FUNCTIONS,
+    BYTES,
     FLOAT,
     FunctionType,
     INT,
@@ -352,8 +353,10 @@ class TypeChecker:
                 return UNKNOWN
             if target == STRING:
                 return STRING
+            if target == BYTES:
+                return INT
             if target not in (UNKNOWN,):
-                self.error(f"indexing requires String, Array, or Tuple; found {target}", expression.target.span, "KRY3055")
+                self.error(f"indexing requires String, Array, Tuple, or Bytes; found {target}", expression.target.span, "KRY3055")
             return UNKNOWN
         return UNKNOWN
 
@@ -626,6 +629,11 @@ class TypeChecker:
             return BOOL
         if operator == "+" and left == STRING and right == STRING:
             return STRING
+        if operator == "+" and left == BYTES and right == BYTES:
+            return BYTES
+        if operator == "+" and (left == BYTES or right == BYTES):
+            self.error("Bytes concatenation requires two Bytes values", expression.span, "KRY3056")
+            return UNKNOWN
         if operator == "+" and isinstance(left, ArrayType) and isinstance(right, ArrayType):
             if not compatible(left.element, right.element):
                 self.error("array concatenation requires compatible element types", expression.span, "KRY3056")

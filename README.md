@@ -36,10 +36,14 @@ generics, ownership, borrowing, or lifetimes.
 
 The first Kryndel-native collection values are immutable homogeneous arrays and
 fixed-width tuples: `[1, 2]`, `(1, "two")`, `len(value)`, `left + right`, and
-safe `value[index]`. `Option` and `Result` are ordinary non-generic enums in
-`stdlib/core`; their Kryndel-native modules expose constructors, predicates, and
-total `unwrap_or`/`get_or` fallback accessors. The compiler and VM remain the
-Python bootstrap.
+safe `value[index]`. `Bytes` is an immutable nominal octet sequence. The
+Kryndel-visible APIs `bytes(Array)`, `string_to_bytes(String)`, and
+`bytes_to_string(Bytes)` construct, encode, and strictly decode it; `len` counts
+octets, `Bytes[index]` returns an `Int` in `0..255`, and `Bytes + Bytes`
+concatenates without normalization or lossy replacement. `Option` and `Result`
+are ordinary non-generic enums in `stdlib/core`; their Kryndel-native modules
+expose constructors, predicates, and total `unwrap_or`/`get_or` fallback
+accessors. The compiler and VM remain the Python bootstrap.
 
 ## Diagnostics
 
@@ -155,6 +159,9 @@ horizontal whitespace and the final newline without rewriting token spacing;
 
 The Python bootstrap owns the lexer, recursive-descent parser, checker,
 module graph, compiler, VM, artifact container, CLI, and local package resolver.
+Bytes execution is currently part of that bootstrap VM: the language-level
+signatures and deterministic fixtures are frozen, but no self-hosted
+implementation is claimed.
 The source language contracts, spans, diagnostic JSON, visibility rules,
 module-resolution rules, bytecode JSON, qualified function names, KEXE checksum
 rules, manifest subset, lockfile, semver, and package checksum algorithm are

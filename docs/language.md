@@ -116,13 +116,23 @@ bytecode; they do not add hidden Python builtins. The fallback accessors are
 deliberately total, so an absent `Option` or failed `Result` returns the caller's
 fallback. A partial `unwrap` operation and its value-absent error remain outside
 this non-generic milestone until a serializable program-error contract is frozen.
+
+`Bytes` is an immutable nominal sequence of octets. The constructor
+`bytes(Array)` requires every element to be an `Int` in `0..255`; it rejects
+other values with `KRY6202`. `string_to_bytes(String)` returns canonical UTF-8,
+while `bytes_to_string(Bytes)` validates and decodes octets strictly. No
+normalization, locale conversion, or replacement character is used. `len` on
+`Bytes` counts octets, `Bytes[index]` returns an `Int`, and `Bytes + Bytes`
+concatenates octets. The first invalid sequence raises `KRY6201` and reports its
+zero-based byte offset and expected sequence length. The source-level wrappers
+are in `stdlib/string/utf8.kry` and `stdlib/collections/bytes.kry`.
+
 Runtime errors for the existing bytecode operations are represented by
 `RuntimeKryndelError`; malformed bytecode, stack underflow, invalid calls,
-division by zero, invalid sequence indexes, and unsupported sequence values are
-diagnosed without exposing Python tracebacks.
-`Bytes` is specified but not yet an executable type. The complete value, UTF-8,
-error, frame, call, and host-boundary contract is versioned in
-[`specs/value-runtime-v1.md`](specs/value-runtime-v1.md).
+division by zero, invalid sequence indexes, invalid octets, invalid UTF-8, and
+unsupported sequence values are diagnosed without exposing Python tracebacks.
+The complete value, UTF-8, error, frame, call, and host-boundary contract is
+versioned in [`specs/value-runtime-v1.md`](specs/value-runtime-v1.md).
 
 
 ## Diagnostics
