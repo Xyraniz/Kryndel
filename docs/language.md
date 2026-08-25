@@ -90,14 +90,25 @@ cannot collide with imported package roots (`KRY3052`). Aliases, reexports,
 imported nominal struct/enum types, traits, and generics are not implemented in
 this milestone.
 
-## Arrays, Option, Result, and runtime errors
+## Arrays, tuples, Option, Result, and runtime errors
 
-Arrays, tuples, `Option`/`Maybe`, `Result`/`Error`, safe indexing, and explicit
-container conversions remain future language work. The current bootstrap keeps
-these semantics out of the VM rather than presenting placeholder APIs. Runtime
-errors for the existing bytecode operations are represented by
-`RuntimeKryndelError`; malformed bytecode, stack underflow, invalid calls,
-and division by zero are diagnosed without exposing Python tracebacks.
+Array literals (`[1, 2]`), tuple literals (`("name", 7)`), length,
+concatenation, and safe indexing are implemented without generics:
+
+```kryndel
+let numbers: Array = [1, 2] + [3]
+let pair: Tuple = ("answer", 42)
+println(numbers[2])
+println(pair[0])
+```
+
+Arrays are homogeneous and tuples are fixed-width. Indexes must be `Int` and
+out-of-range access is a runtime error. `Option`/`Maybe` and `Result`/`Error`
+are ordinary enums in the initial stdlib contract; generic payloads are still
+not implemented. Runtime errors for the existing bytecode operations are
+represented by `RuntimeKryndelError`; malformed bytecode, stack underflow,
+invalid calls, division by zero, invalid sequence indexes, and unsupported
+sequence values are diagnosed without exposing Python tracebacks.
 
 ## Diagnostics
 

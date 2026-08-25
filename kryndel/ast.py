@@ -64,7 +64,26 @@ class Call(Node):
     arguments: list["Expr"] = field(default_factory=list)
 
 
-Expr = Union[Literal, Name, Member, EnumValue, Unary, Binary, Call, "StructLiteral"]
+@dataclass
+class ArrayLiteral(Node):
+    elements: list["Expr"] = field(default_factory=list)
+
+
+@dataclass
+class TupleLiteral(Node):
+    elements: list["Expr"] = field(default_factory=list)
+
+
+@dataclass
+class Index(Node):
+    target: "Expr"
+    index: "Expr"
+
+
+Expr = Union[
+    Literal, Name, Member, EnumValue, Unary, Binary, Call,
+    ArrayLiteral, TupleLiteral, Index, "StructLiteral"
+]
 
 
 @dataclass

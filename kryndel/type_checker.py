@@ -10,6 +10,8 @@ from .diagnostics import DiagnosticBag
 from .source import SourceFile
 from .types import (
     ANY,
+    ARRAY,
+    ArrayType,
     BOOL,
     BUILTIN_FUNCTIONS,
     FLOAT,
@@ -18,6 +20,8 @@ from .types import (
     PRIMITIVE_TYPES,
     STRING,
     StructType,
+    TUPLE,
+    TupleType,
     EnumType,
     Type,
     UI,
@@ -320,6 +324,37 @@ class TypeChecker:
                 expression.callee.payloads = expression.arguments
                 return self.check_enum_value(expression.callee)
             return self.check_call(expression)
+        if isinstance(expression, ast.ArrayLiteral):
+            element_types = [self.check_expression(item) for item in expression.elements]
+            element = element_types[0] if element_types else UNKNOWN
+            for actual in element_types[1:]:
+                if not compatible(element, actual):
+                    self.error(
+                        f"array elements must have one compatible type; found {element} and {actual}",
+                        expression.span,
+                        "KRY3053",
+                    )
+            return ArrayType("Array", element)
+        if isinstance(expression, ast.TupleLiteral):
+            return TupleType("Tuple", tuple(self.check_expression(item) for item in expression.elements))
+        if isinstance(expression, ast.Index):
+            target = self.check_expression(expression.target)
+            index = self.check_expression(expression.index)
+            if index != INT and index != UNKNOWN:
+                self.error("sequence index must be Int", expression.index.span, "KRY3054")
+            if target == ARRAY:
+                return UNKNOWN
+            if isinstance(target, ArrayType):
+                return target.element
+            if target == TUPLE:
+                return UNKNOWN
+            if isinstance(target, TupleType):
+                return UNKNOWN
+            if target == STRING:
+                return STRING
+            if target not in (UNKNOWN,):
+                self.error(f"indexing requires String, Array, or Tuple; found {target}", expression.target.span, "KRY3055")
+            return UNKNOWN
         return UNKNOWN
 
     def check_enum_value(self, expression: ast.EnumValue) -> Type:
@@ -591,6 +626,11 @@ class TypeChecker:
             return BOOL
         if operator == "+" and left == STRING and right == STRING:
             return STRING
+        if operator == "+" and isinstance(left, ArrayType) and isinstance(right, ArrayType):
+            if not compatible(left.element, right.element):
+                self.error("array concatenation requires compatible element types", expression.span, "KRY3056")
+                return UNKNOWN
+            return ArrayType("Array", left.element)
         if operator in ("+", "-", "*", "/", "%"):
             if not numeric(left) or not numeric(right):
                 self.error(f"operator {operator} requires numeric operands", expression.span, "KRY3021")

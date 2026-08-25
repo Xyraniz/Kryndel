@@ -1,0 +1,3 @@
+// Core Option contract for the non-generic 0.1 bootstrap.
+// None carries no value; Some carries an Int until generic types are specified.
+pub enum Option { None Some(Int) }

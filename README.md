@@ -34,6 +34,11 @@ branches, duplicate detection, and exhaustiveness diagnostics. It does not yet
 support arbitrary patterns, struct destructuring, guards, OR patterns, macros,
 generics, ownership, borrowing, or lifetimes.
 
+The first Kryndel-native collection values are immutable homogeneous arrays and
+fixed-width tuples: `[1, 2]`, `(1, "two")`, `len(value)`, `left + right`, and
+safe `value[index]`. `Option` and `Result` are currently ordinary non-generic
+enums in `stdlib/core`; the compiler and VM remain the Python bootstrap.
+
 ## Diagnostics
 
 Every compiler diagnostic has a stable `KRY` code, severity, source file,

@@ -132,6 +132,11 @@ def verify_module(module) -> None:
             elif instruction.op == "BIND_ENUM":
                 if not isinstance(instruction.arg, dict) or set(instruction.arg) != {"source", "bindings", "arity"}:
                     raise ValueError(f"invalid BIND_ENUM metadata in {name!r}")
+            elif instruction.op in {"MAKE_ARRAY", "MAKE_TUPLE"}:
+                if not isinstance(instruction.arg, int) or instruction.arg < 0:
+                    raise ValueError(f"invalid sequence arity in {name!r}")
+            elif instruction.op == "INDEX" and instruction.arg is not None:
+                raise ValueError(f"invalid INDEX metadata in {name!r}")
 
 
 def abi_description() -> dict[str, object]:
@@ -148,5 +153,19 @@ def abi_description() -> dict[str, object]:
         "runtime": {
             "artifact": "KEXE v1 portable VM container",
             "host_primitives": ["memory", "io", "clock", "filesystem", "process", "bytecode reader"],
+        },
+        "layouts": {
+            "String": "host UTF-8 scalar sequence; length counts Unicode code points",
+            "Array": "immutable homogeneous sequence, MAKE_ARRAY arity then source-order values",
+            "Tuple": "immutable fixed-width sequence, MAKE_TUPLE arity then source-order values",
+            "Option": "nominal enum; None or Some(payload)",
+            "Result": "nominal enum; Ok(payload) or Error(payload)",
+        },
+        "runtime_errors": {
+            "KRY6101": "invalid sequence arity",
+            "KRY6102": "sequence index is not Int",
+            "KRY6103": "indexing requires String, Array, or Tuple",
+            "KRY6104": "sequence index out of bounds",
+            "KRY6105": "len requires String, Array, or Tuple",
         },
     }

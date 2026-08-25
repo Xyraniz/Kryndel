@@ -21,7 +21,15 @@ retain source/declaration order. A function contains `name`, `arity`,
 The v1 instruction set includes `PUSH_CONST`, `PUSH_NIL`, `LOAD`, `STORE`,
 `STORE_RESULT`, `POP`, `DUP`, `CALL`, `BINARY`, `UNARY`, `JUMP`,
 `JUMP_IF_FALSE`, `JUMP_IF_TRUE`, `RETURN`, `MAKE_STRUCT`, `GET_FIELD`,
-`MAKE_ENUM`, `MATCH_ENUM`, and `BIND_ENUM`.
+`MAKE_ENUM`, `MATCH_ENUM`, `BIND_ENUM`, `MAKE_ARRAY`, `MAKE_TUPLE`, and
+`INDEX`.
+
+`MAKE_ARRAY` and `MAKE_TUPLE` take a non-negative integer arity and consume
+that many values in source order. They produce immutable nominal runtime
+values. `INDEX` consumes a sequence and an `Int`; it produces one element and
+fails with KRY6102 (non-Int index), KRY6103 (wrong sequence kind), or KRY6104
+(out of bounds). Arrays concatenate with `BINARY +` when their element types
+are compatible.
 
 `MAKE_ENUM` metadata is `{ "type": name, "variant": name }` for unit
 variants, or adds `arity` for positional payloads. Payload values are consumed
