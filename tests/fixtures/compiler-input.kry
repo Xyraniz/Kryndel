@@ -1,0 +1,2 @@
+fn answer() -> Int { return 7 }
+println(answer())

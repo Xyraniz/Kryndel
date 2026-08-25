@@ -1,0 +1,81 @@
+{
+  "bytecode": {
+    "entry": "main",
+    "format": "kryndel-bytecode",
+    "functions": {
+      "answer": {
+        "arity": 0,
+        "constants": [
+          7
+        ],
+        "instructions": [
+          {
+            "arg": 0,
+            "line": 1,
+            "op": "PUSH_CONST"
+          },
+          {
+            "arg": null,
+            "line": 1,
+            "op": "RETURN"
+          },
+          {
+            "arg": null,
+            "line": 0,
+            "op": "PUSH_NIL"
+          },
+          {
+            "arg": null,
+            "line": 0,
+            "op": "RETURN"
+          }
+        ],
+        "name": "answer",
+        "parameters": []
+      },
+      "main": {
+        "arity": 0,
+        "constants": [],
+        "instructions": [
+          {
+            "arg": [
+              "answer",
+              0
+            ],
+            "line": 2,
+            "op": "CALL"
+          },
+          {
+            "arg": [
+              "println",
+              1
+            ],
+            "line": 2,
+            "op": "CALL"
+          },
+          {
+            "arg": null,
+            "line": 2,
+            "op": "POP"
+          },
+          {
+            "arg": null,
+            "line": 0,
+            "op": "PUSH_NIL"
+          },
+          {
+            "arg": null,
+            "line": 0,
+            "op": "RETURN"
+          }
+        ],
+        "name": "main",
+        "parameters": []
+      }
+    },
+    "name": "compiler-input.kry",
+    "version": 1
+  },
+  "contract": "kryndel-compiler",
+  "version": 1
+}

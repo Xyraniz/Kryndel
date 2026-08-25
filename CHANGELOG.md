@@ -11,6 +11,7 @@
 - Hardened bytecode v1 verification with a shared opcode set, exact parameter metadata, string and no-argument checks, nominal struct/enum metadata validation, and deterministic negative cases in `bytecode-verifier-v1.json`.
 - Added `kry lex` with deterministic token/diagnostic snapshots and `--fixture` comparison, plus Unicode-aware `lexer-input.kry`/`lexer-v1.json` evidence. The command remains a bootstrap oracle and does not claim a native lexer.
 - Added `kry parse` with deterministic nominal AST records, parser/lexer diagnostics, and `--fixture` comparison. `parser-input.kry` and `parser-v1.json` freeze a valid struct/let/call program without claiming a Kryndel-native parser.
+- Added `kry graph` and `kry compiler-report` snapshots for module IDs, relative paths, public interfaces, and bytecode v1. `graph-v1.json` and `compiler-v1.json` demonstrate path-independent, repeatable bootstrap outputs without claiming a Kryndel-native checker/compiler.
 
 - Versioned value/runtime v1 contract for strings, bytes, sequences, core
   enums, Void/nil, frames, calls, serializable errors, and the temporary host

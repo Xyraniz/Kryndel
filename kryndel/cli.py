@@ -15,7 +15,7 @@ from .diagnostics import Diagnostic, DiagnosticError, Severity, Span
 from .source import SourceFile
 from .packages import Lockfile, add_dependency, init_project, install, list_packages, read_manifest, remove_dependency, validate_imports
 from .version import __codename__, __version__
-from .tooling import abi_description, check_reproducible, compare_lexer_fixture, compare_parser_fixture, document_project, format_file, host_boundary_report, lexer_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
+from .tooling import abi_description, check_reproducible, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, document_project, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
 from .vm import RuntimeKryndelError, VM
 
 
@@ -81,6 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
     parse_command = subparsers.add_parser("parse", help="Emit deterministic parser AST and diagnostics.")
     parse_command.add_argument("source", type=Path)
     parse_command.add_argument("--fixture", type=Path)
+    graph = subparsers.add_parser("graph", help="Emit deterministic module graph and interfaces.")
+    graph.add_argument("source", type=Path)
+    compiler_report = subparsers.add_parser("compiler-report", help="Emit deterministic compiler bytecode output.")
+    compiler_report.add_argument("source", type=Path)
     subparsers.add_parser("host-report", help="Print the deterministic host-boundary inventory.")
     subparsers.add_parser("clean", help="Remove generated project bytecode artifacts.")
     return parser
@@ -261,6 +265,17 @@ def main(argv: list[str] | None = None) -> int:
             if arguments.fixture is not None:
                 compare_parser_fixture(source, arguments.fixture)
             print(canonical_json(parser_snapshot(source)), end="")
+            return 0
+        if arguments.command == "graph":
+            source = SourceFile.from_path(arguments.source)
+            root = _project_root(arguments.source)
+            if root is None:
+                raise OSError("module graph snapshots require a Kryndel project")
+            print(canonical_json(module_graph_snapshot(root, source)), end="")
+            return 0
+        if arguments.command == "compiler-report":
+            source = SourceFile.from_path(arguments.source)
+            print(canonical_json(compiler_snapshot(source)), end="")
             return 0
         if arguments.command == "host-report":
             print(json.dumps(host_boundary_report(), ensure_ascii=False, indent=2, sort_keys=True))

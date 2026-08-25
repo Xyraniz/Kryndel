@@ -14,7 +14,7 @@ from kryndel.contracts import core_contract_report, validate_core_contract
 from kryndel.filesystem import RootedFileSystem, VirtualFileSystem
 from kryndel.modules import ModuleGraph
 from kryndel.parser import parse
-from kryndel.tooling import abi_description, compare_lexer_fixture, compare_parser_fixture, format_file, host_boundary_report, lexer_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
+from kryndel.tooling import abi_description, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
 from kryndel.diagnostics import DiagnosticError
 from kryndel.cli import main as cli_main
 from kryndel.packages import (
@@ -237,6 +237,25 @@ class KryndelTests(unittest.TestCase):
         fixture = json.loads(raw)
         self.assertEqual(raw, json.dumps(fixture, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         self.assertEqual(fixture["source"], "stdlib/testing/testing.kry")
+
+    def test_module_graph_and_compiler_snapshots_are_reproducible(self) -> None:
+        compiler_source = SourceFile.from_path(Path(__file__).parent / "fixtures" / "compiler-input.kry")
+        compiler_first = compiler_snapshot(compiler_source)
+        compiler_second = compiler_snapshot(SourceFile("different/location/compiler-input.kry", compiler_source.text))
+        self.assertEqual(compiler_first, compiler_second)
+        compiler_fixture = json.loads((Path(__file__).parent / "fixtures" / "compiler-v1.json").read_text(encoding="utf-8"))
+        self.assertEqual(compiler_first, compiler_fixture)
+        self.assertNotIn(str(Path(__file__).parents[1]), json.dumps(compiler_first, ensure_ascii=False, sort_keys=True))
+
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "graph-demo"
+            init_project(project)
+            source_path = project / "src" / "main.kry"
+            source_path.write_text((Path(__file__).parent / "fixtures" / "graph-input.kry").read_text(encoding="utf-8"), encoding="utf-8")
+            graph_first = module_graph_snapshot(project, SourceFile.from_path(source_path))
+            graph_fixture = json.loads((Path(__file__).parent / "fixtures" / "graph-v1.json").read_text(encoding="utf-8"))
+            self.assertEqual(graph_first, graph_fixture)
+            self.assertEqual(graph_first["modules"][0]["path"], "src/main.kry")
 
     def test_parser_snapshot_v1_matches_fixture_and_is_deterministic(self) -> None:
         source_path = Path(__file__).parent / "fixtures" / "parser-input.kry"

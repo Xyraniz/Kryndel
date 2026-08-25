@@ -1,0 +1,16 @@
+{
+  "contract": "kryndel-module-graph",
+  "function_types": {},
+  "modules": [
+    {
+      "imports": [],
+      "module_id": "__root__",
+      "package": "graph-demo",
+      "path": "src/main.kry",
+      "public_symbols": [
+        "answer"
+      ]
+    }
+  ],
+  "version": 1
+}
