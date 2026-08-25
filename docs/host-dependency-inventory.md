@@ -18,7 +18,10 @@ provide API fixtures and signatures only.
 | Clock | `clock() -> Float` | `time.monotonic()` | `KRY6301` | `types.py`, `vm.py` | 100% | monotonic-clock host primitive with test seam |
 | UI text tree | `ui.*` signatures | `UINode` host object/render | `KRY6000` runtime wrapper | `examples/ui_tree.kry` | 100% | explicit portable tree value or host capability |
 | Bytecode read/verify | `kry verify-bytecode` | Python JSON parser/verifier | `KRY6002`, `KRY6305` | `tooling.py` | 100% | Kryndel reader/verifier |
-| Compiler/front end | source -> v1 module | Python lexer/parser/checker/compiler | KRY1xxx–KRY3xxx | full suite | 100% | staged Kryndel toolchain |
+| Compiler/front end | source -> v1 module | Python lexer/parser/checker/compiler | KRY1xxx–KRY3xxx | full suite, `compiler-v1.json` | 100% | staged Kryndel toolchain |
+| Controlled filesystem | `read_bytes`, `write_bytes`, `list_dir`, `stat` | `RootedFileSystem` temporary adapter; `VirtualFileSystem` test seam | `KRY6301`–`KRY6304` | `host-boundary-v1.md`, filesystem tests, `manifest-reader-v1.json` | 100% host adapter | Kryndel-visible filesystem capability |
+
+The eight verified increments add executable compatibility seams for core fixture audits, controlled filesystem access, nominal wire records, manifest reading, bytecode verification, lexer snapshots, parser/AST snapshots, and graph/compiler snapshots. These seams are evidence for differential development only; they do not retire Python ownership.
 
 Bytes and testing assertions are executable bootstrap values. Their language-level
 signatures, nominal immutable storage, deterministic fixtures, and
