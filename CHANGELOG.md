@@ -10,6 +10,7 @@
 - Routed manifest reading and writing through the controlled filesystem boundary. `parse_manifest_text` and `read_manifest_from_filesystem` preserve manifest diagnostics, reject invalid UTF-8 with `KRY6304`, and keep physical paths stable for offline dependency resolution; `manifest-reader-v1.json` freezes the VFS input/output pair.
 - Hardened bytecode v1 verification with a shared opcode set, exact parameter metadata, string and no-argument checks, nominal struct/enum metadata validation, and deterministic negative cases in `bytecode-verifier-v1.json`.
 - Added `kry lex` with deterministic token/diagnostic snapshots and `--fixture` comparison, plus Unicode-aware `lexer-input.kry`/`lexer-v1.json` evidence. The command remains a bootstrap oracle and does not claim a native lexer.
+- Added `kry parse` with deterministic nominal AST records, parser/lexer diagnostics, and `--fixture` comparison. `parser-input.kry` and `parser-v1.json` freeze a valid struct/let/call program without claiming a Kryndel-native parser.
 
 - Versioned value/runtime v1 contract for strings, bytes, sequences, core
   enums, Void/nil, frames, calls, serializable errors, and the temporary host

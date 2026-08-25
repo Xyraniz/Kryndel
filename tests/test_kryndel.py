@@ -14,7 +14,7 @@ from kryndel.contracts import core_contract_report, validate_core_contract
 from kryndel.filesystem import RootedFileSystem, VirtualFileSystem
 from kryndel.modules import ModuleGraph
 from kryndel.parser import parse
-from kryndel.tooling import abi_description, compare_lexer_fixture, format_file, host_boundary_report, lexer_snapshot, pack_project, run_kryndel_tests, verify_module
+from kryndel.tooling import abi_description, compare_lexer_fixture, compare_parser_fixture, format_file, host_boundary_report, lexer_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
 from kryndel.diagnostics import DiagnosticError
 from kryndel.cli import main as cli_main
 from kryndel.packages import (
@@ -237,6 +237,19 @@ class KryndelTests(unittest.TestCase):
         fixture = json.loads(raw)
         self.assertEqual(raw, json.dumps(fixture, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         self.assertEqual(fixture["source"], "stdlib/testing/testing.kry")
+
+    def test_parser_snapshot_v1_matches_fixture_and_is_deterministic(self) -> None:
+        source_path = Path(__file__).parent / "fixtures" / "parser-input.kry"
+        fixture_path = Path(__file__).parent / "fixtures" / "parser-v1.json"
+        source = SourceFile.from_path(source_path)
+        first = parser_snapshot(source)
+        second = parser_snapshot(source)
+        self.assertEqual(first, second)
+        compare_parser_fixture(source, fixture_path)
+        self.assertEqual(first["contract"], "kryndel-parser")
+        self.assertEqual(first["version"], 1)
+        self.assertEqual(first["diagnostics"], [])
+        self.assertEqual(first["ast"]["record"], "Program")
 
     def test_lexer_snapshot_v1_matches_fixture_and_is_deterministic(self) -> None:
         source_path = Path(__file__).parent / "fixtures" / "lexer-input.kry"
