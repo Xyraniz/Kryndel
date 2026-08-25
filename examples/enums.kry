@@ -1,0 +1,9 @@
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+let color: Color = Color.Green
+println(color)
+println(color == Color.Green)
