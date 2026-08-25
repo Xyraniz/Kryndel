@@ -2,21 +2,45 @@
 
 from __future__ import annotations
 
+import ast as python_ast
+import hashlib
+import inspect
+import json
+import textwrap
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import ast as kry_ast
 from .compiler import compile_project, compile_source
 from .diagnostics import DiagnosticError
+from .packages import read_manifest
 from .parser import parse
 from .source import SourceFile
 from .tokens import lex
-from .vm import VM
+from .types import ArrayType, FunctionType, Type
+from .vm import RuntimeKryndelError, VM
 
 
 @dataclass(frozen=True)
 class KryndelTestResult:
     path: Path
     name: str
+    status: str = "passed"
+    error: str | None = None
+
+    def as_dict(self, root: str | Path) -> dict[str, str | None]:
+        project = Path(root).resolve()
+        try:
+            relative_path = self.path.resolve().relative_to(project)
+        except ValueError:
+            relative_path = self.path
+        return {
+            "error": self.error,
+            "file": relative_path.as_posix(),
+            "name": self.name,
+            "status": self.status,
+        }
 
 
 def format_source(text: str) -> str:
@@ -62,16 +86,140 @@ def discover_kryndel_tests(root: str | Path) -> list[tuple[Path, str]]:
     return discovered
 
 
-def run_kryndel_tests(root: str | Path) -> list[KryndelTestResult]:
+def run_kryndel_tests(
+    root: str | Path,
+    *,
+    continue_on_failure: bool = False,
+) -> list[KryndelTestResult]:
     project = Path(root).resolve()
     has_manifest = (project / "kry.toml").is_file()
     results: list[KryndelTestResult] = []
     for path, name in discover_kryndel_tests(project):
-        text = path.read_text(encoding="utf-8")
-        module = compile_project(project, text, path) if has_manifest else compile_source(text, str(path))
-        VM(module, output=lambda _text: None).execute(name, [])
-        results.append(KryndelTestResult(path, name))
+        try:
+            text = path.read_text(encoding="utf-8")
+            module = compile_project(project, text, path) if has_manifest else compile_source(text, str(path))
+            VM(module, output=lambda _text: None).execute(name, [])
+        except (DiagnosticError, RuntimeKryndelError, OSError, ValueError) as error:
+            result = KryndelTestResult(path, name, "failed", str(error))
+            results.append(result)
+            if not continue_on_failure:
+                raise
+        else:
+            results.append(KryndelTestResult(path, name))
     return results
+
+
+def document_source(path: str | Path, display_path: str | None = None) -> dict[str, object]:
+    """Return deterministic public/source documentation for one Kryndel file."""
+    source_path = Path(path)
+    source = SourceFile(display_path or str(source_path), source_path.read_text(encoding="utf-8"))
+    tokens, lexical = lex(source)
+    program, parsing = parse(source, tokens)
+    if lexical.has_errors or parsing.has_errors:
+        raise DiagnosticError(lexical.items + parsing.items, source.text, source.name)
+    declarations: list[dict[str, object]] = []
+    for item in program.items:
+        if isinstance(item, kry_ast.FunctionDecl):
+            declarations.append(
+                {
+                    "kind": "function",
+                    "name": item.name,
+                    "parameters": [
+                        {"name": parameter.name, "type": parameter.type_name.name}
+                        for parameter in item.parameters
+                    ],
+                    "public": item.public,
+                    "return_type": item.return_type.name,
+                    "test": item.test,
+                }
+            )
+        elif isinstance(item, kry_ast.StructDecl):
+            declarations.append(
+                {
+                    "fields": [
+                        {"name": field.name, "type": field.type_name.name}
+                        for field in item.fields
+                    ],
+                    "kind": "struct",
+                    "name": item.name,
+                    "public": item.public,
+                }
+            )
+        elif isinstance(item, kry_ast.EnumDecl):
+            declarations.append(
+                {
+                    "kind": "enum",
+                    "name": item.name,
+                    "public": item.public,
+                    "variants": [
+                        {
+                            "name": variant.name,
+                            "payload_types": [payload.name for payload in variant.payload_types],
+                        }
+                        for variant in item.variants
+                    ],
+                }
+            )
+    return {"declarations": declarations, "file": source.name, "version": 1}
+
+
+def document_project(root: str | Path, source: str | Path | None = None) -> dict[str, object]:
+    project = Path(root).resolve()
+    if source is not None:
+        paths = [Path(source)]
+    else:
+        paths = sorted((project / "src").rglob("*.kry")) if (project / "src").is_dir() else []
+        if not paths:
+            paths = sorted((project / "examples").rglob("*.kry")) if (project / "examples").is_dir() else []
+    if not paths:
+        raise OSError("no Kryndel source files found")
+    files = []
+    for path in paths:
+        absolute = path.resolve()
+        try:
+            display = absolute.relative_to(project).as_posix()
+        except ValueError:
+            display = Path(path).name
+        files.append(document_source(absolute, display))
+    package_name = None
+    manifest_path = project / "kry.toml"
+    if manifest_path.is_file():
+        package_name = read_manifest(manifest_path).name
+    return {
+        "contract": "kryndel-documentation",
+        "files": files,
+        "package": package_name,
+        "version": 1,
+    }
+
+
+def pack_project(root: str | Path, output: str | Path | None = None) -> tuple[Path, str]:
+    """Create a deterministic source package without executing package files."""
+    project = Path(root).resolve()
+    manifest = read_manifest(project)
+    source_root = project / "src"
+    if manifest.path.is_symlink():
+        raise ValueError("manifest must not be a symlink")
+    if source_root.is_symlink() or not source_root.is_dir():
+        raise OSError("project source directory src is missing or is a symlink")
+    paths = [manifest.path, *sorted(source_root.rglob("*.kry"))]
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"package input is not a regular file: {path}")
+    target = Path(output).resolve() if output is not None else project / f"{manifest.name}-{manifest.version}.krypkg"
+    if target.exists() and target.is_symlink():
+        raise ValueError(f"package output must not be a symlink: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for path in paths:
+            relative = path.relative_to(project).as_posix()
+            info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, path.read_bytes())
+    checksum = hashlib.sha256(target.read_bytes()).hexdigest()
+    return target, checksum
 
 
 def check_reproducible(
@@ -139,6 +287,150 @@ def verify_module(module) -> None:
                 raise ValueError(f"invalid INDEX metadata in {name!r}")
 
 
+_HOST_ERROR_CODES = {
+    "print": "KRY6301",
+    "println": "KRY6301",
+    "str": "KRY6202",
+    "int": "KRY6202",
+    "float": "KRY6202",
+    "len": "KRY6105",
+    "bytes": "KRY6202",
+    "string_to_bytes": "KRY6201",
+    "bytes_to_string": "KRY6201",
+    "assert": "KRY6401",
+    "assert_eq": "KRY6402",
+    "abs": "KRY6202",
+    "sqrt": "KRY6202",
+    "clock": "KRY6301",
+    "ui.window": "KRY6301",
+    "ui.label": "KRY6301",
+    "ui.button": "KRY6301",
+    "ui.vbox": "KRY6301",
+    "ui.hbox": "KRY6301",
+    "ui.set_text": "KRY6301",
+    "ui.on_click": "KRY6301",
+    "ui.show": "KRY6301",
+    "ui.run": "KRY6301",
+}
+
+_HOST_FIXTURES = {
+    "bytes": "tests/fixtures/bytes-v1.json",
+    "string_to_bytes": "tests/fixtures/bytes-v1.json",
+    "bytes_to_string": "tests/fixtures/bytes-v1.json",
+    "assert": "tests/fixtures/stdlib-testing-v1.json",
+    "assert_eq": "tests/fixtures/stdlib-testing-v1.json",
+    "len": "tests/fixtures/value-runtime-v1.json",
+    "ui.window": "examples/ui_tree.kry",
+    "ui.label": "examples/ui_tree.kry",
+    "ui.button": "examples/ui_tree.kry",
+    "ui.vbox": "examples/ui_tree.kry",
+    "ui.hbox": "examples/ui_tree.kry",
+    "ui.set_text": "examples/ui_tree.kry",
+    "ui.on_click": "examples/ui_tree.kry",
+    "ui.show": "examples/ui_tree.kry",
+    "ui.run": "examples/ui_tree.kry",
+}
+
+_HOST_REPLACEMENTS = {
+    "bytes": "Kryndel BytesValue and octet validator",
+    "string_to_bytes": "Kryndel UTF-8 encoder over BytesValue",
+    "bytes_to_string": "Kryndel UTF-8 decoder over BytesValue",
+    "len": "Kryndel sequence length implementation",
+    "assert": "Kryndel testing assertion primitive",
+    "assert_eq": "Kryndel testing equality assertion primitive",
+    "clock": "controlled monotonic-clock capability",
+}
+
+
+def _builtin_names_in_vm() -> set[str]:
+    """Extract dispatch names so a new VM intrinsic cannot evade the report."""
+    tree = python_ast.parse(textwrap.dedent(inspect.getsource(VM.builtin)))
+    names: set[str] = set()
+    for node in python_ast.walk(tree):
+        if not isinstance(node, python_ast.Compare) or not isinstance(node.left, python_ast.Name):
+            continue
+        if node.left.id != "name":
+            continue
+        for operator, comparator in zip(node.ops, node.comparators):
+            if isinstance(operator, python_ast.Eq) and isinstance(comparator, python_ast.Constant) and isinstance(comparator.value, str):
+                names.add(comparator.value)
+            elif isinstance(operator, python_ast.In) and isinstance(comparator, (python_ast.Tuple, python_ast.List)):
+                names.update(
+                    item.value
+                    for item in comparator.elts
+                    if isinstance(item, python_ast.Constant) and isinstance(item.value, str)
+                )
+    return names
+
+
+def _type_label(type_: Type) -> str:
+    if isinstance(type_, ArrayType):
+        return f"Array<{_type_label(type_.element)}>"
+    return type_.name
+
+
+def _signature(name: str, function: FunctionType) -> str:
+    parameters = ", ".join(_type_label(parameter) for parameter in function.parameters)
+    if function.variadic:
+        parameters = parameters + ("..." if parameters else "...")
+    return f"{name}({parameters}) -> {_type_label(function.return_type)}"
+
+
+def host_boundary_report() -> dict[str, object]:
+    """Return a deterministic, offline inventory of every VM intrinsic."""
+    from .types import BUILTIN_FUNCTIONS
+
+    dispatched = _builtin_names_in_vm()
+    declared = set(BUILTIN_FUNCTIONS)
+    missing_from_signatures = sorted(dispatched - declared)
+    missing_from_dispatch = sorted(declared - dispatched)
+    missing_metadata = sorted(declared - set(_HOST_ERROR_CODES))
+    if missing_from_signatures or missing_from_dispatch or missing_metadata:
+        raise ValueError(
+            "host intrinsic inventory mismatch: "
+            f"without signatures={missing_from_signatures}, without VM dispatch={missing_from_dispatch}, "
+            f"without metadata={missing_metadata}"
+        )
+    intrinsics = []
+    for name in sorted(declared):
+        function = BUILTIN_FUNCTIONS[name]
+        intrinsics.append(
+            {
+                "error_code": _HOST_ERROR_CODES.get(name),
+                "fixture": _HOST_FIXTURES.get(name, "tests/fixtures/host-boundary-v1.json"),
+                "host_module": "kryndel/vm.py",
+                "name": name,
+                "replacement": _HOST_REPLACEMENTS.get(name, "Kryndel-native implementation"),
+                "signature": _signature(name, function),
+                "state": "host temporal",
+            }
+        )
+    layers = (
+        "lexer",
+        "parser",
+        "checker",
+        "compiler",
+        "verifier",
+        "runtime",
+        "stdlib",
+        "filesystem",
+        "io",
+        "cli",
+    )
+    percentages = {
+        layer: {"Kryndel": 0, "host temporal": 100, "no implementado": 0}
+        for layer in layers
+    }
+    return {
+        "contract": "kryndel-host-boundary",
+        "intrinsics": intrinsics,
+        "layers": percentages,
+        "state_counts": {"Kryndel": 0, "host temporal": len(intrinsics), "no implementado": 0},
+        "unlisted_intrinsics": [],
+        "version": 1,
+    }
+
+
 def abi_description() -> dict[str, object]:
     return {
         "format": "kryndel-abi",
@@ -177,5 +469,7 @@ def abi_description() -> dict[str, object]:
             "KRY6303": "path escapes project root",
             "KRY6304": "malformed program input",
             "KRY6305": "malformed bytecode",
+            "KRY6401": "assertion condition is false",
+            "KRY6402": "assertion values are unequal",
         },
     }

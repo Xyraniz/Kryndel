@@ -16,8 +16,8 @@
   `bytes_to_string(Bytes)` APIs, strict canonical UTF-8 validation with
   offset/sequence diagnostics KRY6201, octet validation KRY6202, immutable
   `Bytes + Bytes`, octet length/indexing, deterministic Bytes fixtures, and
-  source-level wrappers in `stdlib/string/utf8.kry` and
-  `stdlib/collections/bytes.kry`.
+  source-level wrappers in `stdlib/core/bytes.kry`, `stdlib/string/utf8.kry`,
+  and `stdlib/collections/bytes.kry`.
 - Source-level non-generic `Option` and `Result` constructors, predicates, and
   total fallback accessors in `stdlib/core`, with regression coverage proving
   the APIs compile without new hidden VM builtins.
@@ -50,11 +50,17 @@
   specifications for the future self-hosting boundary.
 - `@test` discovery and the initial `kry test`, conservative `kry fmt`,
   `kry reproducible`, `inspect-bytecode`, `verify-bytecode`,
-  `verify-artifact`, `abi`, `new`, and `clean` commands.
-- Regression tests expanded to 74, including nested modules, public/private
+  `verify-artifact`, `abi`, `host-report`, `new`, and `clean` commands.
+- Executable `assert(Bool)` and `assert_eq(Any, Any)` primitives, typed
+  `stdlib/testing/testing.kry` wrappers, KRY6401/KRY6402 diagnostics, and
+  deterministic `kry test --format json` results with failure continuation.
+- Deterministic `kry doc` source declarations and `kry pack` `.krypkg` source
+  archives with fixed metadata, offline operation, and SHA-256 checksums; source
+  files are never executed while documenting or packaging.
+- Regression tests expanded to 78, including nested modules, public/private
   symbols, deterministic linking, cycles, ambiguity, project-aware execution,
-  source-level core APIs, runtime Boolean values, and executable Bytes/UTF-8
-  behavior.
+  source-level core APIs, runtime Boolean values, executable Bytes/UTF-8
+  behavior, host-boundary inventory, and structured test failures.
 
 ### Explicit limitations
 

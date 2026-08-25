@@ -1,0 +1,271 @@
+{
+  "contract": "kryndel-host-boundary",
+  "intrinsics": [
+    {
+      "error_code": "KRY6202",
+      "fixture": "tests/fixtures/host-boundary-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "abs",
+      "replacement": "Kryndel-native implementation",
+      "signature": "abs(Int) -> Int",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6401",
+      "fixture": "tests/fixtures/stdlib-testing-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "assert",
+      "replacement": "Kryndel testing assertion primitive",
+      "signature": "assert(Bool) -> Void",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6402",
+      "fixture": "tests/fixtures/stdlib-testing-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "assert_eq",
+      "replacement": "Kryndel testing equality assertion primitive",
+      "signature": "assert_eq(Any, Any) -> Void",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6202",
+      "fixture": "tests/fixtures/bytes-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "bytes",
+      "replacement": "Kryndel BytesValue and octet validator",
+      "signature": "bytes(Array<Int>) -> Bytes",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6201",
+      "fixture": "tests/fixtures/bytes-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "bytes_to_string",
+      "replacement": "Kryndel UTF-8 decoder over BytesValue",
+      "signature": "bytes_to_string(Bytes) -> String",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "tests/fixtures/host-boundary-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "clock",
+      "replacement": "controlled monotonic-clock capability",
+      "signature": "clock() -> Float",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6202",
+      "fixture": "tests/fixtures/host-boundary-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "float",
+      "replacement": "Kryndel-native implementation",
+      "signature": "float(Any) -> Float",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6202",
+      "fixture": "tests/fixtures/host-boundary-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "int",
+      "replacement": "Kryndel-native implementation",
+      "signature": "int(Any) -> Int",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6105",
+      "fixture": "tests/fixtures/value-runtime-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "len",
+      "replacement": "Kryndel sequence length implementation",
+      "signature": "len(Any) -> Int",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "tests/fixtures/host-boundary-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "print",
+      "replacement": "Kryndel-native implementation",
+      "signature": "print(Any...) -> Void",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "tests/fixtures/host-boundary-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "println",
+      "replacement": "Kryndel-native implementation",
+      "signature": "println(Any...) -> Void",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6202",
+      "fixture": "tests/fixtures/host-boundary-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "sqrt",
+      "replacement": "Kryndel-native implementation",
+      "signature": "sqrt(Float) -> Float",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6202",
+      "fixture": "tests/fixtures/host-boundary-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "str",
+      "replacement": "Kryndel-native implementation",
+      "signature": "str(Any) -> String",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6201",
+      "fixture": "tests/fixtures/bytes-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "string_to_bytes",
+      "replacement": "Kryndel UTF-8 encoder over BytesValue",
+      "signature": "string_to_bytes(String) -> Bytes",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "examples/ui_tree.kry",
+      "host_module": "kryndel/vm.py",
+      "name": "ui.button",
+      "replacement": "Kryndel-native implementation",
+      "signature": "ui.button(UiNode, String) -> UiNode",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "examples/ui_tree.kry",
+      "host_module": "kryndel/vm.py",
+      "name": "ui.hbox",
+      "replacement": "Kryndel-native implementation",
+      "signature": "ui.hbox(UiNode) -> UiNode",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "examples/ui_tree.kry",
+      "host_module": "kryndel/vm.py",
+      "name": "ui.label",
+      "replacement": "Kryndel-native implementation",
+      "signature": "ui.label(UiNode, String) -> UiNode",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "examples/ui_tree.kry",
+      "host_module": "kryndel/vm.py",
+      "name": "ui.on_click",
+      "replacement": "Kryndel-native implementation",
+      "signature": "ui.on_click(UiNode, Any) -> Void",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "examples/ui_tree.kry",
+      "host_module": "kryndel/vm.py",
+      "name": "ui.run",
+      "replacement": "Kryndel-native implementation",
+      "signature": "ui.run() -> Void",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "examples/ui_tree.kry",
+      "host_module": "kryndel/vm.py",
+      "name": "ui.set_text",
+      "replacement": "Kryndel-native implementation",
+      "signature": "ui.set_text(UiNode, String) -> Void",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "examples/ui_tree.kry",
+      "host_module": "kryndel/vm.py",
+      "name": "ui.show",
+      "replacement": "Kryndel-native implementation",
+      "signature": "ui.show(UiNode) -> Void",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "examples/ui_tree.kry",
+      "host_module": "kryndel/vm.py",
+      "name": "ui.vbox",
+      "replacement": "Kryndel-native implementation",
+      "signature": "ui.vbox(UiNode) -> UiNode",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "examples/ui_tree.kry",
+      "host_module": "kryndel/vm.py",
+      "name": "ui.window",
+      "replacement": "Kryndel-native implementation",
+      "signature": "ui.window(String, Int, Int) -> UiNode",
+      "state": "host temporal"
+    }
+  ],
+  "layers": {
+    "checker": {
+      "Kryndel": 0,
+      "host temporal": 100,
+      "no implementado": 0
+    },
+    "cli": {
+      "Kryndel": 0,
+      "host temporal": 100,
+      "no implementado": 0
+    },
+    "compiler": {
+      "Kryndel": 0,
+      "host temporal": 100,
+      "no implementado": 0
+    },
+    "filesystem": {
+      "Kryndel": 0,
+      "host temporal": 100,
+      "no implementado": 0
+    },
+    "io": {
+      "Kryndel": 0,
+      "host temporal": 100,
+      "no implementado": 0
+    },
+    "lexer": {
+      "Kryndel": 0,
+      "host temporal": 100,
+      "no implementado": 0
+    },
+    "parser": {
+      "Kryndel": 0,
+      "host temporal": 100,
+      "no implementado": 0
+    },
+    "runtime": {
+      "Kryndel": 0,
+      "host temporal": 100,
+      "no implementado": 0
+    },
+    "stdlib": {
+      "Kryndel": 0,
+      "host temporal": 100,
+      "no implementado": 0
+    },
+    "verifier": {
+      "Kryndel": 0,
+      "host temporal": 100,
+      "no implementado": 0
+    }
+  },
+  "state_counts": {
+    "Kryndel": 0,
+    "host temporal": 23,
+    "no implementado": 0
+  },
+  "unlisted_intrinsics": [],
+  "version": 1
+}

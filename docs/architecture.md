@@ -50,11 +50,12 @@ package and module notes without changing the existing source-span schema.
 | KRY6100–6199 | sequence layouts, indexing, and collection runtime errors |
 | KRY6200–6299 | value conversion and UTF-8 boundary errors |
 | KRY6300–6399 | IO, filesystem, program, and malformed-bytecode boundary errors |
+| KRY6400–6499 | test assertion failures |
 
 Existing codes remain unchanged. New payload/match codes include `KRY3043`–
 `KRY3049`; imported-symbol codes are `KRY3050`–`KRY3052`; sequence semantic
 codes are `KRY3053`–`KRY3056`; package/module
-codes include `KRY5001`–`KRY5016`.
+codes include `KRY5001`–`KRY5016`; test assertions use `KRY6401` and `KRY6402`.
 
 ## Enums and match
 
@@ -75,11 +76,13 @@ and missing variants unless `_` covers the remainder.
 ## Bytecode and runtime safety
 
 Bytecode v1 is deterministic JSON. Important operations are `MAKE_STRUCT`,
-`GET_FIELD`, `MAKE_ENUM`, `MATCH_ENUM`, and `BIND_ENUM`. The VM validates
-metadata shape, operand stack depth, constant indices, jumps, function arity,
-enum payload arity, and struct fields. Runtime failures are converted to
-`RuntimeKryndelError` with function/line/call-stack context; CLI output never
-exposes a Python traceback. The complete v1 contract is in
+`GET_FIELD`, `MAKE_ENUM`, `MATCH_ENUM`, `BIND_ENUM`, `MAKE_ARRAY`,
+`MAKE_TUPLE`, and `INDEX`. The VM validates metadata shape, operand stack depth,
+constant indices, jumps, function arity, enum payload arity, struct fields, and
+sequence operands. Runtime failures are converted to `RuntimeKryndelError` with
+function/line/call-stack context; CLI output never exposes a Python traceback.
+Visible test assertions report `KRY6401` for a false condition and `KRY6402` for
+an unequal pair. The complete v1 contract is in
 [`specs/bytecode-v1.md`](specs/bytecode-v1.md).
 
 KEXE wraps module JSON with a fixed magic, length, and SHA-256 payload digest.
@@ -126,7 +129,8 @@ top-level statements are not implicitly executed.
 ## Python boundary and self-hosting
 
 Currently Python owns all implementation code and the host filesystem/clock/
-stdout bridges. The measured dependency inventory is in
+stdout bridges. `kry host-report` emits the deterministic inventory and fails if
+VM dispatch names, visible signatures, or error metadata diverge. The measured dependency inventory is in
 [`host-dependency-inventory.md`](host-dependency-inventory.md). The
 language-independent contracts are source spans, AST
 semantics, visibility, module resolution, diagnostic JSON, qualified function

@@ -1,0 +1,11 @@
+pub fn assert_true(value: Bool) -> Void {
+    assert(value)
+}
+
+pub fn assert_equal_int(left: Int, right: Int) -> Void {
+    assert_eq(left, right)
+}
+
+pub fn assert_equal_string(left: String, right: String) -> Void {
+    assert_eq(left, right)
+}

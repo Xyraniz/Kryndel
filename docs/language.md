@@ -131,6 +131,14 @@ Runtime errors for the existing bytecode operations are represented by
 `RuntimeKryndelError`; malformed bytecode, stack underflow, invalid calls,
 division by zero, invalid sequence indexes, invalid octets, invalid UTF-8, and
 unsupported sequence values are diagnosed without exposing Python tracebacks.
+
+Testing exposes `assert(value: Bool) -> Void` and
+`assert_eq(left: Any, right: Any) -> Void`. A false condition produces `KRY6401`
+and unequal values produce `KRY6402`; the typed source wrappers are in
+`stdlib/testing/testing.kry`. `kry test --format json` returns a versioned,
+deterministic list of passed and failed tests and exits with status 1 when any
+case fails.
+
 The complete value, UTF-8, error, frame, call, and host-boundary contract is
 versioned in [`specs/value-runtime-v1.md`](specs/value-runtime-v1.md).
 

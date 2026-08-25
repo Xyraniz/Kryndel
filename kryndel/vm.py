@@ -58,8 +58,10 @@ class BytesValue:
     items: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
-        if any(not isinstance(item, int) or isinstance(item, bool) or not 0 <= item <= 255 for item in self.items):
+        items = tuple(self.items)
+        if any(not isinstance(item, int) or isinstance(item, bool) or not 0 <= item <= 255 for item in items):
             raise ValueError("BytesValue items must be Int octets in the range 0..255")
+        object.__setattr__(self, "items", items)
 
     @property
     def hex(self) -> str:
@@ -390,6 +392,17 @@ class VM:
             if not isinstance(value, BytesValue):
                 raise RuntimeKryndelError("KRY6202 bytes_to_string requires Bytes")
             return self.decode_utf8(value.items)
+        if name == "assert":
+            if arguments[0] is not True:
+                raise RuntimeKryndelError("KRY6401 assertion failed")
+            return None
+        if name == "assert_eq":
+            left, right = arguments
+            if left != right:
+                raise RuntimeKryndelError(
+                    f"KRY6402 assertion failed: expected {self.stringify(right)}, found {self.stringify(left)}"
+                )
+            return None
         if name == "abs":
             return abs(arguments[0])
         if name == "sqrt":
