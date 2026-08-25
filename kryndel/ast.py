@@ -42,6 +42,7 @@ class EnumValue(Node):
     variant_name: str
     enum_span: Span
     variant_span: Span
+    payloads: list["Expr"] = field(default_factory=list)
 
 
 @dataclass
@@ -104,12 +105,12 @@ class ReturnStmt(Node):
 
 @dataclass
 class BreakStmt(Node):
-    pass
+    """Exit the innermost while loop."""
 
 
 @dataclass
 class ContinueStmt(Node):
-    pass
+    """Continue the innermost while loop."""
 
 
 @dataclass
@@ -143,6 +144,7 @@ class StructDecl(Node):
 class EnumVariantDecl(Node):
     name: str
     name_span: Span
+    payload_types: list[TypeName] = field(default_factory=list)
 
 
 @dataclass
@@ -164,6 +166,31 @@ class StructLiteral(Node):
     fields: list[StructFieldInit] = field(default_factory=list)
 
 
+@dataclass
+class MatchPattern(Node):
+    enum_name: str | None
+    variant_name: str | None
+    bindings: list[str] = field(default_factory=list)
+    wildcard: bool = False
+
+
+@dataclass
+class MatchArm(Node):
+    pattern: MatchPattern
+    body: "Stmt"
+
+
+@dataclass
+class MatchStmt(Node):
+    value: Expr
+    arms: list[MatchArm] = field(default_factory=list)
+
+
+@dataclass
+class ImportStmt(Node):
+    path: str
+
+
 Stmt = Union[
     LetStmt,
     ExprStmt,
@@ -173,6 +200,8 @@ Stmt = Union[
     ReturnStmt,
     BreakStmt,
     ContinueStmt,
+    MatchStmt,
+    ImportStmt,
     StructDecl,
     EnumDecl,
 ]

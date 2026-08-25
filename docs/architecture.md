@@ -1,110 +1,101 @@
-# Kryndel Architecture
+# Kryndel architecture
 
-## Unit enums
-
-The parser produces `EnumDecl`, `EnumVariantDecl`, and `EnumValue`. The checker registers enums before expressions, so a declaration may be used earlier in the same file. `EnumType` is nominal. The compiler emits deterministic `MAKE_ENUM` metadata such as `{ "type": "Color", "variant": "Green" }`; the VM creates `EnumValue(type_name, variant_name)` and prints it as `Color.Green`. Variants have no payload and `match` is not implemented.
-
-Kryndel is organized as a sequence of explicit compiler phases. Each phase owns one kind of knowledge and communicates through a small data structure. The implementation currently targets a bundled stack virtual machine; the phase boundaries are designed to support a future native backend without changing the source language.
+Kryndel is a Python standard-library bootstrap with explicit boundaries. The
+boundaries are contracts for a future independent compiler/runtime; they are
+not a claim that the current implementation is self-hosted.
 
 ## Pipeline
 
 ```text
-UTF-8 source
+UTF-8 SourceFile
     |
     v
-Lexer ----------------------> tokens + lexical diagnostics
+Lexer --------------------> tokens + KRY1xxx diagnostics
     |
     v
-Recursive-descent parser ----> AST + parse diagnostics
+Recursive-descent parser --> dataclass AST + KRY2xxx diagnostics
     |
     v
-Static checker --------------> name/type diagnostics
-    |
+Static checker -----------> names/types/imports + KRY3xxx diagnostics
+    |                         match exhaustiveness
     v
-Bytecode compiler -----------> Module
-    |
-    +-------------> JSON dump or KEXE artifact
-    |
-    v
-Stack VM --------------------> runtime values and output
+Bytecode compiler ---------> deterministic Module v1
+    |                 \\
+    v                  v
+   VM                KEXE artifact
 ```
 
-The compiler never executes user code. The VM is the only component that invokes runtime functions or performs side effects.
+The compiler never executes source code. The VM is the only phase allowed to
+perform runtime effects. The package resolver is a separate project-level
+phase and never executes package files.
 
-## Source and spans
+## Diagnostics
 
-`SourceFile` stores the original text and computes half-open spans. A span records byte offsets as well as one-based line and column values. Every token and AST node keeps a span so later diagnostics can highlight the construct that caused a failure.
+`Diagnostic` stores severity, code, primary span, secondary labelled spans,
+message, notes, help, and a suggestion. Human output renders source context;
+`DiagnosticError.as_json()` emits sorted, stable JSON.
 
-The current diagnostic renderer is intentionally terminal-friendly. It prints a filename, one-based location, severity, stable code, source line, caret underline, and optional help text. The data model is independent of the renderer, which leaves room for JSON or language-server diagnostics later.
-
-## Front end
-
-The lexer is hand-written. It recognizes identifiers, reserved words, integer and floating-point literals, strings with a small explicit escape set, comments, punctuation, and operators. Nested block comments are supported. Unknown characters and incomplete strings are reported without allowing a malformed token to silently enter the parser.
-
-The parser is a recursive-descent implementation. Each precedence level is represented by a method, which makes associativity and precedence visible in the source. The parser can recover at statement boundaries so multiple syntax errors can be displayed in one compilation.
-
-The AST is a collection of dataclasses rather than an untyped dictionary tree. This keeps compiler code explicit and makes tests able to assert on the shape of a program without parsing implementation details.
-
-## Type checker
-
-The type checker performs declaration registration before checking executable items. It first registers struct names and their declaration-ordered fields, then registers function signatures so functions can call declarations that appear later in the file, and finally checks statements and expressions against lexical scopes. This permits a struct to be used before its declaration in the same source file without adding modules prematurely.
-
-Bindings are immutable unless declared with `let mut`. A scope stack tracks shadowing and rejects duplicate names in one scope. Built-in functions are represented by the same `FunctionType` structure as user functions. This makes calls to `ui.window` and ordinary calls share one checking path. Structs use nominal `StructType` values with field metadata; constructors are checked for complete, unique, known, and type-compatible fields, while field access resolves to the declared field type.
-
-The checker deliberately uses `Unknown` for error recovery. Once an unknown name or type has been reported, subsequent checks can continue and report independent failures without cascading into dozens of meaningless messages.
-
-## Bytecode
-
-The bytecode VM is stack-based. Instructions are small records with an operation, an optional argument, and a source line. A function owns its constants and instructions. The module owns named functions and an entry name.
-
-Important instructions include:
-
-| Instruction | Purpose |
+| Range | Meaning |
 | --- | --- |
-| `PUSH_CONST` | Push a function constant. |
-| `MAKE_STRUCT` | Consume field values in declaration order and create a typed struct value from stable metadata. |
-| `GET_FIELD` | Consume a struct value and push a named field after runtime validation. |
-| `PUSH_NIL` | Push the `nil` value. |
-| `LOAD` | Load a local slot. |
-| `STORE` | Store and consume a value. |
-| `STORE_RESULT` | Store and leave the value on the stack. |
-| `CALL` | Invoke a named function or built-in. |
-| `BINARY` | Apply a checked binary operator. |
-| `UNARY` | Apply a checked unary operator. |
-| `JUMP` | Unconditional control-flow transfer. |
-| `JUMP_IF_FALSE` | Conditional transfer after consuming a condition. |
-| `JUMP_IF_TRUE` | Conditional transfer after consuming a condition. |
-| `RETURN` | Return the top stack value. |
+| KRY1000–1999 | lexer |
+| KRY2000–2999 | parser/recovery |
+| KRY3000–3999 | names, types, payloads, match |
+| KRY5000–5999 | manifests, semver, packages, locks, checksums |
+| KRY6000–6099 | runtime, malformed bytecode, artifacts |
 
-Compiler scopes map source names to internal slot names. A binding such as `value` becomes a unique internal key, which prevents a nested shadowing declaration from overwriting an outer runtime value.
+Existing codes remain unchanged. New payload/match codes include `KRY3043`–
+`KRY3049`; package codes include `KRY5001`–`KRY5013`.
 
-Logical expressions use `DUP` and conditional jumps so the right-hand side is skipped when the left-hand side decides the result. Loops use patchable jump lists for exits and continues.
+## Enums and match
 
-## Runtime
+The AST keeps variant payload type names and enum value payload expressions.
+`EnumType` is nominal and stores declaration-ordered `(variant, payload types)`
+metadata. Registration occurs before executable checking, so enums and payload
+types can be used before their declarations. The compiler emits payload values
+then `MAKE_ENUM`; the VM retains a nominal `EnumValue(type, variant, payloads)`.
+Dataclass equality gives structural equality of payloads while type and variant
+remain nominal. Ordering is rejected by the checker.
 
-Each function call receives a fresh local dictionary and operand stack. The VM checks function arity, stack depth, local loads, instruction names, and artifact structure. `StructValue` retains the nominal type name and an ordered tuple of `(field_name, value)` pairs; it is not a generic dictionary. Runtime failures include the current function, source line when available, and the call stack, including explicit errors for malformed `MAKE_STRUCT` metadata and invalid `GET_FIELD` operands.
+`match` evaluates its value once into an internal local. Each ordered variant
+arm emits `MATCH_ENUM`, a conditional jump, and (for payload arms) `BIND_ENUM`.
+Bindings live in a compiler scope that ends with the arm. The checker rejects
+wrong enum names, duplicate variants, duplicate wildcards, wrong binding arity,
+and missing variants unless `_` covers the remainder.
 
-The standard library is intentionally small. Printing, conversions, string length, numeric helpers, a monotonic clock, and the deterministic UI tree are implemented directly in `vm.py`. No dynamic import is performed from Kryndel source.
+## Bytecode and runtime safety
 
-## UI boundary
+Bytecode v1 is deterministic JSON. Important operations are `MAKE_STRUCT`,
+`GET_FIELD`, `MAKE_ENUM`, `MATCH_ENUM`, and `BIND_ENUM`. The VM validates
+metadata shape, operand stack depth, constant indices, jumps, function arity,
+enum payload arity, and struct fields. Runtime failures are converted to
+`RuntimeKryndelError` with function/line/call-stack context; CLI output never
+exposes a Python traceback. The complete v1 contract is in
+[`specs/bytecode-v1.md`](specs/bytecode-v1.md).
 
-The current UI implementation is a platform-neutral tree. `UINode` stores a kind, properties, children, and optional callback metadata. Its renderer is deterministic, which makes it useful in tests and documentation.
+KEXE wraps module JSON with a fixed magic, length, and SHA-256 payload digest.
+It is a portable VM artifact, not a native Windows executable.
 
-This boundary is intentional. A real desktop backend requires decisions about window ownership, event dispatch, layout measurement, painting, threads, resource loading, accessibility, and platform distribution. Those decisions should be specified before an operating-system backend is connected to the language.
+## Packages
 
-## KEXE format
+`packages.py` implements a strict manifest subset, semantic version
+requirements, a local registry, path dependencies, dependency graph traversal,
+cycle/incompatibility checks, checksum verification, deterministic JSON
+lockfiles, and staged installation. The resolver sorts package names and lock
+entries. Registry packages live under `.kryndel/registry/name/version`; installed
+files live under `.kryndel/packages/name`.
 
-The KEXE format is a portable Kryndel package, not a PE or ELF executable. Its fixed header contains:
+No pip, Python package installation, database, login, remote service, or package
+installation script is involved. Remote registry transport is deliberately not
+implemented. Imports currently validate that the top-level package is declared;
+exported module symbols and ambiguity resolution remain future work.
 
-```text
-magic      8 bytes   KRYNEXE version marker
-length     4 bytes   big-endian payload length
-checksum  32 bytes   SHA-256 of the payload
-payload     N bytes  deterministic module JSON
-```
+## Python boundary and self-hosting
 
-The loader validates all three header properties before parsing the payload. This gives the project a reproducible distribution boundary today and leaves room for a future native payload format.
-
-## Extension points
-
-The compiler can gain a second backend beside the bytecode compiler. A typed intermediate representation should be introduced before adding native code generation, because an IR can make ownership, calling convention, layout, and platform assumptions explicit. The existing `Module` contract should remain the stable artifact-level interface while backend-specific payloads evolve.
+Currently Python owns all implementation code and the host filesystem/clock/
+stdout bridges. The language-independent contracts are source spans, AST
+semantics, diagnostic JSON, bytecode v1, KEXE checksums, manifest v1, lockfile
+ordering, semver, and package checksum calculation. A future Kryndel lexer
+needs identifiers, literals, comments, operators, and spans; a future parser
+needs declarations, expressions, blocks, enums, payloads, match, and recovery.
+The first self-hosted milestone must reproduce bytecode and diagnostics from
+the same fixtures before the Python bootstrap is retired.

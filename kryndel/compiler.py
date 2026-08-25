@@ -56,6 +56,8 @@ class FunctionCompiler:
     def compile_statement(self, statement: ast.Stmt) -> None:
         if isinstance(statement, (ast.StructDecl, ast.EnumDecl)):
             return
+        if isinstance(statement, ast.ImportStmt):
+            return
         if isinstance(statement, ast.LetStmt):
             internal = f"{statement.name}#{len(self.scopes)}#{len(self.function.instructions)}"
             self.compile_expression(statement.initializer)
@@ -113,6 +115,59 @@ class FunctionCompiler:
         if isinstance(statement, ast.ContinueStmt):
             if self.loop_stack:
                 self.loop_stack[-1][2].append(self.emit("JUMP", None, statement.span.line))
+            return
+        if isinstance(statement, ast.MatchStmt):
+            self.compile_match(statement)
+
+    def compile_match(self, statement: ast.MatchStmt) -> None:
+        value_slot = f"__match_value#{len(self.function.instructions)}"
+        self.compile_expression(statement.value)
+        self.emit("STORE", value_slot, statement.value.span.line)
+        end_jumps: list[int] = []
+        for arm in statement.arms:
+            pattern = arm.pattern
+            false_jump: int | None = None
+            if not pattern.wildcard:
+                self.emit("LOAD", value_slot, pattern.span.line)
+                payload_types = self.enums.get(pattern.enum_name or "")
+                arity = 0
+                if payload_types is not None:
+                    variant = next((item for item in payload_types.variants if item.name == pattern.variant_name), None)
+                    arity = len(variant.payload_types) if variant else 0
+                false_jump = self.emit(
+                    "MATCH_ENUM",
+                    {"type": pattern.enum_name, "variant": pattern.variant_name, "arity": arity},
+                    pattern.span.line,
+                )
+                false_jump = self.emit("JUMP_IF_FALSE", None, pattern.span.line)
+            self.scopes.append({})
+            bindings: list[str] = []
+            for binding in pattern.bindings:
+                if binding == "_":
+                    bindings.append("")
+                    continue
+                internal = f"{binding}#{len(self.scopes)}#{len(self.function.instructions)}"
+                self.scopes[-1][binding] = internal
+                bindings.append(internal)
+            if bindings and not pattern.wildcard:
+                self.emit(
+                    "BIND_ENUM",
+                    {"source": value_slot, "bindings": bindings, "arity": len(bindings)},
+                    pattern.span.line,
+                )
+            if isinstance(arm.body, ast.Block):
+                for nested in arm.body.statements:
+                    self.compile_statement(nested)
+            else:
+                self.compile_statement(arm.body)
+            self.scopes.pop()
+            if not pattern.wildcard:
+                end_jumps.append(self.emit("JUMP", None, arm.span.line))
+                assert false_jump is not None
+                self.patch(false_jump, len(self.function.instructions))
+        end = len(self.function.instructions)
+        for index in end_jumps:
+            self.patch(index, end)
 
     def compile_expression(self, expression: ast.Expr) -> None:
         if isinstance(expression, ast.Literal):
@@ -129,7 +184,12 @@ class FunctionCompiler:
             self.emit("GET_FIELD", expression.name, expression.span.line)
             return
         if isinstance(expression, ast.EnumValue):
-            self.emit("MAKE_ENUM", {"type": expression.enum_name, "variant": expression.variant_name}, expression.span.line)
+            for payload in expression.payloads:
+                self.compile_expression(payload)
+            metadata = {"type": expression.enum_name, "variant": expression.variant_name}
+            if expression.payloads:
+                metadata["arity"] = len(expression.payloads)
+            self.emit("MAKE_ENUM", metadata, expression.span.line)
             return
         if isinstance(expression, ast.StructLiteral):
             declaration = self.structs.get(expression.type_name.name)
@@ -229,17 +289,17 @@ class Compiler:
         return Module(self.source.name, "main", functions)
 
 
-def compile_source(text: str, filename: str = "<source>") -> Module:
+def compile_source(text: str, filename: str = "<source>", allowed_imports: set[str] | None = None) -> Module:
     source = SourceFile(filename, text)
     tokens, lexical_diagnostics = lex(source)
     program, parse_diagnostics = parse(source, tokens)
-    type_diagnostics = check_types(source, program)
+    type_diagnostics = check_types(source, program, allowed_imports)
     diagnostics = lexical_diagnostics.items + parse_diagnostics.items + type_diagnostics.items
     if diagnostics:
         raise DiagnosticError(diagnostics, text, filename)
     return Compiler(source, program).compile()
 
 
-def compile_file(path: str | Path) -> Module:
+def compile_file(path: str | Path, allowed_imports: set[str] | None = None) -> Module:
     source = SourceFile.from_path(path)
-    return compile_source(source.text, source.name)
+    return compile_source(source.text, source.name, allowed_imports)

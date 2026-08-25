@@ -30,10 +30,11 @@ class StructValue:
 
 @dataclass(frozen=True)
 class EnumValue:
-    """A nominal unit enum value."""
+    """A nominal enum value with immutable positional payloads."""
 
     type_name: str
     variant_name: str
+    payloads: tuple[Any, ...] = ()
 
 
 @dataclass
@@ -111,6 +112,10 @@ class VM:
                     self.make_struct(stack, function, instruction)
                 elif op == "MAKE_ENUM":
                     self.make_enum(stack, function, instruction)
+                elif op == "MATCH_ENUM":
+                    self.match_enum(stack, function, instruction)
+                elif op == "BIND_ENUM":
+                    self.bind_enum(locals_, function, instruction)
                 elif op == "GET_FIELD":
                     self.get_field(stack, function, instruction)
                 elif op == "POP":
@@ -186,13 +191,59 @@ class VM:
 
     def make_enum(self, stack: list[Any], function: BytecodeFunction, instruction: Any) -> None:
         metadata = instruction.arg
-        if not isinstance(metadata, dict) or set(metadata) != {"type", "variant"}:
+        if not isinstance(metadata, dict) or set(metadata) not in ({"type", "variant"}, {"type", "variant", "arity"}):
             raise self.error(function, instruction, "malformed MAKE_ENUM metadata")
         type_name = metadata["type"]
         variant_name = metadata["variant"]
-        if (not isinstance(type_name, str) or not type_name or not isinstance(variant_name, str) or not variant_name):
+        arity = metadata.get("arity", 0)
+        if (
+            not isinstance(type_name, str)
+            or not type_name
+            or not isinstance(variant_name, str)
+            or not variant_name
+            or not isinstance(arity, int)
+            or arity < 0
+        ):
             raise self.error(function, instruction, "malformed MAKE_ENUM metadata")
-        stack.append(EnumValue(type_name, variant_name))
+        self.require_stack(stack, function, instruction, arity)
+        payloads = tuple(stack[-arity:]) if arity else ()
+        if arity:
+            del stack[-arity:]
+        stack.append(EnumValue(type_name, variant_name, payloads))
+
+    def match_enum(self, stack: list[Any], function: BytecodeFunction, instruction: Any) -> None:
+        metadata = instruction.arg
+        if not isinstance(metadata, dict) or set(metadata) != {"type", "variant", "arity"}:
+            raise self.error(function, instruction, "malformed MATCH_ENUM metadata")
+        type_name = metadata.get("type")
+        variant_name = metadata.get("variant")
+        arity = metadata.get("arity")
+        if not isinstance(type_name, str) or not isinstance(variant_name, str) or not isinstance(arity, int) or arity < 0:
+            raise self.error(function, instruction, "malformed MATCH_ENUM metadata")
+        self.require_stack(stack, function, instruction, 1)
+        value = stack.pop()
+        if not isinstance(value, EnumValue):
+            stack.append(False)
+            return
+        stack.append(value.type_name == type_name and value.variant_name == variant_name and len(value.payloads) == arity)
+
+    def bind_enum(self, locals_: dict[str, Any], function: BytecodeFunction, instruction: Any) -> None:
+        metadata = instruction.arg
+        if not isinstance(metadata, dict) or set(metadata) != {"source", "bindings", "arity"}:
+            raise self.error(function, instruction, "malformed BIND_ENUM metadata")
+        source = metadata.get("source")
+        bindings = metadata.get("bindings")
+        arity = metadata.get("arity")
+        if not isinstance(source, str) or not isinstance(bindings, list) or not isinstance(arity, int) or arity != len(bindings):
+            raise self.error(function, instruction, "malformed BIND_ENUM metadata")
+        value = locals_.get(source)
+        if not isinstance(value, EnumValue) or len(value.payloads) != arity:
+            raise self.error(function, instruction, "cannot bind payloads from a non-matching enum value")
+        for name, payload in zip(bindings, value.payloads):
+            if name:
+                if not isinstance(name, str):
+                    raise self.error(function, instruction, "malformed BIND_ENUM metadata")
+                locals_[name] = payload
 
     def get_field(self, stack: list[Any], function: BytecodeFunction, instruction: Any) -> None:
         self.require_stack(stack, function, instruction, 1)
@@ -304,7 +355,8 @@ class VM:
             fields = ", ".join(f"{name}: {VM.stringify(field_value)}" for name, field_value in value.fields)
             return f"{value.type_name} {{ {fields} }}"
         if isinstance(value, EnumValue):
-            return f"{value.type_name}.{value.variant_name}"
+            suffix = "" if not value.payloads else "(" + ", ".join(VM.stringify(item) for item in value.payloads) + ")"
+            return f"{value.type_name}.{value.variant_name}{suffix}"
         if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return str(value)

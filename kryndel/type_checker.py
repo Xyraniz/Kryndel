@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from difflib import get_close_matches
 
 from . import ast
 from .diagnostics import DiagnosticBag
@@ -46,6 +47,7 @@ class TypeChecker:
     source: SourceFile
     program: ast.Program
     diagnostics: DiagnosticBag = field(default_factory=DiagnosticBag)
+    allowed_imports: set[str] | None = None
 
     def __post_init__(self) -> None:
         self.scopes: list[dict[str, Symbol]] = [{}]
@@ -69,9 +71,9 @@ class TypeChecker:
                 continue
             parameter_types = tuple(self.resolve_declared_type(parameter.type_name.name) for parameter in declaration.parameters)
             for parameter, type_ in zip(declaration.parameters, parameter_types):
-                self.ensure_known_type(type_, parameter.type_name.span)
+                self.ensure_known_type(type_, parameter.type_name.span, parameter.type_name.name)
             return_type = self.resolve_declared_type(declaration.return_type.name)
-            self.ensure_known_type(return_type, declaration.return_type.span)
+            self.ensure_known_type(return_type, declaration.return_type.span, declaration.return_type.name)
             self.functions[declaration.name] = FunctionInfo(FunctionType(parameter_types, return_type), declaration)
 
         top_level = [
@@ -109,7 +111,7 @@ class TypeChecker:
                     continue
                 seen.add(field.name)
                 field_type = self.resolve_declared_type(field.type_name.name)
-                self.ensure_known_type(field_type, field.type_name.span)
+                self.ensure_known_type(field_type, field.type_name.span, field.type_name.name)
                 fields.append((field.name, field_type))
             self.struct_types[declaration.name] = StructType(declaration.name, tuple(fields))
 
@@ -122,15 +124,23 @@ class TypeChecker:
                 self.error(f"enum {declaration.name!r} is already defined", declaration.span, "KRY3034")
                 continue
             self.enum_declarations[declaration.name] = declaration
+            self.enum_types[declaration.name] = EnumType(declaration.name)
             seen: set[str] = set()
             variants: list[str] = []
+            payloads: list[tuple[str, tuple[Type, ...]]] = []
             for variant in declaration.variants:
                 if variant.name in seen:
                     self.error(f"variant {variant.name!r} is already defined in enum {declaration.name!r}", variant.name_span, "KRY3035")
                     continue
                 seen.add(variant.name)
                 variants.append(variant.name)
-            self.enum_types[declaration.name] = EnumType(declaration.name, tuple(variants))
+                resolved_payloads: list[Type] = []
+                for payload_type in variant.payload_types:
+                    payload = self.resolve_declared_type(payload_type.name)
+                    self.ensure_known_type(payload, payload_type.span, payload_type.name)
+                    resolved_payloads.append(payload)
+                payloads.append((variant.name, tuple(resolved_payloads)))
+            self.enum_types[declaration.name] = EnumType(declaration.name, tuple(variants), tuple(payloads))
 
     def check_function(self, declaration: ast.FunctionDecl) -> None:
         info = self.functions[declaration.name]
@@ -173,11 +183,20 @@ class TypeChecker:
     def check_statement(self, statement: ast.Stmt, expected_return: Type) -> None:
         if isinstance(statement, (ast.StructDecl, ast.EnumDecl)):
             return
+        if isinstance(statement, ast.ImportStmt):
+            if self.allowed_imports is not None and statement.path.split(".", 1)[0] not in self.allowed_imports:
+                self.error(
+                    f"package {statement.path.split('.', 1)[0]!r} is not declared in kry.toml",
+                    statement.span,
+                    "KRY5013",
+                    help="Add the package with kry add before importing it.",
+                )
+            return
         if isinstance(statement, ast.LetStmt):
             actual = self.check_expression(statement.initializer)
             declared = self.resolve_declared_type(statement.annotation.name) if statement.annotation else actual
             if statement.annotation:
-                self.ensure_known_type(declared, statement.annotation.span)
+                self.ensure_known_type(declared, statement.annotation.span, statement.annotation.name)
                 if not compatible(declared, actual):
                     self.error(
                         f"cannot initialize {statement.name!r} with {actual}; expected {declared}",
@@ -222,6 +241,9 @@ class TypeChecker:
             if self.loop_depth == 0:
                 keyword = "break" if isinstance(statement, ast.BreakStmt) else "continue"
                 self.error(f"{keyword} is only valid inside a while loop", statement.span, "KRY3007")
+            return
+        if isinstance(statement, ast.MatchStmt):
+            self.check_match(statement, expected_return)
 
     def check_expression(self, expression: ast.Expr) -> Type:
         if isinstance(expression, ast.Literal):
@@ -232,20 +254,20 @@ class TypeChecker:
                 return UNKNOWN
             symbol = self.lookup(expression.value)
             if symbol is None:
-                self.error(f"unknown name {expression.value!r}", expression.span, "KRY3008", help="Declare the variable before using it.")
+                names = {name for scope in self.scopes for name in scope}
+                suggestion = get_close_matches(expression.value, sorted(names), n=1, cutoff=0.78)
+                self.error(
+                    f"unknown name {expression.value!r}",
+                    expression.span,
+                    "KRY3008",
+                    help=f"Did you mean {suggestion[0]!r}?" if suggestion else "Declare the variable before using it.",
+                )
                 return UNKNOWN
             return symbol.type
         if isinstance(expression, ast.Member):
             return self.check_member(expression)
         if isinstance(expression, ast.EnumValue):
-            enum_type = self.enum_types.get(expression.enum_name)
-            if enum_type is None:
-                self.error(f"unknown enum {expression.enum_name!r}", expression.enum_span, "KRY3036")
-                return UNKNOWN
-            if expression.variant_name not in enum_type.variants:
-                self.error(f"enum {expression.enum_name!r} has no variant {expression.variant_name!r}", expression.variant_span, "KRY3037")
-                return UNKNOWN
-            return enum_type
+            return self.check_enum_value(expression)
         if isinstance(expression, ast.StructLiteral):
             return self.check_struct_literal(expression)
         if isinstance(expression, ast.Unary):
@@ -265,8 +287,107 @@ class TypeChecker:
             right = self.check_expression(expression.right)
             return self.check_binary(expression, left, right)
         if isinstance(expression, ast.Call):
+            if isinstance(expression.callee, ast.EnumValue):
+                expression.callee.payloads = expression.arguments
+                return self.check_enum_value(expression.callee)
             return self.check_call(expression)
         return UNKNOWN
+
+    def check_enum_value(self, expression: ast.EnumValue) -> Type:
+        enum_type = self.enum_types.get(expression.enum_name)
+        if enum_type is None:
+            self.error(f"unknown enum {expression.enum_name!r}", expression.enum_span, "KRY3036")
+            for payload in expression.payloads:
+                self.check_expression(payload)
+            return UNKNOWN
+        if expression.variant_name not in enum_type.variants:
+            suggestion = get_close_matches(expression.variant_name, list(enum_type.variants), n=1, cutoff=0.78)
+            self.error(
+                f"enum {expression.enum_name!r} has no variant {expression.variant_name!r}",
+                expression.variant_span,
+                "KRY3037",
+                help=f"Did you mean {suggestion[0]!r}?" if suggestion else None,
+            )
+            for payload in expression.payloads:
+                self.check_expression(payload)
+            return UNKNOWN
+        expected = enum_type.payload_types(expression.variant_name)
+        if len(expected) != len(expression.payloads):
+            self.error(
+                f"variant {expression.enum_name}.{expression.variant_name} expects {len(expected)} payload(s), found {len(expression.payloads)}",
+                expression.span,
+                "KRY3043",
+                help="Provide exactly the declared positional payloads.",
+            )
+        for index, payload in enumerate(expression.payloads):
+            actual = self.check_expression(payload)
+            if index < len(expected) and not compatible(expected[index], actual):
+                self.error(
+                    f"payload {index + 1} of {expression.enum_name}.{expression.variant_name} expects {expected[index]}, found {actual}",
+                    payload.span,
+                    "KRY3044",
+                )
+        return enum_type
+
+    def check_match(self, statement: ast.MatchStmt, expected_return: Type) -> None:
+        value_type = self.check_expression(statement.value)
+        if not isinstance(value_type, EnumType):
+            self.error("match requires an enum value", statement.value.span, "KRY3045")
+            for arm in statement.arms:
+                self.check_statement(arm.body, expected_return)
+            return
+        covered: set[str] = set()
+        wildcard = False
+        for arm in statement.arms:
+            pattern = arm.pattern
+            if pattern.wildcard:
+                if wildcard:
+                    self.error("duplicate wildcard match arm", pattern.span, "KRY3046")
+                wildcard = True
+                self.push_scope()
+                self.check_statement(arm.body, expected_return)
+                self.pop_scope()
+                continue
+            if pattern.enum_name != value_type.name:
+                self.error(
+                    f"match pattern belongs to enum {pattern.enum_name!r}, expected {value_type.name!r}",
+                    pattern.span,
+                    "KRY3045",
+                )
+            variant = pattern.variant_name or ""
+            if variant in covered:
+                self.error(f"duplicate match arm for {value_type.name}.{variant}", pattern.span, "KRY3046")
+            covered.add(variant)
+            if variant not in value_type.variants:
+                self.error(f"enum {value_type.name!r} has no variant {variant!r}", pattern.span, "KRY3047")
+                payload_types: tuple[Type, ...] = ()
+            else:
+                payload_types = value_type.payload_types(variant)
+            if len(payload_types) != len(pattern.bindings):
+                self.error(
+                    f"pattern {value_type.name}.{variant} expects {len(payload_types)} binding(s), found {len(pattern.bindings)}",
+                    pattern.span,
+                    "KRY3048",
+                )
+            self.push_scope()
+            for index, binding in enumerate(pattern.bindings):
+                if binding == "_":
+                    continue
+                if index < len(payload_types):
+                    self.define(binding, Symbol(payload_types[index], False, pattern.span), pattern.span)
+                else:
+                    self.define(binding, Symbol(UNKNOWN, False, pattern.span), pattern.span)
+            self.check_statement(arm.body, expected_return)
+            self.pop_scope()
+        if not wildcard:
+            missing = [variant for variant in value_type.variants if variant not in covered]
+            if missing:
+                self.error(
+                    f"non-exhaustive match; missing variant(s): {', '.join(f'{value_type.name}.{name}' for name in missing)}",
+                    statement.span,
+                    "KRY3049",
+                    help="Add a branch for each missing variant or add a _ arm.",
+                )
 
     def check_struct_literal(self, expression: ast.StructLiteral) -> Type:
         struct_type = self.struct_types.get(expression.type_name.name)
@@ -361,10 +482,16 @@ class TypeChecker:
                 self.check_expression(argument)
             return UNKNOWN
         if not info.type.variadic and len(expression.arguments) != len(info.type.parameters):
+            help_text = (
+                f"Provide {len(info.type.parameters) - len(expression.arguments)} more argument(s)."
+                if len(expression.arguments) < len(info.type.parameters)
+                else f"Remove {len(expression.arguments) - len(info.type.parameters)} extra argument(s)."
+            )
             self.error(
                 f"function {name!r} expects {len(info.type.parameters)} argument(s), found {len(expression.arguments)}",
                 expression.span,
                 "KRY3012",
+                help=help_text,
             )
         for index, argument in enumerate(expression.arguments):
             actual = self.check_expression(argument)
@@ -426,11 +553,20 @@ class TypeChecker:
             self.error(f"{message}; found {actual}", span, code)
 
     def resolve_declared_type(self, name: str) -> Type:
-        return self.struct_types.get(name, self.enum_types.get(name, resolve_type(name)))
+        if name in self.struct_types:
+            return self.struct_types[name]
+        if name in self.enum_types:
+            return self.enum_types[name]
+        if any(isinstance(item, ast.EnumDecl) and item.name == name for item in self.program.items):
+            return EnumType(name)
+        return resolve_type(name)
 
-    def ensure_known_type(self, type_: Type, span: object) -> None:
+    def ensure_known_type(self, type_: Type, span: object, name: str | None = None) -> None:
         if type_ == UNKNOWN:
-            self.error("unknown type name", span, "KRY3023", help="Use a built-in type, struct, or enum name.")
+            candidates = sorted(set(PRIMITIVE_TYPES) | set(self.struct_types) | set(self.enum_types))
+            close = get_close_matches(name or "", candidates, n=1, cutoff=0.72)
+            help_text = f"Did you mean {close[0]!r}?" if close else "Use a built-in type, struct, or enum name."
+            self.error("unknown type name", span, "KRY3023", help=help_text)
 
     def define(self, name: str, symbol: Symbol, span: object) -> None:
         if name in self.scopes[-1]:
@@ -453,5 +589,5 @@ class TypeChecker:
         self.diagnostics.error(message, span, code=code, help=help)
 
 
-def check_types(source: SourceFile, program: ast.Program) -> DiagnosticBag:
-    return TypeChecker(source, program).check()
+def check_types(source: SourceFile, program: ast.Program, allowed_imports: set[str] | None = None) -> DiagnosticBag:
+    return TypeChecker(source, program, allowed_imports=allowed_imports).check()

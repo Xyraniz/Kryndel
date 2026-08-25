@@ -1,0 +1,10 @@
+enum MaybeInt {
+    None
+    Some(Int)
+}
+
+let value: MaybeInt = MaybeInt.Some(42)
+match value {
+    MaybeInt.None => println("none")
+    MaybeInt.Some(number) => println(number)
+}
