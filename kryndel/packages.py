@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .diagnostics import Diagnostic, DiagnosticError, Severity, Span
+from .filesystem import FileSystem, RootedFileSystem
 
 
 PACKAGE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
@@ -117,15 +118,11 @@ def _parse_assignment(line: str, path: Path, line_number: int) -> tuple[str, str
     return key, value
 
 
-def read_manifest(path: str | Path) -> Manifest:
-    manifest_path = Path(path)
-    if manifest_path.is_dir():
-        manifest_path = manifest_path / "kry.toml"
-    if not manifest_path.is_file():
-        raise package_error("manifest file kry.toml is missing", "KRY5001", manifest_path, "Run kry init or create a supported [package] manifest.")
+def parse_manifest_text(text: str, manifest_path: str | Path) -> Manifest:
+    manifest_path = Path(manifest_path)
     section = ""
     values: dict[str, dict[str, str]] = {"package": {}, "dependencies": {}}
-    for number, raw_line in enumerate(manifest_path.read_text(encoding="utf-8").splitlines(), 1):
+    for number, raw_line in enumerate(text.splitlines(), 1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -159,8 +156,31 @@ def read_manifest(path: str | Path) -> Manifest:
     return Manifest(manifest_path, name, version, package["edition"], dict(sorted(values["dependencies"].items())))
 
 
+def read_manifest_from_filesystem(filesystem: FileSystem, path: str | Path = "kry.toml") -> Manifest:
+    manifest_path = Path(path)
+    try:
+        raw = filesystem.read_bytes(manifest_path.as_posix())
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise package_error("manifest must be valid UTF-8", "KRY6304", manifest_path) from exc
+    return parse_manifest_text(text, manifest_path)
+
+
+def read_manifest(path: str | Path) -> Manifest:
+    manifest_path = Path(path)
+    if manifest_path.is_dir():
+        manifest_path = manifest_path / "kry.toml"
+    if not manifest_path.is_file():
+        raise package_error("manifest file kry.toml is missing", "KRY5001", manifest_path, "Run kry init or create a supported [package] manifest.")
+    filesystem = RootedFileSystem(manifest_path.parent)
+    manifest = read_manifest_from_filesystem(filesystem, manifest_path.name)
+    manifest.path = manifest_path
+    return manifest
+
+
 def write_manifest(manifest: Manifest) -> None:
-    manifest.path.write_text(manifest.dumps(), encoding="utf-8", newline="\n")
+    filesystem = RootedFileSystem(manifest.path.parent)
+    filesystem.write_bytes(manifest.path.name, manifest.dumps().encode("utf-8"))
 
 
 def package_checksum(root: Path) -> str:

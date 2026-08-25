@@ -26,6 +26,7 @@ from kryndel.packages import (
     install,
     package_checksum,
     read_manifest,
+    read_manifest_from_filesystem,
     validate_imports,
 )
 from kryndel.source import SourceFile
@@ -721,6 +722,23 @@ class KryndelTests(unittest.TestCase):
         (package / "kry.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
         (package / "checksum").write_text(package_checksum(package) + "\n", encoding="utf-8")
         return package
+
+    def test_manifest_parser_runs_through_virtual_filesystem(self) -> None:
+        fixture = json.loads((Path(__file__).parent / "fixtures" / "manifest-reader-v1.json").read_text(encoding="utf-8"))
+        manifest_text = fixture["source"]
+        filesystem = VirtualFileSystem({"kry.toml": manifest_text.encode("utf-8")})
+        manifest = read_manifest_from_filesystem(filesystem)
+        self.assertEqual(
+            {
+                "name": manifest.name,
+                "version": str(manifest.version),
+                "edition": manifest.edition,
+                "dependencies": manifest.dependencies,
+            },
+            fixture["expected"],
+        )
+        with self.assertRaisesRegex(DiagnosticError, "KRY6304"):
+            read_manifest_from_filesystem(VirtualFileSystem({"kry.toml": bytes((0xFF,))}))
 
     def test_manifest_parser_rejects_unsupported_syntax_and_accepts_subset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
