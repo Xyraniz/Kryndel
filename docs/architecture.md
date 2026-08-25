@@ -48,6 +48,8 @@ package and module notes without changing the existing source-span schema.
 | KRY5000–5999 | manifests, semver, packages, locks, checksums |
 | KRY6000–6099 | runtime, malformed bytecode, artifacts |
 | KRY6100–6199 | sequence layouts, indexing, and collection runtime errors |
+| KRY6200–6299 | value conversion and UTF-8 boundary errors |
+| KRY6300–6399 | IO, filesystem, program, and malformed-bytecode boundary errors |
 
 Existing codes remain unchanged. New payload/match codes include `KRY3043`–
 `KRY3049`; imported-symbol codes are `KRY3050`–`KRY3052`; sequence semantic
@@ -124,7 +126,9 @@ top-level statements are not implicitly executed.
 ## Python boundary and self-hosting
 
 Currently Python owns all implementation code and the host filesystem/clock/
-stdout bridges. The language-independent contracts are source spans, AST
+stdout bridges. The measured dependency inventory is in
+[`host-dependency-inventory.md`](host-dependency-inventory.md). The
+language-independent contracts are source spans, AST
 semantics, visibility, module resolution, diagnostic JSON, qualified function
 names, bytecode v1, KEXE checksums, manifest v1, lockfile ordering, semver, and
 package checksum calculation. A future Kryndel lexer needs identifiers,

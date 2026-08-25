@@ -37,6 +37,25 @@ class KryndelTests(unittest.TestCase):
             VM(compile_source(source, "test.kry")).run()
         return output.getvalue()
 
+    def test_value_runtime_v1_fixture_is_deterministic_and_complete(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "value-runtime-v1.json"
+        raw = fixture_path.read_text(encoding="utf-8")
+        fixture = json.loads(raw)
+        self.assertEqual(fixture["contract"], "kryndel-value-runtime")
+        self.assertEqual(fixture["version"], 1)
+        self.assertEqual(raw, json.dumps(fixture, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        self.assertEqual(
+            {case["error"] for case in fixture["invalid"]},
+            {"KRY6102", "KRY6104", "KRY6201", "KRY6202", "KRY6301", "KRY6303", "KRY6305"},
+        )
+        self.assertEqual(
+            {case["kind"] for case in fixture["valid"]},
+            {"String", "Bytes", "Array", "Tuple", "Option", "Result", "Void"},
+        )
+        self.assertEqual(len(ArrayValue((1, 2, 3)).items), 3)
+        self.assertEqual(len(TupleValue(("answer", 42)).items), 2)
+        self.assertEqual(VM.stringify(None), "nil")
+
     def test_lexer_handles_comments_literals_and_operators(self) -> None:
         source = SourceFile("test.kry", '// comment\nlet value: Int = 42\n/* nested /* block */ comment */\n')
         tokens, diagnostics = lex(source)

@@ -37,11 +37,13 @@ cross-module type identities and layouts are specified.
 Struct and enum layouts are already nominal and deterministic in bytecode v1.
 A struct retains its type name and declaration-ordered field names. An enum
 retains its type name, variant name, and ordered positional payload tuple.
-Strings are UTF-8 values and `len` counts Unicode code points. Arrays are
-immutable homogeneous sequences with layout `Array(items: tuple<Value>)`;
-tuples are immutable fixed-width values with layout
-`Tuple(items: tuple<Value>)`. Their metadata is nominal in the bootstrap and
-is never represented as a semantic Python dictionary.
+Strings are valid UTF-8 scalar sequences and `len` counts Unicode code points.
+Arrays are immutable homogeneous sequences with layout
+`Array(items: ordered<Value>)`; tuples are immutable fixed-width values with
+layout `Tuple(items: ordered<Value>)`. Their metadata is nominal in the
+bootstrap and is never represented as a semantic Python dictionary. `Bytes`
+is reserved in ABI v1 as immutable octets; it is not executable in the current
+bootstrap and must not be exposed by an unimplemented builtin.
 
 Boolean literals are runtime `true` and `false` values; their source token
 payload is not a semantic string. `Option` and `Result` are ordinary nominal
@@ -54,7 +56,11 @@ monomorphization contract is specified.
 
 KRY6101 through KRY6105 are stable runtime codes for malformed sequence
 metadata, invalid indexing, wrong sequence kind, bounds failure, and invalid
-`len` input.
+`len` input. The value/runtime contract, including UTF-8 and reserved
+`KRY6201`–`KRY6305` families, is frozen in
+[`specs/value-runtime-v1.md`](specs/value-runtime-v1.md). The executable
+implementation inventory is recorded in
+[`host-dependency-inventory.md`](host-dependency-inventory.md).
 
 ## Versioning and verification
 
