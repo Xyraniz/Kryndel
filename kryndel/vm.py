@@ -51,6 +51,21 @@ class TupleValue:
     items: tuple[Any, ...] = ()
 
 
+@dataclass(frozen=True)
+class BytesValue:
+    """Nominal immutable sequence of octets in the range 0..255."""
+
+    items: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(item, int) or isinstance(item, bool) or not 0 <= item <= 255 for item in self.items):
+            raise ValueError("BytesValue items must be Int octets in the range 0..255")
+
+    @property
+    def hex(self) -> str:
+        return bytes(self.items).hex()
+
+
 @dataclass
 class UINode:
     kind: str
@@ -247,9 +262,15 @@ class VM:
         target = stack.pop()
         if not isinstance(index, int) or isinstance(index, bool):
             raise self.error(function, instruction, "KRY6102 sequence index must be Int")
-        items = target.items if isinstance(target, (ArrayValue, TupleValue)) else target if isinstance(target, str) else None
+        items = (
+            target.items
+            if isinstance(target, (ArrayValue, TupleValue, BytesValue))
+            else target
+            if isinstance(target, str)
+            else None
+        )
         if items is None:
-            raise self.error(function, instruction, "KRY6103 indexing requires String, Array, or Tuple")
+            raise self.error(function, instruction, "KRY6103 indexing requires String, Array, Tuple, or Bytes")
         if index < 0 or index >= len(items):
             raise self.error(function, instruction, "KRY6104 sequence index out of bounds")
         stack.append(items[index])
@@ -339,9 +360,36 @@ class VM:
             return float(arguments[0])
         if name == "len":
             value = arguments[0]
-            if isinstance(value, (str, ArrayValue, TupleValue)):
+            if isinstance(value, (str, ArrayValue, TupleValue, BytesValue)):
                 return len(value) if isinstance(value, str) else len(value.items)
-            raise RuntimeKryndelError("KRY6105 len requires String, Array, or Tuple")
+            raise RuntimeKryndelError("KRY6105 len requires String, Array, Tuple, or Bytes")
+        if name == "bytes":
+            value = arguments[0]
+            if not isinstance(value, ArrayValue):
+                raise RuntimeKryndelError("KRY6202 bytes requires an Array of Int octets")
+            items: list[int] = []
+            for index, item in enumerate(value.items):
+                if not isinstance(item, int) or isinstance(item, bool) or not 0 <= item <= 255:
+                    raise RuntimeKryndelError(
+                        f"KRY6202 byte at array index {index} must be an Int in the range 0..255"
+                    )
+                items.append(item)
+            return BytesValue(tuple(items))
+        if name == "string_to_bytes":
+            value = arguments[0]
+            if not isinstance(value, str):
+                raise RuntimeKryndelError("KRY6202 string_to_bytes requires a String")
+            try:
+                return BytesValue(tuple(value.encode("utf-8", "strict")))
+            except UnicodeEncodeError as exc:
+                raise RuntimeKryndelError(
+                    f"KRY6201 invalid UTF-8 at byte offset {exc.start} (sequence length {max(1, exc.end - exc.start)})"
+                ) from exc
+        if name == "bytes_to_string":
+            value = arguments[0]
+            if not isinstance(value, BytesValue):
+                raise RuntimeKryndelError("KRY6202 bytes_to_string requires Bytes")
+            return self.decode_utf8(value.items)
         if name == "abs":
             return abs(arguments[0])
         if name == "sqrt":
@@ -411,9 +459,71 @@ class VM:
             return "[" + ", ".join(VM.stringify(item) for item in value.items) + "]"
         if isinstance(value, TupleValue):
             return "(" + ", ".join(VM.stringify(item) for item in value.items) + ")"
+        if isinstance(value, BytesValue):
+            return f"Bytes({value.hex})"
         if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return str(value)
+
+    @staticmethod
+    def decode_utf8(items: tuple[int, ...]) -> str:
+        """Decode canonical UTF-8 and report the first invalid sequence precisely."""
+        data = tuple(items)
+        codepoints: list[str] = []
+        offset = 0
+        while offset < len(data):
+            lead = data[offset]
+            if lead <= 0x7F:
+                codepoints.append(chr(lead))
+                offset += 1
+                continue
+            if 0xC2 <= lead <= 0xDF:
+                length = 2
+                minimum = 0x80
+                value = lead & 0x1F
+            elif 0xE0 <= lead <= 0xEF:
+                length = 3
+                minimum = 0x800
+                value = lead & 0x0F
+            elif 0xF0 <= lead <= 0xF4:
+                length = 4
+                minimum = 0x10000
+                value = lead & 0x07
+            elif lead in (0xC0, 0xC1):
+                raise RuntimeKryndelError(
+                    f"KRY6201 invalid UTF-8 at byte offset {offset} (sequence length 2)"
+                )
+            else:
+                raise RuntimeKryndelError(
+                    f"KRY6201 invalid UTF-8 at byte offset {offset} (sequence length 1)"
+                )
+            if offset + length > len(data):
+                raise RuntimeKryndelError(
+                    f"KRY6201 invalid UTF-8 at byte offset {offset} (sequence length {length})"
+                )
+            for continuation in data[offset + 1 : offset + length]:
+                if not 0x80 <= continuation <= 0xBF:
+                    raise RuntimeKryndelError(
+                        f"KRY6201 invalid UTF-8 at byte offset {offset} (sequence length {length})"
+                    )
+            first_continuation = data[offset + 1]
+            if length == 3 and ((lead == 0xE0 and first_continuation < 0xA0) or (lead == 0xED and first_continuation > 0x9F)):
+                raise RuntimeKryndelError(
+                    f"KRY6201 invalid UTF-8 at byte offset {offset} (sequence length {length})"
+                )
+            if length == 4 and ((lead == 0xF0 and first_continuation < 0x90) or (lead == 0xF4 and first_continuation > 0x8F)):
+                raise RuntimeKryndelError(
+                    f"KRY6201 invalid UTF-8 at byte offset {offset} (sequence length {length})"
+                )
+            for continuation in data[offset + 1 : offset + length]:
+                value = (value << 6) | (continuation & 0x3F)
+            if value < minimum or value > 0x10FFFF or 0xD800 <= value <= 0xDFFF:
+                raise RuntimeKryndelError(
+                    f"KRY6201 invalid UTF-8 at byte offset {offset} (sequence length {length})"
+                )
+            codepoints.append(chr(value))
+            offset += length
+        return "".join(codepoints)
 
     @staticmethod
     def truthy(value: Any) -> bool:
@@ -433,6 +543,10 @@ class VM:
             if operator == "+":
                 if isinstance(left, ArrayValue) and isinstance(right, ArrayValue):
                     return ArrayValue(left.items + right.items)
+                if isinstance(left, BytesValue) and isinstance(right, BytesValue):
+                    return BytesValue(left.items + right.items)
+                if isinstance(left, BytesValue) or isinstance(right, BytesValue):
+                    raise RuntimeKryndelError("KRY6203 Bytes concatenation requires two Bytes values")
                 return left + right
             if operator == "-":
                 return left - right

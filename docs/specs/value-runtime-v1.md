@@ -24,7 +24,7 @@ constant kind.
 | `Float` | IEEE-754 value; finite values in v1 | numeric after language rules | no |
 | `Bool` | `true` or `false` | Boolean | no |
 | `String` | valid UTF-8 scalar sequence | codepoint sequence | no |
-| `Bytes` | immutable octets, planned v1 boundary value | byte sequence | no |
+| `Bytes` | nominal `Bytes(items: ordered octets)` | byte sequence | no |
 | `Array` | nominal `Array(items: ordered values)` | elementwise; homogeneous | no |
 | `Tuple` | nominal `Tuple(items: ordered values)` | elementwise; fixed width | no |
 | `Option` | nominal enum `None` or `Some(Int)` | nominal and payload-structural | no |
@@ -53,9 +53,13 @@ returns `KRY6201` on failure; conversion from `String` to `Bytes` returns its
 canonical UTF-8 encoding. No normalization, locale conversion, or implicit
 lossy replacement is performed.
 
-The current bootstrap implements `String`, arrays, and tuples. `Bytes` is a
-reserved contract only; its executable implementation is the next value
-milestone and must introduce a nominal `BytesValue` before exposing a builtin.
+The current bootstrap implements `String`, arrays, tuples, and the nominal
+`BytesValue`. The visible constructors are `bytes(Array)` for validated octets
+and `string_to_bytes(String)` for canonical UTF-8. `bytes_to_string(Bytes)` is a
+strict decoder; all invalid sequences produce `KRY6201` with the first byte
+offset and expected sequence length. The implementation stores octets as an
+immutable ordered sequence and does not expose host byte buffers as semantic
+values.
 
 ## Errors
 
@@ -109,4 +113,5 @@ error. No host dictionary is a semantic Kryndel value.
 The dependency inventory in `docs/host-dependency-inventory.md` records the
 current implementation path and replacement plan. The bootstrap remains the
 implementation reference until differential fixtures pass for a Kryndel
-implementation.
+implementation. Bytes behavior is covered by `tests/fixtures/bytes-v1.json` and
+its deterministic runtime tests.

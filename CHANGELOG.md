@@ -7,10 +7,17 @@
 - Versioned value/runtime v1 contract for strings, bytes, sequences, core
   enums, Void/nil, frames, calls, serializable errors, and the temporary host
   boundary, with deterministic valid/invalid fixtures and a measured host
-  dependency inventory. Bytes remain specified but intentionally unimplemented.
+  dependency inventory. The contract now has an executable bootstrap
+  `BytesValue` implementation.
 - Kryndel-native immutable array and tuple literals, deterministic `MAKE_ARRAY`,
   `MAKE_TUPLE`, and `INDEX` bytecode, safe indexing, concatenation, and stable
   runtime errors KRY6101–KRY6105.
+- Executable `bytes(Array)`, `string_to_bytes(String)`, and
+  `bytes_to_string(Bytes)` APIs, strict canonical UTF-8 validation with
+  offset/sequence diagnostics KRY6201, octet validation KRY6202, immutable
+  `Bytes + Bytes`, octet length/indexing, deterministic Bytes fixtures, and
+  source-level wrappers in `stdlib/string/utf8.kry` and
+  `stdlib/collections/bytes.kry`.
 - Source-level non-generic `Option` and `Result` constructors, predicates, and
   total fallback accessors in `stdlib/core`, with regression coverage proving
   the APIs compile without new hidden VM builtins.
@@ -44,9 +51,10 @@
 - `@test` discovery and the initial `kry test`, conservative `kry fmt`,
   `kry reproducible`, `inspect-bytecode`, `verify-bytecode`,
   `verify-artifact`, `abi`, `new`, and `clean` commands.
-- Regression tests expanded to 69, including nested modules, public/private
+- Regression tests expanded to 74, including nested modules, public/private
   symbols, deterministic linking, cycles, ambiguity, project-aware execution,
-  source-level core APIs, and runtime Boolean values.
+  source-level core APIs, runtime Boolean values, and executable Bytes/UTF-8
+  behavior.
 
 ### Explicit limitations
 

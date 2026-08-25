@@ -64,8 +64,9 @@ ANY = Type("Any")
 UNKNOWN = Type("Unknown")
 ARRAY = Type("Array")
 TUPLE = Type("Tuple")
+BYTES = Type("Bytes")
 
-PRIMITIVE_TYPES = {t.name: t for t in (INT, FLOAT, BOOL, STRING, VOID, UI, ARRAY, TUPLE)}
+PRIMITIVE_TYPES = {t.name: t for t in (INT, FLOAT, BOOL, STRING, VOID, UI, ARRAY, TUPLE, BYTES)}
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,9 @@ BUILTIN_FUNCTIONS: dict[str, FunctionType] = {
     "int": FunctionType((ANY,), INT),
     "float": FunctionType((ANY,), FLOAT),
     "len": FunctionType((ANY,), INT),
+    "bytes": FunctionType((ArrayType("Array", INT),), BYTES),
+    "string_to_bytes": FunctionType((STRING,), BYTES),
+    "bytes_to_string": FunctionType((BYTES,), STRING),
     "abs": FunctionType((INT,), INT),
     "sqrt": FunctionType((FLOAT,), FLOAT),
     "clock": FunctionType((), FLOAT),

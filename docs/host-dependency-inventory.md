@@ -10,6 +10,7 @@ provide API fixtures and signatures only.
 | --- | --- | --- | --- | --- | ---: | --- |
 | String length/index | `len(String)`, `String[Int]` | `VM.builtin("len")`, `VM.index` | `KRY6102`, `KRY6103`, `KRY6104`, `KRY6105` | sequence tests | 100% | Kryndel `StringValue` + byte reader |
 | Array/Tuple layout | `[values]`, `(values)` | `MAKE_ARRAY`, `MAKE_TUPLE`, `ArrayValue`, `TupleValue` | `KRY6101`–`KRY6105` | bytecode/runtime tests | 100% | Kryndel nominal sequence runtime |
+| Bytes value/conversion | `bytes(Array)`, `string_to_bytes(String)`, `bytes_to_string(Bytes)`, `Bytes[Int]`, `Bytes + Bytes` | `BytesValue`, `VM.builtin`, `VM.index`, `VM.binary` | `KRY6102`, `KRY6104`, `KRY6201`, `KRY6202`, `KRY6203`, `KRY6105` | `tests/fixtures/bytes-v1.json`, Bytes runtime tests | 100% | Kryndel nominal octet value and UTF-8 decoder |
 | Option/Result | `Option.None`, `Option.Some(Int)`, `Result.Ok(Int)`, `Result.Error(String)` | enum compiler/VM paths | existing enum diagnostics; future `KRY6204` | `stdlib/core/*.kry` | 100% | Kryndel enum/value runtime |
 | Conversion | `str(Any)`, `int(Any)`, `float(Any)` | `VM.builtin` conversion branches | CLI-normalized host errors | string/conversion tests | 100% | Kryndel conversion functions |
 | Output | `print(Any)`, `println(Any)` | `VM.emit_output` | IO mapping not yet frozen in bootstrap | CLI/example runs | 100% | minimal output host primitive |
@@ -18,7 +19,9 @@ provide API fixtures and signatures only.
 | Bytecode read/verify | `kry verify-bytecode` | Python JSON parser/verifier | `KRY6002`, `KRY6305` | `tooling.py` | 100% | Kryndel reader/verifier |
 | Compiler/front end | source -> v1 module | Python lexer/parser/checker/compiler | KRY1xxx–KRY3xxx | full suite | 100% | staged Kryndel toolchain |
 
-`Bytes` is intentionally absent from executable rows: it is frozen in
-`docs/specs/value-runtime-v1.md` but has no current builtin or semantic host
-representation. Adding it requires a nominal runtime value, byte fixtures,
-invalid UTF-8 fixtures, and differential tests before marking it implemented.
+Bytes is now an executable bootstrap value. Its language-level signatures,
+nominal immutable storage, strict UTF-8 decoder, deterministic fixture, and
+positive/negative runtime tests are implemented. The 100% Python share is an
+implementation-path measurement, not a claim of self-hosting; the replacement
+is a Kryndel-native value and decoder that must reproduce `bytes-v1.json` before
+this row can be retired.

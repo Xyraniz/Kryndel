@@ -1,0 +1,23 @@
+pub fn encode(value: String) -> Bytes {
+    return string_to_bytes(value)
+}
+
+pub fn decode(value: Bytes) -> String {
+    return bytes_to_string(value)
+}
+
+pub fn length(value: String) -> Int {
+    return len(value)
+}
+
+pub fn octet_length(value: Bytes) -> Int {
+    return len(value)
+}
+
+pub fn append(left: Bytes, right: Bytes) -> Bytes {
+    return left + right
+}
+
+pub fn octet(value: Bytes, index: Int) -> Int {
+    return value[index]
+}

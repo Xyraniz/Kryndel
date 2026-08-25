@@ -27,7 +27,7 @@ from kryndel.packages import (
 )
 from kryndel.source import SourceFile
 from kryndel.tokens import lex
-from kryndel.vm import ArrayValue, EnumValue, RuntimeKryndelError, StructValue, TupleValue, VM
+from kryndel.vm import ArrayValue, BytesValue, EnumValue, RuntimeKryndelError, StructValue, TupleValue, VM
 
 
 class KryndelTests(unittest.TestCase):
@@ -54,7 +54,85 @@ class KryndelTests(unittest.TestCase):
         )
         self.assertEqual(len(ArrayValue((1, 2, 3)).items), 3)
         self.assertEqual(len(TupleValue(("answer", 42)).items), 2)
+        self.assertEqual(BytesValue((0x41, 0xF0, 0x9F, 0x98, 0x80)).hex, "41f09f9880")
         self.assertEqual(VM.stringify(None), "nil")
+
+    def test_bytes_utf8_api_executes_from_kryndel(self) -> None:
+        source = """
+        fn make() -> Bytes {
+            return string_to_bytes("A😀")
+        }
+        fn append_mark(value: Bytes) -> Bytes {
+            return value + bytes([33])
+        }
+        fn decode(value: Bytes) -> String {
+            return bytes_to_string(value)
+        }
+        """
+        module = compile_source(source, "bytes.kry")
+        runtime = VM(module)
+        value = runtime.execute("make", [])
+        self.assertIsInstance(value, BytesValue)
+        self.assertEqual(value.items, (0x41, 0xF0, 0x9F, 0x98, 0x80))
+        self.assertEqual(runtime.execute("append_mark", [value]).items, value.items + (33,))
+        self.assertEqual(runtime.execute("decode", [value]), "A😀")
+        self.assertEqual(runtime.execute("decode", [BytesValue((0xE2, 0x82, 0xAC))]), "€")
+        self.assertEqual(runtime.execute("decode", [BytesValue((0x41, 0xF0, 0x9F, 0x98, 0x80))]), "A😀")
+        first = compile_source(source, "bytes.kry")
+        second = compile_source(source, "bytes.kry")
+        self.assertEqual(first.dumps(), second.dumps())
+        self.assertIn("CALL", [instruction.op for instruction in first.functions["make"].instructions])
+
+    def test_bytes_length_indexing_and_range_errors_are_stable(self) -> None:
+        source = """
+        fn sample() -> Bytes { return bytes([0, 65, 255]) }
+        fn octet(value: Bytes) -> Int { return value[1] }
+        fn length(value: Bytes) -> Int { return len(value) }
+        """
+        runtime = VM(compile_source(source, "bytes-index.kry"))
+        value = runtime.execute("sample", [])
+        self.assertEqual(runtime.execute("length", [value]), 3)
+        self.assertEqual(runtime.execute("octet", [value]), 65)
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6104"):
+            VM(compile_source("println(bytes([1])[1])", "bytes-bounds.kry")).run()
+        with self.assertRaisesRegex(DiagnosticError, "KRY6102|KRY3054"):
+            compile_source("println(bytes([1])[true])", "bytes-index-type.kry")
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6202"):
+            VM(compile_source("println(bytes([256]))", "bytes-range.kry")).run()
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6202"):
+            VM(compile_source("println(bytes([-1]))", "bytes-negative.kry")).run()
+        with self.assertRaisesRegex(DiagnosticError, "KRY3013"):
+            compile_source("println(bytes([1.0]))", "bytes-float.kry")
+
+    def test_invalid_utf8_reports_offset_and_sequence_length(self) -> None:
+        source = "fn decode(value: Bytes) -> String { return bytes_to_string(value) }"
+        runtime = VM(compile_source(source, "invalid-utf8.kry"))
+        for invalid in ((0xC0, 0xAF), (0xE2, 0x82), (0x41, 0x80), (0xF4, 0x90, 0x80, 0x80)):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(RuntimeKryndelError, r"KRY6201.*byte offset"):
+                runtime.execute("decode", [BytesValue(invalid)])
+        with self.assertRaisesRegex(RuntimeKryndelError, r"KRY6201.*offset 0.*length 2"):
+            runtime.execute("decode", [BytesValue((0xC0, 0xAF))])
+        with self.assertRaisesRegex(ValueError, "0..255"):
+            BytesValue((256,))
+
+    def test_bytes_v1_fixture_is_deterministic_and_matches_runtime(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "bytes-v1.json"
+        raw = fixture_path.read_text(encoding="utf-8")
+        fixture = json.loads(raw)
+        self.assertEqual(fixture["contract"], "kryndel-bytes")
+        self.assertEqual(fixture["version"], 1)
+        self.assertEqual(raw, json.dumps(fixture, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        from_array = BytesValue(tuple(fixture["construction"]["from_array"]["input"]))
+        from_string = BytesValue(tuple("A😀".encode("utf-8")))
+        self.assertEqual(from_array.hex, fixture["construction"]["from_array"]["hex"])
+        self.assertEqual(from_string.hex, fixture["construction"]["from_string"]["hex"])
+        self.assertEqual(len(from_string.items), fixture["operations"]["length_octets"])
+        self.assertEqual(from_string.items[0], fixture["operations"]["index"]["0"])
+        self.assertEqual(from_string.items[4], fixture["operations"]["index"]["4"])
+        self.assertEqual(VM.stringify(from_string), fixture["serialization"]["stringify"])
+        concat_module = compile_source("fn concat(left: Bytes, right: Bytes) -> Bytes { return left + right }", "bytes-concat.kry")
+        concat_result = VM(concat_module).execute("concat", [BytesValue((0x41,)), BytesValue((0xFF,))])
+        self.assertEqual(concat_result.hex, fixture["operations"]["concat"]["result"])
 
     def test_lexer_handles_comments_literals_and_operators(self) -> None:
         source = SourceFile("test.kry", '// comment\nlet value: Int = 42\n/* nested /* block */ comment */\n')
@@ -165,10 +243,16 @@ class KryndelTests(unittest.TestCase):
         collections_module = compile_source((root / "collections" / "sequences.kry").read_text(encoding="utf-8"), "stdlib/collections/sequences.kry")
         option_module = compile_source((root / "core" / "option.kry").read_text(encoding="utf-8"), "stdlib/core/option.kry")
         result_module = compile_source((root / "core" / "result.kry").read_text(encoding="utf-8"), "stdlib/core/result.kry")
+        utf8_module = compile_source((root / "string" / "utf8.kry").read_text(encoding="utf-8"), "stdlib/string/utf8.kry")
+        bytes_module = compile_source((root / "collections" / "bytes.kry").read_text(encoding="utf-8"), "stdlib/collections/bytes.kry")
         self.assertEqual(VM(string_module).execute("length", ["Kryndel"]), 7)
         self.assertEqual(VM(string_module).execute("joined", ["Kry", "ndel"]), "Kryndel")
         self.assertEqual(VM(collections_module).execute("array_length", [ArrayValue((1, 2))]), 2)
         self.assertEqual(VM(collections_module).execute("tuple_length", [TupleValue((1, 2, 3))]), 3)
+        encoded = VM(utf8_module).execute("encode", ["A😀"])
+        self.assertEqual(encoded, BytesValue((0x41, 0xF0, 0x9F, 0x98, 0x80)))
+        self.assertEqual(VM(utf8_module).execute("decode", [encoded]), "A😀")
+        self.assertEqual(VM(bytes_module).execute("octet", [encoded, 1]), 0xF0)
         self.assertEqual(len(option_module.functions), 7)
         self.assertEqual(len(result_module.functions), 7)
 

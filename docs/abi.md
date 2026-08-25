@@ -42,8 +42,11 @@ Arrays are immutable homogeneous sequences with layout
 `Array(items: ordered<Value>)`; tuples are immutable fixed-width values with
 layout `Tuple(items: ordered<Value>)`. Their metadata is nominal in the
 bootstrap and is never represented as a semantic Python dictionary. `Bytes`
-is reserved in ABI v1 as immutable octets; it is not executable in the current
-bootstrap and must not be exposed by an unimplemented builtin.
+has layout `Bytes(items: ordered<Int octets>)`; it is immutable, each octet is
+in `0..255`, `len` counts octets, and indexing returns an `Int`. The visible
+boundary functions are `bytes(Array)`, `string_to_bytes(String)`, and
+`bytes_to_string(Bytes)`. `Bytes + Bytes` preserves octet order and never
+normalizes or replaces invalid UTF-8.
 
 Boolean literals are runtime `true` and `false` values; their source token
 payload is not a semantic string. `Option` and `Result` are ordinary nominal
@@ -56,8 +59,10 @@ monomorphization contract is specified.
 
 KRY6101 through KRY6105 are stable runtime codes for malformed sequence
 metadata, invalid indexing, wrong sequence kind, bounds failure, and invalid
-`len` input. The value/runtime contract, including UTF-8 and reserved
-`KRY6201`–`KRY6305` families, is frozen in
+`len` input. `KRY6201` reports invalid UTF-8 with the first byte offset and
+expected sequence length; `KRY6202` reports an invalid octet or nonrepresentable
+conversion; and `KRY6203` reports incompatible Bytes collection operations.
+The value/runtime contract, including UTF-8 and `KRY6201`–`KRY6305` families, is frozen in
 [`specs/value-runtime-v1.md`](specs/value-runtime-v1.md). The executable
 implementation inventory is recorded in
 [`host-dependency-inventory.md`](host-dependency-inventory.md).

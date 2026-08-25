@@ -1,0 +1,15 @@
+pub fn from_array(value: Array) -> Bytes {
+    return bytes(value)
+}
+
+pub fn length(value: Bytes) -> Int {
+    return len(value)
+}
+
+pub fn octet(value: Bytes, index: Int) -> Int {
+    return value[index]
+}
+
+pub fn join(left: Bytes, right: Bytes) -> Bytes {
+    return left + right
+}
