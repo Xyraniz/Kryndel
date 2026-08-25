@@ -176,7 +176,9 @@ class Lexer:
         while self.peek().isalnum() or self.peek() == "_":
             self.advance()
         value = self.text[start:self.index]
-        self.add(KEYWORDS.get(value, "IDENT"), value, start)
+        kind = KEYWORDS.get(value, "IDENT")
+        literal_value: object = {"true": True, "false": False}.get(value, value)
+        self.add(kind, literal_value, start)
 
     def scan_number(self, start: int) -> None:
         while self.peek().isdigit():

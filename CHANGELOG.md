@@ -7,6 +7,11 @@
 - Kryndel-native immutable array and tuple literals, deterministic `MAKE_ARRAY`,
   `MAKE_TUPLE`, and `INDEX` bytecode, safe indexing, concatenation, and stable
   runtime errors KRY6101–KRY6105.
+- Source-level non-generic `Option` and `Result` constructors, predicates, and
+  total fallback accessors in `stdlib/core`, with regression coverage proving
+  the APIs compile without new hidden VM builtins.
+- Boolean literal tokens now carry runtime Boolean values rather than their
+  source spelling, preserving the existing `Bool` static type at execution.
 - Executable `stdlib/core`, `stdlib/string`, and `stdlib/collections` source
   fixtures, including the non-generic `Option` and `Result` enum contracts and
   differential bootstrap tests.
@@ -35,9 +40,9 @@
 - `@test` discovery and the initial `kry test`, conservative `kry fmt`,
   `kry reproducible`, `inspect-bytecode`, `verify-bytecode`,
   `verify-artifact`, `abi`, `new`, and `clean` commands.
-- Regression tests expanded from 28 to 62, including nested modules,
-  public/private symbols, deterministic linking, cycles, ambiguity, and
-  project-aware execution.
+- Regression tests expanded to 69, including nested modules, public/private
+  symbols, deterministic linking, cycles, ambiguity, project-aware execution,
+  source-level core APIs, and runtime Boolean values.
 
 ### Explicit limitations
 

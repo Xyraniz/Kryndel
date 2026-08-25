@@ -103,12 +103,24 @@ println(pair[0])
 ```
 
 Arrays are homogeneous and tuples are fixed-width. Indexes must be `Int` and
-out-of-range access is a runtime error. `Option`/`Maybe` and `Result`/`Error`
-are ordinary enums in the initial stdlib contract; generic payloads are still
-not implemented. Runtime errors for the existing bytecode operations are
-represented by `RuntimeKryndelError`; malformed bytecode, stack underflow,
-invalid calls, division by zero, invalid sequence indexes, and unsupported
-sequence values are diagnosed without exposing Python tracebacks.
+out-of-range access is a runtime error. `Option`/`Maybe` and `Result`/`Error` are ordinary enums in the initial stdlib contract; generic payloads are still
+not implemented. The executable `stdlib/core/option.kry` module exports
+`none() -> Option`, `some(value: Int) -> Option`, `is_some(value: Option) -> Bool`,
+`is_none(value: Option) -> Bool`, and total `unwrap_or(value: Option, fallback: Int) -> Int`
+(and its `get_or` alias). The executable `stdlib/core/result.kry` module exports
+`ok(value: Int) -> Result`, `error(message: String) -> Result`,
+`is_ok(value: Result) -> Bool`, `is_error(value: Result) -> Bool`, and total
+`unwrap_or(value: Result, fallback: Int) -> Int` (and its `get_or` alias).
+These functions are ordinary Kryndel declarations compiled to the existing
+bytecode; they do not add hidden Python builtins. The fallback accessors are
+deliberately total, so an absent `Option` or failed `Result` returns the caller's
+fallback. A partial `unwrap` operation and its value-absent error remain outside
+this non-generic milestone until a serializable program-error contract is frozen.
+Runtime errors for the existing bytecode operations are represented by
+`RuntimeKryndelError`; malformed bytecode, stack underflow, invalid calls,
+division by zero, invalid sequence indexes, and unsupported sequence values are
+diagnosed without exposing Python tracebacks.
+
 
 ## Diagnostics
 

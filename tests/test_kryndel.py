@@ -102,6 +102,44 @@ class KryndelTests(unittest.TestCase):
             EnumValue,
         )
 
+    def test_option_and_result_stdlib_apis_are_kryndel_native_and_total(self) -> None:
+        root = Path(__file__).parents[1] / "stdlib"
+        option_module = compile_source((root / "core" / "option.kry").read_text(encoding="utf-8"), "stdlib/core/option.kry")
+        result_module = compile_source((root / "core" / "result.kry").read_text(encoding="utf-8"), "stdlib/core/result.kry")
+        option = VM(option_module)
+        result = VM(result_module)
+        none = EnumValue("Option", "None")
+        some = EnumValue("Option", "Some", (9,))
+        ok = EnumValue("Result", "Ok", (7,))
+        error = EnumValue("Result", "Error", ("bad",))
+
+        self.assertEqual(option.execute("none", []), none)
+        self.assertEqual(option.execute("some", [11]), EnumValue("Option", "Some", (11,)))
+        self.assertFalse(option.execute("is_some", [none]))
+        self.assertTrue(option.execute("is_some", [some]))
+        self.assertTrue(option.execute("is_none", [none]))
+        self.assertFalse(option.execute("is_none", [some]))
+        self.assertEqual(option.execute("unwrap_or", [none, 4]), 4)
+        self.assertEqual(option.execute("unwrap_or", [some, 4]), 9)
+        self.assertEqual(option.execute("get_or", [none, 4]), 4)
+
+        self.assertEqual(result.execute("ok", [11]), EnumValue("Result", "Ok", (11,)))
+        self.assertEqual(result.execute("error", ["bad"]), error)
+        self.assertTrue(result.execute("is_ok", [ok]))
+        self.assertFalse(result.execute("is_ok", [error]))
+        self.assertFalse(result.execute("is_error", [ok]))
+        self.assertTrue(result.execute("is_error", [error]))
+        self.assertEqual(result.execute("unwrap_or", [ok, 4]), 7)
+        self.assertEqual(result.execute("unwrap_or", [error, 4]), 4)
+        self.assertEqual(result.execute("get_or", [error, 4]), 4)
+
+        for module in (option_module, result_module):
+            calls = [instruction.arg[0] for function in module.functions.values() for instruction in function.instructions if instruction.op == "CALL"]
+            self.assertNotIn("len", calls)
+            self.assertNotIn("str", calls)
+            self.assertNotIn("int", calls)
+            self.assertNotIn("float", calls)
+
     def test_kryndel_stdlib_sources_compile_and_execute(self) -> None:
         root = Path(__file__).parents[1] / "stdlib"
         string_module = compile_source((root / "string" / "string.kry").read_text(encoding="utf-8"), "stdlib/string/string.kry")
@@ -112,8 +150,14 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(VM(string_module).execute("joined", ["Kry", "ndel"]), "Kryndel")
         self.assertEqual(VM(collections_module).execute("array_length", [ArrayValue((1, 2))]), 2)
         self.assertEqual(VM(collections_module).execute("tuple_length", [TupleValue((1, 2, 3))]), 3)
-        self.assertEqual(len(option_module.functions), 1)
-        self.assertEqual(len(result_module.functions), 1)
+        self.assertEqual(len(option_module.functions), 7)
+        self.assertEqual(len(result_module.functions), 7)
+
+    def test_boolean_literals_are_runtime_booleans(self) -> None:
+        module = compile_source("fn truth() -> Bool { return true }\nfn falsehood() -> Bool { return false }\n", "booleans.kry")
+        runtime = VM(module)
+        self.assertIs(runtime.execute("truth", []), True)
+        self.assertIs(runtime.execute("falsehood", []), False)
 
     def test_functions_and_recursion(self) -> None:
         source = """

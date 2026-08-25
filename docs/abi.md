@@ -43,10 +43,14 @@ tuples are immutable fixed-width values with layout
 `Tuple(items: tuple<Value>)`. Their metadata is nominal in the bootstrap and
 is never represented as a semantic Python dictionary.
 
-`Option` and `Result` are ordinary nominal enums in the current non-generic
-stdlib contract: `Option.None`/`Option.Some(Int)` and
-`Result.Ok(Int)`/`Result.Error(String)`. Generic payloads are deliberately
-not claimed until their type and monomorphization contract is specified.
+Boolean literals are runtime `true` and `false` values; their source token
+payload is not a semantic string. `Option` and `Result` are ordinary nominal
+enums in the current non-generic stdlib contract: `Option.None`/
+`Option.Some(Int)` and `Result.Ok(Int)`/`Result.Error(String)`. The executable
+core modules define constructors, predicates, and total fallback accessors in
+Kryndel source using this layout; no extra VM builtin is part of the API.
+Generic payloads are deliberately not claimed until their type and
+monomorphization contract is specified.
 
 KRY6101 through KRY6105 are stable runtime codes for malformed sequence
 metadata, invalid indexing, wrong sequence kind, bounds failure, and invalid

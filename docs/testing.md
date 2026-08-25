@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 60 tests and covers:
+The suite contains 69 tests and covers:
 
 | Layer | Contract |
 | --- | --- |
