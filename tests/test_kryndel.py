@@ -14,7 +14,7 @@ from kryndel.contracts import core_contract_report, validate_core_contract
 from kryndel.filesystem import RootedFileSystem, VirtualFileSystem
 from kryndel.modules import ModuleGraph
 from kryndel.parser import parse
-from kryndel.tooling import abi_description, format_file, host_boundary_report, pack_project, run_kryndel_tests, verify_module
+from kryndel.tooling import abi_description, compare_lexer_fixture, format_file, host_boundary_report, lexer_snapshot, pack_project, run_kryndel_tests, verify_module
 from kryndel.diagnostics import DiagnosticError
 from kryndel.cli import main as cli_main
 from kryndel.packages import (
@@ -237,6 +237,18 @@ class KryndelTests(unittest.TestCase):
         fixture = json.loads(raw)
         self.assertEqual(raw, json.dumps(fixture, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         self.assertEqual(fixture["source"], "stdlib/testing/testing.kry")
+
+    def test_lexer_snapshot_v1_matches_fixture_and_is_deterministic(self) -> None:
+        source_path = Path(__file__).parent / "fixtures" / "lexer-input.kry"
+        fixture_path = Path(__file__).parent / "fixtures" / "lexer-v1.json"
+        source = SourceFile.from_path(source_path)
+        first = lexer_snapshot(source)
+        second = lexer_snapshot(source)
+        self.assertEqual(first, second)
+        compare_lexer_fixture(source, fixture_path)
+        self.assertEqual(first["contract"], "kryndel-lexer")
+        self.assertEqual(first["version"], 1)
+        self.assertEqual(first["diagnostics"], [])
 
     def test_nominal_token_and_ast_records_are_deterministic(self) -> None:
         source = SourceFile("records.kry", "let answer: Int = 42\n")

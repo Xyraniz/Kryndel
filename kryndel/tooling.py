@@ -21,6 +21,7 @@ from .source import SourceFile
 from .tokens import lex
 from .types import ArrayType, FunctionType, Type
 from .vm import RuntimeKryndelError, VM
+from .wire import token_records
 
 
 @dataclass(frozen=True)
@@ -223,10 +224,34 @@ def pack_project(root: str | Path, output: str | Path | None = None) -> tuple[Pa
     return target, checksum
 
 
-def check_reproducible(
-    source: str | Path,
-    root: str | Path | None = None,
-) -> bool:
+def lexer_snapshot(source: SourceFile) -> dict[str, object]:
+    """Return a deterministic lexer snapshot for differential fixtures."""
+    tokens, diagnostics = lex(source)
+    filename = Path(source.name).name or "<source>"
+    return {
+        "contract": "kryndel-lexer",
+        "diagnostics": [item.as_dict(filename) for item in diagnostics.items],
+        "file": filename,
+        "tokens": token_records(tokens),
+        "version": 1,
+    }
+
+
+def compare_lexer_fixture(source: SourceFile, fixture_path: str | Path) -> None:
+    """Compare the bootstrap lexer with a frozen fixture oracle byte for byte."""
+    from .contracts import canonical_json
+
+    fixture = json.loads(Path(fixture_path).read_text(encoding="utf-8"))
+    expected = fixture.get("snapshot", fixture)
+    actual = lexer_snapshot(source)
+    if expected != actual:
+        raise ValueError(
+            "lexer fixture differs: "
+            + canonical_json({"actual": actual, "expected": expected})
+        )
+
+
+def check_reproducible(source: str | Path, root: str | Path | None = None) -> bool:
     source_path = Path(source)
     text = source_path.read_text(encoding="utf-8")
     if root is not None:
