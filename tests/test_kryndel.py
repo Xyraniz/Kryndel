@@ -1057,6 +1057,45 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(invalid_result.variant_name, "Error")
         self.assertIn("KRY5009", invalid_result.payloads[0])
 
+    def test_source_bytecode_verifier_matches_structural_contract(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "bytecode-native-verifier-v1.json").read_text(encoding="utf-8"))
+        source = (root / "stdlib" / "core" / "bytecode.kry").read_text(encoding="utf-8")
+        module = compile_source(source, "stdlib/core/bytecode.kry")
+        runtime = VM(module)
+
+        push = runtime.execute("instruction", ["PUSH_CONST", 1, "", "", 0, ArrayValue(())])
+        call = runtime.execute("instruction", ["CALL", 1, "println", "", 1, ArrayValue(())])
+        ret = runtime.execute("instruction", ["RETURN", 1, "", "", 0, ArrayValue(())])
+        main = runtime.execute(
+            "function",
+            ["main", 0, ArrayValue(()), ArrayValue((42,)), ArrayValue((push, call, ret))],
+        )
+        valid_module = runtime.execute("module", ["demo", "main", 1, ArrayValue((main,))])
+        valid_result = runtime.execute("verify", [valid_module])
+        self.assertEqual(valid_result.variant_name, "Ok")
+        self.assertEqual(fixture["valid"], ["PUSH_CONST", "CALL", "MAKE_ARRAY", "INDEX", "RETURN"])
+
+        malformed = [
+            runtime.execute("instruction", ["BOGUS", 1, "", "", 0, ArrayValue(())]),
+            runtime.execute("instruction", ["PUSH_CONST", 1, "", "", 1, ArrayValue(())]),
+            runtime.execute("instruction", ["BIND_ENUM", 1, "value", "", 1, ArrayValue(("x", "y"))]),
+        ]
+        for instruction_value, expected in zip(malformed, fixture["invalid"][:3]):
+            bad_function = runtime.execute(
+                "function",
+                ["main", 0, ArrayValue(()), ArrayValue((42,)), ArrayValue((instruction_value,))],
+            )
+            bad_module = runtime.execute("module", ["demo", "main", 1, ArrayValue((bad_function,))])
+            bad_result = runtime.execute("verify", [bad_module])
+            self.assertEqual(bad_result.variant_name, "Error")
+            self.assertIn(expected["error"], bad_result.payloads[0])
+
+        missing_entry = runtime.execute("module", ["demo", "main", 1, ArrayValue(())])
+        missing_result = runtime.execute("verify", [missing_entry])
+        self.assertEqual(missing_result.variant_name, "Error")
+        self.assertIn(fixture["invalid"][3]["error"], missing_result.payloads[0])
+
     def test_manifest_parser_rejects_unsupported_syntax_and_accepts_subset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

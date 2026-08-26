@@ -7,6 +7,7 @@
 - Added the source-level controlled filesystem API: `fs.read_bytes`, `fs.read_text`, `fs.write_bytes`, `fs.list_dir`, and `fs.stat`, with nominal `FileMetadata`, explicit VM capability roots, deterministic VFS/rooted adapters, `filesystem-v1.json`, executable `stdlib/core/filesystem.kry` wrappers, and security/error tests. This remains a Python bootstrap boundary until a native runtime replaces the adapter.
 - Added `stdlib/core/data.kry` with bounded Unicode String/Bytes slices, a divide-and-conquer `StringBuilder`, and nominal `SpanRecord`, `TokenRecord`, `AstRecord`, and `DiagnosticRecord` layouts. Added `data-core-v1.json` and VM regression coverage for deterministic values and `KRY6104`/`KRY6202` bounds errors. This is a source compatibility seam under the Python bootstrap, not a native runtime.
 - Extended `stdlib/core/manifest.kry` with source-level version-range parity and nominal `LockEntry`/`Lockfile` values. Its canonical lockfile writer is compared byte for byte with Python `Lockfile.dumps()` and rejects malformed checksum metadata; SHA-256 calculation, resolution, staging, and installation remain bootstrap boundaries.
+- Added `stdlib/core/bytecode.kry` with nominal instruction/function/module records and a structural verifier returning serializable `KRY6305` errors. Added normalized valid/invalid fixtures and regression coverage; JSON/KEXE reading and checksum calculation remain Python-owned.
 - Added the first toolchain-oriented immutable collection primitive, `array_push(Array, Any) -> Array`, with the `stdlib/collections/sequences.kry` wrapper, deterministic fixture, stable `KRY6203` error, and regression tests. The operation still executes in the bootstrap VM.
 - Added `stdlib/core/manifest.kry`, a real strict-subset manifest parser over `fs.read_text`, with nominal `Dependency`, `Manifest`, and `ManifestResult` values and valid/invalid execution coverage. The Python manifest parser remains the differential oracle until UTF-8 diagnostics and all version-requirement edge cases match byte for byte.
 - Added the offline `kry core-report` contract audit. It canonicalizes and validates the value/runtime, Bytes, testing, and host-boundary v1 fixtures and reports stable byte lengths and SHA-256 checksums without claiming self-hosting. The contract is documented in `docs/specs/core-v1.md`.
@@ -72,7 +73,7 @@
 - Deterministic `kry doc` source declarations and `kry pack` `.krypkg` source
   archives with fixed metadata, offline operation, and SHA-256 checksums; source
   files are never executed while documenting or packaging.
-- Regression tests expanded to 93, including nested modules, public/private
+- Regression tests expanded to 94, including nested modules, public/private
   symbols, deterministic linking, cycles, ambiguity, project-aware execution,
   source-level core APIs, runtime Boolean values, executable Bytes/UTF-8
   behavior, host-boundary inventory, and structured test failures.
