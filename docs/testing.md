@@ -56,8 +56,10 @@ source verifier. A typed-bytecode fixture additionally checks canonical
 constant text, `PUSH_CONST` categories, `PUSH_NIL`, and decoding into nominal
 runtime values, including unsupported-category `KRY7006`. The KEXE reader test
 checks v1 magic, big-endian payload length, offsets, checksum extraction, and
-malformed framing through `stdlib/core/artifact.kry`; checksum calculation and
-JSON decoding remain explicitly out of scope. The SHA-256 source test runs
+malformed framing through `stdlib/core/artifact.kry`; it then passes the
+extracted payload and canonical checksum text through the source SHA-256 verifier
+and rejects a tampered payload. JSON/module decoding remains explicitly out of
+scope. The SHA-256 source test runs
 empty, single-block, and multi-block known vectors and verifies `KRY6205` on a
 mismatch. The source runtime test executes
 that compiled module end to end through `stdlib/core/runtime.kry`
