@@ -6,6 +6,7 @@ import ast as python_ast
 import hashlib
 import inspect
 import json
+import math
 import re
 import textwrap
 import zipfile
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import ast as kry_ast
-from .bytecode import BYTECODE_OPCODES, BYTECODE_VERSION
+from .bytecode import BYTECODE_OPCODES, BYTECODE_VERSION, BytecodeFunction, Instruction
 from .compiler import compile_project, compile_source
 from .diagnostics import DiagnosticError
 from .filesystem import RootedFileSystem
@@ -103,6 +104,7 @@ def run_kryndel_tests(
         try:
             text = path.read_text(encoding="utf-8")
             module = compile_project(project, text, path) if has_manifest else compile_source(text, str(path))
+            verify_execution(module)
             VM(
                 module,
                 output=lambda _text: None,
@@ -344,63 +346,256 @@ def check_reproducible(source: str | Path, root: str | Path | None = None) -> bo
     return first == second
 
 
+_BUILTIN_ARITIES: dict[str, int | None] = {
+    "print": None,
+    "println": None,
+    "str": 1,
+    "int": 1,
+    "float": 1,
+    "len": 1,
+    "bytes": 1,
+    "string_to_bytes": 1,
+    "bytes_to_string": 1,
+    "assert": 1,
+    "assert_eq": 2,
+    "abs": 1,
+    "sqrt": 1,
+    "clock": 0,
+    "array_push": 2,
+    "fs.read_bytes": 1,
+    "fs.read_text": 1,
+    "fs.write_bytes": 2,
+    "fs.list_dir": 1,
+    "fs.stat": 1,
+    "ui.window": 3,
+    "ui.label": 2,
+    "ui.button": 2,
+    "ui.vbox": 1,
+    "ui.hbox": 1,
+    "ui.set_text": 2,
+    "ui.on_click": 2,
+    "ui.show": 1,
+    "ui.run": 0,
+}
+
+
+def _portable_constant(value: object) -> bool:
+    return value is None or type(value) in {bool, int, str} or (type(value) is float and math.isfinite(value))
+
+
+def _require_stack_metadata(instruction: Instruction, function: BytecodeFunction) -> tuple[int, int]:
+    """Return (required depth, delta) for one verified instruction."""
+    op = instruction.op
+    arg = instruction.arg
+    if op in {"PUSH_CONST", "PUSH_NIL", "PUSH_CALLABLE", "LOAD"}:
+        return 0, 1
+    if op in {"STORE", "POP", "JUMP_IF_FALSE", "JUMP_IF_TRUE"}:
+        return 1, -1
+    if op in {"STORE_RESULT", "MATCH_ENUM", "GET_FIELD", "UNARY"}:
+        return 1, 0
+    if op == "DUP":
+        return 1, 1
+    if op == "MAKE_STRUCT":
+        count = len(arg["fields"])
+        return count, 1 - count
+    if op in {"MAKE_ENUM", "MAKE_ARRAY", "MAKE_TUPLE"}:
+        count = arg.get("arity", 0) if op == "MAKE_ENUM" else arg
+        return count, 1 - count
+    if op in {"INDEX", "BINARY"}:
+        return 2, -1
+    if op == "CALL":
+        return arg[1], 1 - arg[1]
+    if op == "RETURN":
+        return 1, -1
+    if op == "JUMP" or op == "BIND_ENUM":
+        return 0, 0
+    raise ValueError(f"KRY7005 unsupported stack effect for {op!r} in {function.name!r}")
+
+
+def _verification_error(code: str, message: str) -> ValueError:
+    return ValueError(f"{code} {message}")
+
+
 def verify_module(module) -> None:
     """Validate the structural invariants needed before VM execution."""
-    from .bytecode import BytecodeFunction
-
-    if module.version != BYTECODE_VERSION or not isinstance(module.name, str) or not isinstance(module.entry, str):
-        raise ValueError("unsupported or malformed bytecode module header")
+    if (
+        type(getattr(module, "version", None)) is not int
+        or module.version != BYTECODE_VERSION
+        or type(getattr(module, "name", None)) is not str
+        or not module.name
+        or type(getattr(module, "entry", None)) is not str
+        or not module.entry
+        or not isinstance(getattr(module, "functions", None), dict)
+        or not module.functions
+    ):
+        raise _verification_error("KRY7001", "unsupported or malformed bytecode module header")
     if module.entry not in module.functions:
-        raise ValueError(f"bytecode entry function {module.entry!r} is missing")
+        raise _verification_error("KRY7002", f"bytecode entry function {module.entry!r} is missing")
+    if any(type(name) is not str or not name for name in module.functions):
+        raise _verification_error("KRY7003", "bytecode function names must be non-empty strings")
     for name in sorted(module.functions):
         function = module.functions[name]
-        if not isinstance(function, BytecodeFunction) or function.name != name:
-            raise ValueError(f"bytecode function key/name mismatch for {name!r}")
-        if function.arity < 0 or len(function.parameters) != function.arity or any(not isinstance(parameter, str) or not parameter for parameter in function.parameters) or len(set(function.parameters)) != len(function.parameters):
-            raise ValueError(f"invalid arity or parameter metadata for {name!r}")
+        if type(name) is not str or not name or not isinstance(function, BytecodeFunction) or function.name != name:
+            raise _verification_error("KRY7003", f"bytecode function key/name mismatch for {name!r}")
+        if (
+            type(function.arity) is not int
+            or function.arity < 0
+            or not isinstance(function.parameters, list)
+            or len(function.parameters) != function.arity
+            or any(type(parameter) is not str or not parameter for parameter in function.parameters)
+            or len(set(function.parameters)) != len(function.parameters)
+        ):
+            raise _verification_error("KRY7004", f"invalid arity or parameter metadata for {name!r}")
+        if not isinstance(function.constants, list) or any(not _portable_constant(value) for value in function.constants):
+            raise _verification_error("KRY7004", f"invalid constant table for {name!r}")
+        if not isinstance(function.instructions, list):
+            raise _verification_error("KRY7005", f"invalid instruction table in {name!r}")
         for instruction in function.instructions:
-            if not isinstance(instruction.op, str) or not instruction.op:
-                raise ValueError(f"invalid instruction in {name!r}")
-            if instruction.line < 0:
-                raise ValueError(f"invalid source line in {name!r}")
+            if not isinstance(instruction, Instruction) or type(instruction.op) is not str or not instruction.op:
+                raise _verification_error("KRY7005", f"invalid instruction in {name!r}")
+            if type(instruction.line) is not int or instruction.line < 0:
+                raise _verification_error("KRY7005", f"invalid source line in {name!r}")
             if instruction.op not in BYTECODE_OPCODES:
-                raise ValueError(f"unknown bytecode opcode {instruction.op!r} in {name!r}")
+                raise _verification_error("KRY7005", f"unknown bytecode opcode {instruction.op!r} in {name!r}")
             if instruction.op in {"PUSH_NIL", "POP", "DUP", "INDEX", "RETURN"} and instruction.arg is not None:
-                raise ValueError(f"invalid argument for {instruction.op} in {name!r}")
-            if instruction.op in {"LOAD", "STORE", "STORE_RESULT", "GET_FIELD", "UNARY", "BINARY", "PUSH_CALLABLE"} and (not isinstance(instruction.arg, str) or not instruction.arg):
-                raise ValueError(f"invalid string argument for {instruction.op} in {name!r}")
+                raise _verification_error("KRY7006", f"invalid argument for {instruction.op} in {name!r}")
+            if instruction.op in {"LOAD", "STORE", "STORE_RESULT", "GET_FIELD", "UNARY", "BINARY", "PUSH_CALLABLE"} and (type(instruction.arg) is not str or not instruction.arg):
+                raise _verification_error("KRY7006", f"invalid string argument for {instruction.op} in {name!r}")
             if instruction.op == "PUSH_CONST":
-                if not isinstance(instruction.arg, int) or not 0 <= instruction.arg < len(function.constants):
-                    raise ValueError(f"invalid constant index in {name!r}")
+                if type(instruction.arg) is not int or not 0 <= instruction.arg < len(function.constants):
+                    raise _verification_error("KRY7006", f"invalid constant index in {name!r}")
             elif instruction.op in {"JUMP", "JUMP_IF_FALSE", "JUMP_IF_TRUE"}:
-                if not isinstance(instruction.arg, int) or not 0 <= instruction.arg <= len(function.instructions):
-                    raise ValueError(f"invalid jump target in {name!r}")
+                if type(instruction.arg) is not int or not 0 <= instruction.arg <= len(function.instructions):
+                    raise _verification_error("KRY7006", f"invalid jump target in {name!r}")
             elif instruction.op == "CALL":
                 if (
                     not isinstance(instruction.arg, (list, tuple))
                     or len(instruction.arg) != 2
-                    or not isinstance(instruction.arg[0], str)
-                    or not isinstance(instruction.arg[1], int)
+                    or type(instruction.arg[0]) is not str
+                    or not instruction.arg[0]
+                    or type(instruction.arg[1]) is not int
                     or instruction.arg[1] < 0
                 ):
-                    raise ValueError(f"invalid CALL metadata in {name!r}")
+                    raise _verification_error("KRY7006", f"invalid CALL metadata in {name!r}")
             elif instruction.op == "MAKE_STRUCT":
-                if not isinstance(instruction.arg, dict) or set(instruction.arg) != {"type", "fields"} or not isinstance(instruction.arg["type"], str) or not isinstance(instruction.arg["fields"], list) or any(not isinstance(field, str) or not field for field in instruction.arg["fields"]) or len(set(instruction.arg["fields"])) != len(instruction.arg["fields"]):
-                    raise ValueError(f"invalid MAKE_STRUCT metadata in {name!r}")
+                metadata = instruction.arg
+                if (
+                    not isinstance(metadata, dict)
+                    or set(metadata) != {"type", "fields"}
+                    or type(metadata["type"]) is not str
+                    or not metadata["type"]
+                    or not isinstance(metadata["fields"], list)
+                    or any(type(field) is not str or not field for field in metadata["fields"])
+                    or len(set(metadata["fields"])) != len(metadata["fields"])
+                ):
+                    raise _verification_error("KRY7006", f"invalid MAKE_STRUCT metadata in {name!r}")
             elif instruction.op == "MAKE_ENUM":
-                if not isinstance(instruction.arg, dict) or set(instruction.arg) not in ({"type", "variant"}, {"type", "variant", "arity"}) or not isinstance(instruction.arg.get("type"), str) or not isinstance(instruction.arg.get("variant"), str) or ("arity" in instruction.arg and (not isinstance(instruction.arg["arity"], int) or instruction.arg["arity"] < 0)):
-                    raise ValueError(f"invalid MAKE_ENUM metadata in {name!r}")
+                metadata = instruction.arg
+                if (
+                    not isinstance(metadata, dict)
+                    or set(metadata) not in ({"type", "variant"}, {"type", "variant", "arity"})
+                    or type(metadata.get("type")) is not str
+                    or not metadata.get("type")
+                    or type(metadata.get("variant")) is not str
+                    or not metadata.get("variant")
+                    or ("arity" in metadata and (type(metadata["arity"]) is not int or metadata["arity"] < 0))
+                ):
+                    raise _verification_error("KRY7006", f"invalid MAKE_ENUM metadata in {name!r}")
             elif instruction.op == "MATCH_ENUM":
-                if not isinstance(instruction.arg, dict) or set(instruction.arg) != {"type", "variant", "arity"} or not isinstance(instruction.arg["type"], str) or not isinstance(instruction.arg["variant"], str) or not isinstance(instruction.arg["arity"], int) or instruction.arg["arity"] < 0:
-                    raise ValueError(f"invalid MATCH_ENUM metadata in {name!r}")
+                metadata = instruction.arg
+                if (
+                    not isinstance(metadata, dict)
+                    or set(metadata) != {"type", "variant", "arity"}
+                    or type(metadata.get("type")) is not str
+                    or not metadata.get("type")
+                    or type(metadata.get("variant")) is not str
+                    or not metadata.get("variant")
+                    or type(metadata.get("arity")) is not int
+                    or metadata["arity"] < 0
+                ):
+                    raise _verification_error("KRY7006", f"invalid MATCH_ENUM metadata in {name!r}")
             elif instruction.op == "BIND_ENUM":
-                if not isinstance(instruction.arg, dict) or set(instruction.arg) != {"source", "bindings", "arity"} or not isinstance(instruction.arg["source"], str) or not isinstance(instruction.arg["bindings"], list) or any(not isinstance(binding, str) or not binding for binding in instruction.arg["bindings"]) or len(set(instruction.arg["bindings"])) != len(instruction.arg["bindings"]) or not isinstance(instruction.arg["arity"], int) or instruction.arg["arity"] < 0 or instruction.arg["arity"] != len(instruction.arg["bindings"]):
-                    raise ValueError(f"invalid BIND_ENUM metadata in {name!r}")
+                metadata = instruction.arg
+                named_bindings = [binding for binding in metadata.get("bindings", [])] if isinstance(metadata, dict) and isinstance(metadata.get("bindings"), list) else []
+                if (
+                    not isinstance(metadata, dict)
+                    or set(metadata) != {"source", "bindings", "arity"}
+                    or type(metadata.get("source")) is not str
+                    or not metadata.get("source")
+                    or not isinstance(metadata.get("bindings"), list)
+                    or any(type(binding) is not str for binding in metadata["bindings"])
+                    or len(set(binding for binding in named_bindings if binding)) != len([binding for binding in named_bindings if binding])
+                    or type(metadata.get("arity")) is not int
+                    or metadata["arity"] < 0
+                    or metadata["arity"] != len(metadata["bindings"])
+                ):
+                    raise _verification_error("KRY7006", f"invalid BIND_ENUM metadata in {name!r}")
             elif instruction.op in {"MAKE_ARRAY", "MAKE_TUPLE"}:
-                if not isinstance(instruction.arg, int) or instruction.arg < 0:
-                    raise ValueError(f"invalid sequence arity in {name!r}")
-            elif instruction.op == "INDEX" and instruction.arg is not None:
-                raise ValueError(f"invalid INDEX metadata in {name!r}")
+                if type(instruction.arg) is not int or instruction.arg < 0:
+                    raise _verification_error("KRY7006", f"invalid sequence arity in {name!r}")
+
+
+def _verify_calls(module) -> None:
+    for name in sorted(module.functions):
+        function = module.functions[name]
+        for instruction in function.instructions:
+            if instruction.op != "CALL":
+                continue
+            target, count = instruction.arg
+            expected = module.functions[target].arity if target in module.functions else _BUILTIN_ARITIES.get(target, -1)
+            if expected == -1:
+                raise _verification_error("KRY7007", f"unknown callable {target!r} in {name!r}")
+            if expected is not None and expected != count:
+                raise _verification_error("KRY7007", f"CALL arity mismatch for {target!r} in {name!r}")
+
+
+def verify_execution(module, *, max_states: int = 1024, max_stack: int = 4096) -> None:
+    """Verify reachable operand-stack depths for every control-flow path."""
+    verify_module(module)
+    _verify_calls(module)
+    if type(max_states) is not int or max_states <= 0 or type(max_stack) is not int or max_stack <= 0:
+        raise ValueError("KRY7008 invalid verifier limits")
+    for name in sorted(module.functions):
+        function = module.functions[name]
+        states: list[tuple[int, int]] = [(0, 0)]
+        seen = {(0, 0)}
+        depth_at_pc = {0: 0}
+        index = 0
+        while index < len(states):
+            pc, depth = states[index]
+            if pc == len(function.instructions):
+                raise _verification_error("KRY7008", f"reachable control flow ended without RETURN in {name!r}")
+            required, delta = _require_stack_metadata(function.instructions[pc], function)
+            if depth < required:
+                raise _verification_error("KRY7008", f"operand stack underflow in {name!r} at instruction {pc}")
+            next_depth = depth + delta
+            if next_depth < 0:
+                raise _verification_error("KRY7008", f"operand stack became negative in {name!r} at instruction {pc}")
+            if next_depth > max_stack:
+                raise _verification_error("KRY7008", f"operand stack exceeded limit in {name!r}")
+            instruction = function.instructions[pc]
+            if instruction.op == "RETURN":
+                index += 1
+                continue
+            if instruction.op == "JUMP":
+                targets = (instruction.arg,)
+            elif instruction.op in {"JUMP_IF_FALSE", "JUMP_IF_TRUE"}:
+                targets = (instruction.arg, pc + 1)
+            else:
+                targets = (pc + 1,)
+            for target in targets:
+                previous_depth = depth_at_pc.get(target)
+                if previous_depth is not None and previous_depth != next_depth:
+                    raise _verification_error("KRY7008", f"incompatible operand stack depth at join in {name!r} at instruction {target}")
+                depth_at_pc[target] = next_depth
+                state = (target, next_depth)
+                if state in seen:
+                    continue
+                seen.add(state)
+                states.append(state)
+                if len(states) > max_states:
+                    raise _verification_error("KRY7008", f"operand stack analysis exceeded limit in {name!r}")
+            index += 1
 
 
 _HOST_ERROR_CODES = {

@@ -157,7 +157,10 @@ Project compilation links exported functions under their fully qualified module 
 `build` writes a `.kexe` Kryndel artifact. This is a portable Kryndel VM
 container, not a Windows PE or native executable. Its header contains a magic
 marker, payload length, and SHA-256 checksum. `inspect` validates and reports
-the module without executing it. The versioned bytecode contract is in
+the module without executing it. The loader rejects symlink paths, payloads
+larger than 16 MiB, duplicate JSON keys, non-finite numbers, and malformed
+record metadata before the VM can receive a module. The versioned bytecode
+contract is in
 [`docs/specs/bytecode-v1.md`](docs/specs/bytecode-v1.md).
 
 ```bash
@@ -194,7 +197,9 @@ json` emits a deterministic versioned report and returns one if any test fails.
 `kry fmt` currently normalizes trailing horizontal whitespace and the final
 newline without rewriting token spacing; `kry reproducible` compiles the
 selected source twice and compares bytecode; `kry verify-bytecode` and
-`kry verify-artifact` validate structural contracts. `kry host-report` emits
+`kry verify-artifact` validate structural contracts and the bounded executable
+operand-stack preflight before execution. `--format json` exposes stable
+verification diagnostics. `kry host-report` emits
 the offline inventory of every VM intrinsic and fails when dispatch, signature,
 error metadata, fixture, or replacement information is missing. `kry doc`
 emits deterministic source declarations, and `kry pack` writes a reproducible

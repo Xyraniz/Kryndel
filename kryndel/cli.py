@@ -15,7 +15,7 @@ from .diagnostics import Diagnostic, DiagnosticError, Severity, Span
 from .source import SourceFile
 from .packages import Lockfile, add_dependency, init_project, install, list_packages, read_manifest, remove_dependency, validate_imports
 from .version import __codename__, __version__
-from .tooling import abi_description, autonomy_audit_report, check_reproducible, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, document_project, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
+from .tooling import abi_description, autonomy_audit_report, check_reproducible, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, document_project, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_execution
 from .filesystem import RootedFileSystem
 from .vm import RuntimeKryndelError, VM
 
@@ -68,6 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         command = subparsers.add_parser(name, help=help_text)
         command.add_argument("path", nargs="?", type=Path)
+        command.add_argument("--format", choices=("human", "json"), default="human")
     subparsers.add_parser("abi", help="Print the stable Kryndel ABI description.")
     subparsers.add_parser("core-report", help="Validate the deterministic core-v1 fixtures.")
     doc = subparsers.add_parser("doc", help="Emit deterministic source documentation.")
@@ -136,7 +137,7 @@ def _structured_error(error: Exception, filename: str = "<kryndel>") -> str:
         match = re.search(r"\b(KRY\d{4})\b", str(error))
         code = match.group(1) if match else "KRY6002" if "bytecode" in str(error) or "malformed" in str(error) else "KRY6000"
     else:
-        code = "KRY6001" if isinstance(error, ArtifactError) else "KRY5000"
+        code = error.code if isinstance(error, ArtifactError) else "KRY5000"
     diagnostic = Diagnostic(Severity.ERROR, str(error), Span(0, 1, 1, 1), code=code)
     return json.dumps({"diagnostics": [diagnostic.as_dict(filename)]}, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
@@ -318,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 from .bytecode import Module
                 module = Module.load(path)
-            verify_module(module)
+            verify_execution(module)
             if arguments.command == "inspect-bytecode":
                 print(json.dumps({"module": module.name, "entry": module.entry, "functions": sorted(module.functions)}, indent=2, sort_keys=True))
             elif arguments.command == "verify-bytecode":
@@ -337,10 +338,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command in {"check", "run", "dump", "build"}:
             if arguments.command == "run" and arguments.source is not None and arguments.source.suffix == ".kexe":
-                VM(read_artifact(arguments.source), filesystem=RootedFileSystem(arguments.source.parent)).run()
+                module = read_artifact(arguments.source)
+                verify_execution(module)
+                VM(module, filesystem=RootedFileSystem(arguments.source.parent)).run()
                 return 0
             source, root = _source_path(arguments.source)
             module = _compile_project(source, root, arguments.locked)
+            verify_execution(module)
             if arguments.command == "check":
                 print(f"checked {source}")
                 return 0
@@ -356,6 +360,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command == "inspect":
             module = read_artifact(arguments.artifact)
+            verify_execution(module)
             if output_format == "json":
                 functions = [{"name": name, "arity": function.arity, "instructions": len(function.instructions)} for name, function in sorted(module.functions.items())]
                 print(json.dumps({"artifact": str(arguments.artifact), "module": module.name, "entry": module.entry, "functions": functions}, indent=2, sort_keys=True))

@@ -8,14 +8,14 @@ import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from kryndel.artifact import read_artifact, write_artifact
+from kryndel.artifact import MAX_PAYLOAD_BYTES, ArtifactError, HEADER, read_artifact, write_artifact
 from kryndel.bytecode import BytecodeFunction, Instruction, Module
 from kryndel.compiler import compile_project, compile_source
-from kryndel.contracts import core_contract_report, validate_core_contract
+from kryndel.contracts import core_contract_report, strict_json_loads, validate_core_contract
 from kryndel.filesystem import RootedFileSystem, VirtualFileSystem
 from kryndel.modules import ModuleGraph
 from kryndel.parser import parse
-from kryndel.tooling import abi_description, autonomy_audit_report, autonomy_status_matrix, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
+from kryndel.tooling import abi_description, autonomy_audit_report, autonomy_status_matrix, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_execution, verify_module
 from kryndel.diagnostics import DiagnosticError
 from kryndel.cli import main as cli_main
 from kryndel.packages import (
@@ -880,6 +880,135 @@ class KryndelTests(unittest.TestCase):
             restored = read_artifact(path)
             self.assertEqual(restored.dumps(), module.dumps())
             self.assertEqual(path.read_bytes()[:8], b"KRYNEXE\x01")
+
+    def test_strict_json_rejects_ambiguous_and_non_portable_values(self) -> None:
+        self.assertEqual(strict_json_loads('{"b": 2, "a": 1}'), {"a": 1, "b": 2})
+        with self.assertRaisesRegex(ValueError, "duplicate JSON object key"):
+            strict_json_loads('{"name": "first", "name": "second"}', context="fixture")
+        with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
+            strict_json_loads('{"value": NaN}', context="fixture")
+        with self.assertRaisesRegex(ValueError, "invalid fixture at line 1, column 2"):
+            strict_json_loads("{", context="fixture")
+
+    def test_bytecode_decoders_reject_ambiguous_metadata(self) -> None:
+        instruction = Instruction.from_dict({"op": "PUSH_NIL", "arg": None, "line": 0})
+        self.assertEqual(instruction, Instruction("PUSH_NIL"))
+        with self.assertRaisesRegex(ValueError, "metadata"):
+            Instruction.from_dict({"op": "PUSH_NIL", "arg": None, "line": 0, "extra": True})
+        with self.assertRaisesRegex(ValueError, "opcode"):
+            Instruction.from_dict({"op": True, "arg": None, "line": 0})
+        with self.assertRaisesRegex(ValueError, "source line"):
+            Instruction.from_dict({"op": "PUSH_NIL", "arg": None, "line": True})
+        with self.assertRaisesRegex(ValueError, "constants"):
+            BytecodeFunction.from_dict({
+                "name": "main",
+                "arity": 0,
+                "constants": [{"host": "object"}],
+                "parameters": [],
+                "instructions": [],
+            })
+
+    def test_module_decoder_requires_canonical_function_table(self) -> None:
+        module = compile_source("println(42)", "decoder.kry")
+        restored = Module.from_dict(json.loads(module.dumps()))
+        self.assertEqual(restored.dumps(), module.dumps())
+        raw = json.loads(module.dumps())
+        del raw["functions"]["main"]["parameters"]
+        with self.assertRaisesRegex(ValueError, "function metadata"):
+            Module.from_dict(raw)
+        raw = json.loads(module.dumps())
+        raw["functions"]["main"]["name"] = "other"
+        with self.assertRaisesRegex(ValueError, "key/name mismatch"):
+            Module.from_dict(raw)
+        raw = json.loads(module.dumps())
+        raw["version"] = True
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            Module.from_dict(raw)
+
+    def test_executable_verifier_rejects_stack_and_call_contract_violations(self) -> None:
+        valid = compile_source("if true { println(1) }", "stack-valid.kry")
+        verify_execution(valid)
+        underflow = Module("underflow", "main", {"main": BytecodeFunction("main", 0, [Instruction("RETURN")])})
+        with self.assertRaisesRegex(ValueError, "KRY7008.*underflow"):
+            verify_execution(underflow)
+        fallthrough = Module("fallthrough", "main", {"main": BytecodeFunction("main", 0, [Instruction("JUMP", 1)])})
+        with self.assertRaisesRegex(ValueError, "KRY7008.*ended without RETURN"):
+            verify_execution(fallthrough)
+        join = Module(
+            "join",
+            "main",
+            {
+                "main": BytecodeFunction(
+                    "main",
+                    0,
+                    [
+                        Instruction("PUSH_NIL"),
+                        Instruction("JUMP_IF_FALSE", 4),
+                        Instruction("PUSH_NIL"),
+                        Instruction("JUMP", 4),
+                        Instruction("PUSH_NIL"),
+                        Instruction("RETURN"),
+                    ],
+                )
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "KRY7008.*incompatible operand stack depth"):
+            verify_execution(join)
+        unknown = Module(
+            "unknown",
+            "main",
+            {"main": BytecodeFunction("main", 0, [Instruction("PUSH_NIL"), Instruction("CALL", ("missing", 1)), Instruction("RETURN")])},
+        )
+        with self.assertRaisesRegex(ValueError, "KRY7007.*unknown callable"):
+            verify_execution(unknown)
+
+    def test_cli_verifies_artifacts_before_execution_and_emits_codes(self) -> None:
+        module = compile_source("println(42)", "cli-verify.kry")
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "path with spaces.kexe"
+            write_artifact(module, artifact)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(cli_main(["verify-artifact", str(artifact)]), 0)
+            self.assertIn("verified artifact", output.getvalue())
+            corrupted = Path(directory) / "corrupted.kexe"
+            corrupted.write_bytes(artifact.read_bytes()[:-1] + bytes((artifact.read_bytes()[-1] ^ 1,)))
+            errors = io.StringIO()
+            with redirect_stderr(errors):
+                self.assertEqual(cli_main(["verify-artifact", "--format", "json", str(corrupted)]), 1)
+            self.assertIn("KRY6205", errors.getvalue())
+
+    def test_kexe_loader_rejects_symlinks_and_oversized_payloads(self) -> None:
+        module = compile_source("println(1)", "kexe-safety.kry")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "program.kexe"
+            write_artifact(module, artifact)
+            link = root / "link.kexe"
+            link.symlink_to(artifact)
+            with self.assertRaisesRegex(ArtifactError, "KRY6301.*regular file"):
+                read_artifact(link)
+            oversized = root / "oversized.kexe"
+            payload_length = MAX_PAYLOAD_BYTES + 1
+            oversized.write_bytes(HEADER.pack(b"KRYNEXE\x01", payload_length, bytes(32)))
+            with self.assertRaisesRegex(ArtifactError, "KRY6305.*exceeds"):
+                read_artifact(oversized)
+            output_link = root / "output.kexe"
+            output_link.symlink_to(artifact)
+            with self.assertRaisesRegex(ArtifactError, "KRY6301.*symlink"):
+                write_artifact(module, output_link)
+
+    def test_verification_boundary_fixture_and_structured_artifact_code(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "verification-boundary-v1.json").read_text(encoding="utf-8"))
+        self.assertEqual(fixture["contract"], "kryndel-verification-boundary")
+        self.assertEqual(fixture["version"], 1)
+        self.assertEqual(set(fixture["codes"]), {"KRY7001", "KRY7002", "KRY7003", "KRY7004", "KRY7005", "KRY7006", "KRY7007", "KRY7008"})
+        self.assertEqual(fixture["limits"], {"max_states": 1024, "max_stack": 4096, "max_kexe_payload_bytes": MAX_PAYLOAD_BYTES})
+        self.assertEqual(
+            fixture,
+            json.loads(json.dumps(fixture, ensure_ascii=False, indent=2, sort_keys=True)),
+        )
 
     def test_bytecode_is_deterministic_json(self) -> None:
         first = compile_source("println(42)", "a.kry").dumps()
