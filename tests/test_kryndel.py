@@ -1213,6 +1213,20 @@ class KryndelTests(unittest.TestCase):
             self.assertEqual(executed.stdout, b"")
             self.assertEqual(executed.stderr, b"")
 
+    def test_source_formatter_matches_conservative_python_contract(self) -> None:
+        root = Path(__file__).parents[1]
+        formatter = VM(compile_source((root / "stdlib" / "core" / "format.kry").read_text(encoding="utf-8"), "stdlib/core/format.kry"))
+        original = "let x: Int = 1  \n\n\n"
+        expected = "let x: Int = 1\n"
+        result = formatter.execute("format", [original])
+        self.assertEqual(result.field("text")[1], expected)
+        self.assertTrue(result.field("changed")[1])
+        repeated = formatter.execute("format", [expected])
+        self.assertEqual(repeated.field("text")[1], expected)
+        self.assertFalse(repeated.field("changed")[1])
+        empty = formatter.execute("format", [""])
+        self.assertEqual(empty.field("text")[1], "\n")
+
     def test_source_bytecode_verifier_matches_structural_contract(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "bytecode-native-verifier-v1.json").read_text(encoding="utf-8"))
