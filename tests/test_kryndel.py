@@ -1223,6 +1223,36 @@ class KryndelTests(unittest.TestCase):
         verified = verifier_runtime.execute("verify", [bytecode_module])
         self.assertEqual(verified.variant_name, "Ok")
 
+    def test_source_compiler_and_runtime_preserve_typed_constants(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "typed-bytecode-v1.json").read_text(encoding="utf-8"))
+        lexer = VM(compile_source((root / "stdlib" / "core" / "lexer.kry").read_text(encoding="utf-8"), "stdlib/core/lexer.kry"))
+        parser = VM(compile_source((root / "stdlib" / "core" / "parser.kry").read_text(encoding="utf-8"), "stdlib/core/parser.kry"))
+        compiler = VM(compile_source((root / "stdlib" / "core" / "compiler.kry").read_text(encoding="utf-8"), "stdlib/core/compiler.kry"))
+        runtime = VM(compile_source((root / "stdlib" / "core" / "runtime.kry").read_text(encoding="utf-8"), "stdlib/core/runtime.kry"))
+        tokens = lexer.execute("lex", [fixture["compiler_source"]]).field("tokens")[1]
+        items = parser.execute("parse", [tokens]).field("items")[1]
+        compiled = compiler.execute("compile", ["typed-constants.kry", items])
+        self.assertEqual(compiled.variant_name, "Ok")
+        module = compiled.payloads[0]
+        function = module.field("functions")[1].items[0]
+        self.assertEqual(function.field("constants")[1].items, tuple(fixture["constants"]))
+        instructions = function.field("instructions")[1].items
+        self.assertEqual([item.field("op")[1] for item in instructions], fixture["operations"])
+        categories = [item.field("text")[1] for item in instructions if item.field("op")[1] == "PUSH_CONST"]
+        self.assertEqual(categories, fixture["constant_categories"])
+        decoded = [runtime.execute("decode_constant", [raw, category]) for raw, category in zip(fixture["constants"], fixture["constant_categories"])]
+        self.assertEqual([item.payloads[0].field("kind")[1] for item in decoded], ["Int", "Float", "Bool", "String"])
+        self.assertEqual(decoded[0].payloads[0].field("number")[1], 42)
+        self.assertAlmostEqual(decoded[1].payloads[0].field("float_number")[1], 3.5)
+        self.assertTrue(decoded[2].payloads[0].field("bool_value")[1])
+        self.assertEqual(decoded[3].payloads[0].field("text")[1], "ok")
+        nil_result = runtime.execute("decode_constant", ["", "nil"])
+        self.assertEqual(nil_result.payloads[0].field("kind")[1], "Nil")
+        unsupported = runtime.execute("decode_constant", ["ff", "bytes"])
+        self.assertEqual(unsupported.variant_name, "Error")
+        self.assertIn(fixture["unsupported_category_error"], unsupported.payloads[0])
+
     def test_source_runtime_executes_compiler_subset_end_to_end(self) -> None:
         root = Path(__file__).parents[1]
         source = (root / "tests" / "fixtures" / "parser-input.kry").read_text(encoding="utf-8")

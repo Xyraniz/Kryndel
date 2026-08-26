@@ -63,7 +63,11 @@ lets become `STORE`, expression statements become `POP`, and a deterministic
 `RETURN` terminates `main`. The emitted module is accepted by the source
 structural verifier in `stdlib/core/bytecode.kry`.
 
-The source compiler currently uses normalized String constants rather than the
-bootstrap's typed constant pool and emits only a single `main` function. Full
-functions, control flow, arithmetic, enums, imports, typed constants, module
-linking, and native bytecode serialization remain Python-owned.
+The source compiler currently stores the canonical textual spelling in its
+normalized String constant array and uses `PUSH_CONST.text` as a narrow category
+(`int`, `float`, `bool`, `string`, or legacy empty/text metadata). `nil` uses
+`PUSH_NIL`. `typed-bytecode-v1.json` freezes this representation and the source
+runtime decodes it into nominal `Int`, `Float`, `Bool`, `String`, and `Nil` values.
+The source compiler still emits only a single `main` function. Full functions,
+control flow, arithmetic, enums, imports, native constant-pool serialization,
+module linking, and native bytecode serialization remain Python-owned.

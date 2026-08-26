@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 107 tests in the current checkout and covers:
+The suite contains 108 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -52,9 +52,12 @@ assignments, primitive mismatch and unknown-name diagnostics,
 and deterministic module resolution for valid, missing, duplicate, and cyclic
 imports. The source compiler test lowers the source lexer/parser subset
 into bytecode records and validates the emitted instruction sequence with the
-source verifier. The source runtime test executes that compiled module
-end to end through `stdlib/core/runtime.kry` and checks the nominal completion
-value. The source backend test emits the x86_64 Linux empty-main seed twice,
+source verifier. A typed-bytecode fixture additionally checks canonical
+constant text, `PUSH_CONST` categories, `PUSH_NIL`, and decoding into nominal
+runtime values, including unsupported-category `KRY7006`. The source runtime
+test executes that compiled module end to end through `stdlib/core/runtime.kry`
+and checks the nominal completion value. The source backend test emits
+the x86_64 Linux empty-main seed twice,
 compares it byte for byte, and rejects unsupported targets. The CLI integration
 also builds and executes the raw ELF seed with only POSIX shell utilities and
 without an installed Python, assembler, or linker. The seed-only offline checker

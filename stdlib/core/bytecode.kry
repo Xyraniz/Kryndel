@@ -91,6 +91,10 @@ fn no_argument_opcode(op: String) -> Bool {
     return op == "PUSH_NIL" or op == "POP" or op == "DUP" or op == "INDEX" or op == "RETURN"
 }
 
+fn constant_category(value: String) -> Bool {
+    return value == "" or value == "int" or value == "float" or value == "bool" or value == "string" or value == "text"
+}
+
 fn string_argument_opcode(op: String) -> Bool {
     return op == "LOAD" or op == "STORE" or op == "STORE_RESULT" or op == "GET_FIELD" or op == "UNARY" or op == "BINARY" or op == "PUSH_CALLABLE"
 }
@@ -122,8 +126,8 @@ fn verify_instruction(value: InstructionRecord, constants: Int, instruction_coun
         return VerifyResult.Ok
     }
     if value.op == "PUSH_CONST" {
-        if value.number < 0 or value.number >= constants or value.text != "" or value.text2 != "" or len(value.names) != 0 {
-            return error("invalid constant index")
+        if value.number < 0 or value.number >= constants or !constant_category(value.text) or value.text2 != "" or len(value.names) != 0 {
+            return error("invalid constant index or category")
         }
         return VerifyResult.Ok
     }
