@@ -1,0 +1,30 @@
+{
+  "contract": "kryndel-source-bytecode-verifier",
+  "invalid": [
+    {
+      "case": "unknown_opcode",
+      "error": "KRY6305"
+    },
+    {
+      "case": "bad_constant_index",
+      "error": "KRY6305"
+    },
+    {
+      "case": "bad_binding_arity",
+      "error": "KRY6305"
+    },
+    {
+      "case": "missing_entry",
+      "error": "KRY6305"
+    }
+  ],
+  "source": "stdlib/core/bytecode.kry",
+  "valid": [
+    "PUSH_CONST",
+    "CALL",
+    "MAKE_ARRAY",
+    "INDEX",
+    "RETURN"
+  ],
+  "version": 1
+}

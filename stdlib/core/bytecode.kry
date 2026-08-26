@@ -1,0 +1,215 @@
+// Source-level structural verifier for normalized bytecode-v1 records.
+// The Python bootstrap still reads JSON and owns the production verifier.
+
+struct InstructionRecord {
+    op: String
+    line: Int
+    text: String
+    text2: String
+    number: Int
+    names: Array
+}
+
+struct FunctionRecord {
+    name: String
+    arity: Int
+    parameters: Array
+    constants: Array
+    instructions: Array
+}
+
+struct ModuleRecord {
+    name: String
+    entry: String
+    version: Int
+    functions: Array
+}
+
+enum VerifyResult {
+    Ok
+    Error(String)
+}
+
+pub fn instruction(op: String, line: Int, text: String, text2: String, number: Int, names: Array) -> InstructionRecord {
+    return InstructionRecord {
+        op: op,
+        line: line,
+        text: text,
+        text2: text2,
+        number: number,
+        names: names,
+    }
+}
+
+pub fn function(name: String, arity: Int, parameters: Array, constants: Array, instructions: Array) -> FunctionRecord {
+    return FunctionRecord {
+        name: name,
+        arity: arity,
+        parameters: parameters,
+        constants: constants,
+        instructions: instructions,
+    }
+}
+
+pub fn module(name: String, entry: String, version: Int, functions: Array) -> ModuleRecord {
+    return ModuleRecord {
+        name: name,
+        entry: entry,
+        version: version,
+        functions: functions,
+    }
+}
+
+fn error(message: String) -> VerifyResult {
+    return VerifyResult.Error("KRY6305 " + message)
+}
+
+fn unique_strings(values: Array) -> Bool {
+    let mut index: Int = 0
+    while index < len(values) {
+        let value: String = values[index]
+        if value == "" {
+            return false
+        }
+        let mut other: Int = 0
+        while other < index {
+            if value == values[other] {
+                return false
+            }
+            other = other + 1
+        }
+        index = index + 1
+    }
+    return true
+}
+
+fn known_opcode(op: String) -> Bool {
+    return op == "PUSH_CONST" or op == "PUSH_NIL" or op == "PUSH_CALLABLE" or op == "LOAD" or op == "STORE" or op == "STORE_RESULT" or op == "MAKE_STRUCT" or op == "MAKE_ENUM" or op == "MAKE_ARRAY" or op == "MAKE_TUPLE" or op == "INDEX" or op == "MATCH_ENUM" or op == "BIND_ENUM" or op == "GET_FIELD" or op == "POP" or op == "DUP" or op == "UNARY" or op == "BINARY" or op == "JUMP" or op == "JUMP_IF_FALSE" or op == "JUMP_IF_TRUE" or op == "CALL" or op == "RETURN"
+}
+
+fn no_argument_opcode(op: String) -> Bool {
+    return op == "PUSH_NIL" or op == "POP" or op == "DUP" or op == "INDEX" or op == "RETURN"
+}
+
+fn string_argument_opcode(op: String) -> Bool {
+    return op == "LOAD" or op == "STORE" or op == "STORE_RESULT" or op == "GET_FIELD" or op == "UNARY" or op == "BINARY" or op == "PUSH_CALLABLE"
+}
+
+fn jump_opcode(op: String) -> Bool {
+    return op == "JUMP" or op == "JUMP_IF_FALSE" or op == "JUMP_IF_TRUE"
+}
+
+fn verify_instruction(value: InstructionRecord, constants: Int, instruction_count: Int) -> VerifyResult {
+    if value.op == "" {
+        return error("invalid instruction")
+    }
+    if value.line < 0 {
+        return error("invalid source line")
+    }
+    if !known_opcode(value.op) {
+        return error("unknown bytecode opcode " + value.op)
+    }
+    if no_argument_opcode(value.op) {
+        if value.text != "" or value.text2 != "" or value.number != 0 or len(value.names) != 0 {
+            return error("invalid argument for " + value.op)
+        }
+        return VerifyResult.Ok
+    }
+    if string_argument_opcode(value.op) {
+        if value.text == "" or value.text2 != "" or value.number != 0 or len(value.names) != 0 {
+            return error("invalid string argument for " + value.op)
+        }
+        return VerifyResult.Ok
+    }
+    if value.op == "PUSH_CONST" {
+        if value.number < 0 or value.number >= constants or value.text != "" or value.text2 != "" or len(value.names) != 0 {
+            return error("invalid constant index")
+        }
+        return VerifyResult.Ok
+    }
+    if jump_opcode(value.op) {
+        if value.number < 0 or value.number > instruction_count or value.text != "" or value.text2 != "" or len(value.names) != 0 {
+            return error("invalid jump target")
+        }
+        return VerifyResult.Ok
+    }
+    if value.op == "CALL" {
+        if value.text == "" or value.number < 0 or value.text2 != "" or len(value.names) != 0 {
+            return error("invalid CALL metadata")
+        }
+        return VerifyResult.Ok
+    }
+    if value.op == "MAKE_STRUCT" {
+        if value.text == "" or value.text2 != "" or value.number != 0 or !unique_strings(value.names) {
+            return error("invalid MAKE_STRUCT metadata")
+        }
+        return VerifyResult.Ok
+    }
+    if value.op == "MAKE_ENUM" or value.op == "MATCH_ENUM" {
+        if value.text == "" or value.text2 == "" or value.number < 0 or len(value.names) != 0 {
+            return error("invalid enum metadata")
+        }
+        return VerifyResult.Ok
+    }
+    if value.op == "BIND_ENUM" {
+        if value.text == "" or value.number < 0 or value.number != len(value.names) or !unique_strings(value.names) or value.text2 != "" {
+            return error("invalid BIND_ENUM metadata")
+        }
+        return VerifyResult.Ok
+    }
+    if value.op == "MAKE_ARRAY" or value.op == "MAKE_TUPLE" {
+        if value.number < 0 or value.text != "" or value.text2 != "" or len(value.names) != 0 {
+            return error("invalid sequence arity")
+        }
+        return VerifyResult.Ok
+    }
+    return error("unsupported verifier case")
+}
+
+fn verify_function(value: FunctionRecord) -> VerifyResult {
+    if value.name == "" or value.arity < 0 or len(value.parameters) != value.arity or !unique_strings(value.parameters) {
+        return error("invalid arity or parameter metadata for " + value.name)
+    }
+    let mut index: Int = 0
+    while index < len(value.instructions) {
+        let instruction_value: InstructionRecord = value.instructions[index]
+        let result: VerifyResult = verify_instruction(instruction_value, len(value.constants), len(value.instructions))
+        match result {
+            VerifyResult.Ok => { }
+            VerifyResult.Error(message) => return VerifyResult.Error(message)
+        }
+        index = index + 1
+    }
+    return VerifyResult.Ok
+}
+
+fn has_entry(functions: Array, entry: String) -> Bool {
+    let mut index: Int = 0
+    while index < len(functions) {
+        let value: FunctionRecord = functions[index]
+        if value.name == entry {
+            return true
+        }
+        index = index + 1
+    }
+    return false
+}
+
+pub fn verify(value: ModuleRecord) -> VerifyResult {
+    if value.version != 1 or value.name == "" or value.entry == "" {
+        return error("unsupported or malformed bytecode module header")
+    }
+    if !has_entry(value.functions, value.entry) {
+        return error("bytecode entry function is missing")
+    }
+    let mut index: Int = 0
+    while index < len(value.functions) {
+        let result: VerifyResult = verify_function(value.functions[index])
+        match result {
+            VerifyResult.Ok => { }
+            VerifyResult.Error(message) => return VerifyResult.Error(message)
+        }
+        index = index + 1
+    }
+    return VerifyResult.Ok
+}
