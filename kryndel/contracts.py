@@ -35,6 +35,44 @@ def canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_non_finite_number(value: str) -> Any:
+    raise ValueError(f"non-finite JSON number is not portable: {value}")
+
+
+def strict_json_loads(text: str, *, context: str = "JSON") -> Any:
+    """Decode JSON without silently accepting ambiguous or non-portable values.
+
+    Object-key uniqueness and finite numeric values are part of the v1 wire
+    boundary. The caller supplies a short context so diagnostics remain useful
+    without exposing implementation details of the Python bootstrap.
+    """
+    if not isinstance(text, str):
+        raise ValueError(f"{context} input must be text")
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_non_finite_number,
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"invalid {context} at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+        ) from exc
+    except ValueError as exc:
+        if str(exc).startswith("duplicate JSON object key:") or str(exc).startswith("non-finite JSON number"):
+            raise ValueError(f"invalid {context}: {exc}") from exc
+        raise
+
+
 def _fixture_path(root: Path, relative: str) -> Path:
     path = root / relative
     if not path.is_file():
@@ -46,8 +84,8 @@ def _read_canonical(path: Path) -> tuple[Any, bytes]:
     raw = path.read_bytes()
     try:
         decoded = raw.decode("utf-8")
-        value = json.loads(decoded)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = strict_json_loads(decoded, context=f"fixture {path}")
+    except (UnicodeDecodeError, ValueError) as exc:
         raise ValueError(f"fixture is not canonical JSON: {path}") from exc
     expected = canonical_json(value).encode("utf-8")
     if raw != expected:

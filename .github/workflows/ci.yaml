@@ -16,6 +16,9 @@ jobs:
         uses: actions/checkout@v4
       - name: Run tests
         run: PYTHONPATH=. python3 -m unittest discover -s tests -v
+      - name: Re-run strict bootstrap verification boundary
+        run: |
+          PYTHONPATH=. python3 -m unittest discover -s tests -p 'test_kryndel.py' -v
       - name: Compile examples through the bootstrap oracle
         run: |
           PYTHONPATH=. python3 -m kryndel check examples/hello.kry

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added eight bounded bootstrap verification checkpoints: strict JSON decoding that rejects duplicate keys and non-finite numbers; exact instruction/function/module record validation; portable scalar constant checks; structural and callable validation with `KRY7001`–`KRY7007`; branch-aware operand-stack preflight with bounded states and stack depth under `KRY7008`; KEXE regular-file, symlink, size, checksum, and schema guards; CLI verification before VM execution with JSON diagnostics; and the `verification-boundary-v1.json` fixture plus documentation. These changes harden the Python bootstrap path and do not claim a native runtime, self-hosting, or a final bundle.
+
 - Added `kry autonomy-audit` and `docs/specs/autonomy-audit-v1.md`. The deterministic report exposes the normal Python bootstrap route, exact repository invocations, pending replacements, and a four-state matrix distinguishing `Kryndel-native`, `host capability nativa mínima`, `bootstrap Python`, and `no implementado`. This is an audit boundary, not a native or self-hosting claim.
 - Extended `stdlib/core/bytecode.kry` with explicit per-opcode operand-stack requirements/deltas and a bounded branch-aware `verify_execution` entry point. The source seam rejects reachable stack underflow, declared-call arity mismatches, and reachable fallthrough without `RETURN` while preserving structural schema fixtures; it remains executed by the Python bootstrap and does not replace the production verifier.
 - Added `tools/kry-kexe-check`, a no-Python host-capability checker for KEXE v1 framing, payload length, SHA-256, missing files, and symlink rejection. It is a bounded artifact checkpoint; it does not decode bytecode, execute modules, or form part of the final bundle.

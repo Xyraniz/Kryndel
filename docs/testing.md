@@ -8,10 +8,11 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The pre-change checkout contained **117 tests**. This checkpoint adds one
-regression, the KEXE checkpoint, the bundle-policy checkpoint, and the
-runtime-builtins checkpoint add one each, so the post-change suite contains
-**121 tests** and covers:
+The measured baseline checkout contained **121 tests**. This iteration adds
+seven regressions for strict JSON, typed bytecode decoding, module-table
+validation, executable stack flow, CLI preflight, KEXE file safety, and the
+verification-boundary fixture, so the post-change suite contains **128 tests**
+and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -130,6 +131,19 @@ textual Python invocation found in supported repository files, and a four-state
 matrix distinguishing `Kryndel-native`, `host capability nativa mínima`,
 `bootstrap Python`, and `no implementado`. The report is evidence for migration
 planning; it does not turn a source seam into a native component.
+
+The new verification-boundary tests use only standard-library facilities and
+temporary files. They reject duplicate JSON keys, non-finite numbers, extra
+record fields, invalid scalar types, missing function metadata, symlink paths,
+oversized KEXE payloads, checksum mutations, stack underflow, reachable
+fallthrough, incompatible control-flow joins, unknown callables, and internal
+call-arity mismatches. The Python CLI runs this preflight before VM execution;
+`KRY7001` through `KRY7008` are bootstrap diagnostics, not evidence of a native
+runtime. `tests/fixtures/verification-boundary-v1.json` freezes the diagnostic
+range and the `1024`-state, `4096`-value, and `16 MiB` limits. The new KEXE
+loader checks JSON only after framing and checksum validation, while the
+no-Python `tools/kry-kexe-check` utility intentionally remains limited to
+framing and checksum.
 
 The formatter CLI test exercises check/rewrite modes
 and empty-file handling without Python. The source formatter test also checks
