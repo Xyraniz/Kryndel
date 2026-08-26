@@ -1165,6 +1165,21 @@ class KryndelTests(unittest.TestCase):
         verified = verifier_runtime.execute("verify", [bytecode_module])
         self.assertEqual(verified.variant_name, "Ok")
 
+    def test_source_runtime_executes_compiler_subset_end_to_end(self) -> None:
+        root = Path(__file__).parents[1]
+        source = (root / "tests" / "fixtures" / "parser-input.kry").read_text(encoding="utf-8")
+        lexer = VM(compile_source((root / "stdlib" / "core" / "lexer.kry").read_text(encoding="utf-8"), "stdlib/core/lexer.kry"))
+        parser = VM(compile_source((root / "stdlib" / "core" / "parser.kry").read_text(encoding="utf-8"), "stdlib/core/parser.kry"))
+        compiler = VM(compile_source((root / "stdlib" / "core" / "compiler.kry").read_text(encoding="utf-8"), "stdlib/core/compiler.kry"))
+        runtime = VM(compile_source((root / "stdlib" / "core" / "runtime.kry").read_text(encoding="utf-8"), "stdlib/core/runtime.kry"))
+        tokens = lexer.execute("lex", [source]).field("tokens")[1]
+        items = parser.execute("parse", [tokens]).field("items")[1]
+        compiled = compiler.execute("compile", ["runtime-input.kry", items])
+        self.assertEqual(compiled.variant_name, "Ok")
+        executed = runtime.execute("run", [compiled.payloads[0]])
+        self.assertEqual(executed.variant_name, "Ok")
+        self.assertEqual(executed.payloads[0].fields[0][1], "Nil")
+
     def test_source_bytecode_verifier_matches_structural_contract(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "bytecode-native-verifier-v1.json").read_text(encoding="utf-8"))

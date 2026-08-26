@@ -122,3 +122,17 @@ implementation. Bytes behavior is covered by `tests/fixtures/bytes-v1.json` and
 its deterministic runtime tests. Assertion behavior is covered by
 `tests/fixtures/stdlib-testing-v1.json`; `assert` and `assert_eq` are visible
 bootstrap boundaries until a Kryndel-native test runner replaces them.
+
+## Source-level runtime milestone
+
+`stdlib/core/runtime.kry` executes the normalized bytecode subset emitted by
+`stdlib/core/compiler.kry`. It provides nominal `Value` and `RuntimeResult`
+records, a stack and local-binding model, constants, `LOAD`/`STORE`, struct
+construction and field access, builtin `print`/`println` calls, `POP`, and
+`RETURN`. It reports stable `KRY7001`–`KRY7005` failures for malformed constants,
+stack underflow, unknown callables, unsupported opcodes, and a missing entry.
+
+An end-to-end regression compiles the parser fixture and executes it through the
+source runtime. This module is still interpreted by the Python VM; it does not
+read KEXE bytes, implement the complete opcode set, provide host IO, or establish
+an independent Kryndel runtime.

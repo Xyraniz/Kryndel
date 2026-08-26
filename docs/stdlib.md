@@ -37,6 +37,7 @@ The core modules now expose these non-generic APIs directly in Kryndel:
 | `core/parser` | `parse(Array) -> ParseResult` over nominal lexer tokens | Source-level parser subset for structs, lets, literals, members, calls, and struct literals; full language AST and typed parser execution remain bootstrap-owned |
 | `core/checker` | `check(Array) -> CheckResult`, `module`, `resolve` | Source-level semantic and dependency checks for the parser subset; complete type identity, imports, visibility, and native module loading remain bootstrap-owned |
 | `core/compiler` | `compile(String, Array) -> CompileResult` | Source-level lowering for the migrated AST subset into verifiable bytecode records; full compiler, typed constants, linking, and serialization remain bootstrap-owned |
+| `core/runtime` | `run(ModuleRecord) -> RuntimeResult` | Source-level execution of the compiler subset with stack/locals and struct values; complete opcode coverage, KEXE input, host IO, and native runtime ownership remain bootstrap-owned |
 
 The source manifest module's lockfile writer accepts checksums as validated
 hexadecimal inputs; it does not pretend to calculate SHA-256. The fallback
