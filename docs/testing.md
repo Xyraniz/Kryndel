@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 101 tests in the current checkout and covers:
+The suite contains 102 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -53,7 +53,9 @@ end to end through `stdlib/core/runtime.kry` and checks the nominal completion
 value. The source backend test emits the x86_64 Linux empty-main seed twice,
 compares it byte for byte, and rejects unsupported targets. The CLI integration
 also builds and executes the raw ELF seed with only POSIX shell utilities and
-without an installed Python, assembler, or linker.
+without an installed Python, assembler, or linker. The source formatter test
+also checks trailing-horizontal-whitespace removal, blank-line trimming, final
+newline canonicalization, and idempotence.
 
 Temporary package registries are created under temporary directories. Tests
 never modify a user's package registry or install Python dependencies. The

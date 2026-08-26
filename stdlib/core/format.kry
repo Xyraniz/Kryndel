@@ -1,0 +1,69 @@
+// Conservative source formatter seam.
+// It intentionally does not rewrite token spacing or program structure.
+
+struct FormatResult {
+    text: String
+    changed: Bool
+}
+
+fn char_at(text: String, index: Int) -> String {
+    if index < 0 or index >= len(text) { return "" }
+    return text[index]
+}
+
+fn text_slice(value: String, start: Int, end: Int) -> String {
+    let mut result: String = ""
+    let mut index: Int = start
+    while index < end {
+        result = result + value[index]
+        index = index + 1
+    }
+    return result
+}
+
+fn array_prefix(values: Array, end: Int) -> Array {
+    let mut result: Array = []
+    let mut index: Int = 0
+    while index < end {
+        result = array_push(result, values[index])
+        index = index + 1
+    }
+    return result
+}
+
+fn trim_horizontal(line: String) -> String {
+    let mut end: Int = len(line)
+    while end > 0 and (char_at(line, end - 1) == " " or char_at(line, end - 1) == "\t") {
+        end = end - 1
+    }
+    return text_slice(line, 0, end)
+}
+
+fn join_lines(lines: Array, start: Int, end: Int) -> String {
+    if start >= end { return "" }
+    if end - start == 1 { return lines[start] }
+    let middle: Int = int(start + (end - start) / 2)
+    let left: String = join_lines(lines, start, middle)
+    let right: String = join_lines(lines, middle, end)
+    return left + "\n" + right
+}
+
+pub fn format(text: String) -> FormatResult {
+    let mut lines: Array = []
+    let mut current: String = ""
+    let mut index: Int = 0
+    while index <= len(text) {
+        if index == len(text) or text[index] == "\n" {
+            lines = array_push(lines, trim_horizontal(current))
+            current = ""
+        } else if text[index] != "\r" {
+            current = current + text[index]
+        }
+        index = index + 1
+    }
+    while len(lines) > 0 and lines[len(lines) - 1] == "" {
+        lines = array_prefix(lines, len(lines) - 1)
+    }
+    let formatted: String = join_lines(lines, 0, len(lines)) + "\n"
+    return FormatResult { text: formatted, changed: formatted != text }
+}
