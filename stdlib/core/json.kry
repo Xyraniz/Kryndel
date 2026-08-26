@@ -1,0 +1,249 @@
+// Source-level JSON parser for the normalized KEXE payload subset.
+// It returns nominal values and does not decode host mappings or modules yet.
+// The Python JSON parser remains the production oracle.
+
+struct JsonMember {
+    key: String
+    value: JsonValue
+}
+
+enum JsonValue {
+    Null
+    Bool(Bool)
+    Int(Int)
+    Float(Float)
+    String(String)
+    Array(Array)
+    Object(Array)
+}
+
+struct ParseState {
+    value: JsonValue
+    next: Int
+    error: String
+}
+
+struct StringState {
+    value: String
+    next: Int
+    error: String
+}
+
+enum JsonResult {
+    Ok(JsonValue)
+    Error(String)
+}
+
+fn empty_value() -> JsonValue {
+    return JsonValue.Null
+}
+
+fn parse_error(message: String) -> ParseState {
+    return ParseState { value: empty_value(), next: 0, error: "KRY6304 " + message }
+}
+
+fn json_error(message: String) -> JsonResult {
+    return JsonResult.Error("KRY6304 " + message)
+}
+
+fn is_space(character: String) -> Bool {
+    return character == " " or character == "\n" or character == "\r" or character == "\t"
+}
+
+fn skip_space(text: String, start: Int) -> Int {
+    let mut index: Int = start
+    while index < len(text) and is_space(text[index]) {
+        index = index + 1
+    }
+    return index
+}
+
+fn is_digit(character: String) -> Bool {
+    return character == "0" or character == "1" or character == "2" or character == "3" or character == "4" or character == "5" or character == "6" or character == "7" or character == "8" or character == "9"
+}
+
+fn is_number_character(character: String) -> Bool {
+    return is_digit(character) or character == "-" or character == "+" or character == "." or character == "e" or character == "E"
+}
+
+fn starts_with(text: String, start: Int, expected: String) -> Bool {
+    if start < 0 or start + len(expected) > len(text) { return false }
+    let mut index: Int = 0
+    while index < len(expected) {
+        if text[start + index] != expected[index] { return false }
+        index = index + 1
+    }
+    return true
+}
+
+fn string_error(message: String, index: Int) -> StringState {
+    return StringState { value: "", next: index, error: "KRY6304 " + message }
+}
+
+fn parse_string(text: String, start: Int) -> StringState {
+    if start >= len(text) or text[start] != "\"" { return string_error("JSON string must start with quote", start) }
+    let mut index: Int = start + 1
+    let mut result: String = ""
+    while index < len(text) {
+        let character: String = text[index]
+        if character == "\"" {
+            return StringState { value: result, next: index + 1, error: "" }
+        }
+        if character == "\\" {
+            index = index + 1
+            if index >= len(text) { return string_error("unterminated JSON escape", index) }
+            let escaped: String = text[index]
+            if escaped == "\"" { result = result + "\"" }
+            else if escaped == "\\" { result = result + "\\" }
+            else if escaped == "/" { result = result + "/" }
+            else if escaped == "b" { result = result + bytes_to_string(bytes([8])) }
+            else if escaped == "f" { result = result + bytes_to_string(bytes([12])) }
+            else if escaped == "n" { result = result + "\n" }
+            else if escaped == "r" { result = result + "\r" }
+            else if escaped == "t" { result = result + "\t" }
+            else if escaped == "u" { return string_error("unicode JSON escapes are outside source subset", index) }
+            else { return string_error("invalid JSON escape", index) }
+        } else {
+            result = result + character
+        }
+        index = index + 1
+    }
+    return string_error("unterminated JSON string", index)
+}
+
+fn valid_number(raw: String) -> Bool {
+    let mut index: Int = 0
+    if len(raw) == 0 { return false }
+    if raw[index] == "-" {
+        index = index + 1
+        if index >= len(raw) { return false }
+    }
+    if raw[index] == "0" {
+        index = index + 1
+        if index < len(raw) and is_digit(raw[index]) { return false }
+    } else {
+        if !is_digit(raw[index]) { return false }
+        while index < len(raw) and is_digit(raw[index]) { index = index + 1 }
+    }
+    if index < len(raw) and raw[index] == "." {
+        index = index + 1
+        let decimal_start: Int = index
+        while index < len(raw) and is_digit(raw[index]) { index = index + 1 }
+        if decimal_start == index { return false }
+    }
+    if index < len(raw) and (raw[index] == "e" or raw[index] == "E") {
+        index = index + 1
+        if index < len(raw) and (raw[index] == "+" or raw[index] == "-") { index = index + 1 }
+        let exponent_start: Int = index
+        while index < len(raw) and is_digit(raw[index]) { index = index + 1 }
+        if exponent_start == index { return false }
+    }
+    return index == len(raw)
+}
+
+fn parse_number(text: String, start: Int) -> ParseState {
+    let mut index: Int = start
+    while index < len(text) and is_number_character(text[index]) {
+        index = index + 1
+    }
+    if index == start { return parse_error("JSON number is empty") }
+    let raw: String = text_slice(text, start, index)
+    if !valid_number(raw) { return parse_error("invalid JSON number") }
+    let mut decimal: Bool = false
+    let mut cursor: Int = 0
+    while cursor < len(raw) {
+        if raw[cursor] == "." or raw[cursor] == "e" or raw[cursor] == "E" { decimal = true }
+        cursor = cursor + 1
+    }
+    if decimal {
+        return ParseState { value: JsonValue.Float(float(raw)), next: index, error: "" }
+    }
+    return ParseState { value: JsonValue.Int(int(raw)), next: index, error: "" }
+}
+
+fn text_slice(text: String, start: Int, end: Int) -> String {
+    let mut result: String = ""
+    let mut index: Int = start
+    while index < end {
+        result = result + text[index]
+        index = index + 1
+    }
+    return result
+}
+
+fn parse_array(text: String, start: Int) -> ParseState {
+    let mut index: Int = skip_space(text, start + 1)
+    let mut values: Array = []
+    if index < len(text) and text[index] == "]" {
+        return ParseState { value: JsonValue.Array(values), next: index + 1, error: "" }
+    }
+    while index < len(text) {
+        let parsed: ParseState = parse_value(text, index)
+        if parsed.error != "" { return parsed }
+        values = array_push(values, parsed.value)
+        index = skip_space(text, parsed.next)
+        if index < len(text) and text[index] == "]" {
+            return ParseState { value: JsonValue.Array(values), next: index + 1, error: "" }
+        }
+        if index >= len(text) or text[index] != "," { return parse_error("expected comma or closing array bracket") }
+        index = skip_space(text, index + 1)
+    }
+    return parse_error("unterminated JSON array")
+}
+
+fn parse_object(text: String, start: Int) -> ParseState {
+    let mut index: Int = skip_space(text, start + 1)
+    let mut members: Array = []
+    if index < len(text) and text[index] == "}" {
+        return ParseState { value: JsonValue.Object(members), next: index + 1, error: "" }
+    }
+    while index < len(text) {
+        let key: StringState = parse_string(text, index)
+        if key.error != "" { return parse_error(key.error) }
+        index = skip_space(text, key.next)
+        if index >= len(text) or text[index] != ":" { return parse_error("expected colon after JSON object key") }
+        index = skip_space(text, index + 1)
+        let parsed: ParseState = parse_value(text, index)
+        if parsed.error != "" { return parsed }
+        members = array_push(members, JsonMember { key: key.value, value: parsed.value })
+        index = skip_space(text, parsed.next)
+        if index < len(text) and text[index] == "}" {
+            return ParseState { value: JsonValue.Object(members), next: index + 1, error: "" }
+        }
+        if index >= len(text) or text[index] != "," { return parse_error("expected comma or closing object brace") }
+        index = skip_space(text, index + 1)
+    }
+    return parse_error("unterminated JSON object")
+}
+
+fn parse_value(text: String, start: Int) -> ParseState {
+    let index: Int = skip_space(text, start)
+    if index >= len(text) { return parse_error("JSON value is missing") }
+    let character: String = text[index]
+    if character == "n" and starts_with(text, index, "null") {
+        return ParseState { value: JsonValue.Null, next: index + 4, error: "" }
+    }
+    if character == "t" and starts_with(text, index, "true") {
+        return ParseState { value: JsonValue.Bool(true), next: index + 4, error: "" }
+    }
+    if character == "f" and starts_with(text, index, "false") {
+        return ParseState { value: JsonValue.Bool(false), next: index + 5, error: "" }
+    }
+    if character == "\"" {
+        let parsed_string: StringState = parse_string(text, index)
+        if parsed_string.error != "" { return parse_error(parsed_string.error) }
+        return ParseState { value: JsonValue.String(parsed_string.value), next: parsed_string.next, error: "" }
+    }
+    if character == "[" { return parse_array(text, index) }
+    if character == "{" { return parse_object(text, index) }
+    if character == "-" or is_digit(character) { return parse_number(text, index) }
+    return parse_error("invalid JSON value")
+}
+
+pub fn parse(text: String) -> JsonResult {
+    let parsed: ParseState = parse_value(text, 0)
+    if parsed.error != "" { return JsonResult.Error(parsed.error) }
+    let end: Int = skip_space(text, parsed.next)
+    if end != len(text) { return json_error("trailing JSON input") }
+    return JsonResult.Ok(parsed.value)
+}

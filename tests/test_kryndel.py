@@ -1058,6 +1058,34 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(invalid_result.variant_name, "Error")
         self.assertIn("KRY5009", invalid_result.payloads[0])
 
+    def test_source_json_parser_matches_value_contract(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "json-source-v1.json").read_text(encoding="utf-8"))
+        source = (root / "stdlib" / "core" / "json.kry").read_text(encoding="utf-8")
+        runtime = VM(compile_source(source, "stdlib/core/json.kry"))
+        parsed = runtime.execute("parse", [fixture["valid"]["source"]])
+        self.assertEqual(parsed.variant_name, "Ok")
+        value = parsed.payloads[0]
+        self.assertEqual(value.variant_name, "Object")
+        members = {member.field("key")[1]: member.field("value")[1] for member in value.payloads[0].items}
+        self.assertEqual(members["name"].variant_name, "String")
+        self.assertEqual(members["name"].payloads[0], "kryndel")
+        self.assertEqual(members["enabled"].variant_name, "Bool")
+        self.assertTrue(members["enabled"].payloads[0])
+        self.assertEqual(members["count"].variant_name, "Int")
+        self.assertEqual(members["count"].payloads[0], 3)
+        self.assertEqual(members["ratio"].variant_name, "Float")
+        self.assertAlmostEqual(members["ratio"].payloads[0], 1.5)
+        self.assertEqual(members["nothing"].variant_name, "Null")
+        items = members["items"]
+        self.assertEqual(items.variant_name, "Array")
+        self.assertEqual([item.variant_name for item in items.payloads[0].items], ["Int", "Bool", "String"])
+        self.assertEqual(items.payloads[0].items[2].payloads[0], "x\n y")
+        for malformed in fixture["invalid"].values():
+            invalid = runtime.execute("parse", [malformed])
+            self.assertEqual(invalid.variant_name, "Error")
+            self.assertIn("KRY6304", invalid.payloads[0])
+
     def test_source_sha256_matches_known_vectors(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "sha256-v1.json").read_text(encoding="utf-8"))
