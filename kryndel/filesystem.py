@@ -26,6 +26,8 @@ def normalize_relative_path(value: str | PurePosixPath) -> PurePosixPath:
         raise filesystem_error("filesystem path must be relative", "KRY6303", raw)
     if "\\" in raw:
         raise filesystem_error("filesystem path must use portable separators", "KRY6304", raw)
+    if "//" in raw:
+        raise filesystem_error("filesystem path contains an invalid component", "KRY6304", raw)
     parts = [part for part in raw.split("/") if part not in {"", "."}]
     if any(part == ".." for part in parts):
         raise filesystem_error("filesystem path escapes project root", "KRY6303", raw)

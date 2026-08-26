@@ -16,6 +16,7 @@ from .source import SourceFile
 from .packages import Lockfile, add_dependency, init_project, install, list_packages, read_manifest, remove_dependency, validate_imports
 from .version import __codename__, __version__
 from .tooling import abi_description, check_reproducible, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, document_project, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
+from .filesystem import RootedFileSystem
 from .vm import RuntimeKryndelError, VM
 
 
@@ -110,6 +111,10 @@ def _source_path(value: Path | None) -> tuple[Path, Path | None]:
     if not source.is_file():
         raise OSError(f"source file not found: {source}")
     return source, root
+
+
+def _execution_filesystem(source: Path, root: Path | None) -> RootedFileSystem:
+    return RootedFileSystem(root if root is not None else source.parent)
 
 
 def _compile_project(source: Path, root: Path | None, locked: bool):
@@ -327,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command in {"check", "run", "dump", "build"}:
             if arguments.command == "run" and arguments.source is not None and arguments.source.suffix == ".kexe":
-                VM(read_artifact(arguments.source)).run()
+                VM(read_artifact(arguments.source), filesystem=RootedFileSystem(arguments.source.parent)).run()
                 return 0
             source, root = _source_path(arguments.source)
             module = _compile_project(source, root, arguments.locked)
@@ -335,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"checked {source}")
                 return 0
             if arguments.command == "run":
-                VM(module).run()
+                VM(module, filesystem=_execution_filesystem(source, root)).run()
                 return 0
             if arguments.command == "dump":
                 print(module.dumps(), end="")

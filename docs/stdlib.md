@@ -8,11 +8,11 @@ contracts below are compiled and executed as ordinary Kryndel modules.
 | --- | --- | --- |
 | Core values | Primitive values, nominal structs, enums, `ArrayValue`, `TupleValue`, and `BytesValue` are represented by the VM | `stdlib/core/option.kry` and `stdlib/core/result.kry` define the current non-generic Option/Result contract, including source-level constructors, predicates, and total fallback accessors |
 | Conversion | `str`, `int`, `float`, `bytes`, `string_to_bytes`, and `bytes_to_string` are VM boundaries with visible signatures | Move signatures and semantics into `stdlib/core` and `stdlib/string`; UTF-8 wrappers now live in `stdlib/string/utf8.kry` |
-| Collections | `len`, `MAKE_ARRAY`, `MAKE_TUPLE`, `INDEX`, and `Bytes + Bytes` are checked VM boundaries | `stdlib/collections/sequences.kry` and `stdlib/collections/bytes.kry` expose deterministic collection helpers |
+| Collections | `len`, `MAKE_ARRAY`, `MAKE_TUPLE`, `INDEX`, `array_push`, and `Bytes + Bytes` are checked VM boundaries | `stdlib/collections/sequences.kry` exposes immutable `append`; `stdlib/collections/bytes.kry` exposes deterministic Bytes helpers |
 | Testing | `assert(Bool)` and `assert_eq(Any, Any)` are visible VM testing primitives | `stdlib/testing/testing.kry` provides typed wrappers; `kry test --format json` emits structured results |
 | Math | `abs` and `sqrt` are VM builtins | Provide checked Kryndel-visible math APIs |
 | IO and UI | `print`, `println`, and textual UI helpers cross the host boundary | Keep only controlled IO primitives in the VM and express policies in Kryndel |
-| Time/process/filesystem | `clock` and future host bridges remain outside the language | Freeze serializable errors and portable APIs before moving implementations |
+| Time/process/filesystem | `clock` and controlled `fs.*` bridges cross the temporary host boundary | `stdlib/core/filesystem.kry` exposes `read_bytes`, `write_bytes`, `list_dir`, and `stat`; replace the VM adapter after the native runtime can provide the same capability |
 
 The source tree currently contains `stdlib/core`, `stdlib/string`,
 `stdlib/collections`, and `stdlib/testing`; each existing file has executable
@@ -27,13 +27,15 @@ The core modules now expose these non-generic APIs directly in Kryndel:
 | `string/utf8` | `encode`, `decode`, `length`, `octet_length`, `append`, `octet` | Source wrappers over the visible UTF-8/Bytes boundary; strict decode reports `KRY6201` |
 | `collections/bytes` | `from_array`, `length`, `octet`, `join` | Source wrappers over `bytes(Array)`, `len`, `INDEX`, and `Bytes + Bytes` |
 | `testing` | `assert_true`, `assert_equal_int`, `assert_equal_string` | Source wrappers over visible assertion primitives; failures use `KRY6401` and `KRY6402` |
+| `core/filesystem` | `read_bytes`, `read_text`, `write_bytes`, `list_dir`, `stat` | Source wrappers over explicit `fs.*` capability; metadata uses `FileMetadata` and errors use `KRY6301`–`KRY6304` |
+| `core/manifest` | `parse(String) -> ManifestResult`, `read(String) -> ManifestResult` | Strict source parser over `Bytes`/filesystem; semantic error payloads are nominal `ManifestResult`, while `packages.py` remains the differential oracle |
 
 The fallback accessors are total and therefore do not yet define a value-absent
 runtime error. A partial `unwrap` API will be added only after a serializable
 program-error contract is specified. The remaining directories will be added
 only with real APIs and host-boundary tests, rather than empty declarations. The
 Bytes wrappers are tested by `tests/test_kryndel.py` and the deterministic
-`tests/fixtures/bytes-v1.json` contract.
+`tests/fixtures/bytes-v1.json` contract. The filesystem wrapper is covered by `tests/fixtures/filesystem-v1.json` and by execution tests over both the in-memory and rooted adapters. Immutable collection append is covered by `tests/fixtures/collections-v1.json` and its runtime tests.
 
 Kryndel is not independent of Python yet. A future native runtime must replace
 the bootstrap implementation while preserving the documented bytecode, module,

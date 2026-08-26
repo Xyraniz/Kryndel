@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added the source-level controlled filesystem API: `fs.read_bytes`, `fs.read_text`, `fs.write_bytes`, `fs.list_dir`, and `fs.stat`, with nominal `FileMetadata`, explicit VM capability roots, deterministic VFS/rooted adapters, `filesystem-v1.json`, executable `stdlib/core/filesystem.kry` wrappers, and security/error tests. This remains a Python bootstrap boundary until a native runtime replaces the adapter.
+- Added the first toolchain-oriented immutable collection primitive, `array_push(Array, Any) -> Array`, with the `stdlib/collections/sequences.kry` wrapper, deterministic fixture, stable `KRY6203` error, and regression tests. The operation still executes in the bootstrap VM.
+- Added `stdlib/core/manifest.kry`, a real strict-subset manifest parser over `fs.read_text`, with nominal `Dependency`, `Manifest`, and `ManifestResult` values and valid/invalid execution coverage. The Python manifest parser remains the differential oracle until UTF-8 diagnostics and all version-requirement edge cases match byte for byte.
 - Added the offline `kry core-report` contract audit. It canonicalizes and validates the value/runtime, Bytes, testing, and host-boundary v1 fixtures and reports stable byte lengths and SHA-256 checksums without claiming self-hosting. The contract is documented in `docs/specs/core-v1.md`.
 - Added `VirtualFileSystem` and `RootedFileSystem` under the host-boundary v1 contract. Relative-path normalization, deterministic listings, byte IO, missing-path diagnostics, traversal rejection, and symlink rejection are executable and tested without touching a user home or network.
 - Added deterministic nominal wire records for `Token`, AST nodes, and `Span`, including finite-value checks, source-order preservation, and the `records-v1.json` fixture used by differential tests. The bootstrap explicitly rejects arbitrary host objects at this boundary.
@@ -12,7 +15,7 @@
 - Added `kry lex` with deterministic token/diagnostic snapshots and `--fixture` comparison, plus Unicode-aware `lexer-input.kry`/`lexer-v1.json` evidence. The command remains a bootstrap oracle and does not claim a native lexer.
 - Added `kry parse` with deterministic nominal AST records, parser/lexer diagnostics, and `--fixture` comparison. `parser-input.kry` and `parser-v1.json` freeze a valid struct/let/call program without claiming a Kryndel-native parser.
 - Added `kry graph` and `kry compiler-report` snapshots for module IDs, relative paths, public interfaces, and bytecode v1. `graph-v1.json` and `compiler-v1.json` demonstrate path-independent, repeatable bootstrap outputs without claiming a Kryndel-native checker/compiler.
-- Updated `docs/roadmap-status.md` and `docs/host-dependency-inventory.md` to record the eight verified bootstrap seams and retain explicit Python ownership and self-hosting limitations.
+- Updated `docs/roadmap-status.md` and `docs/host-dependency-inventory.md` to record the source-level filesystem API and retain explicit Python ownership and self-hosting limitations.
 
 - Versioned value/runtime v1 contract for strings, bytes, sequences, core
   enums, Void/nil, frames, calls, serializable errors, and the temporary host

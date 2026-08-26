@@ -15,6 +15,7 @@ from . import ast as kry_ast
 from .bytecode import BYTECODE_OPCODES, BYTECODE_VERSION
 from .compiler import compile_project, compile_source
 from .diagnostics import DiagnosticError
+from .filesystem import RootedFileSystem
 from .modules import ModuleGraph
 from .packages import read_manifest
 from .parser import parse
@@ -101,7 +102,11 @@ def run_kryndel_tests(
         try:
             text = path.read_text(encoding="utf-8")
             module = compile_project(project, text, path) if has_manifest else compile_source(text, str(path))
-            VM(module, output=lambda _text: None).execute(name, [])
+            VM(
+                module,
+                output=lambda _text: None,
+                filesystem=RootedFileSystem(project if has_manifest else path.parent),
+            ).execute(name, [])
         except (DiagnosticError, RuntimeKryndelError, OSError, ValueError) as error:
             result = KryndelTestResult(path, name, "failed", str(error))
             results.append(result)
@@ -412,6 +417,12 @@ _HOST_ERROR_CODES = {
     "abs": "KRY6202",
     "sqrt": "KRY6202",
     "clock": "KRY6301",
+    "fs.read_bytes": "KRY6301",
+    "fs.read_text": "KRY6301",
+    "fs.write_bytes": "KRY6301",
+    "fs.list_dir": "KRY6301",
+    "fs.stat": "KRY6301",
+    "array_push": "KRY6203",
     "ui.window": "KRY6301",
     "ui.label": "KRY6301",
     "ui.button": "KRY6301",
@@ -430,6 +441,12 @@ _HOST_FIXTURES = {
     "assert": "tests/fixtures/stdlib-testing-v1.json",
     "assert_eq": "tests/fixtures/stdlib-testing-v1.json",
     "len": "tests/fixtures/value-runtime-v1.json",
+    "fs.read_bytes": "tests/fixtures/filesystem-v1.json",
+    "fs.read_text": "tests/fixtures/filesystem-v1.json",
+    "fs.write_bytes": "tests/fixtures/filesystem-v1.json",
+    "fs.list_dir": "tests/fixtures/filesystem-v1.json",
+    "fs.stat": "tests/fixtures/filesystem-v1.json",
+    "array_push": "tests/fixtures/collections-v1.json",
     "ui.window": "examples/ui_tree.kry",
     "ui.label": "examples/ui_tree.kry",
     "ui.button": "examples/ui_tree.kry",
@@ -449,6 +466,12 @@ _HOST_REPLACEMENTS = {
     "assert": "Kryndel testing assertion primitive",
     "assert_eq": "Kryndel testing equality assertion primitive",
     "clock": "controlled monotonic-clock capability",
+    "fs.read_bytes": "Kryndel-native filesystem API over explicit capability",
+    "fs.read_text": "Kryndel-native UTF-8 filesystem API over explicit capability",
+    "fs.write_bytes": "Kryndel-native filesystem API over explicit capability",
+    "fs.list_dir": "Kryndel-native filesystem metadata values",
+    "fs.stat": "Kryndel-native filesystem metadata values",
+    "array_push": "Kryndel-native immutable Array value operation",
 }
 
 
@@ -464,7 +487,7 @@ def _builtin_names_in_vm() -> set[str]:
         for operator, comparator in zip(node.ops, node.comparators):
             if isinstance(operator, python_ast.Eq) and isinstance(comparator, python_ast.Constant) and isinstance(comparator.value, str):
                 names.add(comparator.value)
-            elif isinstance(operator, python_ast.In) and isinstance(comparator, (python_ast.Tuple, python_ast.List)):
+            elif isinstance(operator, python_ast.In) and isinstance(comparator, (python_ast.Tuple, python_ast.List, python_ast.Set)):
                 names.update(
                     item.value
                     for item in comparator.elts

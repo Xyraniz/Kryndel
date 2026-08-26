@@ -25,6 +25,7 @@ constant kind.
 | `Bool` | `true` or `false` | Boolean | no |
 | `String` | valid UTF-8 scalar sequence | codepoint sequence | no |
 | `Bytes` | nominal `Bytes(items: ordered octets)` | byte sequence | no |
+| `FileMetadata` | nominal record `(path: String, kind: String, size: Int)` | fieldwise | no |
 | `Array` | nominal `Array(items: ordered values)` | elementwise; homogeneous | no |
 | `Tuple` | nominal `Tuple(items: ordered values)` | elementwise; fixed width | no |
 | `Option` | nominal enum `None` or `Some(Int)` | nominal and payload-structural | no |
@@ -110,7 +111,9 @@ The temporary host boundary is limited to memory allocation/storage, output and
 input IO, monotonic clock, controlled filesystem access, process exit status,
 and reading the bytecode container. Each operation must be reached through a
 Kryndel-visible signature and return either a nominal value or a serializable
-error. No host dictionary is a semantic Kryndel value.
+error. No host dictionary is a semantic Kryndel value. Filesystem metadata is
+returned as the nominal `FileMetadata` record defined above, never as a host
+mapping.
 
 The dependency inventory in `docs/host-dependency-inventory.md` records the
 current implementation path and replacement plan. The bootstrap remains the

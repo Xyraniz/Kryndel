@@ -65,8 +65,12 @@ UNKNOWN = Type("Unknown")
 ARRAY = Type("Array")
 TUPLE = Type("Tuple")
 BYTES = Type("Bytes")
+FILE_METADATA = StructType(
+    "FileMetadata",
+    (("path", STRING), ("kind", STRING), ("size", INT)),
+)
 
-PRIMITIVE_TYPES = {t.name: t for t in (INT, FLOAT, BOOL, STRING, VOID, UI, ARRAY, TUPLE, BYTES)}
+PRIMITIVE_TYPES = {t.name: t for t in (INT, FLOAT, BOOL, STRING, VOID, UI, ARRAY, TUPLE, BYTES, FILE_METADATA, ANY)}
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,12 @@ BUILTIN_FUNCTIONS: dict[str, FunctionType] = {
     "abs": FunctionType((INT,), INT),
     "sqrt": FunctionType((FLOAT,), FLOAT),
     "clock": FunctionType((), FLOAT),
+    "fs.read_bytes": FunctionType((STRING,), BYTES),
+    "fs.read_text": FunctionType((STRING,), STRING),
+    "fs.write_bytes": FunctionType((STRING, BYTES), VOID),
+    "fs.list_dir": FunctionType((STRING,), ArrayType("Array", FILE_METADATA)),
+    "fs.stat": FunctionType((STRING,), FILE_METADATA),
+    "array_push": FunctionType((ARRAY, ANY), ARRAY),
     "ui.window": FunctionType((STRING, INT, INT), UI),
     "ui.label": FunctionType((UI, STRING), UI),
     "ui.button": FunctionType((UI, STRING), UI),

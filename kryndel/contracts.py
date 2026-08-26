@@ -14,6 +14,8 @@ _REQUIRED_FIXTURES = (
     "tests/fixtures/bytes-v1.json",
     "tests/fixtures/stdlib-testing-v1.json",
     "tests/fixtures/host-boundary-v1.json",
+    "tests/fixtures/filesystem-v1.json",
+    "tests/fixtures/collections-v1.json",
 )
 _REQUIRED_RUNTIME_ERRORS = {
     "KRY6102",
@@ -82,6 +84,36 @@ def _validate_fixture_shape(relative: str, value: Any) -> None:
             raise ValueError("host-boundary fixture has an unexpected contract")
         if not isinstance(value.get("intrinsics"), list) or not isinstance(value.get("layers"), dict):
             raise ValueError("host-boundary fixture must contain intrinsics and layers")
+    elif relative.endswith("filesystem-v1.json"):
+        if value.get("contract") != "kryndel-filesystem":
+            raise ValueError("filesystem fixture has an unexpected contract")
+        if not isinstance(value.get("api"), dict) or set(value["api"]) != {
+            "fs.list_dir",
+            "fs.read_bytes",
+            "fs.read_text",
+            "fs.stat",
+            "fs.write_bytes",
+        }:
+            raise ValueError("filesystem fixture must declare all filesystem intrinsics")
+        if not isinstance(value.get("metadata"), dict) or value["metadata"].get("type") != "FileMetadata":
+            raise ValueError("filesystem fixture must declare FileMetadata")
+        fields = value["metadata"].get("fields")
+        if fields != [
+            {"name": "path", "type": "String"},
+            {"name": "kind", "type": "String"},
+            {"name": "size", "type": "Int"},
+        ]:
+            raise ValueError("filesystem metadata fields are not canonical")
+    elif relative.endswith("collections-v1.json"):
+        if value.get("contract") != "kryndel-collections":
+            raise ValueError("collections fixture has an unexpected contract")
+        if value.get("api") != {"array_push": "array_push(Array, Any) -> Array"}:
+            raise ValueError("collections fixture must declare array_push")
+        if not isinstance(value.get("operations"), dict) or set(value["operations"]) != {
+            "append_int",
+            "append_string",
+        }:
+            raise ValueError("collections fixture must contain canonical append operations")
 
 
 def core_contract_report(root: str | Path) -> dict[str, Any]:
