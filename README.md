@@ -48,13 +48,19 @@ future toolchain. `stdlib/core/lexer.kry` provides a source-level lexer seam for
 
 `stdlib/core/parser.kry` consumes those tokens for a tested AST subset covering
 struct declarations, typed lets, literals, members, calls, and struct literals;
-its `Literal` nodes preserve the tagged lexer payload.
+its `Literal` nodes preserve the tagged lexer payload. `stdlib/core/value.kry`
+freezes a nominal `Value` discriminant order and records for scalar, collection,
+struct, enum, toolchain, diagnostic, and filesystem values; its constructors and
+`tests/fixtures/value-layout-v1.json` are a source compatibility seam under the
+bootstrap VM, not a native runtime claim.
 `stdlib/core/checker.kry` validates that subset, consumes tagged literal payloads
 for Int/Float/Bool/String/Void assignments, and resolves normalized module
 graphs with deterministic missing, duplicate, and cycle diagnostics.
-`stdlib/core/compiler.kry` lowers the same subset into bytecode records accepted by the source verifier, preserving typed constant categories. `stdlib/core/runtime.kry` executes the resulting subset end to end with stack, locals, struct values, builtin print calls, and typed Int/Float/Bool/String/Nil constant decoding.
-`stdlib/core/backend.kry` also lowers one JSON-decoded `PUSH_CONST`/`RETURN` program and one fixed conditional-jump seed to bounded x86_64 Linux exit assembly. `tools/kry-seed` emits and runs a raw x86_64 Linux ELF empty-main seed with a validated exit status in 0..255, without Python, `as`, or `ld`.
-`tools/kry-seed-check` verifies that seed only under an isolated `PATH`/`HOME`, including a spaced output directory and deterministic bytes; it is not a toolchain bundle. `stdlib/core/artifact.kry` now reads KEXE v1 framing bytes, validates magic and payload length, and canonicalizes checksum text for the source verifier. `stdlib/core/sha256.kry` implements and verifies SHA-256 over `Bytes` with known vectors; a source-level regression validates an extracted KEXE payload and rejects tampering. `stdlib/core/json.kry` parses the tested JSON value grammar into nominal values and decodes a bounded v1 bytecode schema subset from strings, payload bytes, or controlled `fs.read_text` input that passes through the source verifier. A regression now composes the real KEXE framing, source SHA-256, source schema decoder, verifier, and source runtime; full schema parity and production artifact/package paths remain under the Python bootstrap.
+`stdlib/core/compiler.kry` lowers the same subset into bytecode records accepted by the source verifier, preserving typed constant categories. `stdlib/core/runtime.kry` executes the verified runtime subset end to end with stack frames, locals, typed Int/Float/Bool/String/Nil values, structs, enums, arrays, tuples, indexing, arithmetic, comparisons, jumps, internal calls, builtin output, and serializable runtime errors; `runtime-source-v1.json` freezes representative programs. The source module remains interpreted by the Python bootstrap.
+`stdlib/core/backend.kry` also lowers one JSON-decoded `PUSH_CONST`/`RETURN` program and one fixed conditional-jump seed to bounded x86_64 Linux exit assembly, and `emit_elf_exit` returns the exact 132-byte ELF64 seed as `Bytes` with the exit status patched directly. A regression executes those bytes from a path with spaces. `tools/kry-seed` emits and runs a raw x86_64 Linux ELF empty-main seed with a validated exit status in 0..255, without Python, `as`, or `ld`; the direct source emitter is still a fixed seed template, not a general backend.
+`tools/kry-seed-check` verifies that seed only under an isolated `PATH`/`HOME`, including a spaced output directory and deterministic bytes; it is not a toolchain bundle. `tools/kry-native-run` and `tools/kry-native-run-check` add a narrower KRYSEED1 native-runtime checkpoint: a fixed x86_64 ELF reads a bounded framed module, writes its payload to stdout, returns the first payload byte, and rejects malformed or missing files without Python or a dynamic loader. The launcher still materializes that fixed image with POSIX shell utilities, so this is not the final bundle or normal CLI.
+
+`stdlib/core/artifact.kry` now reads and rebuilds KEXE v1 framing bytes, validates magic and payload length, and canonicalizes checksum text for the source verifier. `stdlib/core/sha256.kry` implements and verifies SHA-256 over `Bytes` with known vectors; a source-level regression validates an extracted KEXE payload and rejects tampering. `stdlib/core/json.kry` parses the tested JSON value grammar into nominal values, decodes every v1 instruction metadata shape from strings, payload bytes, or controlled `fs.read_text` input, and emits canonical JSON with typed scalar categories. A regression now composes the real KEXE framing, source SHA-256, source schema decoder, verifier, and source runtime; full native compiler, artifact/package ownership, and final bundle paths remain under the Python bootstrap.
 `stdlib/core/format.kry` provides the conservative trailing-whitespace and final-newline formatter contract in source, and `tools/kry-format` exposes it as a no-Python check/rewrite CLI.
 These source modules execute through the Python bootstrap;
 the compiler and VM remain Python implementations.
@@ -224,8 +230,9 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The test suite is the language contract. It covers existing structs and unit
-enums, payload enums and match, diagnostics, malformed bytecode/runtime,
+The test suite is the language contract. It covers the nominal value-layout
+fixture and source constructors in addition to existing structs and unit enums,
+payload enums and match, diagnostics, malformed bytecode/runtime,
 manifests, lockfiles, semver, local resolution, checksums, imports, CLI, KEXE,
 data-core slices/builders/records, source manifest ranges, lockfile JSON,
 normalized bytecode verification, determinism, and security boundaries. The

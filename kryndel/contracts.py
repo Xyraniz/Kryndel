@@ -11,6 +11,7 @@ CORE_VERSION = 1
 
 _REQUIRED_FIXTURES = (
     "tests/fixtures/value-runtime-v1.json",
+    "tests/fixtures/value-layout-v1.json",
     "tests/fixtures/bytes-v1.json",
     "tests/fixtures/stdlib-testing-v1.json",
     "tests/fixtures/host-boundary-v1.json",
@@ -63,7 +64,55 @@ def _validate_fixture_shape(relative: str, value: Any) -> None:
     contract = value.get("contract")
     if not isinstance(contract, str) or not contract:
         raise ValueError(f"fixture {relative} has no contract name")
-    if relative.endswith("value-runtime-v1.json"):
+    if relative.endswith("value-layout-v1.json"):
+        if value.get("contract") != "kryndel-value-layout":
+            raise ValueError("value-layout fixture has an unexpected contract")
+        records = value.get("records")
+        variants = value.get("variants")
+        if not isinstance(records, list) or not isinstance(variants, list):
+            raise ValueError("value-layout fixture must contain records and variants")
+        expected_records = {
+            "SpanValue": ["start", "end", "line", "column"],
+            "IntValue": ["value"],
+            "FloatValue": ["value"],
+            "BoolValue": ["value"],
+            "StringValue": ["value"],
+            "BytesValue": ["items"],
+            "ArrayValue": ["items"],
+            "TupleValue": ["items"],
+            "StructValue": ["type_name", "fields"],
+            "EnumValue": ["type_name", "variant_name", "payloads"],
+            "InstructionValue": ["op", "line", "text", "text2", "number", "names"],
+            "FunctionValue": ["name", "arity", "parameters", "constants", "instructions"],
+            "ModuleValue": ["name", "entry", "version", "functions"],
+            "DiagnosticValue": ["severity", "code", "message", "span", "notes", "help", "suggestion"],
+            "FileMetadataValue": ["path", "kind", "size"],
+        }
+        actual_records = {item.get("name"): item.get("fields") for item in records if isinstance(item, dict)}
+        if actual_records != expected_records or len(records) != len(expected_records):
+            raise ValueError("value-layout record fields are not canonical")
+        expected_variants = [
+            {"name": "Nil", "payload": None},
+            {"name": "Int", "payload": "IntValue"},
+            {"name": "Float", "payload": "FloatValue"},
+            {"name": "Bool", "payload": "BoolValue"},
+            {"name": "String", "payload": "StringValue"},
+            {"name": "Bytes", "payload": "BytesValue"},
+            {"name": "Array", "payload": "ArrayValue"},
+            {"name": "Tuple", "payload": "TupleValue"},
+            {"name": "Struct", "payload": "StructValue"},
+            {"name": "Enum", "payload": "EnumValue"},
+            {"name": "Option", "payload": "OptionValue"},
+            {"name": "Result", "payload": "ResultValue"},
+            {"name": "Function", "payload": "FunctionValue"},
+            {"name": "Module", "payload": "ModuleValue"},
+            {"name": "Instruction", "payload": "InstructionValue"},
+            {"name": "Diagnostic", "payload": "DiagnosticValue"},
+            {"name": "FileMetadata", "payload": "FileMetadataValue"},
+        ]
+        if variants != expected_variants:
+            raise ValueError("value-layout variants are not canonical")
+    elif relative.endswith("value-runtime-v1.json"):
         invalid = value.get("invalid")
         valid = value.get("valid")
         if not isinstance(invalid, list) or not isinstance(valid, list):

@@ -1,0 +1,38 @@
+{
+  "contract": "kryndel-source-runtime",
+  "programs": {
+    "arithmetic": {
+      "expected": 5,
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[2,3],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":\"+\",\"line\":1,\"op\":\"BINARY\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"arithmetic.kry\",\"version\":1}"
+    },
+    "calls_output": {
+      "expected_output": "5\n",
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"add\":{\"arity\":2,\"constants\":[],\"instructions\":[{\"arg\":\"left\",\"line\":1,\"op\":\"LOAD\"},{\"arg\":\"right\",\"line\":1,\"op\":\"LOAD\"},{\"arg\":\"+\",\"line\":1,\"op\":\"BINARY\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"add\",\"parameters\":[\"left\",\"right\"]},\"main\":{\"arity\":0,\"constants\":[2,3],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":[\"add\",2],\"line\":1,\"op\":\"CALL\"},{\"arg\":[\"println\",1],\"line\":1,\"op\":\"CALL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"calls.kry\",\"version\":1}"
+    },
+    "control_flow": {
+      "expected": 1,
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[2,1],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":\"n\",\"line\":1,\"op\":\"STORE_RESULT\"},{\"arg\":null,\"line\":1,\"op\":\"POP\"},{\"arg\":\"n\",\"line\":1,\"op\":\"LOAD\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":\">\",\"line\":1,\"op\":\"BINARY\"},{\"arg\":13,\"line\":1,\"op\":\"JUMP_IF_FALSE\"},{\"arg\":\"n\",\"line\":1,\"op\":\"LOAD\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":\"-\",\"line\":1,\"op\":\"BINARY\"},{\"arg\":\"n\",\"line\":1,\"op\":\"STORE_RESULT\"},{\"arg\":null,\"line\":1,\"op\":\"POP\"},{\"arg\":3,\"line\":1,\"op\":\"JUMP\"},{\"arg\":\"n\",\"line\":1,\"op\":\"LOAD\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"loop.kry\",\"version\":1}"
+    },
+    "enum_match": {
+      "expected": 42,
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[42],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":{\"arity\":1,\"type\":\"Maybe\",\"variant\":\"Some\"},\"line\":1,\"op\":\"MAKE_ENUM\"},{\"arg\":\"value\",\"line\":1,\"op\":\"STORE_RESULT\"},{\"arg\":null,\"line\":1,\"op\":\"POP\"},{\"arg\":\"value\",\"line\":1,\"op\":\"LOAD\"},{\"arg\":{\"arity\":1,\"type\":\"Maybe\",\"variant\":\"Some\"},\"line\":1,\"op\":\"MATCH_ENUM\"},{\"arg\":10,\"line\":1,\"op\":\"JUMP_IF_FALSE\"},{\"arg\":{\"arity\":1,\"bindings\":[\"item\"],\"source\":\"value\"},\"line\":1,\"op\":\"BIND_ENUM\"},{\"arg\":\"item\",\"line\":1,\"op\":\"LOAD\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"},{\"arg\":null,\"line\":1,\"op\":\"PUSH_NIL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"enum.kry\",\"version\":1}"
+    },
+    "sequence_index": {
+      "expected": 7,
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[7,0],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":2,\"line\":1,\"op\":\"MAKE_ARRAY\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":null,\"line\":1,\"op\":\"INDEX\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"sequence.kry\",\"version\":1}"
+    },
+    "struct_field": {
+      "expected": 7,
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[7],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":{\"fields\":[\"x\"],\"type\":\"Point\"},\"line\":1,\"op\":\"MAKE_STRUCT\"},{\"arg\":\"x\",\"line\":1,\"op\":\"GET_FIELD\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"struct.kry\",\"version\":1}"
+    },
+    "unary": {
+      "expected": false,
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[true],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":\"!\",\"line\":1,\"op\":\"UNARY\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"unary.kry\",\"version\":1}"
+    },
+    "tuple_index": {
+      "expected": "left",
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[\"left\",\"right\",0],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":2,\"line\":1,\"op\":\"MAKE_TUPLE\"},{\"arg\":2,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":null,\"line\":1,\"op\":\"INDEX\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"tuple.kry\",\"version\":1}"
+    }
+  },
+  "version": 1
+}

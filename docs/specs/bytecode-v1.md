@@ -68,6 +68,11 @@ normalized String constant array and uses `PUSH_CONST.text` as a narrow category
 (`int`, `float`, `bool`, `string`, or legacy empty/text metadata). `nil` uses
 `PUSH_NIL`. `typed-bytecode-v1.json` freezes this representation and the source
 runtime decodes it into nominal `Int`, `Float`, `Bool`, `String`, and `Nil` values.
+The source JSON decoder now accepts and normalizes every v1 instruction metadata
+shape, including callable/sequence/control-flow, struct, enum, binding, and call
+records. `bytecode-schema-full-v1.json` freezes one valid case per opcode and
+malformed cases for metadata, arity, identity, and constant errors. The source
+verifier also rejects empty or duplicate function tables and missing entries.
 The source compiler still emits only a single `main` function. Full functions,
 control flow, arithmetic, enums, imports, native constant-pool serialization,
 module linking, and native bytecode serialization remain Python-owned.

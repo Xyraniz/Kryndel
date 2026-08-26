@@ -1,0 +1,62 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+work=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/kry-native-run-check.XXXXXX")
+trap '/usr/bin/rm -rf "$work"' EXIT HUP INT TERM
+
+minimal_path=$work/minimal-path
+/usr/bin/mkdir -p "$minimal_path" "$work/input directory"
+
+valid="$work/input directory/valid.kryseed"
+invalid="$work/input directory/invalid.kryseed"
+invalid_mode="$work/input directory/invalid-mode.kryseed"
+empty="$work/input directory/empty.kryseed"
+expected="$work/expected.out"
+actual="$work/actual.out"
+
+# KRYSEED1 + little-endian payload length + mode byte + payload. The first
+# payload byte is the observable process exit status; the rest is stdout.
+/usr/bin/printf '%b' '\113\122\131\123\105\105\104\001\010\000\000\000\000\007native\n' > "$valid"
+    /usr/bin/printf '%b' '\113\122\131\123\105\105\104\001\011\000\000\000\000\007native\n' > "$invalid"
+
+    /usr/bin/printf '%b' '\113\122\131\123\105\105\104\001\010\000\000\000\001\007native\n' > "$invalid_mode"
+
+    /usr/bin/printf '%b' '\113\122\131\123\105\105\104\001\000\000\000\000\000' > "$empty"
+
+    /usr/bin/printf '%b' '\007native\n' > "$expected"
+
+set +e
+env -i PATH="$minimal_path" HOME= /bin/sh "$root/tools/kry-native-run" "$valid" > "$actual"
+status=$?
+set -e
+[ "$status" -eq 7 ]
+/usr/bin/cmp -s "$expected" "$actual"
+
+set +e
+env -i PATH="$minimal_path" HOME= /bin/sh "$root/tools/kry-native-run" "$invalid" > /dev/null
+status=$?
+set -e
+[ "$status" -eq 65 ]
+
+set +e
+env -i PATH="$minimal_path" HOME= /bin/sh "$root/tools/kry-native-run" "$invalid_mode" > /dev/null
+status=$?
+set -e
+[ "$status" -eq 65 ]
+
+set +e
+env -i PATH="$minimal_path" HOME= /bin/sh "$root/tools/kry-native-run" "$empty" > /dev/null
+status=$?
+set -e
+[ "$status" -eq 65 ]
+
+set +e
+env -i PATH="$minimal_path" HOME= /bin/sh "$root/tools/kry-native-run" "$work/input directory/missing.kryseed" > /dev/null 2>&1
+status=$?
+set -e
+[ "$status" -eq 66 ]
+
+printf '%s\n' "native seed runtime check passed"
+printf '%s\n' "scope: KRYSEED1 framing, reserved mode, nonzero payload, bounded stdout, exit status, malformed length, missing file, spaced path"
+printf '%s\n' "not verified: compiler, full bytecode VM, package manager, or normal Python CLI replacement"
