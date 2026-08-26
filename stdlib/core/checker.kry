@@ -1,0 +1,264 @@
+// Source-level semantic checker and module resolver over normalized records.
+// The bootstrap type checker remains the complete language oracle.
+
+struct Span {
+    start: Int
+    end: Int
+    line: Int
+    column: Int
+}
+
+struct AstNode {
+    kind: String
+    text: String
+    span: Span
+    children: Array
+}
+
+struct Diagnostic {
+    severity: String
+    code: String
+    message: String
+    span: Span
+    notes: Array
+    help: String
+}
+
+struct CheckResult {
+    diagnostics: Array
+}
+
+struct ModuleRecord {
+    name: String
+    imports: Array
+}
+
+struct ResolveResult {
+    order: Array
+    diagnostics: Array
+}
+
+struct ResolveState {
+    order: Array
+    visiting: Array
+    done: Array
+    error: String
+}
+
+fn diagnostic(code: String, message: String, location: Span) -> Diagnostic {
+    return Diagnostic { severity: "error", code: code, message: message, span: location, notes: [], help: "" }
+}
+
+fn builtin_type(value: String) -> Bool {
+    return value == "Int" or value == "Float" or value == "Bool" or value == "String" or value == "Bytes" or value == "Array" or value == "Tuple" or value == "Any" or value == "Void"
+}
+
+fn contains(values: Array, value: String) -> Bool {
+    let mut index: Int = 0
+    while index < len(values) {
+        if values[index] == value { return true }
+        index = index + 1
+    }
+    return false
+}
+
+fn struct_type(names: Array, value: String) -> Bool {
+    return builtin_type(value) or contains(names, value)
+}
+
+fn has_variable(variables: Array, value: String) -> Bool {
+    let mut index: Int = 0
+    while index < len(variables) {
+        let binding: Array = variables[index]
+        if binding[0] == value { return true }
+        index = index + 1
+    }
+    return false
+}
+
+fn node_kind(value: AstNode) -> String { return value.kind }
+
+fn expression_type(value: AstNode, variables: Array, structs: Array) -> String {
+    if value.kind == "Literal" {
+        if value.text >= "0" and value.text <= "999999999999999999" { return "Int" }
+        if len(value.text) > 0 and value.text[0] == "\"" { return "String" }
+        return "String"
+    }
+    if value.kind == "StructLiteral" {
+        return value.text
+    }
+    if value.kind == "Name" {
+        let mut index: Int = 0
+        while index < len(variables) {
+            let variable: Array = variables[index]
+            if variable[0] == value.text { return variable[1] }
+            index = index + 1
+        }
+        return "Unknown"
+    }
+    if value.kind == "Member" { return "Any" }
+    if value.kind == "Call" { return "Any" }
+    return "Unknown"
+}
+
+fn check_struct(value: AstNode, structs: Array, diagnostics: Array) -> Array {
+    let mut result: Array = diagnostics
+    if contains(structs, value.text) {
+        return array_push(result, diagnostic("KRY3024", "name already defined in this scope", value.span))
+    }
+    let mut fields: Array = []
+    let mut index: Int = 0
+    while index < len(value.children) {
+        let field: AstNode = value.children[index]
+        if contains(fields, field.text) {
+            result = array_push(result, diagnostic("KRY3025", "duplicate struct field", field.span))
+        } else {
+            fields = array_push(fields, field.text)
+        }
+        index = index + 1
+    }
+    return result
+}
+
+fn check_expression(value: AstNode, variables: Array, structs: Array, diagnostics: Array) -> Array {
+    let mut result: Array = diagnostics
+    if value.kind == "Name" and !has_variable(variables, value.text) and value.text != "print" and value.text != "println" and value.text != "len" and value.text != "str" and value.text != "int" {
+        return array_push(result, diagnostic("KRY3008", "unknown name", value.span))
+    }
+    if value.kind == "Call" {
+        let callee: AstNode = value.children[0]
+        if callee.kind == "Name" and !has_variable(variables, callee.text) and callee.text != "print" and callee.text != "println" and callee.text != "len" and callee.text != "str" and callee.text != "int" {
+            result = array_push(result, diagnostic("KRY3008", "unknown name", callee.span))
+        }
+        let mut index: Int = 1
+        while index < len(value.children) {
+            result = check_expression(value.children[index], variables, structs, result)
+            index = index + 1
+        }
+    }
+    if value.kind == "Member" {
+        if len(value.children) != 1 {
+            result = array_push(result, diagnostic("KRY3032", "invalid member target", value.span))
+        } else {
+            result = check_expression(value.children[0], variables, structs, result)
+        }
+    }
+    if value.kind == "StructLiteral" {
+        if !contains(structs, value.text) {
+            result = array_push(result, diagnostic("KRY3023", "unknown type name", value.span))
+        }
+        let mut index: Int = 0
+        while index < len(value.children) {
+            let field: AstNode = value.children[index]
+            if len(field.children) == 1 {
+                result = check_expression(field.children[0], variables, structs, result)
+            }
+            index = index + 1
+        }
+    }
+    return result
+}
+
+pub fn check(items: Array) -> CheckResult {
+    let mut diagnostics: Array = []
+    let mut structs: Array = []
+    let mut variables: Array = []
+    let mut index: Int = 0
+    while index < len(items) {
+        let statement: AstNode = items[index]
+        if statement.kind == "StructDecl" {
+            diagnostics = check_struct(statement, structs, diagnostics)
+            if !contains(structs, statement.text) {
+                structs = array_push(structs, statement.text)
+            }
+        }
+        index = index + 1
+    }
+    index = 0
+    while index < len(items) {
+        let statement: AstNode = items[index]
+        if statement.kind == "LetStmt" {
+            let annotation: AstNode = statement.children[0]
+            let initializer: AstNode = statement.children[1]
+            if !struct_type(structs, annotation.text) {
+                diagnostics = array_push(diagnostics, diagnostic("KRY3023", "unknown type name", annotation.span))
+            } else {
+                let actual: String = expression_type(initializer, variables, structs)
+                if actual != "Any" and actual != annotation.text and !(annotation.text == "Int" and actual == "Int") {
+                    diagnostics = array_push(diagnostics, diagnostic("KRY3003", "type mismatch", initializer.span))
+                }
+            }
+            if contains(variables, statement.text) {
+                diagnostics = array_push(diagnostics, diagnostic("KRY3024", "name already defined in this scope", statement.span))
+            } else {
+                variables = array_push(variables, [statement.text, annotation.text])
+            }
+            diagnostics = check_expression(initializer, variables, structs, diagnostics)
+        } else if statement.kind == "ExprStmt" {
+            if len(statement.children) == 1 {
+                diagnostics = check_expression(statement.children[0], variables, structs, diagnostics)
+            }
+        }
+        index = index + 1
+    }
+    return CheckResult { diagnostics: diagnostics }
+}
+
+fn module_index(modules: Array, name: String) -> Int {
+    let mut index: Int = 0
+    while index < len(modules) {
+        let module_value: ModuleRecord = modules[index]
+        if module_value.name == name { return index }
+        index = index + 1
+    }
+    return -1
+}
+
+fn visit_module(name: String, modules: Array, visiting: Array, done: Array, order: Array) -> ResolveState {
+    if contains(done, name) {
+        return ResolveState { order: order, visiting: visiting, done: done, error: "" }
+    }
+    if contains(visiting, name) {
+        return ResolveState { order: order, visiting: visiting, done: done, error: "KRY5016" }
+    }
+    let index: Int = module_index(modules, name)
+    if index < 0 {
+        return ResolveState { order: order, visiting: visiting, done: done, error: "KRY5014" }
+    }
+    let module_value: ModuleRecord = modules[index]
+    let next_visiting: Array = array_push(visiting, name)
+    let mut state: ResolveState = ResolveState { order: order, visiting: next_visiting, done: done, error: "" }
+    let mut import_index: Int = 0
+    while import_index < len(module_value.imports) {
+        state = visit_module(module_value.imports[import_index], modules, state.visiting, state.done, state.order)
+        if state.error != "" { return state }
+        import_index = import_index + 1
+    }
+    let final_order: Array = array_push(state.order, name)
+    let final_done: Array = array_push(state.done, name)
+    return ResolveState { order: final_order, visiting: state.visiting, done: final_done, error: "" }
+}
+
+pub fn module(name: String, imports: Array) -> ModuleRecord {
+    return ModuleRecord { name: name, imports: imports }
+}
+
+pub fn resolve(modules: Array, entry: String) -> ResolveResult {
+    let mut names: Array = []
+    let mut index: Int = 0
+    while index < len(modules) {
+        let module_value: ModuleRecord = modules[index]
+        if contains(names, module_value.name) {
+            return ResolveResult { order: [], diagnostics: [diagnostic("KRY5015", "ambiguous module", Span { start: 0, end: 1, line: 1, column: 1 })] }
+        }
+        names = array_push(names, module_value.name)
+        index = index + 1
+    }
+    let state: ResolveState = visit_module(entry, modules, [], [], [])
+    if state.error != "" {
+        let mut message: String = "missing module"
+        if state.error == "KRY5016" { message = "dependency cycle" }
+        return ResolveResult { order: state.order, diagnostics: [diagnostic(state.error, message, Span { start: 0, end: 1, line: 1, column: 1 })] }
+    }
+    return ResolveResult { order: state.order, diagnostics: [] }
+}

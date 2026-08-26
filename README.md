@@ -48,6 +48,8 @@ future toolchain. `stdlib/core/lexer.kry` provides a source-level lexer seam for
 the current keywords, literals, comments, operators, spans, and recovery cases.
 `stdlib/core/parser.kry` consumes those tokens for a tested AST subset covering
 struct declarations, typed lets, literals, members, calls, and struct literals.
+`stdlib/core/checker.kry` validates that subset and resolves normalized module
+graphs with deterministic missing, duplicate, and cycle diagnostics.
 These source modules execute through the Python bootstrap;
 the compiler and VM remain Python implementations.
 
@@ -221,5 +223,5 @@ enums, payload enums and match, diagnostics, malformed bytecode/runtime,
 manifests, lockfiles, semver, local resolution, checksums, imports, CLI, KEXE,
 data-core slices/builders/records, source manifest ranges, lockfile JSON,
 normalized bytecode verification, determinism, and security boundaries. The
-current checkout runs 96 Python unit tests; the
+current checkout runs 97 Python unit tests; the
 historical 78-test wording in older release notes is no longer accurate.

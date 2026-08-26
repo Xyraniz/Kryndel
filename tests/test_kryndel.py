@@ -1109,6 +1109,44 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(actual_items[0].fields[1][1], "Point")
         self.assertEqual(actual_items[1].fields[1][1], "point")
 
+    def test_source_checker_and_module_resolver_contract(self) -> None:
+        root = Path(__file__).parents[1]
+        source = (root / "tests" / "fixtures" / "parser-input.kry").read_text(encoding="utf-8")
+        lexer = VM(compile_source((root / "stdlib" / "core" / "lexer.kry").read_text(encoding="utf-8"), "stdlib/core/lexer.kry"))
+        parser = VM(compile_source((root / "stdlib" / "core" / "parser.kry").read_text(encoding="utf-8"), "stdlib/core/parser.kry"))
+        checker = VM(compile_source((root / "stdlib" / "core" / "checker.kry").read_text(encoding="utf-8"), "stdlib/core/checker.kry"))
+        tokens = lexer.execute("lex", [source]).field("tokens")[1]
+        items = parser.execute("parse", [tokens]).field("items")[1]
+        checked = checker.execute("check", [items])
+        self.assertEqual(len(checked.field("diagnostics")[1].items), 0)
+
+        mismatch_source = 'let value: Int = "wrong"\n'
+        mismatch_tokens = lexer.execute("lex", [mismatch_source]).field("tokens")[1]
+        mismatch_items = parser.execute("parse", [mismatch_tokens]).field("items")[1]
+        mismatch = checker.execute("check", [mismatch_items])
+        self.assertIn("KRY3003", [item.fields[1][1] for item in mismatch.field("diagnostics")[1].items])
+
+        unknown_source = "println(missing)\n"
+        unknown_tokens = lexer.execute("lex", [unknown_source]).field("tokens")[1]
+        unknown_items = parser.execute("parse", [unknown_tokens]).field("items")[1]
+        unknown = checker.execute("check", [unknown_items])
+        self.assertIn("KRY3008", [item.fields[1][1] for item in unknown.field("diagnostics")[1].items])
+
+        lib = checker.execute("module", ["lib", ArrayValue(())])
+        main = checker.execute("module", ["main", ArrayValue(("lib",))])
+        resolved = checker.execute("resolve", [ArrayValue((main, lib)), "main"])
+        self.assertEqual(len(resolved.field("diagnostics")[1].items), 0)
+        self.assertEqual(resolved.field("order")[1].items, ("lib", "main"))
+
+        missing = checker.execute("resolve", [ArrayValue((main,)), "main"])
+        self.assertIn("KRY5014", [item.fields[1][1] for item in missing.field("diagnostics")[1].items])
+        cycle_a = checker.execute("module", ["a", ArrayValue(("b",))])
+        cycle_b = checker.execute("module", ["b", ArrayValue(("a",))])
+        cycle = checker.execute("resolve", [ArrayValue((cycle_a, cycle_b)), "a"])
+        self.assertIn("KRY5016", [item.fields[1][1] for item in cycle.field("diagnostics")[1].items])
+        duplicate = checker.execute("resolve", [ArrayValue((lib, lib)), "lib"])
+        self.assertIn("KRY5015", [item.fields[1][1] for item in duplicate.field("diagnostics")[1].items])
+
     def test_source_bytecode_verifier_matches_structural_contract(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "bytecode-native-verifier-v1.json").read_text(encoding="utf-8"))
