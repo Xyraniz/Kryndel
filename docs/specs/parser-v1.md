@@ -13,10 +13,14 @@ The optional `--fixture` argument compares the full JSON structure against a fro
 and `Diagnostic` values. The first subset parses struct declarations, typed
 `let` statements, integer and string literals, member access, calls with up to
 two arguments, and struct literals. It preserves source order and half-open
-spans, and returns `KRY2001` diagnostics for recoverable subset failures.
+spans, and returns `KRY2001` diagnostics for recoverable subset failures. Literal
+nodes now retain the lexer `LiteralValue` tag and payload fields in an
+additional field after the existing `children` field.
 
 The source parser is executed through the bootstrap VM and is compared against
-`parser-v1.json` for root AST record kinds and spans. Full expression precedence,
+`parser-v1.json` for root AST record kinds and spans, while
+`typed-ast-v1.json` freezes integer, float, boolean, nil, and string payload
+propagation. Full expression precedence,
 functions, enums, match, imports, attributes, and complete diagnostic recovery
 remain to be migrated. The bootstrap parser remains the typed AST oracle, so
 this milestone does not claim a native parser or self-hosting.

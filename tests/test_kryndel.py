@@ -1128,6 +1128,27 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(actual_items[0].fields[1][1], "Point")
         self.assertEqual(actual_items[1].fields[1][1], "point")
 
+    def test_source_parser_propagates_typed_literals(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "typed-ast-v1.json").read_text(encoding="utf-8"))
+        lexer = VM(compile_source((root / "stdlib" / "core" / "lexer.kry").read_text(encoding="utf-8"), "stdlib/core/lexer.kry"))
+        parser = VM(compile_source((root / "stdlib" / "core" / "parser.kry").read_text(encoding="utf-8"), "stdlib/core/parser.kry"))
+        tokens = lexer.execute("lex", [fixture["source"]]).field("tokens")[1]
+        parsed = parser.execute("parse", [tokens])
+        self.assertEqual(len(parsed.field("diagnostics")[1].items), 0)
+        items = parsed.field("items")[1].items
+        self.assertEqual(len(items), len(fixture["literals"]))
+        for statement, expected in zip(items, fixture["literals"]):
+            self.assertEqual(statement.field("kind")[1], "ExprStmt")
+            literal = statement.field("children")[1].items[0]
+            self.assertEqual(literal.field("kind")[1], expected["kind"])
+            value = literal.field("literal")[1]
+            self.assertEqual(value.field("category")[1], expected["category"])
+            self.assertEqual(value.field("int_value")[1], expected["int_value"])
+            self.assertAlmostEqual(value.field("float_value")[1], expected["float_value"])
+            self.assertEqual(value.field("bool_value")[1], expected["bool_value"])
+            self.assertEqual(value.field("string_value")[1], expected["string_value"])
+
     def test_source_checker_and_module_resolver_contract(self) -> None:
         root = Path(__file__).parents[1]
         source = (root / "tests" / "fixtures" / "parser-input.kry").read_text(encoding="utf-8")
