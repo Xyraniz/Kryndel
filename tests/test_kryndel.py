@@ -1057,6 +1057,33 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(invalid_result.variant_name, "Error")
         self.assertIn("KRY5009", invalid_result.payloads[0])
 
+    def test_source_lexer_matches_published_fixture_and_recovers_errors(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "lexer-v1.json").read_text(encoding="utf-8"))
+        source = (root / "tests" / "fixtures" / fixture["file"]).read_text(encoding="utf-8")
+        lexer_source = (root / "stdlib" / "core" / "lexer.kry").read_text(encoding="utf-8")
+        runtime = VM(compile_source(lexer_source, "stdlib/core/lexer.kry"))
+        result = runtime.execute("lex", [source])
+        self.assertEqual(len(result.field("diagnostics")[1].items), 0)
+        actual_tokens = result.field("tokens")[1].items
+        self.assertEqual(len(actual_tokens), len(fixture["tokens"]))
+        for actual, expected in zip(actual_tokens, fixture["tokens"]):
+            self.assertEqual(actual.fields[0][1], expected["kind"])
+            expected_value = expected["value"]
+            expected_text = "" if expected_value is None else str(expected_value)
+            self.assertEqual(actual.fields[1][1], expected_text)
+            actual_span = actual.fields[2][1]
+            self.assertEqual(
+                actual_span.fields,
+                (("start", expected["span"]["start"]), ("end", expected["span"]["end"]), ("line", expected["span"]["line"]), ("column", expected["span"]["column"])),
+            )
+
+        recovered = runtime.execute("lex", ["/* outer /* inner */ done */ @ $ \"bad"])
+        diagnostics = recovered.field("diagnostics")[1].items
+        self.assertEqual([item.fields[1][1] for item in diagnostics], ["KRY1001", "KRY1006"])
+        self.assertEqual(recovered.field("tokens")[1].items[0].fields[0][1], "AT")
+        self.assertEqual(recovered.field("tokens")[1].items[-1].fields[0][1], "EOF")
+
     def test_source_bytecode_verifier_matches_structural_contract(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "bytecode-native-verifier-v1.json").read_text(encoding="utf-8"))

@@ -33,6 +33,7 @@ The core modules now expose these non-generic APIs directly in Kryndel:
 | `core/manifest` | `parse(String) -> ManifestResult`, `read(String) -> ManifestResult`, `lock_entry`, `lockfile`, `lockfile_json` | Source parser now covers version-range classification and canonical lockfile JSON for validated entries; SHA-256 calculation, resolver, staging, and installation remain Python-owned |
 | `core/data` | bounded `StringSlice`/`BytesSlice`, balanced `StringBuilder`, `SpanRecord`, `TokenRecord`, `AstRecord`, and `DiagnosticRecord` constructors/accessors | Real source behavior executed by the bootstrap VM; data layouts and bounds errors are frozen by `data-core-v1.json`, but implementation ownership remains Python |
 | `core/bytecode` | nominal `InstructionRecord`, `FunctionRecord`, `ModuleRecord`, and `verify` | Source-level structural verifier for normalized v1 records; JSON reading, KEXE parsing, and checksum calculation remain Python |
+| `core/lexer` | `lex(String) -> LexerResult`, `read(String) -> LexerResult` | Source-level lexer for current keywords, literals, comments, operators, delimiters, spans, and recovery; typed literal payloads and runtime execution remain bootstrap-owned |
 
 The source manifest module's lockfile writer accepts checksums as validated
 hexadecimal inputs; it does not pretend to calculate SHA-256. The fallback
