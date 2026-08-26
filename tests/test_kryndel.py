@@ -1084,6 +1084,31 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(recovered.field("tokens")[1].items[0].fields[0][1], "AT")
         self.assertEqual(recovered.field("tokens")[1].items[-1].fields[0][1], "EOF")
 
+    def test_source_parser_matches_published_ast_snapshot(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "parser-v1.json").read_text(encoding="utf-8"))
+        source = (root / "tests" / "fixtures" / "parser-input.kry").read_text(encoding="utf-8")
+        lexer_source = (root / "stdlib" / "core" / "lexer.kry").read_text(encoding="utf-8")
+        parser_source = (root / "stdlib" / "core" / "parser.kry").read_text(encoding="utf-8")
+        lexer_runtime = VM(compile_source(lexer_source, "stdlib/core/lexer.kry"))
+        parser_runtime = VM(compile_source(parser_source, "stdlib/core/parser.kry"))
+        lexed = lexer_runtime.execute("lex", [source])
+        tokens = lexed.field("tokens")[1]
+        parsed = parser_runtime.execute("parse", [tokens])
+        self.assertEqual(len(parsed.field("diagnostics")[1].items), 0)
+        actual_items = parsed.field("items")[1].items
+        expected_items = fixture["ast"]["items"]
+        self.assertEqual(len(actual_items), len(expected_items))
+        expected_kinds = [item["record"] for item in expected_items]
+        actual_kinds = [item.fields[0][1] for item in actual_items]
+        self.assertEqual(actual_kinds, ["StructDecl", "LetStmt", "ExprStmt", "ExprStmt"])
+        self.assertEqual(actual_kinds, expected_kinds)
+        expected_spans = [(item["span"]["start"], item["span"]["end"], item["span"]["line"], item["span"]["column"]) for item in expected_items]
+        actual_spans = [tuple(field[1] for field in item.fields[2][1].fields) for item in actual_items]
+        self.assertEqual(actual_spans, expected_spans)
+        self.assertEqual(actual_items[0].fields[1][1], "Point")
+        self.assertEqual(actual_items[1].fields[1][1], "point")
+
     def test_source_bytecode_verifier_matches_structural_contract(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "bytecode-native-verifier-v1.json").read_text(encoding="utf-8"))

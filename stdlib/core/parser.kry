@@ -1,0 +1,250 @@
+// Source-level parser seam over normalized tokens from core/lexer.kry.
+// This first subset intentionally freezes declarations, lets, literals, members,
+// calls, and struct literals before the full language AST is migrated.
+
+struct Span {
+    start: Int
+    end: Int
+    line: Int
+    column: Int
+}
+
+struct Token {
+    kind: String
+    text: String
+    span: Span
+}
+
+struct AstNode {
+    kind: String
+    text: String
+    span: Span
+    children: Array
+}
+
+struct Diagnostic {
+    severity: String
+    code: String
+    message: String
+    span: Span
+    notes: Array
+    help: String
+}
+
+struct ParserState {
+    next: Int
+    node: AstNode
+    error: String
+}
+
+struct ParseResult {
+    items: Array
+    diagnostics: Array
+}
+
+fn token_kind(tokens: Array, index: Int) -> String {
+    if index < 0 or index >= len(tokens) {
+        return "EOF"
+    }
+    let item: Token = tokens[index]
+    return item.kind
+}
+
+fn token_text(tokens: Array, index: Int) -> String {
+    if index < 0 or index >= len(tokens) {
+        return ""
+    }
+    let item: Token = tokens[index]
+    return item.text
+}
+
+fn token_span(tokens: Array, index: Int) -> Span {
+    if index < 0 or index >= len(tokens) {
+        return Span { start: 0, end: 1, line: 1, column: 1 }
+    }
+    let item: Token = tokens[index]
+    return item.span
+}
+
+fn merged_span(tokens: Array, first: Int, last: Int) -> Span {
+    let start: Span = token_span(tokens, first)
+    let end: Span = token_span(tokens, last)
+    return Span { start: start.start, end: end.end, line: start.line, column: start.column }
+}
+
+fn node(kind: String, text: String, location: Span, children: Array) -> AstNode {
+    return AstNode { kind: kind, text: text, span: location, children: children }
+}
+
+fn diagnostic(code: String, message: String, location: Span) -> Diagnostic {
+    return Diagnostic {
+        severity: "error",
+        code: code,
+        message: message,
+        span: location,
+        notes: [],
+        help: "",
+    }
+}
+
+fn failure(tokens: Array, index: Int, message: String) -> ParserState {
+    return ParserState { next: index, node: node("Invalid", "", token_span(tokens, index), []), error: message }
+}
+
+fn parse_expression(tokens: Array, index: Int) -> ParserState {
+    let kind: String = token_kind(tokens, index)
+    if kind == "INT" or kind == "STRING" {
+        return ParserState {
+            next: index + 1,
+            node: node("Literal", token_text(tokens, index), token_span(tokens, index), []),
+            error: "",
+        }
+    }
+    if kind != "IDENT" {
+        return failure(tokens, index, "expected an expression")
+    }
+    let name: AstNode = node("Name", token_text(tokens, index), token_span(tokens, index), [])
+    if token_kind(tokens, index + 1) == "DOT" and token_kind(tokens, index + 2) == "IDENT" {
+        let member: AstNode = node("Member", token_text(tokens, index + 2), merged_span(tokens, index, index + 2), [name])
+        return ParserState { next: index + 3, node: member, error: "" }
+    }
+    if token_kind(tokens, index + 1) == "LPAREN" {
+        let mut arguments: Array = [name]
+        let mut cursor: Int = index + 2
+        if token_kind(tokens, cursor) != "RPAREN" {
+            let argument: ParserState = parse_expression(tokens, cursor)
+            if argument.error != "" {
+                return argument
+            }
+            arguments = array_push(arguments, argument.node)
+            cursor = argument.next
+            if token_kind(tokens, cursor) == "COMMA" {
+                cursor = cursor + 1
+                let second: ParserState = parse_expression(tokens, cursor)
+                if second.error != "" {
+                    return second
+                }
+                arguments = array_push(arguments, second.node)
+                cursor = second.next
+            }
+        }
+        if token_kind(tokens, cursor) != "RPAREN" {
+            return failure(tokens, cursor, "expected ')' after call")
+        }
+        return ParserState {
+            next: cursor + 1,
+            node: node("Call", token_text(tokens, index), merged_span(tokens, index, cursor), arguments),
+            error: "",
+        }
+    }
+    if token_kind(tokens, index + 1) == "LBRACE" {
+        let mut fields: Array = []
+        let mut cursor: Int = index + 2
+        while token_kind(tokens, cursor) != "RBRACE" and token_kind(tokens, cursor) != "EOF" {
+            if token_kind(tokens, cursor) != "IDENT" or token_kind(tokens, cursor + 1) != "COLON" {
+                return failure(tokens, cursor, "expected struct field initializer")
+            }
+            let field_name: String = token_text(tokens, cursor)
+            let value: ParserState = parse_expression(tokens, cursor + 2)
+            if value.error != "" {
+                return value
+            }
+            let field: AstNode = node("StructFieldInit", field_name, merged_span(tokens, cursor, value.next - 1), [value.node])
+            fields = array_push(fields, field)
+            cursor = value.next
+            if token_kind(tokens, cursor) == "COMMA" {
+                cursor = cursor + 1
+            } else if token_kind(tokens, cursor) != "RBRACE" {
+                return failure(tokens, cursor, "expected ',' or '}' after struct field")
+            }
+        }
+        if token_kind(tokens, cursor) != "RBRACE" {
+            return failure(tokens, cursor, "expected '}' after struct literal")
+        }
+        return ParserState {
+            next: cursor + 1,
+            node: node("StructLiteral", token_text(tokens, index), merged_span(tokens, index, cursor), fields),
+            error: "",
+        }
+    }
+    return ParserState { next: index + 1, node: name, error: "" }
+}
+
+fn parse_struct(tokens: Array, index: Int) -> ParserState {
+    if token_kind(tokens, index + 1) != "IDENT" or token_kind(tokens, index + 2) != "LBRACE" {
+        return failure(tokens, index, "expected struct name and '{'")
+    }
+    let name: String = token_text(tokens, index + 1)
+    let mut fields: Array = []
+    let mut cursor: Int = index + 3
+    while token_kind(tokens, cursor) != "RBRACE" and token_kind(tokens, cursor) != "EOF" {
+        if token_kind(tokens, cursor) != "IDENT" or token_kind(tokens, cursor + 1) != "COLON" or token_kind(tokens, cursor + 2) != "IDENT" {
+            return failure(tokens, cursor, "expected struct field name and type")
+        }
+        let type_node: AstNode = node("TypeName", token_text(tokens, cursor + 2), token_span(tokens, cursor + 2), [])
+        let field_node: AstNode = node("StructFieldDecl", token_text(tokens, cursor), merged_span(tokens, cursor, cursor + 2), [type_node])
+        fields = array_push(fields, field_node)
+        cursor = cursor + 3
+    }
+    if token_kind(tokens, cursor) != "RBRACE" {
+        return failure(tokens, cursor, "expected '}' after struct declaration")
+    }
+    return ParserState {
+        next: cursor + 1,
+        node: node("StructDecl", name, merged_span(tokens, index, cursor), fields),
+        error: "",
+    }
+}
+
+fn parse_let(tokens: Array, index: Int) -> ParserState {
+    if token_kind(tokens, index + 1) != "IDENT" or token_kind(tokens, index + 2) != "COLON" or token_kind(tokens, index + 3) != "IDENT" or token_kind(tokens, index + 4) != "EQUAL" {
+        return failure(tokens, index, "expected let name, type, and initializer")
+    }
+    let annotation: AstNode = node("TypeName", token_text(tokens, index + 3), token_span(tokens, index + 3), [])
+    let initializer: ParserState = parse_expression(tokens, index + 5)
+    if initializer.error != "" {
+        return initializer
+    }
+    let children: Array = [annotation, initializer.node]
+    return ParserState {
+        next: initializer.next,
+        node: node("LetStmt", token_text(tokens, index + 1), merged_span(tokens, index, initializer.next - 1), children),
+        error: "",
+    }
+}
+
+fn parse_statement(tokens: Array, index: Int) -> ParserState {
+    if token_kind(tokens, index) == "STRUCT" {
+        return parse_struct(tokens, index)
+    }
+    if token_kind(tokens, index) == "LET" {
+        return parse_let(tokens, index)
+    }
+    let expression: ParserState = parse_expression(tokens, index)
+    if expression.error != "" {
+        return expression
+    }
+    return ParserState {
+        next: expression.next,
+        node: node("ExprStmt", "", expression.node.span, [expression.node]),
+        error: "",
+    }
+}
+
+fn parse_items(tokens: Array, index: Int, items: Array) -> ParseResult {
+    if token_kind(tokens, index) == "EOF" {
+        return ParseResult { items: items, diagnostics: [] }
+    }
+    let statement: ParserState = parse_statement(tokens, index)
+    if statement.error != "" {
+        return ParseResult {
+            items: items,
+            diagnostics: [diagnostic("KRY2001", statement.error, token_span(tokens, index))],
+        }
+    }
+    return parse_items(tokens, statement.next, array_push(items, statement.node))
+}
+
+pub fn parse(tokens: Array) -> ParseResult {
+    return parse_items(tokens, 0, [])
+}

@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 95 tests in the current checkout and covers:
+The suite contains 96 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -41,7 +41,9 @@ source bytecode verifier test checks normalized v1 records, entry presence,
 opcode/operand bounds, and malformed metadata without using host dictionaries.
 The source lexer test compares the published snapshot's token kinds, normalized
 text, order, and spans, then exercises nested-comment, invalid-character, and
-unterminated-string recovery.
+unterminated-string recovery. The source parser test feeds those source
+lexer tokens into `stdlib/core/parser.kry` and compares AST root kinds and
+spans with `parser-v1.json`.
 
 Temporary package registries are created under temporary directories. Tests
 never modify a user's package registry or install Python dependencies. The
