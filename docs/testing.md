@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 106 tests in the current checkout and covers:
+The suite contains 107 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -47,8 +47,8 @@ parser test feeds those source
 lexer tokens into `stdlib/core/parser.kry` and compares AST root kinds and
 spans with `parser-v1.json`. A typed-AST fixture additionally verifies that the
 literal payload remains attached after parsing. The source checker test then
-validates the
-lexer-parser-checker pipeline, primitive mismatch and unknown-name diagnostics,
+validates the lexer-parser-checker pipeline, typed Int/Float/Bool/String/Void
+assignments, primitive mismatch and unknown-name diagnostics,
 and deterministic module resolution for valid, missing, duplicate, and cyclic
 imports. The source compiler test lowers the source lexer/parser subset
 into bytecode records and validates the emitted instruction sequence with the

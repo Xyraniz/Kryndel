@@ -1,5 +1,6 @@
 // Source-level semantic checker and module resolver over normalized records.
-// The bootstrap type checker remains the complete language oracle.
+// Literal typing now consumes the parser's tagged payload; the bootstrap type
+// checker remains the complete language oracle.
 
 struct Span {
     start: Int
@@ -8,11 +9,20 @@ struct Span {
     column: Int
 }
 
+struct LiteralValue {
+    category: String
+    int_value: Int
+    float_value: Float
+    bool_value: Bool
+    string_value: String
+}
+
 struct AstNode {
     kind: String
     text: String
     span: Span
     children: Array
+    literal: LiteralValue
 }
 
 struct Diagnostic {
@@ -80,9 +90,13 @@ fn node_kind(value: AstNode) -> String { return value.kind }
 
 fn expression_type(value: AstNode, variables: Array, structs: Array) -> String {
     if value.kind == "Literal" {
-        if value.text >= "0" and value.text <= "999999999999999999" { return "Int" }
-        if len(value.text) > 0 and value.text[0] == "\"" { return "String" }
-        return "String"
+        let literal_value: LiteralValue = value.literal
+        if literal_value.category == "int" { return "Int" }
+        if literal_value.category == "float" { return "Float" }
+        if literal_value.category == "bool" { return "Bool" }
+        if literal_value.category == "string" { return "String" }
+        if literal_value.category == "nil" { return "Void" }
+        return "Unknown"
     }
     if value.kind == "StructLiteral" {
         return value.text

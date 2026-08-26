@@ -5,7 +5,11 @@ nominal AST records emitted by `stdlib/core/parser.kry`. Its `check` operation
 tracks struct names and local bindings, detects duplicate declarations and
 fields, validates the tested primitive and struct-literal type relationships,
 and reports unknown names and types with stable `KRY3008`, `KRY3023`, `KRY3024`,
-and `KRY3003` codes.
+and `KRY3003` codes. Literal nodes consume the tagged `LiteralValue` payload
+from the parser: `int` maps to `Int`, `float` to `Float`, `bool` to `Bool`,
+`string` to `String`, and `nil` to the runtime `Void` type. The
+`typed-checker-v1.json` fixture freezes valid assignments and a Bool/Float
+mismatch.
 
 The same module defines nominal `ModuleRecord` and `ResolveResult` values. Its
 `resolve` operation performs deterministic dependency-first traversal and
