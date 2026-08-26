@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+
+usage() {
+    printf '%s\n' "usage: $0 BUNDLE_DIR" >&2
+    exit 64
+}
+
+[ "$#" -eq 1 ] || usage
+bundle=$1
+[ -d "$bundle" ] || {
+    printf '%s\n' "kry-bundle-check: bundle directory not found" >&2
+    exit 66
+}
+
+work=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/kry-bundle-check.XXXXXX")
+trap '/usr/bin/rm -rf "$work"' EXIT HUP INT TERM
+flag=$work/violations
+
+report_violation() {
+    printf 'forbidden: %s\n' "$1" >&2
+    /usr/bin/touch "$flag"
+}
+
+find "$bundle" -type l -print | while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    report_violation "$path"
+done
+
+find "$bundle" \( -name '*.py' -o -name '*.pyc' -o -name '__pycache__' -o -name 'build' -o -name 'dist' -o -name '*.egg-info' -o -name '*.krypkg' \) -print | while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    report_violation "$path"
+done
+
+find "$bundle" -type f -print | while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if grep -IaEn '(^|[^[:alnum:]_])(python|python3|pip|pip3|rustc|cargo|node|npm|gcc|g\+\+|clang|clang\+\+|msvc|cl\.exe|(^|/)as|(^|/)ld)([^[:alnum:]_]|$)' "$path" >/dev/null 2>&1; then
+        report_violation "$path: forbidden runtime or toolchain invocation"
+    fi
+done
+
+[ ! -e "$flag" ] || exit 65
+printf '%s\n' "bundle audit passed"
+printf 'files %s\n' "$(find "$bundle" -type f | wc -l)"

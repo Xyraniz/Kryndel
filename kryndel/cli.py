@@ -15,7 +15,7 @@ from .diagnostics import Diagnostic, DiagnosticError, Severity, Span
 from .source import SourceFile
 from .packages import Lockfile, add_dependency, init_project, install, list_packages, read_manifest, remove_dependency, validate_imports
 from .version import __codename__, __version__
-from .tooling import abi_description, check_reproducible, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, document_project, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
+from .tooling import abi_description, autonomy_audit_report, check_reproducible, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, document_project, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
 from .filesystem import RootedFileSystem
 from .vm import RuntimeKryndelError, VM
 
@@ -87,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     compiler_report = subparsers.add_parser("compiler-report", help="Emit deterministic compiler bytecode output.")
     compiler_report.add_argument("source", type=Path)
     subparsers.add_parser("host-report", help="Print the deterministic host-boundary inventory.")
+    subparsers.add_parser("autonomy-audit", help="Audit the Python bootstrap route and native replacement matrix.")
     subparsers.add_parser("clean", help="Remove generated project bytecode artifacts.")
     return parser
 
@@ -284,6 +285,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command == "host-report":
             print(json.dumps(host_boundary_report(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.command == "autonomy-audit":
+            root = _project_root() or Path.cwd().resolve()
+            print(json.dumps(autonomy_audit_report(root), ensure_ascii=False, indent=2, sort_keys=True))
             return 0
         if arguments.command == "doc":
             root = _project_root(arguments.source) or Path.cwd().resolve()

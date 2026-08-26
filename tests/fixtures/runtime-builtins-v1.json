@@ -1,0 +1,44 @@
+{
+  "contract": "kryndel-source-runtime-builtins",
+  "invalid": {
+    "assert_false": {
+      "error": "KRY6401",
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[false],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":[\"assert\",1],\"line\":1,\"op\":\"CALL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"assert-false.kry\",\"version\":1}"
+    },
+    "assert_mismatch": {
+      "error": "KRY6402",
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[7,8],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":[\"assert_eq\",2],\"line\":1,\"op\":\"CALL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"assert-mismatch.kry\",\"version\":1}"
+    },
+    "sqrt_negative": {
+      "error": "KRY6202",
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[-1.0],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":[\"sqrt\",1],\"line\":1,\"op\":\"CALL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"sqrt-negative.kry\",\"version\":1}"
+    }
+  },
+  "positive": {
+    "abs": {
+      "expected_int": 7,
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[-7],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":[\"abs\",1],\"line\":1,\"op\":\"CALL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"abs.kry\",\"version\":1}"
+    },
+    "array_push": {
+      "expected_values": [7, 8],
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[7,8],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":1,\"line\":1,\"op\":\"MAKE_ARRAY\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":[\"array_push\",2],\"line\":1,\"op\":\"CALL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"array-push.kry\",\"version\":1}"
+    },
+    "assert": {
+      "expected_kind": "Nil",
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[true],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":[\"assert\",1],\"line\":1,\"op\":\"CALL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"assert.kry\",\"version\":1}"
+    },
+    "assert_eq": {
+      "expected_kind": "Nil",
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[7,7],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":[\"assert_eq\",2],\"line\":1,\"op\":\"CALL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"assert-eq.kry\",\"version\":1}"
+    },
+    "sqrt": {
+      "expected_float": 3.0,
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[9.0],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":[\"sqrt\",1],\"line\":1,\"op\":\"CALL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"sqrt.kry\",\"version\":1}"
+    },
+    "bytes": {
+      "expected_octets": [65, 255],
+      "source": "{\"entry\":\"main\",\"format\":\"kryndel-bytecode\",\"functions\":{\"main\":{\"arity\":0,\"constants\":[65,255],\"instructions\":[{\"arg\":0,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":1,\"line\":1,\"op\":\"PUSH_CONST\"},{\"arg\":2,\"line\":1,\"op\":\"MAKE_ARRAY\"},{\"arg\":[\"bytes\",1],\"line\":1,\"op\":\"CALL\"},{\"arg\":null,\"line\":1,\"op\":\"RETURN\"}],\"name\":\"main\",\"parameters\":[]}},\"name\":\"bytes.kry\",\"version\":1}"
+    }
+  },
+  "version": 1
+}

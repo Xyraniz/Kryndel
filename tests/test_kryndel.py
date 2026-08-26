@@ -15,7 +15,7 @@ from kryndel.contracts import core_contract_report, validate_core_contract
 from kryndel.filesystem import RootedFileSystem, VirtualFileSystem
 from kryndel.modules import ModuleGraph
 from kryndel.parser import parse
-from kryndel.tooling import abi_description, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
+from kryndel.tooling import abi_description, autonomy_audit_report, autonomy_status_matrix, compare_lexer_fixture, compare_parser_fixture, compiler_snapshot, format_file, host_boundary_report, lexer_snapshot, module_graph_snapshot, pack_project, parser_snapshot, run_kryndel_tests, verify_module
 from kryndel.diagnostics import DiagnosticError
 from kryndel.cli import main as cli_main
 from kryndel.packages import (
@@ -342,6 +342,28 @@ class KryndelTests(unittest.TestCase):
             self.assertIn(item["state"], {"Kryndel", "host temporal", "no implementado"})
         for values in report["layers"].values():
             self.assertEqual(sum(values.values()), 100)
+
+    def test_autonomy_audit_reports_four_states_and_python_route(self) -> None:
+        root = Path(__file__).parents[1]
+        matrix = autonomy_status_matrix()
+        fixture = json.loads((root / "tests" / "fixtures" / "autonomy-audit-v1.json").read_text(encoding="utf-8"))
+        self.assertEqual(matrix, fixture)
+        self.assertEqual(
+            matrix["states"],
+            ["Kryndel-native", "host capability nativa mínima", "bootstrap Python", "no implementado"],
+        )
+        self.assertEqual(sum(matrix["counts"].values()), len(matrix["components"]))
+        self.assertGreater(matrix["counts"]["bootstrap Python"], 0)
+        self.assertGreater(matrix["counts"]["no implementado"], 0)
+        report = autonomy_audit_report(root)
+        self.assertEqual(report["contract"], "kryndel-autonomy-audit")
+        self.assertEqual(report["normal_python_route"]["entrypoint"], "python3 -m kryndel")
+        self.assertIn("kryndel/cli.py", report["bootstrap_modules"])
+        self.assertTrue(any(item["file"] == ".github/workflows/ci.yaml" for item in report["python_invocations"]))
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(cli_main(["autonomy-audit"]), 0)
+        self.assertEqual(json.loads(output.getvalue()), report)
 
     def test_stdlib_testing_assertions_are_executable_and_structured(self) -> None:
         root = Path(__file__).parents[1]
@@ -1554,6 +1576,7 @@ class KryndelTests(unittest.TestCase):
     def test_source_runtime_executes_full_subset_fixture(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "runtime-source-v1.json").read_text(encoding="utf-8"))
+        self.assertEqual(fixture["execution_verifier"], "verify_execution")
         json_runtime = VM(compile_source((root / "stdlib" / "core" / "json.kry").read_text(encoding="utf-8"), "stdlib/core/json.kry"))
         verifier = VM(compile_source((root / "stdlib" / "core" / "bytecode.kry").read_text(encoding="utf-8"), "stdlib/core/bytecode.kry"))
         runtime = VM(compile_source((root / "stdlib" / "core" / "runtime.kry").read_text(encoding="utf-8"), "stdlib/core/runtime.kry"))
@@ -1563,6 +1586,7 @@ class KryndelTests(unittest.TestCase):
                 self.assertEqual(decoded.variant_name, "Ok")
                 module = decoded.payloads[0]
                 self.assertEqual(verifier.execute("verify", [module]).variant_name, "Ok")
+                self.assertEqual(verifier.execute("verify_execution", [module]).variant_name, "Ok")
                 if "expected_output" in program:
                     output = io.StringIO()
                     with redirect_stdout(output):
@@ -1584,6 +1608,40 @@ class KryndelTests(unittest.TestCase):
                 elif isinstance(expected, str):
                     self.assertEqual(value.field("kind")[1], "String")
                     self.assertEqual(value.field("text")[1], expected)
+
+    def test_source_runtime_executes_bytes_collections_and_assertions(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "runtime-builtins-v1.json").read_text(encoding="utf-8"))
+        json_runtime = VM(compile_source((root / "stdlib" / "core" / "json.kry").read_text(encoding="utf-8"), "stdlib/core/json.kry"))
+        verifier = VM(compile_source((root / "stdlib" / "core" / "bytecode.kry").read_text(encoding="utf-8"), "stdlib/core/bytecode.kry"))
+        runtime = VM(compile_source((root / "stdlib" / "core" / "runtime.kry").read_text(encoding="utf-8"), "stdlib/core/runtime.kry"))
+        for name, program in fixture["positive"].items():
+            with self.subTest(positive=name):
+                decoded = json_runtime.execute("decode_bytecode", [program["source"]])
+                self.assertEqual(decoded.variant_name, "Ok")
+                module = decoded.payloads[0]
+                self.assertEqual(verifier.execute("verify_execution", [module]).variant_name, "Ok")
+                result = runtime.execute("run", [module])
+                self.assertEqual(result.variant_name, "Ok")
+                value = result.payloads[0]
+                if "expected_octets" in program or "expected_values" in program:
+                    expected_items = program.get("expected_octets", program.get("expected_values"))
+                    self.assertEqual([item.field("number")[1] for item in value.field("values")[1].items], expected_items)
+                elif "expected_int" in program:
+                    self.assertEqual(value.field("kind")[1], "Int")
+                    self.assertEqual(value.field("number")[1], program["expected_int"])
+                elif "expected_float" in program:
+                    self.assertEqual(value.field("kind")[1], "Float")
+                    self.assertAlmostEqual(value.field("float_number")[1], program["expected_float"], places=6)
+                else:
+                    self.assertEqual(value.field("kind")[1], program["expected_kind"])
+        for name, program in fixture["invalid"].items():
+            with self.subTest(invalid=name):
+                decoded = json_runtime.execute("decode_bytecode", [program["source"]])
+                self.assertEqual(decoded.variant_name, "Ok")
+                result = runtime.execute("run", [decoded.payloads[0]])
+                self.assertEqual(result.variant_name, "Error")
+                self.assertIn(program["error"], result.payloads[0])
 
     def test_source_backend_emits_deterministic_x86_64_seed(self) -> None:
         root = Path(__file__).parents[1]
@@ -1649,6 +1707,27 @@ class KryndelTests(unittest.TestCase):
         self.assertIn("je .L4", control_result.payloads[0])
         self.assertIn("jmp .L5", control_result.payloads[0])
         self.assertIn("mov $7, %rdi", control_result.payloads[0])
+        arithmetic_decoded = decoder.execute("decode_bytecode", [fixture["arithmetic_program_source"]])
+        self.assertEqual(arithmetic_decoded.variant_name, "Ok")
+        arithmetic_program = arithmetic_decoded.payloads[0]
+        self.assertEqual(verifier.execute("verify_execution", [arithmetic_program]).variant_name, "Ok")
+        arithmetic_result = backend.execute("emit_elf_program", [arithmetic_program, fixture["target"]])
+        self.assertEqual(arithmetic_result.variant_name, "Ok")
+        arithmetic_bytes = arithmetic_result.payloads[0]
+        self.assertEqual(arithmetic_bytes.items[:4], (127, 69, 76, 70))
+        with tempfile.TemporaryDirectory() as directory:
+            arithmetic_path = Path(directory) / "native addition"
+            arithmetic_path.write_bytes(bytes(arithmetic_bytes.items))
+            arithmetic_path.chmod(0o755)
+            executed_arithmetic = subprocess.run([str(arithmetic_path)], capture_output=True)
+            self.assertEqual(executed_arithmetic.returncode, fixture["arithmetic_expected_status"])
+            self.assertEqual(executed_arithmetic.stdout, b"")
+            self.assertEqual(executed_arithmetic.stderr, b"")
+        overflow_decoded = decoder.execute("decode_bytecode", [fixture["arithmetic_overflow_program_source"]])
+        self.assertEqual(overflow_decoded.variant_name, "Ok")
+        overflow_result = backend.execute("emit_elf_program", [overflow_decoded.payloads[0], fixture["target"]])
+        self.assertEqual(overflow_result.variant_name, "Error")
+        self.assertIn("KRY8007", overflow_result.payloads[0])
 
     def test_seed_cli_builds_native_elf_without_python_toolchain(self) -> None:
         root = Path(__file__).parents[1]
@@ -1706,6 +1785,72 @@ class KryndelTests(unittest.TestCase):
         self.assertIn("KRYSEED1 framing", checked.stdout)
         self.assertIn("not verified: compiler, full bytecode VM, package manager, or normal Python CLI replacement", checked.stdout)
 
+    def test_kexe_checker_runs_without_python_and_rejects_malformed_artifacts(self) -> None:
+        root = Path(__file__).parents[1]
+        checker = root / "tools" / "kry-kexe-check"
+        self.assertNotIn("python", checker.read_text(encoding="utf-8").lower())
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            artifact = base / "spaced artifact.kexe"
+            write_artifact(compile_source("println(42)\n", "kexe-check.kry"), artifact)
+            environment = {"PATH": "/usr/bin:/bin", "HOME": "", "LC_ALL": "C"}
+            verified = subprocess.run([str(checker), str(artifact)], env=environment, capture_output=True, text=True)
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            self.assertIn("verified KEXE v1", verified.stdout)
+            self.assertIn("sha256 ", verified.stdout)
+
+            tampered = base / "tampered.kexe"
+            tampered.write_bytes(artifact.read_bytes()[:-1] + bytes((artifact.read_bytes()[-1] ^ 1,)))
+            bad_checksum = subprocess.run([str(checker), str(tampered)], env=environment, capture_output=True, text=True)
+            self.assertEqual(bad_checksum.returncode, 65)
+            self.assertIn("KRY6205", bad_checksum.stderr)
+
+            bad_length = base / "bad-length.kexe"
+            payload = bytearray(artifact.read_bytes())
+            payload[11] ^= 1
+            bad_length.write_bytes(payload)
+            bad_frame = subprocess.run([str(checker), str(bad_length)], env=environment, capture_output=True, text=True)
+            self.assertEqual(bad_frame.returncode, 65)
+            self.assertIn("KRY6305", bad_frame.stderr)
+
+            link = base / "linked.kexe"
+            link.symlink_to(artifact)
+            bad_link = subprocess.run([str(checker), str(link)], env=environment, capture_output=True, text=True)
+            self.assertEqual(bad_link.returncode, 65)
+            self.assertIn("symlink", bad_link.stderr)
+
+    def test_bundle_checker_isolated_and_rejects_forbidden_dependencies(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "bundle-audit-v1.json").read_text(encoding="utf-8"))
+        self.assertEqual(fixture["version"], 1)
+        checker = root / "tools" / "kry-bundle-check"
+        environment = {"PATH": "/usr/bin:/bin", "HOME": "", "LC_ALL": "C"}
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            clean = base / "clean bundle"
+            (clean / "bin").mkdir(parents=True)
+            (clean / "stdlib").mkdir()
+            (clean / "bin" / "kry").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (clean / "stdlib" / "core.kry").write_text("fn main() -> Void { return nil }\n", encoding="utf-8")
+            accepted = subprocess.run([str(checker), str(clean)], env=environment, capture_output=True, text=True)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertIn("bundle audit passed", accepted.stdout)
+
+            forbidden = base / "forbidden"
+            (forbidden / "bin").mkdir(parents=True)
+            (forbidden / "bin" / "kry").write_text("#!/bin/sh\nexec python3 -m kryndel\n", encoding="utf-8")
+            (forbidden / "old.py").write_text("print('not bundled')\n", encoding="utf-8")
+            rejected = subprocess.run([str(checker), str(forbidden)], env=environment, capture_output=True, text=True)
+            self.assertEqual(rejected.returncode, fixture["exit_codes"]["malformed_or_forbidden"])
+            self.assertIn("forbidden", rejected.stderr)
+
+            linked = base / "linked"
+            (linked / "bin").mkdir(parents=True)
+            (linked / "bin" / "kry").symlink_to(clean / "bin" / "kry")
+            rejected_link = subprocess.run([str(checker), str(linked)], env=environment, capture_output=True, text=True)
+            self.assertEqual(rejected_link.returncode, fixture["exit_codes"]["malformed_or_forbidden"])
+            self.assertIn("forbidden", rejected_link.stderr)
+
     def test_source_formatter_matches_conservative_python_contract(self) -> None:
         root = Path(__file__).parents[1]
         formatter = VM(compile_source((root / "stdlib" / "core" / "format.kry").read_text(encoding="utf-8"), "stdlib/core/format.kry"))
@@ -1754,6 +1899,20 @@ class KryndelTests(unittest.TestCase):
         valid_module = runtime.execute("module", ["demo", "main", 1, ArrayValue((main,))])
         valid_result = runtime.execute("verify", [valid_module])
         self.assertEqual(valid_result.variant_name, "Ok")
+        executable_result = runtime.execute("verify_execution", [valid_module])
+        self.assertEqual(executable_result.variant_name, "Ok")
+        condition = runtime.execute("instruction", ["PUSH_CONST", 1, "int", "", 0, ArrayValue(())])
+        branch = runtime.execute("instruction", ["JUMP_IF_FALSE", 1, "", "", 4, ArrayValue(())])
+        taken = runtime.execute("instruction", ["PUSH_CONST", 1, "int", "", 0, ArrayValue(())])
+        skip = runtime.execute("instruction", ["JUMP", 1, "", "", 5, ArrayValue(())])
+        fallback = runtime.execute("instruction", ["PUSH_CONST", 1, "int", "", 0, ArrayValue(())])
+        branch_main = runtime.execute(
+            "function",
+            ["main", 0, ArrayValue(()), ArrayValue((42,)), ArrayValue((condition, branch, taken, skip, fallback, ret))],
+        )
+        branch_module = runtime.execute("module", ["branch", "main", 1, ArrayValue((branch_main,))])
+        branch_result = runtime.execute("verify_execution", [branch_module])
+        self.assertEqual(branch_result.variant_name, "Ok")
         self.assertEqual(fixture["valid"], ["PUSH_CONST", "CALL", "MAKE_ARRAY", "INDEX", "RETURN"])
 
         malformed = [
@@ -1775,6 +1934,29 @@ class KryndelTests(unittest.TestCase):
         missing_result = runtime.execute("verify", [missing_entry])
         self.assertEqual(missing_result.variant_name, "Error")
         self.assertIn(fixture["invalid"][3]["error"], missing_result.payloads[0])
+
+        underflow = runtime.execute("instruction", ["POP", 1, "", "", 0, ArrayValue(())])
+        underflow_main = runtime.execute("function", ["main", 0, ArrayValue(()), ArrayValue(()), ArrayValue((underflow,))])
+        underflow_module = runtime.execute("module", ["demo", "main", 1, ArrayValue((underflow_main,))])
+        underflow_result = runtime.execute("verify_execution", [underflow_module])
+        self.assertEqual(underflow_result.variant_name, "Error")
+        self.assertIn(fixture["invalid"][4]["error"], underflow_result.payloads[0])
+
+        ret = runtime.execute("instruction", ["RETURN", 1, "", "", 0, ArrayValue(())])
+        arity_call = runtime.execute("instruction", ["CALL", 1, "helper", "", 0, ArrayValue(())])
+        arity_main = runtime.execute("function", ["main", 0, ArrayValue(()), ArrayValue(()), ArrayValue((arity_call, ret))])
+        helper = runtime.execute("function", ["helper", 1, ArrayValue(("value",)), ArrayValue(()), ArrayValue(())])
+        arity_module = runtime.execute("module", ["demo", "main", 1, ArrayValue((arity_main, helper))])
+        arity_result = runtime.execute("verify", [arity_module])
+        self.assertEqual(arity_result.variant_name, "Error")
+        self.assertIn(fixture["invalid"][5]["error"], arity_result.payloads[0])
+
+        no_return = runtime.execute("instruction", ["PUSH_CONST", 1, "int", "", 0, ArrayValue(())])
+        no_return_main = runtime.execute("function", ["main", 0, ArrayValue(()), ArrayValue((1,)), ArrayValue((no_return,))])
+        no_return_module = runtime.execute("module", ["demo", "main", 1, ArrayValue((no_return_main,))])
+        no_return_result = runtime.execute("verify_execution", [no_return_module])
+        self.assertEqual(no_return_result.variant_name, "Error")
+        self.assertIn(fixture["invalid"][6]["error"], no_return_result.payloads[0])
 
     def test_manifest_parser_rejects_unsupported_syntax_and_accepts_subset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

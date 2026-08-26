@@ -6,6 +6,7 @@ import ast as python_ast
 import hashlib
 import inspect
 import json
+import re
 import textwrap
 import zipfile
 from dataclasses import dataclass
@@ -474,6 +475,158 @@ _HOST_REPLACEMENTS = {
     "array_push": "Kryndel-native immutable Array value operation",
 }
 
+_AUTONOMY_STATES = (
+    "Kryndel-native",
+    "host capability nativa mínima",
+    "bootstrap Python",
+    "no implementado",
+)
+
+_AUTONOMY_COMPONENTS = (
+    {
+        "component": "value runtime",
+        "evidence": "stdlib/core/value.kry + kryndel/vm.py",
+        "replacement": "native tagged values implementing value-layout-v1",
+        "status": "bootstrap Python",
+    },
+    {
+        "component": "bytecode and KEXE reader",
+        "evidence": "kryndel/bytecode.py + kryndel/artifact.py",
+        "replacement": "native canonical JSON/KEXE reader and verifier",
+        "status": "bootstrap Python",
+    },
+    {
+        "component": "compiler and front end",
+        "evidence": "kryndel/tokens.py, parser.py, type_checker.py, compiler.py",
+        "replacement": "native lexer/parser/checker/compiler",
+        "status": "bootstrap Python",
+    },
+    {
+        "component": "runtime and VM",
+        "evidence": "kryndel/vm.py",
+        "replacement": "native VM with explicit capability table",
+        "status": "bootstrap Python",
+    },
+    {
+        "component": "filesystem capability",
+        "evidence": "kryndel/filesystem.py + kryndel/vm.py",
+        "replacement": "native rooted filesystem capability",
+        "status": "bootstrap Python",
+    },
+    {
+        "component": "package manager and module loader",
+        "evidence": "kryndel/packages.py + kryndel/modules.py",
+        "replacement": "native offline resolver, loader, and staging",
+        "status": "bootstrap Python",
+    },
+    {
+        "component": "productive CLI",
+        "evidence": "kryndel/cli.py + kryndel/__main__.py",
+        "replacement": "native kry executable isolated from bootstrap PATH",
+        "status": "bootstrap Python",
+    },
+    {
+        "component": "formatter utility",
+        "evidence": "tools/kry-format",
+        "replacement": "native formatter integrated into the productive CLI",
+        "status": "host capability nativa mínima",
+    },
+    {
+        "component": "seed utilities",
+        "evidence": "tools/kry-seed and tools/kry-native-run",
+        "replacement": "Kryndel-generated runtime replacing fixed shell materializers",
+        "status": "host capability nativa mínima",
+    },
+    {
+        "component": "KEXE framing utility",
+        "evidence": "tools/kry-kexe-check",
+        "replacement": "native artifact reader and verifier in the stage-2 runtime",
+        "status": "host capability nativa mínima",
+    },
+    {
+        "component": "documentation and packer",
+        "evidence": "kryndel/tooling.py",
+        "replacement": "native doc and reproducible pack commands",
+        "status": "bootstrap Python",
+    },
+    {
+        "component": "core bundle",
+        "evidence": "no bundle command or target artifact exists",
+        "replacement": "reproducible target-specific bundle without bootstrap files",
+        "status": "no implementado",
+    },
+    {
+        "component": "self-hosting",
+        "evidence": "docs/roadmap-status.md formal gate",
+        "replacement": "two equivalent clean native rebuilds",
+        "status": "no implementado",
+    },
+    {
+        "component": "UI backend",
+        "evidence": "UINode dispatches in kryndel/vm.py",
+        "replacement": "exclude UI from core or define a separate native capability",
+        "status": "no implementado",
+    },
+)
+
+
+def autonomy_status_matrix() -> dict[str, object]:
+    """Return the explicit four-state implementation ownership matrix."""
+    counts = {state: 0 for state in _AUTONOMY_STATES}
+    for component in _AUTONOMY_COMPONENTS:
+        counts[component["status"]] += 1
+    return {
+        "components": [dict(component) for component in _AUTONOMY_COMPONENTS],
+        "counts": counts,
+        "states": list(_AUTONOMY_STATES),
+        "version": 1,
+    }
+
+
+def autonomy_audit_report(root: str | Path = ".") -> dict[str, object]:
+    """Identify the normal Python route and every documented replacement gap."""
+    project = Path(root).resolve()
+    bootstrap_modules = sorted(
+        path.relative_to(project).as_posix()
+        for path in (project / "kryndel").glob("*.py")
+        if path.is_file()
+    )
+    explicit_python_invocations = []
+    pattern = re.compile(r"(?:python3?\s+-m\s+kryndel|PYTHONPATH=.*python3?\s+-m\s+kryndel)")
+    for path in sorted(project.rglob("*")):
+        if not path.is_file() or ".git" in path.parts or path.suffix not in {".md", ".py", ".yaml", ".yml", ".sh"}:
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue
+        for number, line in enumerate(lines, 1):
+            if pattern.search(line):
+                explicit_python_invocations.append(
+                    {
+                        "file": path.relative_to(project).as_posix(),
+                        "line": number,
+                        "text": line.strip(),
+                    }
+                )
+    matrix = autonomy_status_matrix()
+    return {
+        "bootstrap_modules": bootstrap_modules,
+        "contract": "kryndel-autonomy-audit",
+        "normal_python_route": {
+            "entrypoint": "python3 -m kryndel",
+            "vm": "kryndel/vm.py",
+            "source_seams": "stdlib/**/*.kry interpreted by the bootstrap VM",
+        },
+        "pending_replacements": [
+            component for component in matrix["components"]
+            if component["status"] != "Kryndel-native"
+        ],
+        "python_invocations": explicit_python_invocations,
+        "status_matrix": matrix,
+        "version": 1,
+    }
+
 
 def _builtin_names_in_vm() -> set[str]:
     """Extract dispatch names so a new VM intrinsic cannot evade the report."""
@@ -554,11 +707,14 @@ def host_boundary_report() -> dict[str, object]:
         layer: {"Kryndel": 0, "host temporal": 100, "no implementado": 0}
         for layer in layers
     }
+    matrix = autonomy_status_matrix()
     return {
+        "autonomy": matrix,
         "contract": "kryndel-host-boundary",
         "intrinsics": intrinsics,
         "layers": percentages,
         "state_counts": {"Kryndel": 0, "host temporal": len(intrinsics), "no implementado": 0},
+        "status_matrix": matrix,
         "unlisted_intrinsics": [],
         "version": 1,
     }

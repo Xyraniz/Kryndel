@@ -4,6 +4,22 @@ Kryndel is a Python standard-library bootstrap with explicit boundaries. The
 boundaries are contracts for a future independent compiler/runtime; they are
 not a claim that the current implementation is self-hosted.
 
+## Transition stages
+
+| Stage | Ownership | Current evidence |
+| --- | --- | --- |
+| stage-0 | Python bootstrap compiler, VM, CLI, and differential oracle | `kryndel/*.py`; normal route is `python3 -m kryndel` |
+| stage-1 | Kryndel source seams and frozen contracts | `stdlib/**/*.kry` plus versioned fixtures; source seams still run through stage-0 |
+| stage-2 | Native artifact reader, verifier, runtime, and capability table | Not implemented; the fixed seed utilities are only host-capability checkpoints |
+| stage-3 | Native compiler, module loader, package manager, and productive CLI | Not implemented |
+| stage-4 | Reproducible target-specific user bundle | Not implemented |
+| stage-5 | Native compiler self-build and two equivalent clean rebuilds | Not implemented |
+
+`kry autonomy-audit` is the executable inventory of this boundary. A source
+module is **seam fuente bajo bootstrap Python** whenever its normal execution
+enters `kryndel/vm.py`; the source language alone does not establish native
+ownership.
+
 ## Pipeline
 
 ```text

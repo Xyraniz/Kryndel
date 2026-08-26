@@ -1,6 +1,7 @@
 // Minimal direct backend for the first native seed target.
 // Besides the empty-main seed, this target accepts one PUSH_CONST/RETURN
-// program whose scalar constant is an exit status in 0..255.
+// program whose scalar constant is an exit status in 0..255 and one bounded
+// PUSH_CONST/PUSH_CONST/BINARY(+)/RETURN program emitted directly as ELF bytes.
 
 struct FunctionRecord {
     name: String
@@ -121,6 +122,62 @@ enum BytesResult {
     Error(String)
 }
 
+fn little32(value: Int) -> Array {
+    return [value % 256, int(value / 256) % 256, int(value / 65536) % 256, int(value / 16777216) % 256]
+}
+
+fn little64(value: Int) -> Array {
+    return [value % 256, int(value / 256) % 256, int(value / 65536) % 256, int(value / 16777216) % 256, 0, 0, 0, 0]
+}
+
+fn append_ints(left: Array, right: Array) -> Array {
+    let mut result: Array = []
+    let mut index: Int = 0
+    while index < len(left) {
+        result = array_push(result, left[index])
+        index = index + 1
+    }
+    index = 0
+    while index < len(right) {
+        result = array_push(result, right[index])
+        index = index + 1
+    }
+    return result
+}
+
+fn arithmetic_elf_bytes(left: Int, right: Int) -> Bytes {
+    let left_code: Array = append_ints([184], little32(left))
+    let right_code: Array = append_ints([5], little32(right))
+    let arithmetic: Array = append_ints(left_code, right_code)
+    let exit_code: Array = append_ints([137, 199], [184, 60, 0, 0, 0, 15, 5])
+    let code: Array = append_ints(arithmetic, exit_code)
+    let total: Int = 120 + len(code)
+    let mut header: Array = [127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 62, 0, 1, 0, 0, 0]
+    header = append_ints(header, little64(4194424))
+    header = append_ints(header, little64(64))
+    header = append_ints(header, little64(0))
+    header = append_ints(header, [0, 0, 0, 0, 64, 0, 56, 0, 1, 0, 0, 0, 0, 0, 0, 0])
+    header = append_ints(header, [1, 0, 0, 0, 5, 0, 0, 0])
+    header = append_ints(header, little64(0))
+    header = append_ints(header, little64(4194304))
+    header = append_ints(header, little64(4194304))
+    header = append_ints(header, little64(total))
+    header = append_ints(header, little64(total))
+    header = append_ints(header, little64(4096))
+    return bytes(append_ints(header, code))
+}
+
+fn arithmetic_exit_program(functions: Array) -> Bool {
+    if len(functions) != 1 { return false }
+    let main: FunctionRecord = functions[0]
+    if main.name != "main" or main.arity != 0 or len(main.parameters) != 0 or len(main.constants) != 2 or len(main.instructions) != 4 { return false }
+    let first: InstructionRecord = main.instructions[0]
+    let second: InstructionRecord = main.instructions[1]
+    let operation: InstructionRecord = main.instructions[2]
+    let finish: InstructionRecord = main.instructions[3]
+    return first.op == "PUSH_CONST" and first.number == 0 and second.op == "PUSH_CONST" and second.number == 1 and operation.op == "BINARY" and operation.text == "+" and finish.op == "RETURN"
+}
+
 fn elf_seed_bytes(code: Int) -> Bytes {
     let items: Array = [
         127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0,
@@ -165,6 +222,16 @@ pub fn emit_program(value: ModuleRecord, target: String) -> BackendResult {
 
 pub fn emit(value: ModuleRecord, target: String) -> BackendResult {
     return emit_exit(value, target, 0)
+}
+
+pub fn emit_elf_program(value: ModuleRecord, target: String) -> BytesResult {
+    if target != "x86_64-linux" { return BytesResult.Error("KRY8001 unsupported target") }
+    if !arithmetic_exit_program(value.functions) { return BytesResult.Error("KRY8006 backend accepts only bounded integer addition") }
+    let main: FunctionRecord = value.functions[0]
+    let left: Int = int(main.constants[0])
+    let right: Int = int(main.constants[1])
+    if left < 0 or right < 0 or left + right > 255 { return BytesResult.Error("KRY8007 integer addition exit status must be in 0..255") }
+    return BytesResult.Ok(arithmetic_elf_bytes(left, right))
 }
 
 pub fn emit_elf_exit(value: ModuleRecord, target: String, code: Int) -> BytesResult {

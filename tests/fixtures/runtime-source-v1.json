@@ -1,5 +1,6 @@
 {
   "contract": "kryndel-source-runtime",
+  "execution_verifier": "verify_execution",
   "programs": {
     "arithmetic": {
       "expected": 5,

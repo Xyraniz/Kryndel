@@ -5,6 +5,13 @@ compiler and VM are currently written in Python's standard library. Kryndel is
 not self-hosted yet; this repository is building the stable interfaces needed
 to replace that bootstrap over time.
 
+The transition is explicit: **stage-0** is the Python bootstrap and differential
+oracle, **stage-1** is the set of Kryndel source seams, **stage-2** is the
+planned native runtime, **stage-3** is the planned native compiler, and
+**stage-4** is the planned distributable bundle. A source module interpreted by
+`kryndel/vm.py` is still a **seam fuente bajo bootstrap Python**, not a native
+implementation.
+
 ## Current language
 
 The front end supports explicit primitive types, immutable/mutable bindings,
@@ -56,12 +63,12 @@ bootstrap VM, not a native runtime claim.
 `stdlib/core/checker.kry` validates that subset, consumes tagged literal payloads
 for Int/Float/Bool/String/Void assignments, and resolves normalized module
 graphs with deterministic missing, duplicate, and cycle diagnostics.
-`stdlib/core/compiler.kry` lowers the same subset into bytecode records accepted by the source verifier, preserving typed constant categories. `stdlib/core/runtime.kry` executes the verified runtime subset end to end with stack frames, locals, typed Int/Float/Bool/String/Nil values, structs, enums, arrays, tuples, indexing, arithmetic, comparisons, jumps, internal calls, builtin output, and serializable runtime errors; `runtime-source-v1.json` freezes representative programs. The source module remains interpreted by the Python bootstrap.
-`stdlib/core/backend.kry` also lowers one JSON-decoded `PUSH_CONST`/`RETURN` program and one fixed conditional-jump seed to bounded x86_64 Linux exit assembly, and `emit_elf_exit` returns the exact 132-byte ELF64 seed as `Bytes` with the exit status patched directly. A regression executes those bytes from a path with spaces. `tools/kry-seed` emits and runs a raw x86_64 Linux ELF empty-main seed with a validated exit status in 0..255, without Python, `as`, or `ld`; the direct source emitter is still a fixed seed template, not a general backend.
+`stdlib/core/compiler.kry` lowers the same subset into bytecode records accepted by the source verifier, preserving typed constant categories. `stdlib/core/runtime.kry` executes the verified runtime subset end to end with stack frames, locals, typed Int/Float/Bool/String/Nil values, structs, enums, arrays, tuples, indexing, arithmetic, comparisons, jumps, internal calls, builtin output, `bytes`, immutable `array_push`, `assert`, and `assert_eq`; `runtime-source-v1.json` and `runtime-builtins-v1.json` freeze representative programs and negative codes. The source module remains interpreted by the Python bootstrap, and strict UTF-8 conversion remains a pending boundary.
+`stdlib/core/backend.kry` also lowers one JSON-decoded `PUSH_CONST`/`RETURN` program and one fixed conditional-jump seed to bounded x86_64 Linux exit assembly, and `emit_elf_exit` returns the exact 132-byte ELF64 seed as `Bytes` with the exit status patched directly. A regression executes those bytes from a path with spaces. `tools/kry-seed` emits and runs a raw x86_64 Linux ELF empty-main seed with a validated exit status in 0..255, without Python, `as`, or `ld`; the source backend now also emits and executes a bounded `PUSH_CONST`/`PUSH_CONST`/`BINARY(+)`/`RETURN` ELF image directly, while general lowering remains unimplemented.
 `tools/kry-seed-check` verifies that seed only under an isolated `PATH`/`HOME`, including a spaced output directory and deterministic bytes; it is not a toolchain bundle. `tools/kry-native-run` and `tools/kry-native-run-check` add a narrower KRYSEED1 native-runtime checkpoint: a fixed x86_64 ELF reads a bounded framed module, writes its payload to stdout, returns the first payload byte, and rejects malformed or missing files without Python or a dynamic loader. The launcher still materializes that fixed image with POSIX shell utilities, so this is not the final bundle or normal CLI.
 
 `stdlib/core/artifact.kry` now reads and rebuilds KEXE v1 framing bytes, validates magic and payload length, and canonicalizes checksum text for the source verifier. `stdlib/core/sha256.kry` implements and verifies SHA-256 over `Bytes` with known vectors; a source-level regression validates an extracted KEXE payload and rejects tampering. `stdlib/core/json.kry` parses the tested JSON value grammar into nominal values, decodes every v1 instruction metadata shape from strings, payload bytes, or controlled `fs.read_text` input, and emits canonical JSON with typed scalar categories. A regression now composes the real KEXE framing, source SHA-256, source schema decoder, verifier, and source runtime; full native compiler, artifact/package ownership, and final bundle paths remain under the Python bootstrap.
-`stdlib/core/format.kry` provides the conservative trailing-whitespace and final-newline formatter contract in source, and `tools/kry-format` exposes it as a no-Python check/rewrite CLI.
+`stdlib/core/format.kry` provides the conservative trailing-whitespace and final-newline formatter contract in source, and `tools/kry-format` exposes it as a no-Python check/rewrite CLI. `tools/kry-kexe-check` independently validates KEXE v1 framing, payload length, SHA-256, and symlink rejection using a minimal host utility boundary; it does not decode or execute modules and is not part of the final bundle. `tools/kry-bundle-check` audits candidate bundle directories for forbidden Python/toolchain invocations, caches, artifacts, and symlinks; it validates packaging policy but does not create a bundle.
 These source modules execute through the Python bootstrap;
 the compiler and VM remain Python implementations.
 
@@ -108,7 +115,14 @@ The implemented registry is local and offline:
 Supported commands are `new`, `init`, `add`, `remove`, `install`, `update`,
 `list`, `tree`, `check`, `build`, `run`, `inspect`, `fmt`, `test`, `doc`, `pack`,
 `reproducible`, `inspect-bytecode`, `verify-bytecode`, `verify-artifact`,
-`abi`, `host-report`, and `clean`:
+`abi`, `host-report`, `autonomy-audit`, and `clean`. The `autonomy-audit`
+report identifies the normal Python route, its pending replacements, and the
+four implementation states (`Kryndel-native`, `host capability nativa mínima`,
+`bootstrap Python`, and `no implementado`):
+
+```bash
+PYTHONPATH=. python3 -m kryndel autonomy-audit
+```
 
 ```bash
 PYTHONPATH=. python3 -m kryndel init demo
@@ -235,6 +249,8 @@ fixture and source constructors in addition to existing structs and unit enums,
 payload enums and match, diagnostics, malformed bytecode/runtime,
 manifests, lockfiles, semver, local resolution, checksums, imports, CLI, KEXE,
 data-core slices/builders/records, source manifest ranges, lockfile JSON,
-normalized bytecode verification, determinism, and security boundaries. The
-current checkout runs 113 Python unit tests; the
-historical 78-test wording in older release notes is no longer accurate.
+normalized bytecode verification, determinism, and security boundaries. The pre-change checkout measured **117 Python unit tests**; the audit, KEXE, bundle-policy, and runtime-builtins checkpoints add one
+regression each, so the post-change suite measures **121 tests**.
+The historical 78- and 113-test wording in older release notes is no longer
+accurate. These counts measure the bootstrap suite, not independence from
+Python.
