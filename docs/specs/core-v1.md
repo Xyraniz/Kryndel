@@ -10,10 +10,13 @@ The report emits the relative fixture path, byte length, SHA-256 checksum, and v
 
 ## Required fixture invariants
 
-The value/runtime fixture must declare version `1`, contain valid and invalid cases, and cover the currently frozen bootstrap errors `KRY6102`, `KRY6104`, `KRY6201`, `KRY6202`, `KRY6301`, `KRY6303`, and `KRY6305`. The Bytes fixture must expose construction and operation records; the collection fixture must declare immutable `array_push`; the filesystem fixture must declare all `fs.*` operations and the `FileMetadata` fields; the testing fixture must point at `stdlib/testing/testing.kry`; and the host-boundary fixture must expose intrinsic and layer records.
+The value/runtime fixture must declare version `1`, contain valid and invalid
+cases, and cover the currently frozen bootstrap errors `KRY6102`, `KRY6104`,
+`KRY6201`, `KRY6202`, `KRY6301`, `KRY6303`, and `KRY6305`. The Bytes fixture must expose construction and operation records; the collection fixture must declare immutable `array_push`; the filesystem fixture must declare all `fs.*` operations and the `FileMetadata` fields; the testing fixture must point at `stdlib/testing/testing.kry`; the host-boundary fixture must expose intrinsic and layer records; and `data-core-v1.json` must declare the source-level bounded readers, balanced string builder, nominal record layouts, and stable bounds errors.
+
 
 > `kry core-report` validates the current Python bootstrap reference. It does not move implementation ownership from Python to Kryndel and must not be used as evidence of self-hosting.
 
 ## Compatibility rule
 
-A future Kryndel-native reader may reproduce this report byte for byte. Until that differential check exists, the Python command remains the reference implementation and the roadmap must continue to identify the compiler, runtime, filesystem, and tooling layers as host-temporary.
+A future Kryndel-native reader may reproduce this report byte for byte. The data-core source module is executable through the bootstrap VM and provides real bounded-reader, builder, and record behavior, but its runtime remains Python-owned. Until a native differential check retires that ownership, the Python command remains the reference implementation and the roadmap must continue to identify the compiler, runtime, filesystem, and tooling layers as host-temporary.

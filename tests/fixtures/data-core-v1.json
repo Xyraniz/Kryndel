@@ -1,0 +1,100 @@
+{
+  "contract": "kryndel-data-core",
+  "invalid": [
+    {
+      "case": "string_slice_negative_start",
+      "error": "KRY6202"
+    },
+    {
+      "case": "string_slice_reversed",
+      "error": "KRY6202"
+    },
+    {
+      "case": "bytes_slice_out_of_bounds",
+      "error": "KRY6202"
+    },
+    {
+      "case": "string_slice_index_out_of_bounds",
+      "error": "KRY6104"
+    },
+    {
+      "case": "bytes_slice_index_out_of_bounds",
+      "error": "KRY6104"
+    }
+  ],
+  "operations": {
+    "bytes_slice": "bytes_slice(Bytes, Int, Int) -> BytesSliceResult",
+    "bytes_slice_get": "bytes_slice_get(BytesSlice, Int) -> BytesReadResult",
+    "bytes_slice_length": "bytes_slice_length(BytesSlice) -> Int",
+    "bytes_slice_to_bytes": "bytes_slice_to_bytes(BytesSlice) -> Bytes",
+    "string_builder_append": "string_builder_append(StringBuilder, String) -> StringBuilder",
+    "string_builder_finish": "string_builder_finish(StringBuilder) -> String",
+    "string_builder_new": "string_builder_new() -> StringBuilder",
+    "string_slice": "string_slice(String, Int, Int) -> StringSliceResult",
+    "string_slice_get": "string_slice_get(StringSlice, Int) -> StringReadResult",
+    "string_slice_length": "string_slice_length(StringSlice) -> Int",
+    "string_slice_to_string": "string_slice_to_string(StringSlice) -> String"
+  },
+  "records": {
+    "AstRecord": [
+      "kind",
+      "text",
+      "span",
+      "children"
+    ],
+    "DiagnosticRecord": [
+      "severity",
+      "code",
+      "message",
+      "span",
+      "notes",
+      "help"
+    ],
+    "SpanRecord": [
+      "start",
+      "end",
+      "line",
+      "column"
+    ],
+    "TokenRecord": [
+      "kind",
+      "text",
+      "span"
+    ]
+  },
+  "source": "stdlib/core/data.kry",
+  "valid": [
+    {
+      "case": "unicode_string_slice",
+      "expected": {
+        "index0": "é",
+        "index1": "z",
+        "length": 2
+      }
+    },
+    {
+      "case": "bytes_slice",
+      "expected": {
+        "index0": 255,
+        "index1": 0,
+        "length": 2
+      }
+    },
+    {
+      "case": "balanced_builder",
+      "expected": "Kryndel data core"
+    },
+    {
+      "case": "nominal_records",
+      "expected": {
+        "span": [
+          2,
+          4,
+          1,
+          3
+        ]
+      }
+    }
+  ],
+  "version": 1
+}

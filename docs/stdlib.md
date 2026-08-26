@@ -16,7 +16,9 @@ contracts below are compiled and executed as ordinary Kryndel modules.
 
 The source tree currently contains `stdlib/core`, `stdlib/string`,
 `stdlib/collections`, and `stdlib/testing`; each existing file has executable
-signatures and tests.
+signatures and tests. `stdlib/core/data.kry` adds the first toolchain-oriented
+bounded readers, a non-quadratic divide-and-conquer string builder, and nominal
+record constructors as ordinary Kryndel source.
 The core modules now expose these non-generic APIs directly in Kryndel:
 
 | Module | Source-level operations | Boundary status |
@@ -29,6 +31,7 @@ The core modules now expose these non-generic APIs directly in Kryndel:
 | `testing` | `assert_true`, `assert_equal_int`, `assert_equal_string` | Source wrappers over visible assertion primitives; failures use `KRY6401` and `KRY6402` |
 | `core/filesystem` | `read_bytes`, `read_text`, `write_bytes`, `list_dir`, `stat` | Source wrappers over explicit `fs.*` capability; metadata uses `FileMetadata` and errors use `KRY6301`–`KRY6304` |
 | `core/manifest` | `parse(String) -> ManifestResult`, `read(String) -> ManifestResult` | Strict source parser over `Bytes`/filesystem; semantic error payloads are nominal `ManifestResult`, while `packages.py` remains the differential oracle |
+| `core/data` | bounded `StringSlice`/`BytesSlice`, balanced `StringBuilder`, `SpanRecord`, `TokenRecord`, `AstRecord`, and `DiagnosticRecord` constructors/accessors | Real source behavior executed by the bootstrap VM; data layouts and bounds errors are frozen by `data-core-v1.json`, but implementation ownership remains Python |
 
 The fallback accessors are total and therefore do not yet define a value-absent
 runtime error. A partial `unwrap` API will be added only after a serializable
@@ -37,6 +40,5 @@ only with real APIs and host-boundary tests, rather than empty declarations. The
 Bytes wrappers are tested by `tests/test_kryndel.py` and the deterministic
 `tests/fixtures/bytes-v1.json` contract. The filesystem wrapper is covered by `tests/fixtures/filesystem-v1.json` and by execution tests over both the in-memory and rooted adapters. Immutable collection append is covered by `tests/fixtures/collections-v1.json` and its runtime tests.
 
-Kryndel is not independent of Python yet. A future native runtime must replace
-the bootstrap implementation while preserving the documented bytecode, module,
-ABI, and runtime-error contracts.
+Kryndel is not independent of Python yet. A future native runtime must replace the bootstrap implementation while preserving the documented bytecode, module,
+ABI, data-core, and runtime-error contracts.

@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 78 tests and covers:
+The suite contains 91 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -17,6 +17,7 @@ The suite contains 78 tests and covers:
 | Compiler/VM | deterministic `MAKE_ENUM`, matching, extraction, equality, immutable `BytesValue`, strict UTF-8, octet validation, Bytes concatenation/indexing, assertions, malformed metadata, runtime errors |
 | Packages and modules | manifest subset, semver, local/path registry, transitives, lock ordering, cycles, checksums, traversal, nested module resolution, ambiguity, exports, private symbols, deterministic linking |
 | CLI/artifacts | human/JSON errors, exit codes, init/add/install/list/tree, build/run/inspect, KEXE checksums, `host-report`, `doc`, `pack`, and structured `kry test` results |
+| Data core | bounded Unicode StringSlice and BytesSlice readers, explicit bounds errors, balanced StringBuilder, and nominal Span/Token/AST/diagnostic source records |
 
 Failure tests assert stable codes and useful spans rather than entire prose
 paragraphs. Happy-path tests run through `compile_source` or the project-aware
@@ -30,7 +31,10 @@ assertions are available through `stdlib/testing/testing.kry`; failures use
 `KRY6401` and `KRY6402`. `kry test --format json` runs each test in a fresh
 compiled VM and reports deterministic per-test status without tracebacks.
 Determinism tests compile identical source and resolve identical package/module
-graphs twice.
+graphs twice. The data-core test compiles `stdlib/core/data.kry` through the
+bootstrap VM, checks Unicode codepoint indexing and octet indexing, exercises
+invalid bounds, builds a string from chunks, and verifies declaration-ordered
+nominal records against `tests/fixtures/data-core-v1.json`.
 
 Temporary package registries are created under temporary directories. Tests
 never modify a user's package registry or install Python dependencies. The

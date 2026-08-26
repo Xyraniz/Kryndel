@@ -410,6 +410,74 @@ class KryndelTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeKryndelError, "KRY6203"):
             VM(compile_source("fn bad(value: Any) -> Array { return array_push(value, 2) }", "collections-invalid.kry")).execute("bad", [1])
 
+    def test_data_core_source_contract_is_deterministic_and_bounded(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "data-core-v1.json").read_text(encoding="utf-8"))
+        self.assertEqual(fixture["contract"], "kryndel-data-core")
+        self.assertEqual(fixture["version"], 1)
+        self.assertEqual(
+            fixture["operations"]["string_slice"],
+            "string_slice(String, Int, Int) -> StringSliceResult",
+        )
+        source = (root / "stdlib" / "core" / "data.kry").read_text(encoding="utf-8")
+        runtime = VM(compile_source(source, "stdlib/core/data.kry"))
+
+        sliced = runtime.execute("string_slice", ["aéz", 1, 3])
+        self.assertIsInstance(sliced, EnumValue)
+        self.assertEqual(sliced.type_name, "StringSliceResult")
+        self.assertEqual(sliced.variant_name, "Ok")
+        string_slice = sliced.payloads[0]
+        self.assertEqual(runtime.execute("string_slice_length", [string_slice]), fixture["valid"][0]["expected"]["length"])
+        self.assertEqual(runtime.execute("string_slice_get", [string_slice, 0]), EnumValue("StringReadResult", "Ok", (fixture["valid"][0]["expected"]["index0"],)))
+        self.assertEqual(runtime.execute("string_slice_get", [string_slice, 1]), EnumValue("StringReadResult", "Ok", (fixture["valid"][0]["expected"]["index1"],)))
+        self.assertEqual(runtime.execute("string_slice_to_string", [string_slice]), "éz")
+        out_of_bounds = runtime.execute("string_slice_get", [string_slice, 2])
+        self.assertEqual(out_of_bounds.variant_name, "Error")
+        self.assertIn("KRY6104", out_of_bounds.payloads[0])
+        invalid_string = runtime.execute("string_slice", ["abc", -1, 2])
+        self.assertEqual(invalid_string.variant_name, "Error")
+        self.assertIn("KRY6202", invalid_string.payloads[0])
+        reversed_string = runtime.execute("string_slice", ["abc", 2, 1])
+        self.assertEqual(reversed_string.variant_name, "Error")
+        self.assertIn("KRY6202", reversed_string.payloads[0])
+
+        bytes_value = BytesValue((0x41, 0xFF, 0x00))
+        byte_result = runtime.execute("bytes_slice", [bytes_value, 1, 3])
+        byte_slice = byte_result.payloads[0]
+        self.assertEqual(runtime.execute("bytes_slice_length", [byte_slice]), fixture["valid"][1]["expected"]["length"])
+        self.assertEqual(runtime.execute("bytes_slice_get", [byte_slice, 0]), EnumValue("BytesReadResult", "Ok", (fixture["valid"][1]["expected"]["index0"],)))
+        self.assertEqual(runtime.execute("bytes_slice_get", [byte_slice, 1]), EnumValue("BytesReadResult", "Ok", (fixture["valid"][1]["expected"]["index1"],)))
+        self.assertEqual(runtime.execute("bytes_slice_to_bytes", [byte_slice]), BytesValue((0xFF, 0x00)))
+        invalid_bytes = runtime.execute("bytes_slice", [bytes_value, 2, 4])
+        self.assertEqual(invalid_bytes.variant_name, "Error")
+        self.assertIn("KRY6202", invalid_bytes.payloads[0])
+        self.assertEqual(
+            {case["error"] for case in fixture["invalid"]},
+            {"KRY6104", "KRY6202"},
+        )
+
+        empty_builder = runtime.execute("string_builder_new", [])
+        one_chunk_builder = runtime.execute("string_builder_append", [empty_builder, "x"])
+        self.assertEqual(runtime.execute("string_builder_finish", [empty_builder]), "")
+        self.assertEqual(runtime.execute("string_builder_finish", [one_chunk_builder]), "x")
+        builder = empty_builder
+        for chunk in ("Kry", "ndel ", "data ", "core"):
+            builder = runtime.execute("string_builder_append", [builder, chunk])
+        self.assertEqual(runtime.execute("string_builder_finish", [builder]), fixture["valid"][2]["expected"])
+
+        location = runtime.execute("span", [2, 4, 1, 3])
+        token = runtime.execute("token", ["LET", "let", location])
+        ast = runtime.execute("ast", ["Literal", "42", location, ArrayValue(())])
+        diagnostic = runtime.execute(
+            "diagnostic",
+            ["error", "KRY1001", "unexpected character", location, ArrayValue(("note",)), "remove it"],
+        )
+        self.assertEqual(location.fields, tuple(zip(("start", "end", "line", "column"), fixture["valid"][3]["expected"]["span"])))
+        self.assertEqual(token.fields[0], ("kind", "LET"))
+        self.assertEqual(token.fields[2][1], location)
+        self.assertEqual(ast.fields[0:3], (("kind", "Literal"), ("text", "42"), ("span", location)))
+        self.assertEqual(diagnostic.fields[0:4], (("severity", "error"), ("code", "KRY1001"), ("message", "unexpected character"), ("span", location)))
+
     def test_manifest_parser_executes_from_kryndel_over_filesystem_api(self) -> None:
         root = Path(__file__).parents[1]
         source = (root / "stdlib" / "core" / "manifest.kry").read_text(encoding="utf-8")
