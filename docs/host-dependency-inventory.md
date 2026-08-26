@@ -6,20 +6,39 @@ executed implementation owned by the Python bootstrap. At this milestone every
 executable compiler/runtime path remains Python-owned; Kryndel source modules
 provide API wrappers and signatures, while their host capabilities remain temporary.
 
+The inventory distinguishes four implementation states rather than presenting a
+single autonomy percentage:
+
+| State | Meaning in this repository |
+| --- | --- |
+| `Kryndel-native` | The normal path is implemented in Kryndel-native code and does not invoke the Python VM. |
+| `host capability nativa mínima` | A narrow, explicitly audited host operation is used outside the language core without a Python dependency in its tested path. |
+| `bootstrap Python` | The implementation, source seam, or normal CLI path is owned or executed by the Python bootstrap. |
+| `no implementado` | The replacement or promised product capability does not exist yet. |
+
+`Python share` below is retained as a per-capability implementation-path field
+for compatibility with the existing fixture. It is not a project-wide
+percentage. The machine-readable `kry autonomy-audit` report is the authoritative
+component matrix for the transition and records exact source invocations and
+pending replacements.
+
 | Capability | Kryndel-visible signature | Current host operation | Serializable error | Evidence | Python share | Replacement |
 | --- | --- | --- | --- | --- | ---: | --- |
 | String length/index | `len(String)`, `String[Int]` | `VM.builtin("len")`, `VM.index` | `KRY6102`, `KRY6103`, `KRY6104`, `KRY6105` | sequence tests | 100% | Kryndel `StringValue` + byte reader |
 | Array/Tuple layout | `[values]`, `(values)` | `MAKE_ARRAY`, `MAKE_TUPLE`, `ArrayValue`, `TupleValue` | `KRY6101`–`KRY6105` | bytecode/runtime tests | 100% | Kryndel nominal sequence runtime |
 | Immutable array append | `array_push(Array, Any) -> Array` | `VM.builtin`, immutable `ArrayValue` reconstruction | `KRY6203` | `collections-v1.json`, collection runtime tests | 100% | Kryndel-native immutable Array operation |
-| Bytes value/conversion | `bytes(Array)`, `string_to_bytes(String)`, `bytes_to_string(Bytes)`, `Bytes[Int]`, `Bytes + Bytes` | `BytesValue`, `VM.builtin`, `VM.index`, `VM.binary` | `KRY6102`, `KRY6104`, `KRY6201`, `KRY6202`, `KRY6203`, `KRY6105` | `tests/fixtures/bytes-v1.json`, Bytes runtime tests | 100% | Kryndel nominal octet value and UTF-8 decoder |
-| Testing assertions | `assert(Bool)`, `assert_eq(Any, Any)` | `VM.builtin`, `tooling.run_kryndel_tests` | `KRY6401`, `KRY6402` | `tests/fixtures/stdlib-testing-v1.json`, `stdlib/testing/testing.kry` | 100% | Kryndel-native assertion values and runner |
+| Bytes value/conversion | `bytes(Array)`, `string_to_bytes(String)`, `bytes_to_string(Bytes)`, `Bytes[Int]`, `Bytes + Bytes` | Bootstrap `BytesValue`/`VM.builtin`; source runtime now owns normalized `bytes(Array)` construction and `Bytes` layout under `runtime-builtins-v1.json` | `KRY6102`, `KRY6104`, `KRY6201`, `KRY6202`, `KRY6203`, `KRY6105` | `tests/fixtures/bytes-v1.json`, `runtime-builtins-v1.json`, Bytes runtime tests | 100% normal path; source subset partial | Complete strict UTF-8 and native Bytes value in the stage-2 runtime |
+| Testing assertions | `assert(Bool)`, `assert_eq(Any, Any)` | Bootstrap `VM.builtin`; source runtime now validates bool/equality values and returns nominal `Nil` for passing assertions | `KRY6401`, `KRY6402` | `tests/fixtures/stdlib-testing-v1.json`, `runtime-builtins-v1.json`, `stdlib/testing/testing.kry` | 100% normal path; source subset partial | Native assertion values and isolated test runner |
 | Option/Result | `Option.None`, `Option.Some(Int)`, `Result.Ok(Int)`, `Result.Error(String)` | enum compiler/VM paths | existing enum diagnostics; future `KRY6204` | `stdlib/core/*.kry` | 100% | Kryndel enum/value runtime |
 | Conversion | `str(Any)`, `int(Any)`, `float(Any)` | `VM.builtin` conversion branches | CLI-normalized host errors | string/conversion tests | 100% | Kryndel conversion functions |
+| Math core | `abs(Int/Float)`, `sqrt(Float)` | Bootstrap `VM.builtin`; source runtime now implements Int/Float `abs` and bounded Newton `sqrt` | `KRY6202` for invalid type or negative input | `runtime-builtins-v1.json`, runtime source regression | 100% normal path; source subset partial | Move numeric operations to the native value/runtime implementation |
 | Output | `print(Any)`, `println(Any)` | `VM.emit_output` | IO mapping not yet frozen in bootstrap | CLI/example runs | 100% | minimal output host primitive |
 | Clock | `clock() -> Float` | `time.monotonic()` | `KRY6301` | `types.py`, `vm.py` | 100% | monotonic-clock host primitive with test seam |
 | UI text tree | `ui.*` signatures | `UINode` host object/render | `KRY6000` runtime wrapper | `examples/ui_tree.kry` | 100% | explicit portable tree value or host capability |
 | Bytecode read/verify | `kry verify-bytecode` | Python JSON parser/verifier | `KRY6002`, `KRY6305` | `tooling.py`, `stdlib/core/bytecode.kry`, `bytecode-native-verifier-v1.json` | 100% normal path | Replace the JSON/KEXE reader and checksum with the source verifier plus a native byte reader |
 | KEXE framing reader | `core/artifact.read_file(String) -> ReadResult`, `read_header(Bytes) -> ReadResult`, `write_artifact_bytes(Bytes, Bytes) -> WriteResult` | `VM` executes source framing parser, controlled `fs.read_bytes` loader, and inverse byte constructor; it validates magic/length, extracts checksum/payload bytes, and rebuilds framing deterministically | `KRY6305`; missing file remains the filesystem `KRY6302` boundary | `stdlib/core/artifact.kry`, `kexe-reader-v1.json`, source KEXE pipeline and VFS file-loader regression | 100% runtime path | Connect source module serialization to the native runtime and replace the VM filesystem adapter before retiring Python artifact verification |
+| No-Python KEXE framing checker | `tools/kry-kexe-check ARTIFACT.kexe` | POSIX `od`, `dd`, `sha256sum`, and path checks read the header and payload without entering Python | exit 64 usage, 65 malformed/checksum/symlink, 66 missing | `tools/kry-kexe-check`, KEXE checker regression | 0% for this utility | Replace host utility with the stage-2 native artifact reader; it does not decode or execute modules |
+| Candidate-bundle policy checker | `tools/kry-bundle-check BUNDLE_DIR` | POSIX `find`/`grep` audit candidate contents for forbidden runtimes, toolchains, caches, artifacts, and symlinks | exit 64 usage, 65 forbidden content, 66 missing | `tools/kry-bundle-check`, `bundle-audit-v1.json`, isolated bundle regression | 0% for this audit utility | Keep as a pre-release gate; a real native bundle must still be produced and exercised |
 | SHA-256 source digest | `core/sha256.digest(Bytes) -> DigestResult`, `verify(Bytes, String) -> DigestResult` | `VM` executes arithmetic SHA-256 source implementation | `KRY6205` on expected-digest mismatch | `stdlib/core/sha256.kry`, `sha256-v1.json` | 100% runtime path | Connect digest to KEXE/package bytes and replace Python `hashlib` only after native byte reader and module decoding exist |
 | Source JSON values | `core/json.parse(String) -> JsonResult` | `VM` executes recursive source parser into nominal JSON values | `KRY6304` for malformed subset input | `stdlib/core/json.kry`, `json-source-v1.json` | 100% runtime path | Add bytecode schema validation, ModuleRecord construction, file input, and production KEXE decoding |
 | Source bytecode schema | `core/json.decode_bytecode(String) -> BytecodeResult`, `decode_bytecode_file(String) -> BytecodeResult`, `decode_bytecode_bytes(Bytes) -> BytecodeResult`, `encode_bytecode(BytecodeModule) -> EncodeResult` | `VM` parses JSON, builds nominal verifier-compatible records with typed scalar category sidecars, and emits canonical JSON; controlled `fs.read_text` and extracted payload bytes remain host bridges | `KRY6304`/`KRY6305` for malformed input/schema; `KRY6302` for missing file | `stdlib/core/json.kry`, `bytecode-schema-source-v1.json`, `bytecode-schema-full-v1.json`, JSON/KEXE pipeline regressions | 100% runtime path | Replace the source seam with the native JSON/KEXE reader and preserve structured constant/value layouts during native execution |

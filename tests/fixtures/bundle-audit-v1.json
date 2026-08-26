@@ -1,0 +1,32 @@
+{
+  "contract": "kryndel-bundle-audit",
+  "forbidden_artifacts": [
+    "*.py",
+    "*.pyc",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+    "*.krypkg",
+    "symlink"
+  ],
+  "forbidden_invocations": [
+    "python",
+    "pip",
+    "rustc",
+    "cargo",
+    "node",
+    "npm",
+    "gcc",
+    "clang",
+    "msvc",
+    "as",
+    "ld"
+  ],
+  "exit_codes": {
+    "malformed_or_forbidden": 65,
+    "missing_bundle": 66,
+    "usage": 64
+  },
+  "version": 1
+}

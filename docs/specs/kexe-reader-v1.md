@@ -28,7 +28,13 @@ rechaza checksums que no midan exactamente 32 bytes.
 ## Límites
 
 Este es un lector/escritor de framing conectado al comparador SHA-256 fuente, no un
-verificador completo. El campo de 32 bytes se extrae y se canonicaliza para
+verificador completo. El utility `tools/kry-kexe-check` añade un checkpoint de
+host capability nativa mínima: lee el mismo encabezado con utilities POSIX,
+comprueba magic, longitud, checksum y rechazo de symlinks sin invocar Python.
+No es todavía el lector del runtime productivo y sus utilities host no forman
+parte del bundle final.
+
+El campo de 32 bytes se extrae y se canonicaliza para
 `stdlib/core/sha256.kry`; la regresión valida el payload `abc` y rechaza una
 mutación con `KRY6205`. Todavía no se decodifica el JSON del payload, no se
 construye un `ModuleRecord` completo y no se ejecutan bytes KEXE. La lexer,

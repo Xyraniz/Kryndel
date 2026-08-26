@@ -8,7 +8,10 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 113 tests in the current checkout and covers:
+The pre-change checkout contained **117 tests**. This checkpoint adds one
+regression, the KEXE checkpoint, the bundle-policy checkpoint, and the
+runtime-builtins checkpoint add one each, so the post-change suite contains
+**121 tests** and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -41,8 +44,13 @@ bootstrap VM, checks Unicode codepoint indexing and octet indexing, exercises
 invalid bounds, builds a string from chunks, and verifies declaration-ordered
 nominal records against `tests/fixtures/data-core-v1.json`. Manifest tests
 also compare source-level range results with the Python oracle and compare
-canonical source lockfile JSON byte for byte with `Lockfile.dumps()`. The source bytecode verifier test checks normalized v1 records, entry presence,
-opcode/operand bounds, and malformed metadata without using host dictionaries.
+canonical source lockfile JSON byte for byte with `Lockfile.dumps()`. The
+source bytecode verifier test checks normalized v1 records, entry presence,
+opcode/operand bounds, malformed metadata, declared-call arity, reachable
+fallthrough without `RETURN`, and the explicit `verify_execution` operand-stack
+gate without using host dictionaries. Structural schema fixtures remain allowed
+to contain one metadata example for every opcode; they are not treated as
+executable control-flow programs.
 The full source-schema regression decodes one canonical JSON case for every v1
 opcode, checks normalized metadata and typed scalar constants, passes the result
 through the source verifier, and rejects malformed call, struct, enum, binding,
@@ -83,9 +91,13 @@ constants. The end-to-end KEXE source pipeline then reads a real Python-referenc
 artifact, rebuilds its framing byte for byte with `write_artifact_bytes`, verifies
 its extracted digest, decodes its payload bytes, validates the normalized module,
 and runs it through the source runtime to return `hello`. The source runtime
-fixture `runtime-source-v1.json` additionally executes arithmetic, typed values,
-loops, jumps, internal calls, builtin output, enum matching/binding, collections,
+fixture `runtime-source-v1.json` additionally passes `verify_execution` and
+executes arithmetic, typed values, loops, jumps, internal calls, builtin output,
+enum matching/binding, collections,
 struct fields, and unary operations through `stdlib/core/runtime.kry`; the
+separate `runtime-builtins-v1.json` fixture covers `bytes`, immutable
+`array_push`, `abs`, bounded `sqrt`, passing assertions, and
+`KRY6202`/`KRY6401`/`KRY6402` failures. The
 compiler subset executes end to end and checks the nominal completion value. The source backend test emits
 the x86_64 Linux empty-main seed twice,
 compares it byte for byte, executes the 132-byte direct ELF `Bytes` seed from a
@@ -104,7 +116,21 @@ Kryndel toolchain bundle. The native seed runtime checker uses a separate
 `PATH`/empty `HOME`, checks exact framing, reserved mode, nonzero payload length,
 bounded stdout, first-byte exit status, malformed length, and missing-file errors,
 and explicitly reports that it does not replace the compiler, full bytecode VM,
-package manager, or normal Python CLI.
+package manager, or normal Python CLI. `tools/kry-kexe-check` is tested separately
+against a Python-generated KEXE differential artifact under `PATH`/`HOME` isolation;
+it verifies only v1 framing, payload length, digest, and symlink rejection, and
+must not be described as a native module reader or runtime. The bundle policy
+regression uses `bundle-audit-v1.json` and a temporary directory with a clean
+candidate, forbidden Python/toolchain content, and a symlink; it runs
+`tools/kry-bundle-check` with `PATH`/`HOME` isolation and does not imply that a
+real product bundle exists.
+`kry autonomy-audit` emits a deterministic `kryndel-autonomy-audit` report. It
+lists the normal `python3 -m kryndel` route, the bootstrap modules, every
+textual Python invocation found in supported repository files, and a four-state
+matrix distinguishing `Kryndel-native`, `host capability nativa mínima`,
+`bootstrap Python`, and `no implementado`. The report is evidence for migration
+planning; it does not turn a source seam into a native component.
+
 The formatter CLI test exercises check/rewrite modes
 and empty-file handling without Python. The source formatter test also checks
 trailing-horizontal-whitespace removal, blank-line trimming, final newline

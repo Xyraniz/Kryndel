@@ -1,104 +1,111 @@
-# Auditoría local de autonomía de Kryndel
+# Kryndel local autonomy audit
 
-**Fecha de auditoría:** 25 de agosto de 2026
+**Fecha de auditoría:** 26 de agosto de 2026
 
-**Rama:** `main`
+**Rama de trabajo:** `agent/python-independence`
 
-**Identidad de commit:** `Xyraniz <xyraniz@users.noreply.github.com>`
+**Identidad configurada para commits:** `Xyraniz <xyraniz@users.noreply.github.com>`
 
-## Estado de publicación
+## Alcance y procedencia del checkout
 
-El árbol de trabajo está limpio. La rama local contiene **20 commits por delante**
-de `origin/main` y no contiene commits por detrás. No se ejecutó `git push` en
-este tramo de trabajo. El último commit remoto permanece en
-`5179a5c4cffc05aa7e037919d460e8690c46c03f`; el commit local actual es
-`9e905de8a389f171f007df9262831dd54c51fd39`.
+El checkout se obtuvo como un snapshot de `main` mediante la API de GitHub
+después de que dos intentos de `gh repo clone` por HTTPS terminaran con errores
+TLS del entorno. Por esa razón, el checkout local conserva `origin` como URL
+informativa, pero no tiene una referencia local `origin/main` ni el historial
+completo del repositorio. La referencia remota observada por la API es
+`f0cd4c454fde2afea7e2db040a1689e561db5679`. Esta limitación no se oculta ni se
+interpreta como una divergencia de commits.
 
-| Propiedad | Resultado |
+La línea base local del snapshot, antes de los cambios de esta rama, fue el
+commit de importación `7adf883422b82cd6914dba46f7d33ac08d5ca5b8`. Los resultados
+completos de las comprobaciones se guardaron fuera del repositorio en
+`/home/ubuntu/kryndel_audit_baseline_20260826/`.
+
+| Comprobación | Resultado medido |
 | --- | --- |
-| Rama | `main` |
-| Estado | limpio |
-| Divergencia | `origin/main...HEAD = 0 20` |
-| Último remoto | `5179a5c4cffc05aa7e037919d460e8690c46c03f` |
-| HEAD local | `9e905de8a389f171f007df9262831dd54c51fd39` |
-| Publicación | pendiente de autorización explícita del usuario |
-| Artefactos prohibidos en el repositorio | ninguno encontrado: no hay `.pyc`, `.kexe` ni `.krypkg` |
-
-Los veinte commits locales, en orden, son:
-
-| Commit | Tema |
-| --- | --- |
-| `c5c58b0` | runtime fuente del subset |
-| `431e8f4` | contrato seed del backend directo |
-| `226107a` | CLI seed ELF sin Python |
-| `2d4df3d` | contrato formatter fuente |
-| `0ae609d` | CLI formatter sin Python |
-| `cdd0b19` | verificación offline del seed |
-| `a0ede72` | payload tipado de tokens |
-| `10536a5` | propagación de literales al AST |
-| `0b4dd7c` | asignaciones de literales tipadas |
-| `2bfed7d` | constantes tipadas fuente |
-| `adb373b` | lector de framing KEXE fuente |
-| `be4fe6c` | SHA-256 fuente |
-| `9b4ed0d` | estados de salida 0..255 en seed |
-| `fefab89` | checksum KEXE conectado a SHA-256 |
-| `5612a02` | parser JSON fuente |
-| `9f968e8` | decoder de schema bytecode fuente |
-| `653ce1d` | lowering de retorno constante |
-| `051674a` | seed de control condicional acotado |
-| `db94fe2` | lector de payload mediante capacidad controlada |
-| `9e905de` | pipeline KEXE fuente completo para subset |
-
-## Evidencia de pruebas
-
-La validación final ejecutó compilación sintáctica de los módulos Python, las
-regresiones focales de JSON, KEXE, SHA-256, backend, filesystem y verificador,
-y la suite completa. El resultado medido fue:
-
-| Validación | Resultado |
-| --- | --- |
+| `git status --short --branch` | `## master` antes de crear la rama de trabajo |
+| `git log -5 --oneline --decorate` | snapshot local con un commit de importación |
+| `git rev-parse HEAD` | `7adf883422b82cd6914dba46f7d33ac08d5ca5b8` |
+| `git rev-parse origin/main` | no disponible localmente; la referencia no existe |
+| SHA de `main` obtenido de GitHub | `f0cd4c454fde2afea7e2db040a1689e561db5679` |
 | `git diff --check` | correcto |
+| `git ls-files` | 128 archivos rastreados en el snapshot |
 | `python3 -m py_compile kryndel/*.py tests/test_kryndel.py` | correcto |
-| Regresiones focales finales | 4 pruebas, `OK` |
-| Suite completa | **113 pruebas en 11.202 s, `OK`** |
-| Limpieza de `__pycache__` | realizada |
+| `python3 -m unittest discover -s tests -v` | **117 pruebas, `OK`, 12.227 s** |
+| Estado después de las pruebas | solo se generaron dos `__pycache__`; se eliminaron |
 
-La regresión `kexe-source-pipeline-v1` usa el serializador Python de referencia
-sólo para construir un artefacto diferencial. La cadena bajo prueba realiza, en
-orden, framing KEXE fuente, extracción y comparación SHA-256 fuente, conversión
-de bytes a JSON fuente, construcción del subset bytecode, verificación fuente y
-ejecución del módulo por el runtime fuente bajo la VM Python.
+La suite Python es el oráculo diferencial de stage-0. No demuestra independencia
+ni convierte los módulos `.kry` en componentes nativos.
 
-## Capacidad incorporada
+## Cadena de transición
 
-| Área | Implementación actual | Límite que permanece |
+| Stage | Definición | Estado observado |
 | --- | --- | --- |
-| Datos, spans y registros | módulos fuente con contratos y fixtures | el runtime de valores sigue en la VM Python |
-| Lexer, parser y checker | seams fuente para un subset, con literales tipados | la ruta productiva y la paridad completa siguen en Python |
-| Compiler y runtime | constantes tipadas, `PUSH_NIL` y subset ejecutable | faltan todos los opcodes, serialización y runtime nativo |
-| KEXE y checksum | framing, SHA-256 y pipeline de payload para un subset | faltan schema completo, CLI productivo y reemplazo de `read_artifact` |
-| JSON | valores nominales, decoder bytecode acotado y lectura controlada | faltan todas las invariantes de schema y módulo |
-| Backend directo | empty-main, retorno constante y un seed condicional fijo x86_64 Linux | faltan lowering general, datos, llamadas, object/linker e integración productiva |
-| Utilidades sin Python | `tools/kry-seed`, `tools/kry-format`, `tools/kry-seed-check` | son utilidades acotadas; no forman un bundle de toolchain |
+| stage-0 | Bootstrap Python, VM, CLI y oráculo diferencial | Implementado |
+| stage-1 | Seams fuente Kryndel y contratos versionados | Implementado solo en subsets delimitados |
+| stage-2 | Runtime nativo que lee KEXE, verifica bytecode y ejecuta `main` | No implementado |
+| stage-3 | Compiler, loader y CLI productiva nativos | No implementado |
+| stage-4 | Bundle target-specific autocontenido y reproducible | No implementado |
+| stage-5 | Dos reconstrucciones nativas equivalentes | No implementado |
 
-> **Conclusión:** Kryndel aún no es self-hosted ni autónomo de Python.
+Un módulo fuente interpretado por `kryndel/vm.py` se denomina **seam fuente bajo
+bootstrap Python**. La etiqueta no se sustituye por `Kryndel-native` hasta que
+la ruta normal deje de invocar la VM Python.
 
-La ruta normal continúa dependiendo del bootstrap Python para lexer, parser,
-checker, compiler, VM, lectura y escritura de artefactos, resolución de paquetes,
-checksums productivos y CLI. Los módulos `.kry` añadidos son implementaciones
-fuente reales y verificables de contratos delimitados, pero se ejecutan por la
-VM Python. El seed ELF sin Python sólo representa un `main` vacío o un estado de
-salida fijo; no ejecuta el compilador ni el runtime de Kryndel.
+## Matriz de estados
 
-## Próximos cuellos de botella técnicos
+La nueva auditoría ejecutable es `PYTHONPATH=. python3 -m kryndel autonomy-audit`.
+Su matriz no es un porcentaje global; cada registro tiene evidencia, reemplazo y
+un estado explícito.
 
-El siguiente trabajo realista es ampliar el decoder y el verificador bytecode
-por familias de instrucciones, añadir invariantes de `entry`, aridad,
-constantes y llamadas, y mantener fixtures diferenciales contra Python. Después
-se puede conectar el lector de archivos KEXE a una API fuente controlada y
-comparar más módulos. Sólo cuando lexer, parser, checker, compiler, runtime,
-lector binario, schema, checksum, CLI y backend tengan sustitutos nativos
-completos y ejecutables será válido reducir la matriz de dependencia Python.
+| Estado | Componentes medidos |
+| --- | ---: |
+| `Kryndel-native` | 0 |
+| `host capability nativa mínima` | 3 |
+| `bootstrap Python` | 8 |
+| `no implementado` | 3 |
 
-Este informe es local y auditable. No implica publicación remota ni autoriza
-ningún push posterior.
+Los tres checkpoints de host actualmente aislados son el formatter POSIX, el
+seed ELF/KRYSEED1 y el checker de framing/checksum KEXE. El valor runtime,
+lector bytecode/KEXE productivo, compiler, VM,
+filesystem, package manager, CLI, documentación/packer siguen en bootstrap. El
+bundle, self-hosting y backend UI permanecen no implementados.
+
+La auditoría también enumera invocaciones textuales de `python -m kryndel` en
+Markdown, Python, YAML y shell. Es una auditoría de rutas documentadas y no una
+prueba completa contra ejecución indirecta.
+
+## Cambios de este checkpoint
+
+Los cambios funcionales quedaron en siete commits coherentes sobre
+`agent/python-independence`; este documento de cierre se añade como el octavo:
+`c6b2352` añade `kry autonomy-audit` y la matriz de
+host; `6170a4d` añade `tools/kry-kexe-check`; `47e04d7` registra las primeras
+mediciones; `7a1d8cf` hace branch-aware el análisis de pila; `eaef6ee` conecta
+`verify_execution` al fixture runtime; `698ba59` añade
+`tools/kry-bundle-check`, `bundle-audit-v1.json` y su job CI; y `680aaf6`
+registra el estado final medido. El checkout final pasa 120 pruebas Python, los
+checkers no-Python, la auditoría de candidato bundle, y sincroniza la
+documentación afectada, conservando 117 como línea base.
+
+## Límites verificados
+
+La ruta normal todavía requiere Python para lexer, parser, checker, compiler,
+VM, lectura/escritura de KEXE, resolución de paquetes, documentación, packer y
+CLI. `tools/kry-format`, `tools/kry-seed-check` y
+`tools/kry-native-run-check` son checkpoints estrechos de capacidades host; no
+constituyen un bundle ni ejecutan programas Kryndel generales. No se afirma
+self-hosting, autonomía, ejecución sin toolchains, ni ausencia de dependencias
+externas en el producto final.
+
+No se ejecutó `git push` ni se publicó nada en `main`. El último HEAD funcional
+medido antes de este documento fue `680aaf655f87f6b8809ee4ab61afab9157b79ae9`,
+precedido por `698ba59`, `eaef6ee`, `7a1d8cf`, `47e04d7`, `6170a4d`, y `c6b2352`;
+la identidad de todos los commits es la indicada arriba.
+
+## Siguiente checkpoint verificable
+
+El siguiente trabajo debe ser pequeño y técnico: extender la lectura nativa de
+artefactos desde el framing KEXE hacia el schema bytecode completo, congelar una
+fixture válida y fixtures malformadas por opcode, y medirlo con el mismo entorno
+sin afirmar todavía que existe un runtime nativo.

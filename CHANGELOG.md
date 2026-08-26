@@ -4,6 +4,13 @@
 
 ### Added
 
+- Added `kry autonomy-audit` and `docs/specs/autonomy-audit-v1.md`. The deterministic report exposes the normal Python bootstrap route, exact repository invocations, pending replacements, and a four-state matrix distinguishing `Kryndel-native`, `host capability nativa mínima`, `bootstrap Python`, and `no implementado`. This is an audit boundary, not a native or self-hosting claim.
+- Extended `stdlib/core/bytecode.kry` with explicit per-opcode operand-stack requirements/deltas and a bounded branch-aware `verify_execution` entry point. The source seam rejects reachable stack underflow, declared-call arity mismatches, and reachable fallthrough without `RETURN` while preserving structural schema fixtures; it remains executed by the Python bootstrap and does not replace the production verifier.
+- Added `tools/kry-kexe-check`, a no-Python host-capability checker for KEXE v1 framing, payload length, SHA-256, missing files, and symlink rejection. It is a bounded artifact checkpoint; it does not decode bytecode, execute modules, or form part of the final bundle.
+- Added `tools/kry-bundle-check` and `bundle-audit-v1.json`, a no-Python pre-release policy gate that rejects forbidden runtimes/toolchains, caches, generated artifacts, and symlinks in candidate bundle directories. It validates packaging policy but does not create a bundle.
+- Extended `stdlib/core/runtime.kry` with source-level `bytes`, immutable `array_push`, `assert`, and `assert_eq` builtins, plus `runtime-builtins-v1.json` positive/negative coverage. Strict UTF-8 conversion, clock, and filesystem remain explicit bootstrap boundaries; `abs` and bounded `sqrt` are source-runtime operations, and the source runtime is not yet native.
+- Extended `stdlib/core/backend.kry` with `emit_elf_program`, a bounded direct x86_64 ELF generator for integer addition. Its output executes from a spaced path without assembler or linker and rejects unsupported shapes/overflow; general compiler-to-backend lowering remains pending.
+
 - Added the source-level controlled filesystem API: `fs.read_bytes`, `fs.read_text`, `fs.write_bytes`, `fs.list_dir`, and `fs.stat`, with nominal `FileMetadata`, explicit VM capability roots, deterministic VFS/rooted adapters, `filesystem-v1.json`, executable `stdlib/core/filesystem.kry` wrappers, and security/error tests. This remains a Python bootstrap boundary until a native runtime replaces the adapter.
 - Added `stdlib/core/data.kry` with bounded Unicode String/Bytes slices, a divide-and-conquer `StringBuilder`, and nominal `SpanRecord`, `TokenRecord`, `AstRecord`, and `DiagnosticRecord` layouts. Added `data-core-v1.json` and VM regression coverage for deterministic values and `KRY6104`/`KRY6202` bounds errors. This is a source compatibility seam under the Python bootstrap, not a native runtime.
 - Extended `stdlib/core/manifest.kry` with source-level version-range parity and nominal `LockEntry`/`Lockfile` values. Its canonical lockfile writer is compared byte for byte with Python `Lockfile.dumps()` and rejects malformed checksum metadata; SHA-256 calculation, resolution, staging, and installation remain bootstrap boundaries.
@@ -84,7 +91,7 @@
 - Deterministic `kry doc` source declarations and `kry pack` `.krypkg` source
   archives with fixed metadata, offline operation, and SHA-256 checksums; source
   files are never executed while documenting or packaging.
-- Regression tests expanded to 113, including nested modules, public/private
+- Regression tests expanded to 121, including nested modules, public/private
   symbols, deterministic linking, cycles, ambiguity, project-aware execution,
   source-level core APIs, runtime Boolean values, executable Bytes/UTF-8
   behavior, host-boundary inventory, and structured test failures.

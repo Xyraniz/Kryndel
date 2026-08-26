@@ -324,12 +324,64 @@ fn call_builtin(name: String, arguments: Array) -> RuntimeResult {
         if value.kind == "String" { return runtime_ok(float_value(float(value.text))) }
         return runtime_error("KRY6202 conversion is not representable")
     }
+    if name == "abs" {
+        if len(arguments) != 1 { return runtime_error("KRY6202 abs requires a numeric value") }
+        let value: Value = arguments[0]
+        if value.kind == "Int" {
+            if value.number < 0 { return runtime_ok(int_value(-value.number)) }
+            return runtime_ok(value)
+        }
+        if value.kind == "Float" {
+            if value.float_number < 0.0 { return runtime_ok(float_value(-value.float_number)) }
+            return runtime_ok(value)
+        }
+        return runtime_error("KRY6202 abs requires a numeric value")
+    }
+    if name == "sqrt" {
+        if len(arguments) != 1 { return runtime_error("KRY6202 sqrt requires a non-negative number") }
+        let input: Value = arguments[0]
+        let mut number: Float = input.float_number
+        if input.kind == "Int" { number = float(input.number) }
+        if input.kind != "Int" and input.kind != "Float" or number < 0.0 { return runtime_error("KRY6202 sqrt requires a non-negative number") }
+        if number == 0.0 { return runtime_ok(float_value(0.0)) }
+        let mut guess: Float = number
+        if guess < 1.0 { guess = 1.0 }
+        let mut step: Int = 0
+        while step < 24 {
+            guess = (guess + number / guess) / 2.0
+            step = step + 1
+        }
+        return runtime_ok(float_value(guess))
+    }
     if name == "len" {
         if len(arguments) != 1 { return runtime_error("KRY7003 invalid len arity") }
         let value: Value = arguments[0]
         if value.kind == "String" { return runtime_ok(int_value(len(value.text))) }
         if value.kind == "Array" or value.kind == "Tuple" or value.kind == "Bytes" { return runtime_ok(int_value(len(value.values))) }
         return runtime_error("KRY6105 len requires String, Array, Tuple, or Bytes")
+    }
+    if name == "bytes" {
+        if len(arguments) != 1 or arguments[0].kind != "Array" { return runtime_error("KRY6202 bytes requires an Array of Int octets") }
+        let input: Array = arguments[0].values
+        let mut index: Int = 0
+        while index < len(input) {
+            let item: Value = input[index]
+            if item.kind != "Int" or item.number < 0 or item.number > 255 { return runtime_error("KRY6202 byte at array index " + str(index) + " must be an Int in the range 0..255") }
+            index = index + 1
+        }
+        return runtime_ok(Value { kind: "Bytes", text: "", number: 0, values: input, names: [], float_number: 0.0, bool_value: false })
+    }
+    if name == "array_push" {
+        if len(arguments) != 2 or arguments[0].kind != "Array" { return runtime_error("KRY6203 array_push requires an Array") }
+        return runtime_ok(array_value(append_values(arguments[0].values, [arguments[1]])))
+    }
+    if name == "assert" {
+        if len(arguments) != 1 or arguments[0].kind != "Bool" or !arguments[0].bool_value { return runtime_error("KRY6401 assertion failed") }
+        return runtime_ok(nil_value())
+    }
+    if name == "assert_eq" {
+        if len(arguments) != 2 or !value_equal(arguments[0], arguments[1]) { return runtime_error("KRY6402 assertion failed: expected " + stringify_value(arguments[1]) + ", found " + stringify_value(arguments[0])) }
+        return runtime_ok(nil_value())
     }
     return runtime_error("KRY7003 unknown callable")
 }

@@ -1,0 +1,49 @@
+#!/bin/sh
+set -eu
+
+usage() {
+    printf '%s\n' "usage: $0 ARTIFACT.kexe" >&2
+    exit 64
+}
+
+[ "$#" -eq 1 ] || usage
+artifact=$1
+[ -f "$artifact" ] || {
+    printf '%s\n' "kry-kexe-check: artifact not found" >&2
+    exit 66
+}
+[ ! -L "$artifact" ] || {
+    printf '%s\n' "kry-kexe-check: symlink artifacts are rejected" >&2
+    exit 65
+}
+
+size=$(wc -c < "$artifact")
+[ "$size" -ge 44 ] || {
+    printf '%s\n' "kry-kexe-check: KRY6305 artifact header is truncated" >&2
+    exit 65
+}
+
+magic=$(od -An -tx1 -j0 -N8 "$artifact" | tr -d ' \n')
+[ "$magic" = "4b52594e45584501" ] || {
+    printf '%s\n' "kry-kexe-check: KRY6305 invalid artifact magic" >&2
+    exit 65
+}
+
+set -- $(od -An -tu1 -j8 -N4 "$artifact")
+payload_length=$((($1 << 24) | ($2 << 16) | ($3 << 8) | $4))
+expected_size=$((44 + payload_length))
+[ "$expected_size" -eq "$size" ] || {
+    printf '%s\n' "kry-kexe-check: KRY6305 payload length does not cover the file" >&2
+    exit 65
+}
+
+expected_digest=$(od -An -tx1 -j12 -N32 "$artifact" | tr -d ' \n')
+actual_digest=$(dd if="$artifact" bs=1 skip=44 count="$payload_length" 2>/dev/null | sha256sum | cut -d' ' -f1)
+[ "$expected_digest" = "$actual_digest" ] || {
+    printf '%s\n' "kry-kexe-check: KRY6205 payload checksum mismatch" >&2
+    exit 65
+}
+
+printf '%s\n' "verified KEXE v1"
+printf 'payload-bytes %s\n' "$payload_length"
+printf 'sha256 %s\n' "$actual_digest"

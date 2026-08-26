@@ -133,15 +133,22 @@ bootstrap boundaries until a Kryndel-native test runner replaces them.
 bindings, typed constants, `LOAD`/`STORE`/`STORE_RESULT`, struct and enum values,
 arrays and tuples, indexing, `DUP`/`POP`, unary and binary arithmetic/comparison,
 conditional and unconditional jumps, internal calls, builtin `print`/`println`,
-and `RETURN`. `PUSH_CONST` categories decode into `Int`, `Float`, `Bool`, or
-`String`; `PUSH_NIL` produces `Nil`. The public `decode_constant` seam rejects
+`bytes`, `array_push`, `assert`, `assert_eq`, and `RETURN`. `PUSH_CONST`
+categories decode into `Int`, `Float`, `Bool`, or `String`; `PUSH_NIL` produces
+`Nil`; the new `bytes` path validates nominal `Int` octets in `0..255` and
+preserves immutable source order. The public `decode_constant` seam rejects
 unsupported categories with `KRY7006`.
 
 Runtime failures remain serializable `RuntimeResult.Error` values with stable
 `KRY7001`–`KRY7005`, `KRY6102`–`KRY6105`, `KRY6202`, and `KRY6203` messages for
 malformed constants, stack underflow, unknown callables, invalid jumps, indexing,
-conversion, and unsupported operations. `runtime-source-v1.json` exercises
-arithmetic, calls/output, loops, enum matching and binding, collections, structs,
-and unary operations. This module is still interpreted by the Python VM; it is a
-verified source runtime seam, not an independent executable and not yet a complete
-host-capability implementation.
+conversion, and unsupported operations. `runtime-source-v1.json` exercises arithmetic, calls/output, loops, enum
+matching and binding, collections, structs, and unary operations. The separate
+`runtime-builtins-v1.json` fixture covers immutable array append, nominal Bytes
+construction and positive/negative assertion paths with `KRY6202`, `KRY6401`, and
+`KRY6402`. The source runtime also provides `abs` for Int/Float and a bounded
+Newton iteration for non-negative `sqrt`; invalid math inputs return `KRY6202`.
+This module is still interpreted by the Python VM; it is a verified source runtime
+seam, not an independent executable and not yet a complete host-capability
+implementation. UTF-8 `string_to_bytes`/`bytes_to_string`, clock, and filesystem
+ownership remain explicit pending boundaries.
