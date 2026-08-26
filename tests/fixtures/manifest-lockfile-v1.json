@@ -1,0 +1,23 @@
+{
+  "contract": "kryndel-manifest-lockfile",
+  "entries": [
+    {
+      "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "dependencies": [],
+      "name": "core",
+      "source": "registry",
+      "version": "1.0.0"
+    },
+    {
+      "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dependencies": [
+        "core"
+      ],
+      "name": "request",
+      "source": "path",
+      "version": "1.0.0"
+    }
+  ],
+  "expected": "{\n  \"format\": \"kryndel-lock\",\n  \"packages\": [\n    {\n      \"checksum\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n      \"dependencies\": [],\n      \"name\": \"core\",\n      \"source\": \"registry\",\n      \"version\": \"1.0.0\"\n    },\n    {\n      \"checksum\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\n      \"dependencies\": [\n        \"core\"\n      ],\n      \"name\": \"request\",\n      \"source\": \"path\",\n      \"version\": \"1.0.0\"\n    }\n  ],\n  \"version\": 1\n}\n",
+  "version": 1
+}

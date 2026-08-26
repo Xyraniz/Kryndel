@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 91 tests in the current checkout and covers:
+The suite contains 93 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -34,7 +34,9 @@ Determinism tests compile identical source and resolve identical package/module
 graphs twice. The data-core test compiles `stdlib/core/data.kry` through the
 bootstrap VM, checks Unicode codepoint indexing and octet indexing, exercises
 invalid bounds, builds a string from chunks, and verifies declaration-ordered
-nominal records against `tests/fixtures/data-core-v1.json`.
+nominal records against `tests/fixtures/data-core-v1.json`. Manifest tests
+also compare source-level range results with the Python oracle and compare
+canonical source lockfile JSON byte for byte with `Lockfile.dumps()`.
 
 Temporary package registries are created under temporary directories. Tests
 never modify a user's package registry or install Python dependencies. The

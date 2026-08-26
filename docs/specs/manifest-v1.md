@@ -41,3 +41,19 @@ SHA-256 is printed as the observable package checksum. Packing identical source
 and manifest bytes twice must produce identical archive bytes and checksum.
 The archive is a source distribution for the current bootstrap; it is not a
 native executable and does not claim an independent runtime.
+
+## Source-level parity milestone
+
+`stdlib/core/manifest.kry` now validates exact, caret, tilde, and bounded range
+requirements, rejects empty ranges, classifies invalid semantic versions as
+`KRY5003`, classifies invalid requirements as `KRY5012`, and rejects absolute
+path dependencies as `KRY5010`. The bootstrap differential tests compare valid
+source results and error codes against `packages.py`.
+
+The same module defines nominal `LockEntry` and `Lockfile` values and emits the
+canonical `kry.lock` JSON layout for entries already ordered by package name,
+with sorted dependency names and validated 64-character hexadecimal checksums.
+The source writer is compared byte for byte with Python `Lockfile.dumps()` and
+rejects malformed metadata with `KRY5009`. SHA-256 calculation, offline graph
+resolution, staging, and filesystem installation remain Python-owned until a
+native byte-oriented verifier and resolver are implemented.

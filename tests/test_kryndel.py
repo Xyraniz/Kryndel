@@ -18,6 +18,7 @@ from kryndel.tooling import abi_description, compare_lexer_fixture, compare_pars
 from kryndel.diagnostics import DiagnosticError
 from kryndel.cli import main as cli_main
 from kryndel.packages import (
+    LockEntry,
     Lockfile,
     SemVer,
     VersionRequirement,
@@ -25,6 +26,7 @@ from kryndel.packages import (
     init_project,
     install,
     package_checksum,
+    parse_manifest_text,
     read_manifest,
     read_manifest_from_filesystem,
     validate_imports,
@@ -958,6 +960,102 @@ class KryndelTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(DiagnosticError, "KRY6304"):
             read_manifest_from_filesystem(VirtualFileSystem({"kry.toml": bytes((0xFF,))}))
+
+    def test_manifest_source_matches_python_oracle_for_range_cases(self) -> None:
+        root = Path(__file__).parents[1]
+        source = (root / "stdlib" / "core" / "manifest.kry").read_text(encoding="utf-8")
+        module = compile_source(source, "stdlib/core/manifest.kry")
+        cases = [
+            ("1.0.0", None),
+            ("^1.2", None),
+            ("~1.2", None),
+            (">=1.0.0,<2.0.0", None),
+            ("path:../request", None),
+            ("", "KRY5012"),
+            (">=2.0.0,<1.0.0", "KRY5012"),
+            ("path:/absolute", "KRY5010"),
+        ]
+        prefix = '[package]\nname = "demo"\nversion = "1.2.3"\nedition = "2026"\n\n[dependencies]\nrequest = "'
+        for requirement, expected_error in cases:
+            manifest_text = prefix + requirement + '"\n'
+            native = VM(module).execute("parse", [manifest_text])
+            try:
+                oracle = parse_manifest_text(manifest_text, "kry.toml")
+                oracle_result = ("ok", oracle.name, str(oracle.version), oracle.edition, oracle.dependencies)
+            except DiagnosticError as exc:
+                oracle_result = ("error", exc.diagnostics[0].code)
+            if expected_error is None:
+                self.assertEqual(native.variant_name, "Ok")
+                parsed = native.payloads[0]
+                native_result = (
+                    "ok",
+                    parsed.field("name")[1],
+                    parsed.field("version")[1],
+                    parsed.field("edition")[1],
+                    {item.field("name")[1]: item.field("requirement")[1] for item in parsed.field("dependencies")[1].items},
+                )
+                self.assertEqual(native_result, oracle_result)
+            else:
+                self.assertEqual(native.variant_name, "Error")
+                self.assertIn(expected_error, native.payloads[0])
+                self.assertEqual(oracle_result[0], "error")
+                self.assertEqual(oracle_result[1], expected_error)
+
+        invalid_version = '[package]\nname = "demo"\nversion = "1.2"\nedition = "2026"\n'
+        native_version = VM(module).execute("parse", [invalid_version])
+        self.assertEqual(native_version.variant_name, "Error")
+        self.assertIn("KRY5003", native_version.payloads[0])
+        with self.assertRaises(DiagnosticError) as oracle_version:
+            parse_manifest_text(invalid_version, "kry.toml")
+        self.assertEqual(oracle_version.exception.diagnostics[0].code, "KRY5003")
+
+    def test_manifest_lockfile_source_matches_python_serialization(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "manifest-lockfile-v1.json").read_text(encoding="utf-8"))
+        source = (root / "stdlib" / "core" / "manifest.kry").read_text(encoding="utf-8")
+        module = compile_source(source, "stdlib/core/manifest.kry")
+        entries = fixture["entries"]
+        native_entries = ArrayValue(
+            tuple(
+                VM(module).execute(
+                    "lock_entry",
+                    [
+                        entry["name"],
+                        entry["version"],
+                        entry["checksum"],
+                        entry["source"],
+                        ArrayValue(tuple(entry["dependencies"])),
+                    ],
+                )
+                for entry in entries
+            )
+        )
+        native_lock = VM(module).execute("lockfile", [native_entries])
+        native_result = VM(module).execute("lockfile_json", [native_lock])
+        self.assertEqual(native_result.variant_name, "Ok")
+        oracle = Lockfile(
+            [
+                LockEntry(
+                    entry["name"],
+                    entry["version"],
+                    entry["checksum"],
+                    entry["source"],
+                    tuple(entry["dependencies"]),
+                )
+                for entry in entries
+            ]
+        ).dumps()
+        self.assertEqual(native_result.payloads[0], oracle)
+        self.assertEqual(native_result.payloads[0], fixture["expected"])
+
+        invalid_entry = VM(module).execute(
+            "lock_entry",
+            ["request", "1.0.0", "not-a-sha256", "registry", ArrayValue(())],
+        )
+        invalid_lock = VM(module).execute("lockfile", [ArrayValue((invalid_entry,))])
+        invalid_result = VM(module).execute("lockfile_json", [invalid_lock])
+        self.assertEqual(invalid_result.variant_name, "Error")
+        self.assertIn("KRY5009", invalid_result.payloads[0])
 
     def test_manifest_parser_rejects_unsupported_syntax_and_accepts_subset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
