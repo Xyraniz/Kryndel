@@ -20,7 +20,7 @@ not counted as Kryndel-native implementation.
 | 9. Kryndel-native checker/module/compiler | Source checker and resolver seam implemented for tested subset; compiler pending | `stdlib/core/checker.kry` validates tested AST bindings/types and resolves normalized module records with `KRY5014`/`KRY5015`/`KRY5016`; full type system, imports, visibility, and compiler remain Python |
 | 10. Kryndel-native runtime | Source runtime seam implemented for compiler subset; complete native ownership pending | `stdlib/core/runtime.kry` executes the emitted subset end to end with stack/locals, structs, calls, and stable `KRY7001`–`KRY7005`; full opcode set, KEXE input, host IO, and independent executable remain Python |
 | 11. Formatter, test runner, docs, pack and CLI | Partial bootstrap milestone | `kry test --format json`, `kry doc`, `kry pack`, formatter, package commands, and CLI exist in Python; source-level replacements remain |
-| 12. Self-contained bundle | Not implemented | No compiler/runtime/bundle executable without Python, Rust, Node.js or external services |
+| 12. Self-contained bundle | Seed boundary only; bundle not implemented | `stdlib/core/backend.kry` emits deterministic x86_64 Linux exit-0 assembly for an empty main; no complete object/linker/runtime bundle exists |
 | 13. Formal self-hosting gate | Not passed | The required compiler, runtime, package manager, formatter and two rebuilds without Python do not yet exist |
 
 ## Verified bootstrap increments after `eb51d99`
@@ -46,7 +46,10 @@ The following nine increments are implemented, tested, and documented in the che
 | Source checker/resolver seam | `stdlib/core/checker.kry`, `checker-v1.md`, checker/resolver regression test | Kryndel source executed by Python VM; full type system, imports, visibility, and native module loading remain Python |
 | Source compiler seam | `stdlib/core/compiler.kry`, `bytecode-v1.md`, compiler/verifier regression test | Kryndel source lowers the tested AST subset to verifiable records; full compiler, typed constants, linking, and serialization remain Python |
 | Source runtime seam | `stdlib/core/runtime.kry`, `value-runtime-v1.md`, compiler-to-runtime regression test | Kryndel source executes emitted subset through the Python VM; complete opcode coverage, KEXE input, host IO, and native runtime remain pending |
+| Direct backend seed seam | `stdlib/core/backend.kry`, `backend-v1.md`, backend determinism regression test | Kryndel source emits x86_64 Linux exit-0 assembly for an empty main; complete native backend, object format, linking, and runtime integration remain pending |
 
 The source-level filesystem boundary is now implemented as a verified bootstrap API, a first strict manifest reader exists in Kryndel source over that boundary, `stdlib/core/data.kry` provides bounded readers, a balanced string builder, and nominal toolchain records, the source manifest module emits canonical lockfile JSON for validated entries, `stdlib/core/bytecode.kry` verifies normalized bytecode records, `stdlib/core/lexer.kry` reproduces the published lexer snapshot's kinds, text, order, spans, and recovery cases, `stdlib/core/parser.kry` consumes those tokens for a tested AST subset, `stdlib/core/checker.kry` validates that subset plus dependency traversal, `stdlib/core/compiler.kry` lowers that subset to bytecode records accepted by the source verifier, and `stdlib/core/runtime.kry` executes the emitted subset end to end. These are executable compatibility seams under the Python VM, not native implementations. The next technical gate is typed token values plus full AST/precedence/checking parity, followed by full-language bytecode reproduction, complete opcode/runtime coverage, a native byte-oriented reader, and SHA-256 or full KEXE verification before replacing the remaining package tooling.
 The bootstrap manifest parser remains the reference implementation and the
-project must not claim independence from Python.
+project must not claim independence from Python. Commits after the initial
+published checkpoints are intentionally local until the user authorizes a later
+batch push.

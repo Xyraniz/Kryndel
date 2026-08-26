@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 99 tests in the current checkout and covers:
+The suite contains 100 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -50,7 +50,8 @@ imports. The source compiler test lowers the source lexer/parser subset
 into bytecode records and validates the emitted instruction sequence with the
 source verifier. The source runtime test executes that compiled module
 end to end through `stdlib/core/runtime.kry` and checks the nominal completion
-value.
+value. The source backend test emits the x86_64 Linux empty-main seed twice,
+compares it byte for byte, and rejects unsupported targets.
 
 Temporary package registries are created under temporary directories. Tests
 never modify a user's package registry or install Python dependencies. The

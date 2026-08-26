@@ -1180,6 +1180,20 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(executed.variant_name, "Ok")
         self.assertEqual(executed.payloads[0].fields[0][1], "Nil")
 
+    def test_source_backend_emits_deterministic_x86_64_seed(self) -> None:
+        root = Path(__file__).parents[1]
+        backend = VM(compile_source((root / "stdlib" / "core" / "backend.kry").read_text(encoding="utf-8"), "stdlib/core/backend.kry"))
+        seed = backend.execute("seed_module", [])
+        first = backend.execute("emit", [seed, "x86_64-linux"])
+        second = backend.execute("emit", [seed, "x86_64-linux"])
+        self.assertEqual(first.variant_name, "Ok")
+        self.assertEqual(first.payloads[0], second.payloads[0])
+        self.assertIn(".global _start", first.payloads[0])
+        self.assertIn("mov $60, %rax", first.payloads[0])
+        unsupported = backend.execute("emit", [seed, "wasm32"])
+        self.assertEqual(unsupported.variant_name, "Error")
+        self.assertIn("KRY8001", unsupported.payloads[0])
+
     def test_source_bytecode_verifier_matches_structural_contract(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "bytecode-native-verifier-v1.json").read_text(encoding="utf-8"))
