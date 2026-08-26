@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 111 tests in the current checkout and covers:
+The suite contains 112 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -63,7 +63,10 @@ scope. The SHA-256 source test runs
 empty, single-block, and multi-block known vectors and verifies `KRY6205` on a
 mismatch. The JSON source test parses nominal null, boolean, integer, float,
 string, array, and object values, including escapes, and rejects malformed
-subset input with `KRY6304`. The source runtime test executes
+subset input with `KRY6304`. The schema regression decodes a v1 JSON module
+into nominal function/instruction records, passes it through the source verifier,
+and rejects malformed format, version, function, and argument cases with
+`KRY6305`. The source runtime test executes
 that compiled module end to end through `stdlib/core/runtime.kry`
 and checks the nominal completion value. The source backend test emits
 the x86_64 Linux empty-main seed twice,

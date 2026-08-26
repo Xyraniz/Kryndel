@@ -28,13 +28,18 @@ codepoints equivalente a la del runtime completo.
 
 ## Relación con KEXE
 
-El parser se prueba con un documento que contiene los valores presentes en un
-payload de bytecode. Todavía no convierte `JsonValue.Object` a los registros
-`ModuleRecord`, no valida las claves requeridas del formato bytecode, no lee
-archivos y no reemplaza el `json.loads` Python de `kryndel/artifact.py`. La
-siguiente etapa puede añadir un decoder de schema sobre estos valores, separado
-del parser JSON general, para construir funciones, constantes e instrucciones
-que luego pasen por `stdlib/core/bytecode.kry`.
+`decode_bytecode(String)` añade un decoder de schema sobre el parser general.
+Valida el formato `kryndel-bytecode`, la versión 1, la identidad del módulo, un
+objeto de funciones, constantes escalares y el subset de instrucciones
+`PUSH_CONST`, `PUSH_NIL`, `LOAD`, `STORE`, `POP` y `RETURN`. Devuelve registros
+nominales normalizados con los mismos campos que consume el verificador fuente;
+la regresión pasa el resultado por `stdlib/core/bytecode.kry` y obtiene `Ok`.
+
+El decoder todavía no lee archivos ni cubre todas las instrucciones, constantes
+estructuradas, validaciones completas de aridad/entry o la construcción exacta
+de todos los invariantes de `ModuleRecord`. Tampoco reemplaza el `json.loads`
+Python de `kryndel/artifact.py`; funciona como una etapa fuente diferencial para
+el subset congelado.
 
 La implementación se ejecuta por la VM Python. Por tanto, este contrato es una
 pieza diferencial de la futura cadena bootstrap y no evidencia de self-hosting o
