@@ -1058,6 +1058,34 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(invalid_result.variant_name, "Error")
         self.assertIn("KRY5009", invalid_result.payloads[0])
 
+    def test_source_json_decoder_builds_bytecode_subset(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "bytecode-schema-source-v1.json").read_text(encoding="utf-8"))
+        source = (root / "stdlib" / "core" / "json.kry").read_text(encoding="utf-8")
+        runtime = VM(compile_source(source, "stdlib/core/json.kry"))
+        decoded = runtime.execute("decode_bytecode", [fixture["valid"]["source"]])
+        self.assertEqual(decoded.variant_name, "Ok")
+        module = decoded.payloads[0]
+        self.assertEqual(module.field("name")[1], "json.kry")
+        self.assertEqual(module.field("entry")[1], "main")
+        functions = module.field("functions")[1].items
+        self.assertEqual(len(functions), 1)
+        function = functions[0]
+        self.assertEqual(function.field("name")[1], "main")
+        self.assertEqual(function.field("constants")[1].items, ("hello", "7"))
+        instructions = function.field("instructions")[1].items
+        self.assertEqual([item.field("op")[1] for item in instructions], ["PUSH_CONST", "POP", "RETURN"])
+        self.assertEqual(instructions[0].field("number")[1], 0)
+        self.assertEqual(instructions[1].field("number")[1], 0)
+        verifier_source = (root / "stdlib" / "core" / "bytecode.kry").read_text(encoding="utf-8")
+        verifier = VM(compile_source(verifier_source, "stdlib/core/bytecode.kry"))
+        verified = verifier.execute("verify", [module])
+        self.assertEqual(verified.variant_name, "Ok")
+        for malformed in fixture["invalid"].values():
+            invalid = runtime.execute("decode_bytecode", [malformed])
+            self.assertEqual(invalid.variant_name, "Error")
+            self.assertIn("KRY6305", invalid.payloads[0])
+
     def test_source_json_parser_matches_value_contract(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "json-source-v1.json").read_text(encoding="utf-8"))
