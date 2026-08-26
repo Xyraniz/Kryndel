@@ -38,6 +38,7 @@ The core modules now expose these non-generic APIs directly in Kryndel:
 | `core/checker` | `check(Array) -> CheckResult`, `module`, `resolve` | Source-level semantic and dependency checks for the parser subset; complete type identity, imports, visibility, and native module loading remain bootstrap-owned |
 | `core/compiler` | `compile(String, Array) -> CompileResult` | Source-level lowering for the migrated AST subset into verifiable bytecode records; full compiler, typed constants, linking, and serialization remain bootstrap-owned |
 | `core/runtime` | `run(ModuleRecord) -> RuntimeResult` | Source-level execution of the compiler subset with stack/locals and struct values; complete opcode coverage, KEXE input, host IO, and native runtime ownership remain bootstrap-owned |
+| `core/backend` | `seed_module()`, `emit(ModuleRecord, String) -> BackendResult` | Deterministic x86_64 Linux exit-0 assembly seed for an empty main module; complete native backend, object format, linking, and runtime integration remain pending |
 
 The source manifest module's lockfile writer accepts checksums as validated
 hexadecimal inputs; it does not pretend to calculate SHA-256. The fallback

@@ -1,0 +1,62 @@
+// Minimal direct backend for the first native seed target.
+// The complete compiler backend remains pending; this target only accepts an
+// empty main function and emits a Linux x86_64 exit-0 program.
+
+struct FunctionRecord {
+    name: String
+    arity: Int
+    parameters: Array
+    constants: Array
+    instructions: Array
+}
+
+struct ModuleRecord {
+    name: String
+    entry: String
+    version: Int
+    functions: Array
+}
+
+enum BackendResult {
+    Ok(String)
+    Error(String)
+}
+
+fn backend_error(message: String) -> BackendResult {
+    return BackendResult.Error(message)
+}
+
+fn backend_ok(value: String) -> BackendResult {
+    return BackendResult.Ok(value)
+}
+
+fn empty_main(functions: Array) -> Bool {
+    if len(functions) != 1 { return false }
+    let main: FunctionRecord = functions[0]
+    return main.name == "main" and main.arity == 0 and len(main.parameters) == 0 and len(main.constants) == 0 and len(main.instructions) == 0
+}
+
+pub fn seed_module() -> ModuleRecord {
+    let main: FunctionRecord = FunctionRecord {
+        name: "main",
+        arity: 0,
+        parameters: [],
+        constants: [],
+        instructions: [],
+    }
+    return ModuleRecord { name: "seed", entry: "main", version: 1, functions: [main] }
+}
+
+fn x86_64_linux_exit0() -> String {
+    return ".global _start\n.section .text\n_start:\n    mov $60, %rax\n    xor %rdi, %rdi\n    syscall\n"
+}
+
+pub fn emit(value: ModuleRecord, target: String) -> BackendResult {
+    if target != "x86_64-linux" {
+        return backend_error("KRY8001 unsupported target")
+    }
+    if value.version != 1 or value.entry != "main" or !empty_main(value.functions) {
+        return backend_error("KRY8002 seed backend accepts only an empty main module")
+    }
+    return backend_ok(x86_64_linux_exit0())
+}
