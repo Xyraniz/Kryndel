@@ -1,0 +1,257 @@
+// Source-level SHA-256 over nominal Bytes.
+// Bitwise operations are simulated with bounded arithmetic so this module does
+// not add a host intrinsic. The Python hashlib path remains the differential
+// oracle and production owner.
+
+enum DigestResult {
+    Ok(String)
+    Error(String)
+}
+
+fn modulo(value: Int) -> Int {
+    return value % 4294967296
+}
+
+fn power_two(shift: Int) -> Int {
+    let mut value: Int = 1
+    let mut index: Int = 0
+    while index < shift {
+        value = value * 2
+        index = index + 1
+    }
+    return value
+}
+
+fn shift_right(value: Int, shift: Int) -> Int {
+    return int(value / power_two(shift))
+}
+
+fn bit_and(left: Int, right: Int) -> Int {
+    let mut a: Int = left
+    let mut b: Int = right
+    let mut result: Int = 0
+    let mut place: Int = 1
+    let mut index: Int = 0
+    while index < 32 {
+        if a % 2 == 1 and b % 2 == 1 { result = result + place }
+        a = int(a / 2)
+        b = int(b / 2)
+        place = place * 2
+        index = index + 1
+    }
+    return result
+}
+
+fn bit_xor(left: Int, right: Int) -> Int {
+    let mut a: Int = left
+    let mut b: Int = right
+    let mut result: Int = 0
+    let mut place: Int = 1
+    let mut index: Int = 0
+    while index < 32 {
+        if (a % 2 == 1 and b % 2 == 0) or (a % 2 == 0 and b % 2 == 1) { result = result + place }
+        a = int(a / 2)
+        b = int(b / 2)
+        place = place * 2
+        index = index + 1
+    }
+    return result
+}
+
+fn bit_xor_three(first: Int, second: Int, third: Int) -> Int {
+    return bit_xor(bit_xor(first, second), third)
+}
+
+fn bit_not(value: Int) -> Int {
+    return 4294967295 - value
+}
+
+fn rotate_right(value: Int, shift: Int) -> Int {
+    let low: Int = shift_right(value, shift)
+    let tail: Int = value % power_two(shift)
+    return modulo(low + tail * power_two(32 - shift))
+}
+
+fn add_words(first: Int, second: Int, third: Int, fourth: Int, fifth: Int) -> Int {
+    return modulo(first + second + third + fourth + fifth)
+}
+
+fn constants() -> Array {
+    return [
+        1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221,
+        3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580,
+        3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986,
+        2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895,
+        666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037,
+        2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344,
+        430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779,
+        1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298,
+    ]
+}
+
+fn initial_hash() -> Array {
+    return [
+        1779033703, 3144134277, 1013904242, 2773480762,
+        1359893119, 2600822924, 528734635, 1541459225,
+    ]
+}
+
+fn append_word(value: Array, word: Int) -> Array {
+    let mut result: Array = value
+    result = array_push(result, int(word / 16777216) % 256)
+    result = array_push(result, int(word / 65536) % 256)
+    result = array_push(result, int(word / 256) % 256)
+    result = array_push(result, word % 256)
+    return result
+}
+
+fn padded(value: Bytes) -> Bytes {
+    let mut result: Array = []
+    let mut index: Int = 0
+    while index < len(value) {
+        result = array_push(result, value[index])
+        index = index + 1
+    }
+    result = array_push(result, 128)
+    let remainder: Int = len(result) % 64
+    let mut zeros: Int = remainder
+    if zeros > 56 { zeros = 64 - zeros + 56 }
+    else { zeros = 56 - zeros }
+    let mut zero_index: Int = 0
+    while zero_index < zeros {
+        result = array_push(result, 0)
+        zero_index = zero_index + 1
+    }
+    let bit_length: Int = len(value) * 8
+    let high: Int = int(bit_length / 4294967296)
+    let low: Int = bit_length % 4294967296
+    result = append_word(result, high)
+    result = append_word(result, low)
+    return bytes(result)
+}
+
+fn block_words(value: Bytes, start: Int) -> Array {
+    let mut result: Array = []
+    let mut index: Int = 0
+    while index < 16 {
+        let offset: Int = start + index * 4
+        let word: Int = value[offset] * 16777216 + value[offset + 1] * 65536 + value[offset + 2] * 256 + value[offset + 3]
+        result = array_push(result, word)
+        index = index + 1
+    }
+    return result
+}
+
+fn expanded_words(value: Bytes, start: Int) -> Array {
+    let mut words: Array = block_words(value, start)
+    let mut index: Int = 16
+    while index < 64 {
+        let first: Int = bit_xor_three(rotate_right(words[index - 15], 7), rotate_right(words[index - 15], 18), shift_right(words[index - 15], 3))
+        let second: Int = bit_xor_three(rotate_right(words[index - 2], 17), rotate_right(words[index - 2], 19), shift_right(words[index - 2], 10))
+        words = array_push(words, add_words(words[index - 16], first, words[index - 7], second, 0))
+        index = index + 1
+    }
+    return words
+}
+
+fn compress(hash: Array, words: Array) -> Array {
+    let mut a: Int = hash[0]
+    let mut b: Int = hash[1]
+    let mut c: Int = hash[2]
+    let mut d: Int = hash[3]
+    let mut e: Int = hash[4]
+    let mut f: Int = hash[5]
+    let mut g: Int = hash[6]
+    let mut h: Int = hash[7]
+    let k: Array = constants()
+    let mut index: Int = 0
+    while index < 64 {
+        let sigma_one: Int = bit_xor_three(rotate_right(e, 6), rotate_right(e, 11), rotate_right(e, 25))
+        let choose: Int = bit_xor(bit_and(e, f), bit_and(bit_not(e), g))
+        let first: Int = add_words(h, sigma_one, choose, k[index], words[index])
+        let sigma_zero: Int = bit_xor_three(rotate_right(a, 2), rotate_right(a, 13), rotate_right(a, 22))
+        let majority: Int = bit_xor_three(bit_and(a, b), bit_and(a, c), bit_and(b, c))
+        let second: Int = modulo(sigma_zero + majority)
+        h = g
+        g = f
+        f = e
+        e = modulo(d + first)
+        d = c
+        c = b
+        b = a
+        a = modulo(first + second)
+        index = index + 1
+    }
+    let mut result: Array = []
+    result = array_push(result, modulo(int(hash[0]) + a))
+    result = array_push(result, modulo(int(hash[1]) + b))
+    result = array_push(result, modulo(int(hash[2]) + c))
+    result = array_push(result, modulo(int(hash[3]) + d))
+    result = array_push(result, modulo(int(hash[4]) + e))
+    result = array_push(result, modulo(int(hash[5]) + f))
+    result = array_push(result, modulo(int(hash[6]) + g))
+    result = array_push(result, modulo(int(hash[7]) + h))
+    return result
+}
+
+fn hex_digit(value: Int) -> String {
+    if value == 0 { return "0" }
+    if value == 1 { return "1" }
+    if value == 2 { return "2" }
+    if value == 3 { return "3" }
+    if value == 4 { return "4" }
+    if value == 5 { return "5" }
+    if value == 6 { return "6" }
+    if value == 7 { return "7" }
+    if value == 8 { return "8" }
+    if value == 9 { return "9" }
+    if value == 10 { return "a" }
+    if value == 11 { return "b" }
+    if value == 12 { return "c" }
+    if value == 13 { return "d" }
+    if value == 14 { return "e" }
+    return "f"
+}
+
+fn word_hex(value: Int) -> String {
+    let mut result: String = ""
+    let mut shift: Int = 28
+    while shift >= 0 {
+        result = result + hex_digit(int(value / power_two(shift)) % 16)
+        shift = shift - 4
+    }
+    return result
+}
+
+fn hash_hex(value: Array) -> String {
+    let mut result: String = ""
+    let mut index: Int = 0
+    while index < len(value) {
+        result = result + word_hex(value[index])
+        index = index + 1
+    }
+    return result
+}
+
+pub fn digest(value: Bytes) -> DigestResult {
+    let input: Bytes = padded(value)
+    let mut hash: Array = initial_hash()
+    let mut start: Int = 0
+    while start < len(input) {
+        hash = compress(hash, expanded_words(input, start))
+        start = start + 64
+    }
+    return DigestResult.Ok(hash_hex(hash))
+}
+
+pub fn verify(value: Bytes, expected: String) -> DigestResult {
+    let result: DigestResult = digest(value)
+    match result {
+        DigestResult.Ok(actual) => {
+            if actual == expected { return DigestResult.Ok(actual) }
+            return DigestResult.Error("KRY6205 SHA-256 mismatch")
+        }
+        DigestResult.Error(message) => return DigestResult.Error(message)
+    }
+    return DigestResult.Error("KRY6205 SHA-256 verification failed")
+}

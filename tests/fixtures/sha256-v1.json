@@ -1,0 +1,19 @@
+{
+  "contract": "kryndel-source-sha256",
+  "mismatch_error": "KRY6205",
+  "vectors": [
+    {
+      "input": "",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "input": "abc",
+      "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    },
+    {
+      "input": "The quick brown fox jumps over the lazy dog",
+      "sha256": "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+    }
+  ],
+  "version": 1
+}
