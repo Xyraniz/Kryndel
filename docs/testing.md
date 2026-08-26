@@ -66,7 +66,9 @@ string, array, and object values, including escapes, and rejects malformed
 subset input with `KRY6304`. The schema regression decodes a v1 JSON module
 into nominal function/instruction records, passes it through the source verifier,
 and rejects malformed format, version, function, and argument cases with
-`KRY6305`. The source runtime test executes
+`KRY6305`. The same schema path is exercised through controlled
+`VirtualFileSystem` input with `decode_bytecode_file`; a missing file preserves
+`KRY6302`. The source runtime test executes
 that compiled module end to end through `stdlib/core/runtime.kry`
 and checks the nominal completion value. The source backend test emits
 the x86_64 Linux empty-main seed twice,

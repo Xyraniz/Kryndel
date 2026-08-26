@@ -36,7 +36,9 @@ objeto de funciones, constantes escalares y el subset de instrucciones
 nominales normalizados con los mismos campos que consume el verificador fuente;
 la regresión pasa el resultado por `stdlib/core/bytecode.kry` y obtiene `Ok`.
 
-El decoder todavía no lee archivos ni cubre todas las instrucciones, constantes
+`decode_bytecode_file(String)` compone `fs.read_text` con el decoder y se prueba
+sobre `VirtualFileSystem`; un archivo ausente conserva el diagnóstico controlado
+`KRY6302`. El decoder todavía no cubre todas las instrucciones, constantes
 estructuradas, validaciones completas de aridad/entry o la construcción exacta
 de todos los invariantes de `ModuleRecord`. Tampoco reemplaza el `json.loads`
 Python de `kryndel/artifact.py`; funciona como una etapa fuente diferencial para
