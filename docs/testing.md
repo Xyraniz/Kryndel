@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 112 tests in the current checkout and covers:
+The suite contains 113 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -68,7 +68,10 @@ into nominal function/instruction records, passes it through the source verifier
 and rejects malformed format, version, function, and argument cases with
 `KRY6305`. The same schema path is exercised through controlled
 `VirtualFileSystem` input with `decode_bytecode_file`; a missing file preserves
-`KRY6302`. The source runtime test executes
+`KRY6302`. The end-to-end KEXE source pipeline then reads a real Python-reference
+artifact, verifies its extracted digest, decodes its payload bytes, validates the
+normalized module, and runs it through the source runtime to return `hello`. The
+source runtime test executes
 that compiled module end to end through `stdlib/core/runtime.kry`
 and checks the nominal completion value. The source backend test emits
 the x86_64 Linux empty-main seed twice,

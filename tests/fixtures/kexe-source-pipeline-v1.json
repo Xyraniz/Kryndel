@@ -1,0 +1,23 @@
+{
+  "checksum_hex": "d151021038497dded812b9c0785704629b7acf9ece6bef00d964a220805ea65e",
+  "module": {
+    "entry": "main",
+    "format": "kryndel-bytecode",
+    "functions": {
+      "main": {
+        "arity": 0,
+        "constants": ["hello"],
+        "instructions": [
+          {"arg": 0, "line": 1, "op": "PUSH_CONST"},
+          {"arg": null, "line": 1, "op": "RETURN"}
+        ],
+        "name": "main",
+        "parameters": []
+      }
+    },
+    "name": "pipeline.kry",
+    "version": 1
+  },
+  "payload_length": 460,
+  "version": 1
+}

@@ -473,3 +473,8 @@ pub fn decode_bytecode(text: String) -> BytecodeResult {
 pub fn decode_bytecode_file(path: String) -> BytecodeResult {
     return decode_bytecode(fs.read_text(path))
 }
+
+
+pub fn decode_bytecode_bytes(value: Bytes) -> BytecodeResult {
+    return decode_bytecode(bytes_to_string(value))
+}
