@@ -10,6 +10,9 @@ not a claim that the current implementation is self-hosted.
 UTF-8 SourceFile
     |
     v
+Data core -----------------> bounded readers, slices, builders, nominal records
+    |
+    v
 Lexer --------------------> tokens + KRY1xxx diagnostics
     |
     v
@@ -129,8 +132,11 @@ top-level statements are not implicitly executed.
 ## Python boundary and self-hosting
 
 Currently Python owns all implementation code and the host filesystem/clock/
-stdout bridges. `kry host-report` emits the deterministic inventory and fails if
-VM dispatch names, visible signatures, or error metadata diverge. The measured dependency inventory is in
+stdout bridges. The source-level data core now defines bounded readers, balanced
+string assembly, and nominal toolchain record layouts, but those declarations are
+executed by the Python VM and do not retire Python ownership. `kry host-report`
+emits the deterministic inventory and fails if VM dispatch names, visible
+signatures, or error metadata diverge. The measured dependency inventory is in
 [`host-dependency-inventory.md`](host-dependency-inventory.md). The
 language-independent contracts are source spans, AST
 semantics, visibility, module resolution, diagnostic JSON, qualified function

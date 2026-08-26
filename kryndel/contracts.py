@@ -16,6 +16,7 @@ _REQUIRED_FIXTURES = (
     "tests/fixtures/host-boundary-v1.json",
     "tests/fixtures/filesystem-v1.json",
     "tests/fixtures/collections-v1.json",
+    "tests/fixtures/data-core-v1.json",
 )
 _REQUIRED_RUNTIME_ERRORS = {
     "KRY6102",
@@ -114,6 +115,42 @@ def _validate_fixture_shape(relative: str, value: Any) -> None:
             "append_string",
         }:
             raise ValueError("collections fixture must contain canonical append operations")
+    elif relative.endswith("data-core-v1.json"):
+        if value.get("contract") != "kryndel-data-core":
+            raise ValueError("data-core fixture has an unexpected contract")
+        if value.get("source") != "stdlib/core/data.kry":
+            raise ValueError("data-core fixture points at an unexpected source")
+        operations = value.get("operations")
+        if not isinstance(operations, dict) or set(operations) != {
+            "bytes_slice",
+            "bytes_slice_get",
+            "bytes_slice_length",
+            "bytes_slice_to_bytes",
+            "string_builder_append",
+            "string_builder_finish",
+            "string_builder_new",
+            "string_slice",
+            "string_slice_get",
+            "string_slice_length",
+            "string_slice_to_string",
+        }:
+            raise ValueError("data-core fixture must declare the complete source API")
+        records = value.get("records")
+        if records != {
+            "AstRecord": ["kind", "text", "span", "children"],
+            "DiagnosticRecord": ["severity", "code", "message", "span", "notes", "help"],
+            "SpanRecord": ["start", "end", "line", "column"],
+            "TokenRecord": ["kind", "text", "span"],
+        }:
+            raise ValueError("data-core record layouts are not canonical")
+        invalid = value.get("invalid")
+        if not isinstance(invalid, list) or {case.get("error") for case in invalid if isinstance(case, dict)} != {
+            "KRY6104",
+            "KRY6202",
+        }:
+            raise ValueError("data-core fixture must cover bounded-reader errors")
+        if not isinstance(value.get("valid"), list) or not value["valid"]:
+            raise ValueError("data-core fixture must contain valid cases")
 
 
 def core_contract_report(root: str | Path) -> dict[str, Any]:

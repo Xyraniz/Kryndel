@@ -40,10 +40,13 @@ fixed-width tuples: `[1, 2]`, `(1, "two")`, `len(value)`, `left + right`,
 Kryndel-visible APIs `bytes(Array)`, `string_to_bytes(String)`, and
 `bytes_to_string(Bytes)` construct, encode, and strictly decode it; `len` counts
 octets, `Bytes[index]` returns an `Int` in `0..255`, and `Bytes + Bytes`
-concatenates without normalization or lossy replacement. `Option` and `Result`
-are ordinary non-generic enums in `stdlib/core`; their Kryndel-native modules
+concatenates without normalization or lossy replacement. `Option` and `Result` are ordinary non-generic enums in `stdlib/core`; their Kryndel-native modules
 expose constructors, predicates, and total `unwrap_or`/`get_or` fallback
-accessors. The compiler and VM remain the Python bootstrap.
+accessors. `stdlib/core/data.kry` also exposes bounded String/Bytes slices, a
+balanced string builder, and nominal Span/Token/AST/diagnostic records for the
+future toolchain. These source modules execute through the Python bootstrap;
+the compiler and VM remain Python implementations.
+
 
 ## Diagnostics
 
@@ -167,7 +170,8 @@ emits deterministic source declarations, and `kry pack` writes a reproducible
 source files.
 
 The Python bootstrap owns the lexer, recursive-descent parser, checker,
-module graph, compiler, VM, artifact container, CLI, and local package resolver.
+module graph, compiler, VM, artifact container, CLI, local package resolver, and
+the runtime implementation behind `stdlib/core/data.kry`.
 Bytes execution, assertions, host-report, doc, pack, and the current test runner
 are also bootstrap implementations behind visible contracts. Their language-level
 signatures and deterministic fixtures are frozen, but no self-hosted
@@ -211,4 +215,6 @@ PYTHONPATH=. python3 -m unittest discover -s tests -v
 The test suite is the language contract. It covers existing structs and unit
 enums, payload enums and match, diagnostics, malformed bytecode/runtime,
 manifests, lockfiles, semver, local resolution, checksums, imports, CLI, KEXE,
-determinism, and security boundaries.
+data-core slices/builders/records, determinism, and security boundaries. The
+current checkout runs 91 Python unit tests; the historical 78-test wording in
+older release notes is no longer accurate.
