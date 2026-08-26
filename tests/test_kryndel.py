@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -1193,6 +1194,24 @@ class KryndelTests(unittest.TestCase):
         unsupported = backend.execute("emit", [seed, "wasm32"])
         self.assertEqual(unsupported.variant_name, "Error")
         self.assertIn("KRY8001", unsupported.payloads[0])
+
+    def test_seed_cli_builds_native_elf_without_python_toolchain(self) -> None:
+        root = Path(__file__).parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "kry-seed"
+            built = subprocess.run(
+                [str(root / "tools" / "kry-seed"), str(output)],
+                env={"PATH": "/usr/bin:/bin"},
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(built.returncode, 0, built.stderr)
+            self.assertTrue(os.access(output, os.X_OK))
+            self.assertTrue(output.read_bytes().startswith(bytes((0x7F, 0x45, 0x4C, 0x46))))
+            executed = subprocess.run([str(output)], capture_output=True)
+            self.assertEqual(executed.returncode, 0)
+            self.assertEqual(executed.stdout, b"")
+            self.assertEqual(executed.stderr, b"")
 
     def test_source_bytecode_verifier_matches_structural_contract(self) -> None:
         root = Path(__file__).parents[1]
