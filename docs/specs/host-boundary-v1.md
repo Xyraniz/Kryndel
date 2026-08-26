@@ -10,12 +10,12 @@ The rooted adapter resolves each component beneath one explicit root and rejects
 
 ## Operations
 
-The v1 surface consists of `read_bytes(path)`, `write_bytes(path, value)`, `list_dir(path)`, and `stat(path)`. Directory listings are sorted by portable relative path. Metadata contains only path, kind (`file` or `directory`), and byte size; timestamps, permissions, absolute paths, and host-specific inode data are excluded.
+The v1 surface consists of `read_bytes(path)`, `read_text(path)`, `write_bytes(path, value)`, `list_dir(path)`, and `stat(path)`. The executable source wrappers in `stdlib/core/filesystem.kry` expose these operations as `String -> Bytes`, `String -> String`, `String, Bytes -> Void`, `String -> Array`, and `String -> FileMetadata`. Directory listings are sorted by portable relative path. `FileMetadata` is a nominal value with declaration-ordered fields `path: String`, `kind: String`, and `size: Int`; timestamps, permissions, absolute paths, and host-specific inode data are excluded.
 
-`VirtualFileSystem` implements the same operations in memory and is the primary deterministic test seam. `RootedFileSystem` is the small temporary host adapter. Both adapters return immutable byte results and serializable `DiagnosticError` values rather than Python tracebacks.
+`VirtualFileSystem` implements the same operations in memory and is the primary deterministic test seam. `RootedFileSystem` is the small temporary host adapter. The VM receives one explicit `FileSystem` capability; it never derives a root from the current working directory and it refuses filesystem calls when no capability is configured. Both adapters return immutable byte results and serializable `DiagnosticError` values rather than Python tracebacks. The bootstrap maps those diagnostics to runtime messages retaining `KRY6301`–`KRY6304` and does not expose host paths as semantic values.
 
 > This boundary is an executable bootstrap contract. It does not claim that the language parser, package manager, or runtime has been rewritten in Kryndel.
 
 ## Acceptance evidence
 
-The regression suite checks sorted listings, byte round trips, missing paths, absolute and traversal rejection, and symlink rejection for both adapters. The next integration step is to make the manifest reader consume this interface without changing manifest v1 diagnostics or lockfile bytes.
+The regression suite checks sorted listings, byte and strict UTF-8 text round trips, nominal metadata fields, missing paths, malformed separators, absolute and traversal rejection, and symlink rejection for both adapters and the source-level API. The next integration step is to make the manifest reader consume this interface without changing manifest v1 diagnostics or lockfile bytes.

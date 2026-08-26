@@ -103,8 +103,12 @@ println(pair[0])
 ```
 
 Arrays are homogeneous and tuples are fixed-width. Indexes must be `Int` and
-out-of-range access is a runtime error. `Option`/`Maybe` and `Result`/`Error` are ordinary enums in the initial stdlib contract; generic payloads are still
-not implemented. The executable `stdlib/core/option.kry` module exports
+out-of-range access is a runtime error. `array_push(Array, Any) -> Array` returns
+a new immutable array and leaves its input unchanged; incompatible collection
+values produce `KRY6203`. The source wrapper is `stdlib/collections/sequences.kry`.
+`Option`/`Maybe` and `Result`/`Error` are ordinary enums in the initial stdlib
+contract; generic payloads are still not implemented.
+The executable `stdlib/core/option.kry` module exports
 `none() -> Option`, `some(value: Int) -> Option`, `is_some(value: Option) -> Bool`,
 `is_none(value: Option) -> Bool`, and total `unwrap_or(value: Option, fallback: Int) -> Int`
 (and its `get_or` alias). The executable `stdlib/core/result.kry` module exports
@@ -127,10 +131,22 @@ concatenates octets. The first invalid sequence raises `KRY6201` and reports its
 zero-based byte offset and expected sequence length. The source-level wrappers
 are in `stdlib/string/utf8.kry` and `stdlib/collections/bytes.kry`.
 
-Runtime errors for the existing bytecode operations are represented by
-`RuntimeKryndelError`; malformed bytecode, stack underflow, invalid calls,
-division by zero, invalid sequence indexes, invalid octets, invalid UTF-8, and
-unsupported sequence values are diagnosed without exposing Python tracebacks.
+Runtime errors for the existing bytecode operations are represented by `RuntimeKryndelError`; malformed bytecode, stack underflow, invalid calls, division by zero, invalid sequence indexes, invalid octets, invalid UTF-8, and unsupported sequence values are diagnosed without exposing Python tracebacks.
+
+## Controlled filesystem API
+
+The temporary source-level filesystem API is exposed through the `fs` capability. A VM embedding must provide one explicit project root; paths are relative POSIX paths and cannot contain a drive prefix, backslash, repeated separators, `..`, or symlinks. The API is available through the executable wrappers in `stdlib/core/filesystem.kry`:
+
+```kryndel
+fn read_bytes(path: String) -> Bytes
+fn read_text(path: String) -> String
+fn write_bytes(path: String, value: Bytes) -> Void
+fn list_dir(path: String) -> Array
+fn stat(path: String) -> FileMetadata
+```
+
+`FileMetadata` is a nominal record with `path: String`, `kind: String` (`file` or `directory`), and `size: Int`. Directory results are deterministic and sorted by portable relative path. Missing entries produce `KRY6302`, root escapes and symlinks produce `KRY6303`, malformed paths or invalid UTF-8 values produce `KRY6304`, and unconfigured or failed host IO produces `KRY6301`. The API is a bootstrap boundary: the current VM adapter is temporary and does not make the compiler or runtime self-hosted.
+
 
 Testing exposes `assert(value: Bool) -> Void` and
 `assert_eq(left: Any, right: Any) -> Void`. A false condition produces `KRY6401`

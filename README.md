@@ -35,8 +35,8 @@ support arbitrary patterns, struct destructuring, guards, OR patterns, macros,
 generics, ownership, borrowing, or lifetimes.
 
 The first Kryndel-native collection values are immutable homogeneous arrays and
-fixed-width tuples: `[1, 2]`, `(1, "two")`, `len(value)`, `left + right`, and
-safe `value[index]`. `Bytes` is an immutable nominal octet sequence. The
+fixed-width tuples: `[1, 2]`, `(1, "two")`, `len(value)`, `left + right`,
+`array_push(value, item)`, and safe `value[index]`. `Bytes` is an immutable nominal octet sequence. The
 Kryndel-visible APIs `bytes(Array)`, `string_to_bytes(String)`, and
 `bytes_to_string(Bytes)` construct, encode, and strictly decode it; `len` counts
 octets, `Bytes[index]` returns an `Int` in `0..255`, and `Bytes + Bytes`
@@ -171,7 +171,10 @@ module graph, compiler, VM, artifact container, CLI, and local package resolver.
 Bytes execution, assertions, host-report, doc, pack, and the current test runner
 are also bootstrap implementations behind visible contracts. Their language-level
 signatures and deterministic fixtures are frozen, but no self-hosted
-implementation is claimed. The complete implementation audit is in
+implementation is claimed. The controlled filesystem boundary is now also
+available through `fs.read_bytes`, `fs.read_text`, `fs.write_bytes`, `fs.list_dir`, and `fs.stat`,
+with executable wrappers in `stdlib/core/filesystem.kry`; it remains a temporary
+VM capability rooted explicitly by the embedding. The complete implementation audit is in
 [`docs/roadmap-status.md`](docs/roadmap-status.md).
 The source language contracts, spans, diagnostic JSON, visibility rules,
 module-resolution rules, bytecode JSON, qualified function names, KEXE checksum

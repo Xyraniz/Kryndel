@@ -11,6 +11,15 @@
       "state": "host temporal"
     },
     {
+      "error_code": "KRY6203",
+      "fixture": "tests/fixtures/collections-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "array_push",
+      "replacement": "Kryndel-native immutable Array value operation",
+      "signature": "array_push(Array, Any) -> Array",
+      "state": "host temporal"
+    },
+    {
       "error_code": "KRY6401",
       "fixture": "tests/fixtures/stdlib-testing-v1.json",
       "host_module": "kryndel/vm.py",
@@ -62,6 +71,51 @@
       "name": "float",
       "replacement": "Kryndel-native implementation",
       "signature": "float(Any) -> Float",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "tests/fixtures/filesystem-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "fs.list_dir",
+      "replacement": "Kryndel-native filesystem metadata values",
+      "signature": "fs.list_dir(String) -> Array<FileMetadata>",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "tests/fixtures/filesystem-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "fs.read_bytes",
+      "replacement": "Kryndel-native filesystem API over explicit capability",
+      "signature": "fs.read_bytes(String) -> Bytes",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "tests/fixtures/filesystem-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "fs.read_text",
+      "replacement": "Kryndel-native UTF-8 filesystem API over explicit capability",
+      "signature": "fs.read_text(String) -> String",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "tests/fixtures/filesystem-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "fs.stat",
+      "replacement": "Kryndel-native filesystem metadata values",
+      "signature": "fs.stat(String) -> FileMetadata",
+      "state": "host temporal"
+    },
+    {
+      "error_code": "KRY6301",
+      "fixture": "tests/fixtures/filesystem-v1.json",
+      "host_module": "kryndel/vm.py",
+      "name": "fs.write_bytes",
+      "replacement": "Kryndel-native filesystem API over explicit capability",
+      "signature": "fs.write_bytes(String, Bytes) -> Void",
       "state": "host temporal"
     },
     {
@@ -263,7 +317,7 @@
   },
   "state_counts": {
     "Kryndel": 0,
-    "host temporal": 23,
+    "host temporal": 29,
     "no implementado": 0
   },
   "unlisted_intrinsics": [],

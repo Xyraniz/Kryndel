@@ -6,3 +6,7 @@ pub fn array_length(value: Array) -> Int {
 pub fn tuple_length(value: Tuple) -> Int {
     return len(value)
 }
+
+pub fn append(value: Array, item: Any) -> Array {
+    return array_push(value, item)
+}

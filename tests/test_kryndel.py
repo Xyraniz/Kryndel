@@ -93,6 +93,53 @@ class KryndelTests(unittest.TestCase):
             with self.assertRaisesRegex(DiagnosticError, "KRY6303"):
                 rooted.read_bytes("link.txt")
 
+    def test_filesystem_api_executes_from_kryndel_with_nominal_metadata(self) -> None:
+        virtual = VirtualFileSystem({"input.bin": b"A", "dir/z.bin": b"z", "dir/a.bin": b"a"})
+        source = """
+        fn read() -> Bytes { return fs.read_bytes("input.bin") }
+        fn save(value: Bytes) -> Void { return fs.write_bytes("output.bin", value) }
+        fn entries() -> Array { return fs.list_dir("dir") }
+        fn metadata() -> FileMetadata { return fs.stat("input.bin") }
+        """
+        runtime = VM(compile_source(source, "filesystem-api.kry"), filesystem=virtual)
+        self.assertEqual(runtime.execute("read", []).items, (0x41,))
+        runtime.execute("save", [BytesValue((0x42, 0x00))])
+        self.assertEqual(virtual.read_bytes("output.bin"), bytes((0x42, 0)))
+        listing = runtime.execute("entries", [])
+        self.assertEqual([item.fields[0][1] for item in listing.items], ["dir/a.bin", "dir/z.bin"])
+        metadata = runtime.execute("metadata", [])
+        self.assertIsInstance(metadata, StructValue)
+        self.assertEqual(metadata.fields, (("path", "input.bin"), ("kind", "file"), ("size", 1)))
+
+        wrapped = compile_source(
+            (Path(__file__).parents[1] / "stdlib" / "core" / "filesystem.kry").read_text(encoding="utf-8"),
+            "stdlib/core/filesystem.kry",
+        )
+        wrapped_runtime = VM(wrapped, filesystem=virtual)
+        self.assertEqual(wrapped_runtime.execute("read_bytes", ["input.bin"]).items, (0x41,))
+        self.assertEqual(wrapped_runtime.execute("read_text", ["input.bin"]), "A")
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6304"):
+            VM(compile_source('fn read() -> String { return fs.read_text("bad.bin") }', "filesystem-utf8.kry"), filesystem=VirtualFileSystem({"bad.bin": bytes((0xFF,))})).execute("read", [])
+
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6303"):
+            VM(compile_source('fn read() -> Bytes { return fs.read_bytes("../escape") }', "filesystem-escape.kry"), filesystem=virtual).execute("read", [])
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6302"):
+            VM(compile_source('fn read() -> Bytes { return fs.read_bytes("missing") }', "filesystem-missing.kry"), filesystem=virtual).execute("read", [])
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6304"):
+            VM(compile_source('fn read() -> Bytes { return fs.read_bytes("dir//file") }', "filesystem-malformed.kry"), filesystem=virtual).execute("read", [])
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6301"):
+            VM(compile_source('fn read() -> Bytes { return fs.read_bytes("input.bin") }', "filesystem-unconfigured.kry")).execute("read", [])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "fixture.bin").write_bytes(b"A")
+            program = root / "main.kry"
+            program.write_text("println(bytes_to_string(fs.read_bytes(\"fixture.bin\")))" + chr(10), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(cli_main(["run", str(program)]), 0)
+            self.assertEqual(output.getvalue(), "A" + chr(10))
+
     def test_value_runtime_v1_fixture_is_deterministic_and_complete(self) -> None:
         fixture_path = Path(__file__).parent / "fixtures" / "value-runtime-v1.json"
         raw = fixture_path.read_text(encoding="utf-8")
@@ -343,6 +390,52 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(first.functions["main"].instructions[-1].op, "RETURN")
         self.assertIsInstance(runtime.execute("make", []), ArrayValue)
         self.assertIsInstance(runtime.execute("pair", []), TupleValue)
+
+    def test_array_append_is_immutable_and_source_level(self) -> None:
+        source = """
+        fn append_ints() -> Array {
+            let original: Array = [1, 2]
+            return array_push(original, 3)
+        }
+        """
+        runtime = VM(compile_source(source, "collections.kry"))
+        result = runtime.execute("append_ints", [])
+        self.assertIsInstance(result, ArrayValue)
+        self.assertEqual(result.items, (1, 2, 3))
+        wrapper = compile_source(
+            (Path(__file__).parents[1] / "stdlib" / "collections" / "sequences.kry").read_text(encoding="utf-8"),
+            "stdlib/collections/sequences.kry",
+        )
+        self.assertEqual(VM(wrapper).execute("append", [ArrayValue(("a",)), "b"]).items, ("a", "b"))
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6203"):
+            VM(compile_source("fn bad(value: Any) -> Array { return array_push(value, 2) }", "collections-invalid.kry")).execute("bad", [1])
+
+    def test_manifest_parser_executes_from_kryndel_over_filesystem_api(self) -> None:
+        root = Path(__file__).parents[1]
+        source = (root / "stdlib" / "core" / "manifest.kry").read_text(encoding="utf-8")
+        manifest = """[package]\nname = \"demo\"\nversion = \"1.2.3\"\nedition = \"2026\"\n\n[dependencies]\nrequest = \"^1.0\"\n"""
+        runtime = VM(
+            compile_source(source, "stdlib/core/manifest.kry"),
+            filesystem=VirtualFileSystem({"kry.toml": manifest.encode("utf-8")}),
+        )
+        result = runtime.execute("read", ["kry.toml"])
+        self.assertIsInstance(result, EnumValue)
+        self.assertEqual(result.type_name, "ManifestResult")
+        self.assertEqual(result.variant_name, "Ok")
+        parsed = result.payloads[0]
+        self.assertIsInstance(parsed, StructValue)
+        self.assertEqual(parsed.field("name"), (True, "demo"))
+        self.assertEqual(parsed.field("version"), (True, "1.2.3"))
+        dependencies = parsed.field("dependencies")[1]
+        self.assertEqual(dependencies.items[0].field("name"), (True, "request"))
+        self.assertEqual(dependencies.items[0].field("requirement"), (True, "^1.0"))
+
+        invalid = VM(
+            compile_source(source, "stdlib/core/manifest.kry"),
+            filesystem=VirtualFileSystem({"kry.toml": b"[unsupported]\\n"}),
+        ).execute("read", ["kry.toml"])
+        self.assertEqual(invalid.variant_name, "Error")
+        self.assertIn("KRY5001", invalid.payloads[0])
 
     def test_sequence_index_errors_have_stable_runtime_codes(self) -> None:
         with self.assertRaisesRegex(RuntimeKryndelError, "KRY6104"):

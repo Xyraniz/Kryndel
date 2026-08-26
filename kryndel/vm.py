@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .bytecode import BytecodeFunction, Module
+from .filesystem import FileMetadata, FileSystem
 
 
 class RuntimeKryndelError(Exception):
@@ -92,6 +93,7 @@ class UINode:
 class VM:
     module: Module
     output: Callable[[str], None] = print
+    filesystem: FileSystem | None = None
     call_stack: list[str] = field(default_factory=list)
 
     def run(self) -> Any:
@@ -409,6 +411,13 @@ class VM:
             return math.sqrt(arguments[0])
         if name == "clock":
             return time.monotonic()
+        if name in {"fs.read_bytes", "fs.read_text", "fs.write_bytes", "fs.list_dir", "fs.stat"}:
+            return self.filesystem_builtin(name, arguments)
+        if name == "array_push":
+            value, item = arguments
+            if not isinstance(value, ArrayValue):
+                raise RuntimeKryndelError("KRY6203 array_push requires an Array")
+            return ArrayValue(value.items + (item,))
         if name == "ui.window":
             title, width, height = arguments
             return UINode("Window", {"title": title, "width": width, "height": height})
@@ -443,6 +452,51 @@ class VM:
         if name == "ui.run":
             return None
         raise RuntimeKryndelError(f"unknown function {name!r}")
+
+    def filesystem_builtin(self, name: str, arguments: list[Any]) -> Any:
+        if self.filesystem is None:
+            raise RuntimeKryndelError("KRY6301 filesystem capability is not configured")
+        if name in {"fs.read_bytes", "fs.read_text", "fs.list_dir", "fs.stat"} and (
+            len(arguments) != 1 or not isinstance(arguments[0], str)
+        ):
+            raise RuntimeKryndelError(f"KRY6304 {name} requires a String path")
+        if name == "fs.write_bytes" and (
+            len(arguments) != 2 or not isinstance(arguments[0], str) or not isinstance(arguments[1], BytesValue)
+        ):
+            raise RuntimeKryndelError("KRY6304 fs.write_bytes requires a String path and Bytes value")
+        path = arguments[0]
+        try:
+            if name == "fs.read_bytes":
+                return BytesValue(tuple(self.filesystem.read_bytes(path)))
+            if name == "fs.read_text":
+                try:
+                    return self.decode_utf8(tuple(self.filesystem.read_bytes(path)))
+                except RuntimeKryndelError as exc:
+                    if "KRY6201" in str(exc):
+                        raise RuntimeKryndelError("KRY6304 filesystem text input must be valid UTF-8") from exc
+                    raise
+            if name == "fs.write_bytes":
+                self.filesystem.write_bytes(path, arguments[1].items)
+                return None
+            if name == "fs.list_dir":
+                return ArrayValue(tuple(self.metadata_value(item) for item in self.filesystem.list_dir(path)))
+            return self.metadata_value(self.filesystem.stat(path))
+        except Exception as exc:
+            if isinstance(exc, RuntimeKryndelError):
+                raise
+            diagnostic = getattr(exc, "diagnostics", ())
+            if diagnostic:
+                first = diagnostic[0]
+                code = first.code or "KRY6301"
+                raise RuntimeKryndelError(f"{code} {first.message}") from exc
+            raise RuntimeKryndelError(f"KRY6301 {exc}") from exc
+
+    @staticmethod
+    def metadata_value(metadata: FileMetadata) -> StructValue:
+        return StructValue(
+            "FileMetadata",
+            (("path", metadata.path), ("kind", metadata.kind), ("size", metadata.size)),
+        )
 
     def emit_output(self, text: str, *, newline: bool) -> None:
         if self.output is print:

@@ -79,3 +79,21 @@ checking the contained module. The offline `kry host-report` command validates
 that every VM-dispatched intrinsic has a visible type signature, error metadata,
 fixture, and replacement plan; `kry test --format json` has the analogous
 versioned result contract for source tests.
+
+## Controlled filesystem capability
+
+The temporary host boundary is limited to memory allocation/storage, output and
+input IO, monotonic clock, controlled filesystem access, process exit status,
+and reading the bytecode container. Each operation must be reached through a
+Kryndel-visible signature and return either a nominal value or a serializable
+error. No host dictionary is a semantic Kryndel value.
+
+The filesystem surface is `fs.read_bytes(String) -> Bytes`,
+`fs.read_text(String) -> String`,
+`fs.write_bytes(String, Bytes) -> Void`,
+`fs.list_dir(String) -> Array<FileMetadata>`, and
+`fs.stat(String) -> FileMetadata`. `FileMetadata` is a nominal record with
+`path: String`, `kind: String`, and `size: Int`. The VM receives the capability
+explicitly; a missing capability is `KRY6301`, while the rooted adapters preserve
+`KRY6302`–`KRY6304` for missing entries, root escapes, symlinks, and malformed
+paths. Source wrappers are provided by `stdlib/core/filesystem.kry`.

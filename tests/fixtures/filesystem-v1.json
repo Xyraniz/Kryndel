@@ -1,0 +1,42 @@
+{
+  "api": {
+    "fs.list_dir": "fs.list_dir(String) -> Array<FileMetadata>",
+    "fs.read_bytes": "fs.read_bytes(String) -> Bytes",
+    "fs.read_text": "fs.read_text(String) -> String",
+    "fs.stat": "fs.stat(String) -> FileMetadata",
+    "fs.write_bytes": "fs.write_bytes(String, Bytes) -> Void"
+  },
+  "contract": "kryndel-filesystem",
+  "errors": {
+    "KRY6301": "IO failure or invalid write target",
+    "KRY6302": "file or directory does not exist",
+    "KRY6303": "path escapes the explicit project root",
+    "KRY6304": "malformed path, content, or argument"
+  },
+  "metadata": {
+    "fields": [
+      {
+        "name": "path",
+        "type": "String"
+      },
+      {
+        "name": "kind",
+        "type": "String"
+      },
+      {
+        "name": "size",
+        "type": "Int"
+      }
+    ],
+    "type": "FileMetadata"
+  },
+  "path_policy": {
+    "absolute": "KRY6303",
+    "backslash": "KRY6304",
+    "dot_dot": "KRY6303",
+    "repeated_separator": "KRY6304",
+    "root": ".",
+    "symlink": "KRY6303"
+  },
+  "version": 1
+}
