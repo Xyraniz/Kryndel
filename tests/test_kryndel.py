@@ -1085,6 +1085,15 @@ class KryndelTests(unittest.TestCase):
             invalid = runtime.execute("decode_bytecode", [malformed])
             self.assertEqual(invalid.variant_name, "Error")
             self.assertIn("KRY6305", invalid.payloads[0])
+        file_runtime = VM(
+            compile_source(source, "stdlib/core/json.kry"),
+            filesystem=VirtualFileSystem({"payload.json": fixture["valid"]["source"].encode("utf-8")}),
+        )
+        file_decoded = file_runtime.execute("decode_bytecode_file", ["payload.json"])
+        self.assertEqual(file_decoded.variant_name, "Ok")
+        self.assertEqual(file_decoded.payloads[0].field("name")[1], "json.kry")
+        with self.assertRaisesRegex(RuntimeKryndelError, "KRY6302"):
+            file_runtime.execute("decode_bytecode_file", ["missing.json"])
 
     def test_source_json_parser_matches_value_contract(self) -> None:
         root = Path(__file__).parents[1]

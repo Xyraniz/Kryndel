@@ -468,3 +468,8 @@ pub fn decode_bytecode(text: String) -> BytecodeResult {
     }
     return schema_error("unreachable bytecode decoder state")
 }
+
+
+pub fn decode_bytecode_file(path: String) -> BytecodeResult {
+    return decode_bytecode(fs.read_text(path))
+}
