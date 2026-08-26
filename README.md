@@ -44,7 +44,9 @@ concatenates without normalization or lossy replacement. `Option` and `Result` a
 expose constructors, predicates, and total `unwrap_or`/`get_or` fallback
 accessors. `stdlib/core/data.kry` also exposes bounded String/Bytes slices, a
 balanced string builder, and nominal Span/Token/AST/diagnostic records for the
-future toolchain. These source modules execute through the Python bootstrap;
+future toolchain. `stdlib/core/lexer.kry` provides a source-level lexer seam for
+the current keywords, literals, comments, operators, spans, and recovery cases.
+These source modules execute through the Python bootstrap;
 the compiler and VM remain Python implementations.
 
 
@@ -217,5 +219,5 @@ enums, payload enums and match, diagnostics, malformed bytecode/runtime,
 manifests, lockfiles, semver, local resolution, checksums, imports, CLI, KEXE,
 data-core slices/builders/records, source manifest ranges, lockfile JSON,
 normalized bytecode verification, determinism, and security boundaries. The
-current checkout runs 94 Python unit tests; the
+current checkout runs 95 Python unit tests; the
 historical 78-test wording in older release notes is no longer accurate.
