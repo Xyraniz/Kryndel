@@ -5,6 +5,7 @@
   "markers": [".global _start", "mov $60, %rax", "syscall"],
   "program_source": "{\"format\":\"kryndel-bytecode\",\"version\":1,\"name\":\"status.kry\",\"entry\":\"main\",\"functions\":{\"main\":{\"name\":\"main\",\"arity\":0,\"parameters\":[],\"constants\":[7],\"instructions\":[{\"op\":\"PUSH_CONST\",\"arg\":0,\"line\":1},{\"op\":\"RETURN\",\"arg\":null,\"line\":1}]}}}",
   "invalid_program_source": "{\"format\":\"kryndel-bytecode\",\"version\":1,\"name\":\"status.kry\",\"entry\":\"main\",\"functions\":{\"main\":{\"name\":\"main\",\"arity\":0,\"parameters\":[],\"constants\":[256],\"instructions\":[{\"op\":\"PUSH_CONST\",\"arg\":0,\"line\":1},{\"op\":\"RETURN\",\"arg\":null,\"line\":1}]}}}",
+  "control_program_source": "{\"format\":\"kryndel-bytecode\",\"version\":1,\"name\":\"control.kry\",\"entry\":\"main\",\"functions\":{\"main\":{\"name\":\"main\",\"arity\":0,\"parameters\":[],\"constants\":[7,0],\"instructions\":[{\"op\":\"PUSH_CONST\",\"arg\":1,\"line\":1},{\"op\":\"JUMP_IF_FALSE\",\"arg\":4,\"line\":1},{\"op\":\"PUSH_CONST\",\"arg\":0,\"line\":1},{\"op\":\"JUMP\",\"arg\":5,\"line\":1},{\"op\":\"PUSH_CONST\",\"arg\":0,\"line\":1},{\"op\":\"RETURN\",\"arg\":null,\"line\":1}]}}}",
   "supported_exit_statuses": [0, 7, 255],
   "target": "x86_64-linux",
   "version": 2

@@ -394,6 +394,12 @@ fn decode_instruction(value: JsonValue) -> BytecodeInstruction {
             _ => return BytecodeInstruction { op: "ERROR", line: line, text: "KRY6305 invalid name instruction", text2: "", number: 0, names: [] }
         }
     }
+    if op == "JUMP" or op == "JUMP_IF_FALSE" {
+        match argument {
+            JsonValue.Int(number) => return BytecodeInstruction { op: op, line: line, text: "", text2: "", number: number, names: [] }
+            _ => return BytecodeInstruction { op: "ERROR", line: line, text: "KRY6305 invalid jump target", text2: "", number: 0, names: [] }
+        }
+    }
     return BytecodeInstruction { op: "ERROR", line: line, text: "KRY6305 unsupported source schema opcode", text2: "", number: 0, names: [] }
 }
 

@@ -84,6 +84,19 @@ fn constant_exit_program(functions: Array) -> Bool {
     return first.op == "PUSH_CONST" and first.number == 0 and second.op == "RETURN"
 }
 
+fn control_flow_program(functions: Array) -> Bool {
+    if len(functions) != 1 { return false }
+    let main: FunctionRecord = functions[0]
+    if main.name != "main" or main.arity != 0 or len(main.parameters) != 0 or len(main.constants) != 2 or len(main.instructions) != 6 { return false }
+    let first: InstructionRecord = main.instructions[0]
+    let branch: InstructionRecord = main.instructions[1]
+    let fallthrough: InstructionRecord = main.instructions[2]
+    let skip: InstructionRecord = main.instructions[3]
+    let taken: InstructionRecord = main.instructions[4]
+    let finish: InstructionRecord = main.instructions[5]
+    return first.op == "PUSH_CONST" and first.number == 1 and branch.op == "JUMP_IF_FALSE" and branch.number == 4 and fallthrough.op == "PUSH_CONST" and fallthrough.number == 0 and skip.op == "JUMP" and skip.number == 5 and taken.op == "PUSH_CONST" and taken.number == 0 and finish.op == "RETURN"
+}
+
 pub fn seed_module() -> ModuleRecord {
     let main: FunctionRecord = FunctionRecord {
         name: "main",
@@ -97,6 +110,10 @@ pub fn seed_module() -> ModuleRecord {
 
 fn x86_64_linux_exit(code: Int) -> String {
     return ".global _start\n.section .text\n_start:\n    mov $60, %rax\n    mov $" + str(code) + ", %rdi\n    syscall\n"
+}
+
+fn x86_64_linux_control_exit(code: Int) -> String {
+    return ".global _start\n.section .text\n_start:\n    mov $0, %rdi\n    test %rdi, %rdi\n    je .L4\n    mov $" + str(code) + ", %rdi\n    jmp .L5\n.L4:\n    mov $" + str(code) + ", %rdi\n.L5:\n    mov $60, %rax\n    syscall\n"
 }
 
 pub fn emit_exit(value: ModuleRecord, target: String, code: Int) -> BackendResult {
@@ -114,12 +131,13 @@ pub fn emit_exit(value: ModuleRecord, target: String, code: Int) -> BackendResul
 
 pub fn emit_program(value: ModuleRecord, target: String) -> BackendResult {
     if target != "x86_64-linux" { return backend_error("KRY8001 unsupported target") }
-    if value.version != 1 or value.entry != "main" or !constant_exit_program(value.functions) {
-        return backend_error("KRY8004 backend accepts only PUSH_CONST then RETURN")
+    if value.version != 1 or value.entry != "main" or (!constant_exit_program(value.functions) and !control_flow_program(value.functions)) {
+        return backend_error("KRY8004 backend accepts only bounded constant-return or control-flow seed")
     }
     let main: FunctionRecord = value.functions[0]
     let code: Int = parse_exit_text(str(main.constants[0]))
     if code < 0 or code > 255 { return backend_error("KRY8005 constant exit status must be in 0..255") }
+    if control_flow_program(value.functions) { return backend_ok(x86_64_linux_control_exit(code)) }
     return backend_ok(x86_64_linux_exit(code))
 }
 

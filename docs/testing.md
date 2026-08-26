@@ -71,8 +71,9 @@ that compiled module end to end through `stdlib/core/runtime.kry`
 and checks the nominal completion value. The source backend test emits
 the x86_64 Linux empty-main seed twice,
 compares it byte for byte, checks exit statuses 0, 7, and 255, passes a decoded
-`PUSH_CONST`/`RETURN` program through the direct backend, and rejects unsupported
-targets, shapes, and out-of-range statuses. The seed CLI regression also
+`PUSH_CONST`/`RETURN` and fixed conditional-jump programs through the direct
+backend, checks `je .L4` and `jmp .L5`, and rejects unsupported targets, shapes,
+and out-of-range statuses. The seed CLI regression also
 builds and executes a status-7 raw ELF.
 The CLI integration
 also builds and executes the raw ELF seed with only POSIX shell utilities and
