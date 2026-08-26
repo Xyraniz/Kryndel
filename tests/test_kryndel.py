@@ -1227,6 +1227,23 @@ class KryndelTests(unittest.TestCase):
         empty = formatter.execute("format", [""])
         self.assertEqual(empty.field("text")[1], "\n")
 
+    def test_formatter_cli_runs_without_python(self) -> None:
+        root = Path(__file__).parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = Path(directory) / "input.kry"
+            input_path.write_text("let x: Int = 1  \n\n\n", encoding="utf-8")
+            needs_formatting = subprocess.run([str(root / "tools" / "kry-format"), "--check", str(input_path)], capture_output=True, text=True)
+            self.assertEqual(needs_formatting.returncode, 1)
+            rewritten = subprocess.run([str(root / "tools" / "kry-format"), str(input_path)], capture_output=True, text=True)
+            self.assertEqual(rewritten.returncode, 0, rewritten.stderr)
+            self.assertEqual(input_path.read_text(encoding="utf-8"), "let x: Int = 1\n")
+            clean = subprocess.run([str(root / "tools" / "kry-format"), "--check", str(input_path)], capture_output=True, text=True)
+            self.assertEqual(clean.returncode, 0, clean.stderr)
+            empty_path = Path(directory) / "empty.kry"
+            empty_path.write_text("", encoding="utf-8")
+            subprocess.run([str(root / "tools" / "kry-format"), str(empty_path)], check=True)
+            self.assertEqual(empty_path.read_text(encoding="utf-8"), "\n")
+
     def test_source_bytecode_verifier_matches_structural_contract(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "bytecode-native-verifier-v1.json").read_text(encoding="utf-8"))
