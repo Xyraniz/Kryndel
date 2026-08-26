@@ -1058,6 +1058,25 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(invalid_result.variant_name, "Error")
         self.assertIn("KRY5009", invalid_result.payloads[0])
 
+    def test_source_kexe_reader_matches_framing_contract(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "kexe-reader-v1.json").read_text(encoding="utf-8"))
+        source = (root / "stdlib" / "core" / "artifact.kry").read_text(encoding="utf-8")
+        runtime = VM(compile_source(source, "stdlib/core/artifact.kry"))
+        valid = runtime.execute("read_header", [BytesValue(tuple(fixture["valid"]["bytes"]))])
+        self.assertEqual(valid.variant_name, "Ok")
+        header = valid.payloads[0]
+        self.assertEqual(header.field("version")[1], fixture["valid"]["version"])
+        self.assertEqual(header.field("payload_length")[1], fixture["valid"]["payload_length"])
+        self.assertEqual(header.field("payload_start")[1], fixture["valid"]["payload_start"])
+        self.assertEqual(header.field("payload_end")[1], fixture["valid"]["payload_end"])
+        self.assertEqual(header.field("checksum")[1].items, tuple([0] * fixture["valid"]["checksum_length"]))
+        self.assertEqual(header.field("payload")[1].items, tuple(fixture["valid"]["payload"]))
+        for malformed in fixture["invalid"].values():
+            result = runtime.execute("read_header", [BytesValue(tuple(malformed))])
+            self.assertEqual(result.variant_name, "Error")
+            self.assertIn("KRY6305", result.payloads[0])
+
     def test_source_lexer_matches_published_fixture_and_recovers_errors(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "lexer-v1.json").read_text(encoding="utf-8"))

@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 108 tests in the current checkout and covers:
+The suite contains 109 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -54,8 +54,11 @@ imports. The source compiler test lowers the source lexer/parser subset
 into bytecode records and validates the emitted instruction sequence with the
 source verifier. A typed-bytecode fixture additionally checks canonical
 constant text, `PUSH_CONST` categories, `PUSH_NIL`, and decoding into nominal
-runtime values, including unsupported-category `KRY7006`. The source runtime
-test executes that compiled module end to end through `stdlib/core/runtime.kry`
+runtime values, including unsupported-category `KRY7006`. The KEXE reader test
+checks v1 magic, big-endian payload length, offsets, checksum extraction, and
+malformed framing through `stdlib/core/artifact.kry`; checksum calculation and
+JSON decoding remain explicitly out of scope. The source runtime test executes
+that compiled module end to end through `stdlib/core/runtime.kry`
 and checks the nominal completion value. The source backend test emits
 the x86_64 Linux empty-main seed twice,
 compares it byte for byte, and rejects unsupported targets. The CLI integration
