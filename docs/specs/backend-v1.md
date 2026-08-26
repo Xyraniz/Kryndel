@@ -1,18 +1,22 @@
 # Kryndel direct backend seed contract v1
 
 `stdlib/core/backend.kry` defines a deliberately narrow direct backend contract.
-It accepts only a v1 `ModuleRecord` containing one empty `main` function and the
-`x86_64-linux` target. `emit` emits deterministic GNU assembler text for a
-Linux `_start` entry that exits with status zero, while `emit_exit` accepts an
-explicit status in `0..255` and emits the same direct x86_64 `sys_exit` sequence.
-Unsupported targets return `KRY8001`; non-seed modules return `KRY8002`; an
-out-of-range status returns `KRY8003`.
+It accepts a v1 `ModuleRecord` and the `x86_64-linux` target. `emit` preserves
+the empty-main exit-zero seed, while `emit_exit` accepts an explicit status in
+`0..255` and emits the same direct x86_64 `sys_exit` sequence. `emit_program`
+accepts one `main` with no parameters, one scalar constant, and exactly
+`PUSH_CONST 0` followed by `RETURN`; it parses the constant in source and emits
+that bounded exit status. Unsupported targets return `KRY8001`; non-seed empty
+modules return `KRY8002`; an out-of-range explicit status returns `KRY8003`;
+unsupported program shapes return `KRY8004`; invalid program constants return
+`KRY8005`.
 
 The backend regression calls the source module twice and compares the emitted
-assembly byte for byte, then checks statuses `0`, `7`, and `255` plus invalid
-bounds. `tools/kry-seed` exposes the same optional status for a raw ELF seed.
-This is a bootstrap-executed seed for validating a future direct backend
-boundary, not a complete native code generator. Function calls, constants,
-arithmetic, control flow, data layout, object formats, linking, and compiler to
-backend integration remain unimplemented until the full compiler and native
-runtime contracts are frozen.
+assembly byte for byte, checks statuses `0`, `7`, and `255` plus invalid bounds,
+and passes a JSON-decoded `PUSH_CONST`/`RETURN` module through `emit_program`,
+including `KRY8005` for status 256. `tools/kry-seed` exposes the same optional
+status for a raw ELF seed. This is a bootstrap-executed seed for validating a
+future direct backend boundary, not a complete native code generator. Function
+calls, general constants, arithmetic, control flow, data layout, object formats,
+linking, and compiler-to-backend integration remain unimplemented until the full
+compiler and native runtime contracts are frozen.

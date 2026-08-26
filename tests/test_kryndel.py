@@ -1392,6 +1392,19 @@ class KryndelTests(unittest.TestCase):
         unsupported = backend.execute("emit", [seed, "wasm32"])
         self.assertEqual(unsupported.variant_name, "Error")
         self.assertIn("KRY8001", unsupported.payloads[0])
+        json_source = (root / "stdlib" / "core" / "json.kry").read_text(encoding="utf-8")
+        decoder = VM(compile_source(json_source, "stdlib/core/json.kry"))
+        decoded = decoder.execute("decode_bytecode", [fixture["program_source"]])
+        self.assertEqual(decoded.variant_name, "Ok")
+        program = decoded.payloads[0]
+        program_result = backend.execute("emit_program", [program, fixture["target"]])
+        self.assertEqual(program_result.variant_name, "Ok")
+        self.assertIn("mov $7, %rdi", program_result.payloads[0])
+        invalid_program = decoder.execute("decode_bytecode", [fixture["invalid_program_source"]])
+        self.assertEqual(invalid_program.variant_name, "Ok")
+        invalid_program_result = backend.execute("emit_program", [invalid_program.payloads[0], fixture["target"]])
+        self.assertEqual(invalid_program_result.variant_name, "Error")
+        self.assertIn("KRY8005", invalid_program_result.payloads[0])
 
     def test_seed_cli_builds_native_elf_without_python_toolchain(self) -> None:
         root = Path(__file__).parents[1]

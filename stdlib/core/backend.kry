@@ -1,6 +1,6 @@
 // Minimal direct backend for the first native seed target.
-// The complete compiler backend remains pending; this target only accepts an
-// empty main function and emits a Linux x86_64 exit-status seed for 0..255.
+// Besides the empty-main seed, this target accepts one PUSH_CONST/RETURN
+// program whose scalar constant is an exit status in 0..255.
 
 struct FunctionRecord {
     name: String
@@ -8,6 +8,15 @@ struct FunctionRecord {
     parameters: Array
     constants: Array
     instructions: Array
+}
+
+struct InstructionRecord {
+    op: String
+    line: Int
+    text: String
+    text2: String
+    number: Int
+    names: Array
 }
 
 struct ModuleRecord {
@@ -36,6 +45,45 @@ fn empty_main(functions: Array) -> Bool {
     return main.name == "main" and main.arity == 0 and len(main.parameters) == 0 and len(main.constants) == 0 and len(main.instructions) == 0
 }
 
+fn decimal_digit(character: String) -> Int {
+    if character == "0" { return 0 }
+    if character == "1" { return 1 }
+    if character == "2" { return 2 }
+    if character == "3" { return 3 }
+    if character == "4" { return 4 }
+    if character == "5" { return 5 }
+    if character == "6" { return 6 }
+    if character == "7" { return 7 }
+    if character == "8" { return 8 }
+    return 9
+}
+
+fn parse_exit_text(text: String) -> Int {
+    if len(text) == 0 { return -1 }
+    let mut index: Int = 0
+    let mut value: Int = 0
+    while index < len(text) {
+        if !is_digit(text[index]) { return -1 }
+        value = value * 10 + decimal_digit(text[index])
+        if value > 255 { return -1 }
+        index = index + 1
+    }
+    return value
+}
+
+fn is_digit(character: String) -> Bool {
+    return character == "0" or character == "1" or character == "2" or character == "3" or character == "4" or character == "5" or character == "6" or character == "7" or character == "8" or character == "9"
+}
+
+fn constant_exit_program(functions: Array) -> Bool {
+    if len(functions) != 1 { return false }
+    let main: FunctionRecord = functions[0]
+    if main.name != "main" or main.arity != 0 or len(main.parameters) != 0 or len(main.constants) != 1 or len(main.instructions) != 2 { return false }
+    let first: InstructionRecord = main.instructions[0]
+    let second: InstructionRecord = main.instructions[1]
+    return first.op == "PUSH_CONST" and first.number == 0 and second.op == "RETURN"
+}
+
 pub fn seed_module() -> ModuleRecord {
     let main: FunctionRecord = FunctionRecord {
         name: "main",
@@ -61,6 +109,17 @@ pub fn emit_exit(value: ModuleRecord, target: String, code: Int) -> BackendResul
     if code < 0 or code > 255 {
         return backend_error("KRY8003 exit status must be in 0..255")
     }
+    return backend_ok(x86_64_linux_exit(code))
+}
+
+pub fn emit_program(value: ModuleRecord, target: String) -> BackendResult {
+    if target != "x86_64-linux" { return backend_error("KRY8001 unsupported target") }
+    if value.version != 1 or value.entry != "main" or !constant_exit_program(value.functions) {
+        return backend_error("KRY8004 backend accepts only PUSH_CONST then RETURN")
+    }
+    let main: FunctionRecord = value.functions[0]
+    let code: Int = parse_exit_text(str(main.constants[0]))
+    if code < 0 or code > 255 { return backend_error("KRY8005 constant exit status must be in 0..255") }
     return backend_ok(x86_64_linux_exit(code))
 }
 
