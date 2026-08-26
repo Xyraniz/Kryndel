@@ -1,0 +1,209 @@
+// Source-level runtime seam for normalized bytecode-v1 records.
+// It executes the compiler subset; the Python VM remains the production runtime.
+
+struct InstructionRecord {
+    op: String
+    line: Int
+    text: String
+    text2: String
+    number: Int
+    names: Array
+}
+
+struct FunctionRecord {
+    name: String
+    arity: Int
+    parameters: Array
+    constants: Array
+    instructions: Array
+}
+
+struct ModuleRecord {
+    name: String
+    entry: String
+    version: Int
+    functions: Array
+}
+
+struct Binding {
+    name: String
+    value: Value
+}
+
+struct Value {
+    kind: String
+    text: String
+    number: Int
+    values: Array
+    names: Array
+}
+
+enum RuntimeResult {
+    Ok(Value)
+    Error(String)
+}
+
+fn runtime_error(message: String) -> RuntimeResult {
+    return RuntimeResult.Error(message)
+}
+
+fn runtime_ok(value: Value) -> RuntimeResult {
+    return RuntimeResult.Ok(value)
+}
+
+fn nil_value() -> Value {
+    return Value { kind: "Nil", text: "", number: 0, values: [], names: [] }
+}
+
+fn string_value(value: String) -> Value {
+    return Value { kind: "String", text: value, number: 0, values: [], names: [] }
+}
+
+fn int_value(value: Int) -> Value {
+    return Value { kind: "Int", text: "", number: value, values: [], names: [] }
+}
+
+fn struct_value(type_name: String, values: Array, names: Array) -> Value {
+    return Value { kind: type_name, text: "", number: 0, values: values, names: names }
+}
+
+fn find_function(functions: Array, name: String) -> FunctionRecord {
+    let mut index: Int = 0
+    while index < len(functions) {
+        let function_value: FunctionRecord = functions[index]
+        if function_value.name == name { return function_value }
+        index = index + 1
+    }
+    return FunctionRecord { name: "", arity: 0, parameters: [], constants: [], instructions: [] }
+}
+
+fn find_local(locals: Array, name: String) -> Value {
+    let mut index: Int = len(locals) - 1
+    while index >= 0 {
+        let binding: Binding = locals[index]
+        if binding.name == name { return binding.value }
+        index = index - 1
+    }
+    return nil_value()
+}
+
+fn set_local(locals: Array, name: String, value: Value) -> Array {
+    let mut index: Int = 0
+    while index < len(locals) {
+        let binding: Binding = locals[index]
+        if binding.name == name {
+            let mut updated: Array = []
+            let mut cursor: Int = 0
+            while cursor < len(locals) {
+                if cursor == index {
+                    updated = array_push(updated, Binding { name: name, value: value })
+                } else {
+                    updated = array_push(updated, locals[cursor])
+                }
+                cursor = cursor + 1
+            }
+            return updated
+        }
+        index = index + 1
+    }
+    return array_push(locals, Binding { name: name, value: value })
+}
+
+fn pop_value(stack: Array) -> Value {
+    if len(stack) == 0 { return nil_value() }
+    return stack[len(stack) - 1]
+}
+
+fn pop_many(stack: Array, count: Int) -> Array {
+    let mut result: Array = []
+    let mut index: Int = 0
+    while index < count {
+        result = array_push(result, stack[len(stack) - 1 - index])
+        index = index + 1
+    }
+    return result
+}
+
+fn remove_many(stack: Array, count: Int) -> Array {
+    let end: Int = len(stack) - count
+    let mut result: Array = []
+    let mut index: Int = 0
+    while index < end {
+        result = array_push(result, stack[index])
+        index = index + 1
+    }
+    return result
+}
+
+fn field_value(value: Value, name: String) -> Value {
+    let mut index: Int = 0
+    while index < len(value.names) {
+        if value.names[index] == name { return value.values[index] }
+        index = index + 1
+    }
+    return nil_value()
+}
+
+fn run_function(function_value: FunctionRecord, module: ModuleRecord) -> RuntimeResult {
+    let mut stack: Array = []
+    let mut locals: Array = []
+    let mut index: Int = 0
+    while index < len(function_value.instructions) {
+        let instruction: InstructionRecord = function_value.instructions[index]
+        if instruction.op == "PUSH_CONST" {
+            if instruction.number < 0 or instruction.number >= len(function_value.constants) {
+                return runtime_error("KRY7001 invalid constant index")
+            }
+            stack = array_push(stack, string_value(function_value.constants[instruction.number]))
+        } else if instruction.op == "PUSH_NIL" {
+            stack = array_push(stack, nil_value())
+        } else if instruction.op == "LOAD" {
+            stack = array_push(stack, find_local(locals, instruction.text))
+        } else if instruction.op == "STORE" {
+            if len(stack) == 0 { return runtime_error("KRY7002 stack underflow") }
+            let value: Value = pop_value(stack)
+            stack = remove_many(stack, 1)
+            locals = set_local(locals, instruction.text, value)
+        } else if instruction.op == "MAKE_STRUCT" {
+            if len(stack) < len(instruction.names) { return runtime_error("KRY7002 stack underflow") }
+            let values: Array = pop_many(stack, len(instruction.names))
+            stack = remove_many(stack, len(instruction.names))
+            stack = array_push(stack, struct_value(instruction.text, values, instruction.names))
+        } else if instruction.op == "GET_FIELD" {
+            if len(stack) == 0 { return runtime_error("KRY7002 stack underflow") }
+            let target: Value = pop_value(stack)
+            stack = remove_many(stack, 1)
+            stack = array_push(stack, field_value(target, instruction.text))
+        } else if instruction.op == "CALL" {
+            if len(stack) < instruction.number { return runtime_error("KRY7002 stack underflow") }
+            stack = remove_many(stack, instruction.number)
+            let callee: FunctionRecord = find_function(module.functions, instruction.text)
+            if callee.name != "" {
+                let called: RuntimeResult = run_function(callee, module)
+                match called {
+                    RuntimeResult.Ok(value) => stack = array_push(stack, value)
+                    RuntimeResult.Error(message) => return runtime_error(message)
+                }
+            } else if instruction.text == "println" or instruction.text == "print" {
+                stack = array_push(stack, nil_value())
+            } else {
+                return runtime_error("KRY7003 unknown callable")
+            }
+        } else if instruction.op == "POP" {
+            if len(stack) == 0 { return runtime_error("KRY7002 stack underflow") }
+            stack = remove_many(stack, 1)
+        } else if instruction.op == "RETURN" {
+            return runtime_ok(pop_value(stack))
+        } else {
+            return runtime_error("KRY7004 unsupported opcode")
+        }
+        index = index + 1
+    }
+    return runtime_ok(pop_value(stack))
+}
+
+pub fn run(value: ModuleRecord) -> RuntimeResult {
+    let main: FunctionRecord = find_function(value.functions, value.entry)
+    if main.name == "" { return runtime_error("KRY7005 entry function missing") }
+    return run_function(main, value)
+}
