@@ -1058,6 +1058,41 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(invalid_result.variant_name, "Error")
         self.assertIn("KRY5009", invalid_result.payloads[0])
 
+    def test_source_kexe_pipeline_decodes_verifies_and_runs(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "kexe-source-pipeline-v1.json").read_text(encoding="utf-8"))
+        module = Module.from_dict(fixture["module"])
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_path = Path(directory) / "pipeline.kexe"
+            write_artifact(module, artifact_path)
+            artifact_bytes = artifact_path.read_bytes()
+        artifact_source = (root / "stdlib" / "core" / "artifact.kry").read_text(encoding="utf-8")
+        artifact_runtime = VM(compile_source(artifact_source, "stdlib/core/artifact.kry"))
+        header_result = artifact_runtime.execute("read_header", [BytesValue(tuple(artifact_bytes))])
+        self.assertEqual(header_result.variant_name, "Ok")
+        header = header_result.payloads[0]
+        self.assertEqual(header.field("payload_length")[1], fixture["payload_length"])
+        self.assertEqual(header.field("checksum_hex")[1], fixture["checksum_hex"])
+        sha_source = (root / "stdlib" / "core" / "sha256.kry").read_text(encoding="utf-8")
+        sha_runtime = VM(compile_source(sha_source, "stdlib/core/sha256.kry"))
+        checksum_result = sha_runtime.execute("verify", [header.field("payload")[1], header.field("checksum_hex")[1]])
+        self.assertEqual(checksum_result.variant_name, "Ok")
+        json_source = (root / "stdlib" / "core" / "json.kry").read_text(encoding="utf-8")
+        json_runtime = VM(compile_source(json_source, "stdlib/core/json.kry"))
+        decoded = json_runtime.execute("decode_bytecode_bytes", [header.field("payload")[1]])
+        self.assertEqual(decoded.variant_name, "Ok")
+        bytecode_module = decoded.payloads[0]
+        verifier_source = (root / "stdlib" / "core" / "bytecode.kry").read_text(encoding="utf-8")
+        verifier_runtime = VM(compile_source(verifier_source, "stdlib/core/bytecode.kry"))
+        verified = verifier_runtime.execute("verify", [bytecode_module])
+        self.assertEqual(verified.variant_name, "Ok")
+        runtime_source = (root / "stdlib" / "core" / "runtime.kry").read_text(encoding="utf-8")
+        runtime = VM(compile_source(runtime_source, "stdlib/core/runtime.kry"))
+        executed = runtime.execute("run", [bytecode_module])
+        self.assertEqual(executed.variant_name, "Ok")
+        self.assertEqual(executed.payloads[0].field("kind")[1], "String")
+        self.assertEqual(executed.payloads[0].field("text")[1], "hello")
+
     def test_source_json_decoder_builds_bytecode_subset(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "bytecode-schema-source-v1.json").read_text(encoding="utf-8"))
