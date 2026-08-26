@@ -53,3 +53,17 @@ Version 1 is portable VM bytecode, not native machine code. A self-hosted
 compiler must emit this contract byte-for-byte for reproducible builds or
 explicitly select a future format version. Qualified names do not make a `.kexe`
 file a native executable.
+
+## Source-level compiler milestone
+
+`stdlib/core/compiler.kry` lowers the tested parser subset into normalized
+bytecode records: literals become `PUSH_CONST`, names become `LOAD`, members
+become `GET_FIELD`, calls become `CALL`, struct literals become `MAKE_STRUCT`,
+lets become `STORE`, expression statements become `POP`, and a deterministic
+`RETURN` terminates `main`. The emitted module is accepted by the source
+structural verifier in `stdlib/core/bytecode.kry`.
+
+The source compiler currently uses normalized String constants rather than the
+bootstrap's typed constant pool and emits only a single `main` function. Full
+functions, control flow, arithmetic, enums, imports, typed constants, module
+linking, and native bytecode serialization remain Python-owned.

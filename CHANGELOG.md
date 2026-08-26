@@ -11,6 +11,7 @@
 - Added `stdlib/core/lexer.kry` with source-level scanning of current keywords, identifiers, numbers, strings, escapes, comments, operators, delimiters, EOF, spans, and recovery diagnostics. It reproduces the published snapshot's normalized token text; typed literal payloads and production execution remain Python-owned.
 - Added `stdlib/core/parser.kry` with a source-level AST subset over lexer tokens for struct declarations, typed lets, literals, members, calls, and struct literals. Root AST kinds and spans are compared with `parser-v1.json`; full precedence and typed AST payloads remain Python-owned.
 - Added `stdlib/core/checker.kry` with source-level binding/type checks for the parser subset and deterministic dependency-first module resolution. Valid, missing, duplicate, and cyclic module cases are covered; the full type system and native loader remain Python-owned.
+- Added `stdlib/core/compiler.kry` with source-level lowering of the migrated AST subset into normalized bytecode records and a regression that validates its instruction sequence through the source verifier. Full-language compilation, typed constants, linking, and serialization remain Python-owned.
 - Added the first toolchain-oriented immutable collection primitive, `array_push(Array, Any) -> Array`, with the `stdlib/collections/sequences.kry` wrapper, deterministic fixture, stable `KRY6203` error, and regression tests. The operation still executes in the bootstrap VM.
 - Added `stdlib/core/manifest.kry`, a real strict-subset manifest parser over `fs.read_text`, with nominal `Dependency`, `Manifest`, and `ManifestResult` values and valid/invalid execution coverage. The Python manifest parser remains the differential oracle until UTF-8 diagnostics and all version-requirement edge cases match byte for byte.
 - Added the offline `kry core-report` contract audit. It canonicalizes and validates the value/runtime, Bytes, testing, and host-boundary v1 fixtures and reports stable byte lengths and SHA-256 checksums without claiming self-hosting. The contract is documented in `docs/specs/core-v1.md`.
@@ -76,7 +77,7 @@
 - Deterministic `kry doc` source declarations and `kry pack` `.krypkg` source
   archives with fixed metadata, offline operation, and SHA-256 checksums; source
   files are never executed while documenting or packaging.
-- Regression tests expanded to 97, including nested modules, public/private
+- Regression tests expanded to 98, including nested modules, public/private
   symbols, deterministic linking, cycles, ambiguity, project-aware execution,
   source-level core APIs, runtime Boolean values, executable Bytes/UTF-8
   behavior, host-boundary inventory, and structured test failures.
