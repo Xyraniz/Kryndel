@@ -116,6 +116,28 @@ fn x86_64_linux_control_exit(code: Int) -> String {
     return ".global _start\n.section .text\n_start:\n    mov $0, %rdi\n    test %rdi, %rdi\n    je .L4\n    mov $" + str(code) + ", %rdi\n    jmp .L5\n.L4:\n    mov $" + str(code) + ", %rdi\n.L5:\n    mov $60, %rax\n    syscall\n"
 }
 
+enum BytesResult {
+    Ok(Bytes)
+    Error(String)
+}
+
+fn elf_seed_bytes(code: Int) -> Bytes {
+    let items: Array = [
+        127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 2, 0, 62, 0, 1, 0, 0, 0,
+        120, 0, 64, 0, 0, 0, 0, 0, 64, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 64, 0, 56, 0, 1, 0, 0, 0,
+        0, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0,
+        0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0,
+        132, 0, 0, 0, 0, 0, 0, 0, 132, 0, 0, 0,
+        0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0,
+        184, 60, 0, 0, 0, 191, code, 0, 0, 0, 15, 5,
+    ]
+    return bytes(items)
+}
+
 pub fn emit_exit(value: ModuleRecord, target: String, code: Int) -> BackendResult {
     if target != "x86_64-linux" {
         return backend_error("KRY8001 unsupported target")
@@ -143,4 +165,13 @@ pub fn emit_program(value: ModuleRecord, target: String) -> BackendResult {
 
 pub fn emit(value: ModuleRecord, target: String) -> BackendResult {
     return emit_exit(value, target, 0)
+}
+
+pub fn emit_elf_exit(value: ModuleRecord, target: String, code: Int) -> BytesResult {
+    if target != "x86_64-linux" { return BytesResult.Error("KRY8001 unsupported target") }
+    if value.version != 1 or value.entry != "main" or !empty_main(value.functions) {
+        return BytesResult.Error("KRY8002 seed backend accepts only an empty main module")
+    }
+    if code < 0 or code > 255 { return BytesResult.Error("KRY8003 exit status must be in 0..255") }
+    return BytesResult.Ok(elf_seed_bytes(code))
 }

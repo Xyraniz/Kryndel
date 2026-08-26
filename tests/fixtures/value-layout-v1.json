@@ -1,0 +1,197 @@
+{
+  "contract": "kryndel-value-layout",
+  "records": [
+    {
+      "fields": [
+        "start",
+        "end",
+        "line",
+        "column"
+      ],
+      "name": "SpanValue"
+    },
+    {
+      "fields": [
+        "value"
+      ],
+      "name": "IntValue"
+    },
+    {
+      "fields": [
+        "value"
+      ],
+      "name": "FloatValue"
+    },
+    {
+      "fields": [
+        "value"
+      ],
+      "name": "BoolValue"
+    },
+    {
+      "fields": [
+        "value"
+      ],
+      "name": "StringValue"
+    },
+    {
+      "fields": [
+        "items"
+      ],
+      "name": "BytesValue"
+    },
+    {
+      "fields": [
+        "items"
+      ],
+      "name": "ArrayValue"
+    },
+    {
+      "fields": [
+        "items"
+      ],
+      "name": "TupleValue"
+    },
+    {
+      "fields": [
+        "type_name",
+        "fields"
+      ],
+      "name": "StructValue"
+    },
+    {
+      "fields": [
+        "type_name",
+        "variant_name",
+        "payloads"
+      ],
+      "name": "EnumValue"
+    },
+    {
+      "fields": [
+        "op",
+        "line",
+        "text",
+        "text2",
+        "number",
+        "names"
+      ],
+      "name": "InstructionValue"
+    },
+    {
+      "fields": [
+        "name",
+        "arity",
+        "parameters",
+        "constants",
+        "instructions"
+      ],
+      "name": "FunctionValue"
+    },
+    {
+      "fields": [
+        "name",
+        "entry",
+        "version",
+        "functions"
+      ],
+      "name": "ModuleValue"
+    },
+    {
+      "fields": [
+        "severity",
+        "code",
+        "message",
+        "span",
+        "notes",
+        "help",
+        "suggestion"
+      ],
+      "name": "DiagnosticValue"
+    },
+    {
+      "fields": [
+        "path",
+        "kind",
+        "size"
+      ],
+      "name": "FileMetadataValue"
+    }
+  ],
+  "sequence_fields": {
+    "ArrayValue": "items",
+    "BytesValue": "items",
+    "TupleValue": "items"
+  },
+  "variants": [
+    {
+      "name": "Nil",
+      "payload": null
+    },
+    {
+      "name": "Int",
+      "payload": "IntValue"
+    },
+    {
+      "name": "Float",
+      "payload": "FloatValue"
+    },
+    {
+      "name": "Bool",
+      "payload": "BoolValue"
+    },
+    {
+      "name": "String",
+      "payload": "StringValue"
+    },
+    {
+      "name": "Bytes",
+      "payload": "BytesValue"
+    },
+    {
+      "name": "Array",
+      "payload": "ArrayValue"
+    },
+    {
+      "name": "Tuple",
+      "payload": "TupleValue"
+    },
+    {
+      "name": "Struct",
+      "payload": "StructValue"
+    },
+    {
+      "name": "Enum",
+      "payload": "EnumValue"
+    },
+    {
+      "name": "Option",
+      "payload": "OptionValue"
+    },
+    {
+      "name": "Result",
+      "payload": "ResultValue"
+    },
+    {
+      "name": "Function",
+      "payload": "FunctionValue"
+    },
+    {
+      "name": "Module",
+      "payload": "ModuleValue"
+    },
+    {
+      "name": "Instruction",
+      "payload": "InstructionValue"
+    },
+    {
+      "name": "Diagnostic",
+      "payload": "DiagnosticValue"
+    },
+    {
+      "name": "FileMetadata",
+      "payload": "FileMetadataValue"
+    }
+  ],
+  "version": 1
+}

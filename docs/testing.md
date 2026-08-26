@@ -18,6 +18,7 @@ The suite contains 113 tests in the current checkout and covers:
 | Packages and modules | manifest subset, semver, local/path registry, transitives, lock ordering, cycles, checksums, traversal, nested module resolution, ambiguity, exports, private symbols, deterministic linking |
 | CLI/artifacts | human/JSON errors, exit codes, init/add/install/list/tree, build/run/inspect, KEXE checksums, `host-report`, `doc`, `pack`, and structured `kry test` results |
 | Data core | bounded Unicode StringSlice and BytesSlice readers, explicit bounds errors, balanced StringBuilder, and nominal Span/Token/AST/diagnostic source records |
+| Value layout | canonical `Value` discriminant order, nominal scalar/collection/toolchain records, immutable sequence payloads, and source-constructor regression under the bootstrap VM |
 
 Failure tests assert stable codes and useful spans rather than entire prose
 paragraphs. Happy-path tests run through `compile_source` or the project-aware
@@ -31,14 +32,22 @@ assertions are available through `stdlib/testing/testing.kry`; failures use
 `KRY6401` and `KRY6402`. `kry test --format json` runs each test in a fresh
 compiled VM and reports deterministic per-test status without tracebacks.
 Determinism tests compile identical source and resolve identical package/module
-graphs twice. The data-core test compiles `stdlib/core/data.kry` through the
+graphs twice. The value-layout test compiles `stdlib/core/value.kry` through the bootstrap
+VM, validates the canonical fixture, exercises every frozen constructor, and
+checks nested nominal records and enum payloads. It deliberately reports the
+module as a source compatibility seam because the VM is still Python-owned. The
+data-core test compiles `stdlib/core/data.kry` through the
 bootstrap VM, checks Unicode codepoint indexing and octet indexing, exercises
 invalid bounds, builds a string from chunks, and verifies declaration-ordered
 nominal records against `tests/fixtures/data-core-v1.json`. Manifest tests
 also compare source-level range results with the Python oracle and compare
-canonical source lockfile JSON byte for byte with `Lockfile.dumps()`. The
-source bytecode verifier test checks normalized v1 records, entry presence,
+canonical source lockfile JSON byte for byte with `Lockfile.dumps()`. The source bytecode verifier test checks normalized v1 records, entry presence,
 opcode/operand bounds, and malformed metadata without using host dictionaries.
+The full source-schema regression decodes one canonical JSON case for every v1
+opcode, checks normalized metadata and typed scalar constants, passes the result
+through the source verifier, and rejects malformed call, struct, enum, binding,
+function, entry, opcode, and constant cases with `KRY6305`.
+
 The source lexer test compares the published snapshot's token kinds, normalized
 text, order, and spans, then exercises nested-comment, invalid-character, and
 unterminated-string recovery. A typed-token fixture additionally checks tagged
@@ -68,14 +77,19 @@ into nominal function/instruction records, passes it through the source verifier
 and rejects malformed format, version, function, and argument cases with
 `KRY6305`. The same schema path is exercised through controlled
 `VirtualFileSystem` input with `decode_bytecode_file`; a missing file preserves
-`KRY6302`. The end-to-end KEXE source pipeline then reads a real Python-reference
-artifact, verifies its extracted digest, decodes its payload bytes, validates the
-normalized module, and runs it through the source runtime to return `hello`. The
-source runtime test executes
-that compiled module end to end through `stdlib/core/runtime.kry`
-and checks the nominal completion value. The source backend test emits
+`KRY6302`. The full schema test also re-encodes the normalized module and compares
+canonical JSON byte for byte with the Python reference, including typed scalar
+constants. The end-to-end KEXE source pipeline then reads a real Python-reference
+artifact, rebuilds its framing byte for byte with `write_artifact_bytes`, verifies
+its extracted digest, decodes its payload bytes, validates the normalized module,
+and runs it through the source runtime to return `hello`. The source runtime
+fixture `runtime-source-v1.json` additionally executes arithmetic, typed values,
+loops, jumps, internal calls, builtin output, enum matching/binding, collections,
+struct fields, and unary operations through `stdlib/core/runtime.kry`; the
+compiler subset executes end to end and checks the nominal completion value. The source backend test emits
 the x86_64 Linux empty-main seed twice,
-compares it byte for byte, checks exit statuses 0, 7, and 255, passes a decoded
+compares it byte for byte, executes the 132-byte direct ELF `Bytes` seed from a
+path containing a space, checks exit statuses 0, 7, and 255, passes a decoded
 `PUSH_CONST`/`RETURN` and fixed conditional-jump programs through the direct
 backend, checks `je .L4` and `jmp .L5`, and rejects unsupported targets, shapes,
 and out-of-range statuses. The seed CLI regression also
@@ -85,7 +99,13 @@ also builds and executes the raw ELF seed with only POSIX shell utilities and
 without an installed Python, assembler, or linker. The seed-only offline checker
 repeats that generation in a spaced directory with isolated `PATH`/`HOME`,
 checks ELF magic and determinism, and executes the result; it does not verify a
-Kryndel toolchain bundle. The formatter CLI test exercises check/rewrite modes
+Kryndel toolchain bundle. The native seed runtime checker uses a separate
+`KRYSEED1` module in a spaced directory, runs the fixed ELF under an isolated
+`PATH`/empty `HOME`, checks exact framing, reserved mode, nonzero payload length,
+bounded stdout, first-byte exit status, malformed length, and missing-file errors,
+and explicitly reports that it does not replace the compiler, full bytecode VM,
+package manager, or normal Python CLI.
+The formatter CLI test exercises check/rewrite modes
 and empty-file handling without Python. The source formatter test also checks
 trailing-horizontal-whitespace removal, blank-line trimming, final newline
 canonicalization, and idempotence.

@@ -1,0 +1,230 @@
+// Nominal value layout v1 for the future native runtime.
+// This module is a compatibility seam while the Python bootstrap still owns
+// execution. The Array fields are the language's current non-generic sequence
+// boundary; their element layout is frozen by the enclosing nominal record.
+
+struct SpanValue {
+    start: Int
+    end: Int
+    line: Int
+    column: Int
+}
+
+struct IntValue {
+    value: Int
+}
+
+struct FloatValue {
+    value: Float
+}
+
+struct BoolValue {
+    value: Bool
+}
+
+struct StringValue {
+    value: String
+}
+
+struct BytesValue {
+    items: Bytes
+}
+
+struct ArrayValue {
+    items: Array
+}
+
+struct TupleValue {
+    items: Array
+}
+
+struct StructValue {
+    type_name: String
+    fields: Array
+}
+
+struct EnumValue {
+    type_name: String
+    variant_name: String
+    payloads: Array
+}
+
+struct InstructionValue {
+    op: String
+    line: Int
+    text: String
+    text2: String
+    number: Int
+    names: Array
+}
+
+struct FunctionValue {
+    name: String
+    arity: Int
+    parameters: Array
+    constants: Array
+    instructions: Array
+}
+
+struct ModuleValue {
+    name: String
+    entry: String
+    version: Int
+    functions: Array
+}
+
+struct DiagnosticValue {
+    severity: String
+    code: String
+    message: String
+    span: SpanValue
+    notes: Array
+    help: String
+    suggestion: String
+}
+
+struct FileMetadataValue {
+    path: String
+    kind: String
+    size: Int
+}
+
+enum OptionValue {
+    None
+    Some(Int)
+}
+
+enum ResultValue {
+    Ok(Int)
+    Error(String)
+}
+
+enum Value {
+    Nil
+    Int(IntValue)
+    Float(FloatValue)
+    Bool(BoolValue)
+    String(StringValue)
+    Bytes(BytesValue)
+    Array(ArrayValue)
+    Tuple(TupleValue)
+    Struct(StructValue)
+    Enum(EnumValue)
+    Option(OptionValue)
+    Result(ResultValue)
+    Function(FunctionValue)
+    Module(ModuleValue)
+    Instruction(InstructionValue)
+    Diagnostic(DiagnosticValue)
+    FileMetadata(FileMetadataValue)
+}
+
+pub fn layout_version() -> Int {
+    return 1
+}
+
+pub fn nil_value() -> Value {
+    return Value.Nil
+}
+
+pub fn int_value(value: Int) -> Value {
+    return Value.Int(IntValue { value: value })
+}
+
+pub fn float_value(value: Float) -> Value {
+    return Value.Float(FloatValue { value: value })
+}
+
+pub fn bool_value(value: Bool) -> Value {
+    return Value.Bool(BoolValue { value: value })
+}
+
+pub fn string_value(value: String) -> Value {
+    return Value.String(StringValue { value: value })
+}
+
+pub fn bytes_value(value: Bytes) -> Value {
+    return Value.Bytes(BytesValue { items: value })
+}
+
+pub fn array_value(value: Array) -> Value {
+    return Value.Array(ArrayValue { items: value })
+}
+
+pub fn tuple_value(value: Array) -> Value {
+    return Value.Tuple(TupleValue { items: value })
+}
+
+pub fn struct_value(type_name: String, fields: Array) -> Value {
+    return Value.Struct(StructValue { type_name: type_name, fields: fields })
+}
+
+pub fn enum_value(type_name: String, variant_name: String, payloads: Array) -> Value {
+    return Value.Enum(EnumValue { type_name: type_name, variant_name: variant_name, payloads: payloads })
+}
+
+pub fn option_none() -> Value {
+    return Value.Option(OptionValue.None)
+}
+
+pub fn option_some(value: Int) -> Value {
+    return Value.Option(OptionValue.Some(value))
+}
+
+pub fn result_ok(value: Int) -> Value {
+    return Value.Result(ResultValue.Ok(value))
+}
+
+pub fn result_error(message: String) -> Value {
+    return Value.Result(ResultValue.Error(message))
+}
+
+pub fn instruction_value(op: String, line: Int, text: String, text2: String, number: Int, names: Array) -> Value {
+    return Value.Instruction(InstructionValue {
+        op: op,
+        line: line,
+        text: text,
+        text2: text2,
+        number: number,
+        names: names,
+    })
+}
+
+pub fn function_value(name: String, arity: Int, parameters: Array, constants: Array, instructions: Array) -> Value {
+    return Value.Function(FunctionValue {
+        name: name,
+        arity: arity,
+        parameters: parameters,
+        constants: constants,
+        instructions: instructions,
+    })
+}
+
+pub fn module_value(name: String, entry: String, version: Int, functions: Array) -> Value {
+    return Value.Module(ModuleValue {
+        name: name,
+        entry: entry,
+        version: version,
+        functions: functions,
+    })
+}
+
+pub fn diagnostic_value(severity: String, code: String, message: String, location: SpanValue, notes: Array, help: String, suggestion: String) -> Value {
+    return Value.Diagnostic(DiagnosticValue {
+        severity: severity,
+        code: code,
+        message: message,
+        span: location,
+        notes: notes,
+        help: help,
+        suggestion: suggestion,
+    })
+}
+
+pub fn file_metadata_value(path: String, kind: String, size: Int) -> Value {
+    return Value.FileMetadata(FileMetadataValue { path: path, kind: kind, size: size })
+}
+
+pub fn span_value(start: Int, end: Int, line: Int, column: Int) -> SpanValue {
+    return SpanValue { start: start, end: end, line: line, column: column }
+}

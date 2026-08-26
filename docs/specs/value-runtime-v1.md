@@ -127,18 +127,21 @@ bootstrap boundaries until a Kryndel-native test runner replaces them.
 
 ## Source-level runtime milestone
 
-`stdlib/core/runtime.kry` executes the normalized bytecode subset emitted by
-`stdlib/core/compiler.kry`. It provides nominal `Value` and `RuntimeResult`
-records, a stack and local-binding model, tagged constants, `LOAD`/`STORE`,
-struct construction and field access, builtin `print`/`println` calls, `POP`,
-and `RETURN`. A `PUSH_CONST` category decodes into `Int`, `Float`, `Bool`, or
-`String`; `PUSH_NIL` produces `Nil`. The public `decode_constant` seam also
-rejects unsupported categories with `KRY7006`. It reports stable `KRY7001`–`KRY7005`
-failures for malformed constants, stack underflow, unknown callables, unsupported
-opcodes, and a missing entry.
+`stdlib/core/runtime.kry` executes normalized bytecode records emitted by
+`stdlib/core/compiler.kry` or decoded by `stdlib/core/json.kry`. It provides nominal
+`Value` and `RuntimeResult` records, frames represented by recursive calls, local
+bindings, typed constants, `LOAD`/`STORE`/`STORE_RESULT`, struct and enum values,
+arrays and tuples, indexing, `DUP`/`POP`, unary and binary arithmetic/comparison,
+conditional and unconditional jumps, internal calls, builtin `print`/`println`,
+and `RETURN`. `PUSH_CONST` categories decode into `Int`, `Float`, `Bool`, or
+`String`; `PUSH_NIL` produces `Nil`. The public `decode_constant` seam rejects
+unsupported categories with `KRY7006`.
 
-An end-to-end regression compiles the parser fixture and executes it through the
-source runtime. The typed-constant fixture also freezes the compiler metadata
-and nominal decoded values. This module is still interpreted by the Python VM; it does not
-read KEXE bytes, implement the complete opcode set, provide host IO, or establish
-an independent Kryndel runtime.
+Runtime failures remain serializable `RuntimeResult.Error` values with stable
+`KRY7001`–`KRY7005`, `KRY6102`–`KRY6105`, `KRY6202`, and `KRY6203` messages for
+malformed constants, stack underflow, unknown callables, invalid jumps, indexing,
+conversion, and unsupported operations. `runtime-source-v1.json` exercises
+arithmetic, calls/output, loops, enum matching and binding, collections, structs,
+and unary operations. This module is still interpreted by the Python VM; it is a
+verified source runtime seam, not an independent executable and not yet a complete
+host-capability implementation.

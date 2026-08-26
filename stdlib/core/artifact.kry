@@ -17,6 +17,11 @@ enum ReadResult {
     Error(String)
 }
 
+enum WriteResult {
+    Ok(Bytes)
+    Error(String)
+}
+
 fn error(message: String) -> ReadResult {
     return ReadResult.Error("KRY6305 " + message)
 }
@@ -49,6 +54,19 @@ fn read_u32_be(value: Bytes, start: Int) -> Int {
     return value[start] * 16777216 + value[start + 1] * 65536 + value[start + 2] * 256 + value[start + 3]
 }
 
+fn write_u32_be(value: Int) -> Bytes {
+    return bytes([
+        int(value / 16777216) % 256,
+        int(value / 65536) % 256,
+        int(value / 256) % 256,
+        value % 256,
+    ])
+}
+
+fn write_error(message: String) -> WriteResult {
+    return WriteResult.Error("KRY6305 " + message)
+}
+
 fn hex_digit(value: Int) -> String {
     if value == 0 { return "0" }
     if value == 1 { return "1" }
@@ -77,6 +95,15 @@ fn checksum_text(value: Bytes) -> String {
         index = index + 1
     }
     return result
+}
+
+pub fn write_artifact_bytes(payload: Bytes, checksum: Bytes) -> WriteResult {
+    if len(checksum) != 32 { return write_error("KEXE checksum must contain 32 bytes") }
+    return WriteResult.Ok(expected_magic() + write_u32_be(len(payload)) + checksum + payload)
+}
+
+pub fn read_file(path: String) -> ReadResult {
+    return read_header(fs.read_bytes(path))
 }
 
 pub fn read_header(value: Bytes) -> ReadResult {

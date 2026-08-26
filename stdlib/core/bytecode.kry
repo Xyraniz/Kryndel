@@ -187,6 +187,22 @@ fn verify_function(value: FunctionRecord) -> VerifyResult {
     return VerifyResult.Ok
 }
 
+fn unique_function_names(functions: Array) -> Bool {
+    let mut index: Int = 0
+    while index < len(functions) {
+        let value: FunctionRecord = functions[index]
+        if value.name == "" { return false }
+        let mut other: Int = 0
+        while other < index {
+            let previous: FunctionRecord = functions[other]
+            if previous.name == value.name { return false }
+            other = other + 1
+        }
+        index = index + 1
+    }
+    return true
+}
+
 fn has_entry(functions: Array, entry: String) -> Bool {
     let mut index: Int = 0
     while index < len(functions) {
@@ -202,6 +218,9 @@ fn has_entry(functions: Array, entry: String) -> Bool {
 pub fn verify(value: ModuleRecord) -> VerifyResult {
     if value.version != 1 or value.name == "" or value.entry == "" {
         return error("unsupported or malformed bytecode module header")
+    }
+    if len(value.functions) == 0 or !unique_function_names(value.functions) {
+        return error("invalid bytecode function table")
     }
     if !has_entry(value.functions, value.entry) {
         return error("bytecode entry function is missing")
