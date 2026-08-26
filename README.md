@@ -215,6 +215,6 @@ PYTHONPATH=. python3 -m unittest discover -s tests -v
 The test suite is the language contract. It covers existing structs and unit
 enums, payload enums and match, diagnostics, malformed bytecode/runtime,
 manifests, lockfiles, semver, local resolution, checksums, imports, CLI, KEXE,
-data-core slices/builders/records, determinism, and security boundaries. The
-current checkout runs 91 Python unit tests; the historical 78-test wording in
-older release notes is no longer accurate.
+data-core slices/builders/records, source manifest ranges, lockfile JSON, determinism,
+and security boundaries. The current checkout runs 93 Python unit tests; the
+historical 78-test wording in older release notes is no longer accurate.

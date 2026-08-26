@@ -143,6 +143,26 @@ fn full_version(value: String) -> Bool {
     return true
 }
 
+fn version_at_least(left: String, right: String) -> Bool {
+    let left_major: Int = int(slice(left, 0, find(left, ".")))
+    let right_major: Int = int(slice(right, 0, find(right, ".")))
+    if left_major != right_major {
+        return left_major > right_major
+    }
+    let left_minor_start: Int = find(left, ".") + 1
+    let right_minor_start: Int = find(right, ".") + 1
+    let left_second: Int = find(slice(left, left_minor_start, len(left)), ".")
+    let right_second: Int = find(slice(right, right_minor_start, len(right)), ".")
+    let left_minor: Int = int(slice(left, left_minor_start, left_minor_start + left_second))
+    let right_minor: Int = int(slice(right, right_minor_start, right_minor_start + right_second))
+    if left_minor != right_minor {
+        return left_minor > right_minor
+    }
+    let left_patch: Int = int(slice(left, left_minor_start + left_second + 1, len(left)))
+    let right_patch: Int = int(slice(right, right_minor_start + right_second + 1, len(right)))
+    return left_patch >= right_patch
+}
+
 fn partial_version(value: String) -> Bool {
     let first: Int = find(value, ".")
     if first < 0 {
@@ -154,6 +174,26 @@ fn partial_version(value: String) -> Bool {
     let major: String = slice(value, 0, first)
     let minor: String = slice(value, first + 1, len(value))
     return digits(major) and digits(minor)
+}
+
+fn requirement_error(value: String) -> String {
+    if len(value) >= 5 and slice(value, 0, 5) == "path:" {
+        let path: String = slice(value, 5, len(value))
+        if path == "" {
+            return "KRY5012"
+        }
+        if path[0] == "/" {
+            return "KRY5010"
+        }
+        return ""
+    }
+    if value == "" or (value[0] != "^" and value[0] != "~" and value[0] != ">" and !full_version(value)) {
+        return "KRY5012"
+    }
+    if !requirement(value) {
+        return "KRY5012"
+    }
+    return ""
 }
 
 fn requirement(value: String) -> Bool {
@@ -172,7 +212,12 @@ fn requirement(value: String) -> Bool {
         if comma < 0 or comma + 1 >= len(value) or slice(value, comma + 1, comma + 2) != "<" {
             return false
         }
-        return full_version(slice(value, 2, comma)) and full_version(slice(value, comma + 2, len(value)))
+        let lower: String = slice(value, 2, comma)
+        let upper: String = slice(value, comma + 2, len(value))
+        if !full_version(lower) or !full_version(upper) {
+            return false
+        }
+        return !version_at_least(lower, upper)
     }
     return full_version(value)
 }
@@ -251,8 +296,12 @@ pub fn parse(text: String) -> ManifestResult {
                 return result_error("KRY5001", "[package] contains an unsupported key")
             }
         } else {
-            if !identifier(key) or !requirement(value) {
+            if !identifier(key) {
                 return result_error("KRY5002", "invalid dependency declaration")
+            }
+            let requirement_code: String = requirement_error(value)
+            if requirement_code != "" {
+                return result_error(requirement_code, "invalid version requirement")
             }
             let mut index: Int = 0
             while index < len(dependencies) {
@@ -272,8 +321,11 @@ pub fn parse(text: String) -> ManifestResult {
     if !identifier(package_name) or package_name == "." or package_name == ".." {
         return result_error("KRY5002", "invalid package name")
     }
-    if !full_version(package_version) or !digits(package_edition) {
-        return result_error("KRY5002", "invalid package version or edition")
+    if !full_version(package_version) {
+        return result_error("KRY5003", "invalid semantic version")
+    }
+    if !digits(package_edition) {
+        return result_error("KRY5002", "invalid edition")
     }
     return ManifestResult.Ok(Manifest {
         name: package_name,
@@ -281,6 +333,126 @@ pub fn parse(text: String) -> ManifestResult {
         edition: package_edition,
         dependencies: dependencies,
     })
+}
+
+struct LockEntry {
+    name: String
+    version: String
+    checksum: String
+    source: String
+    dependencies: Array
+}
+
+struct Lockfile {
+    entries: Array
+}
+
+enum LockfileResult {
+    Ok(String)
+    Error(String)
+}
+
+fn json_string(value: String) -> String {
+    return "\"" + value + "\""
+}
+
+fn join_strings(values: Array, start: Int, end: Int, separator: String) -> String {
+    if start >= end {
+        return ""
+    }
+    if end - start == 1 {
+        return values[start]
+    }
+    let middle: Int = int(start + (end - start) / 2)
+    let left: String = join_strings(values, start, middle, separator)
+    let right: String = join_strings(values, middle, end, separator)
+    return left + separator + right
+}
+
+fn dependencies_json(dependencies: Array) -> String {
+    let mut values: Array = []
+    let mut index: Int = 0
+    while index < len(dependencies) {
+        values = array_push(values, json_string(dependencies[index]))
+        index = index + 1
+    }
+    if len(values) == 0 {
+        return "[]"
+    }
+    return "[\n        " + join_strings(values, 0, len(values), ",\n        ") + "\n      ]"
+}
+
+fn hex_digit(value: String) -> Bool {
+    return (value >= "0" and value <= "9") or (value >= "a" and value <= "f") or (value >= "A" and value <= "F")
+}
+
+fn checksum(value: String) -> Bool {
+    if len(value) != 64 {
+        return false
+    }
+    let mut index: Int = 0
+    while index < len(value) {
+        if !hex_digit(value[index]) {
+            return false
+        }
+        index = index + 1
+    }
+    return true
+}
+
+fn lock_entry_ordered(entry: LockEntry, previous: String) -> Bool {
+    if !identifier(entry.name) or !full_version(entry.version) or !checksum(entry.checksum) or (entry.source != "path" and entry.source != "registry") {
+        return false
+    }
+    if previous != "" and entry.name <= previous {
+        return false
+    }
+    let mut index: Int = 0
+    let mut last: String = ""
+    while index < len(entry.dependencies) {
+        let dependency: String = entry.dependencies[index]
+        if !identifier(dependency) or (last != "" and dependency <= last) {
+            return false
+        }
+        last = dependency
+        index = index + 1
+    }
+    return true
+}
+
+fn lock_entry_json(entry: LockEntry) -> String {
+    return "    {\n      \"checksum\": " + json_string(entry.checksum) + ",\n      \"dependencies\": " + dependencies_json(entry.dependencies) + ",\n      \"name\": " + json_string(entry.name) + ",\n      \"source\": " + json_string(entry.source) + ",\n      \"version\": " + json_string(entry.version) + "\n    }"
+}
+
+pub fn lock_entry(name: String, version: String, checksum: String, source: String, dependencies: Array) -> LockEntry {
+    return LockEntry {
+        name: name,
+        version: version,
+        checksum: checksum,
+        source: source,
+        dependencies: dependencies,
+    }
+}
+
+pub fn lockfile(entries: Array) -> Lockfile {
+    return Lockfile { entries: entries }
+}
+
+pub fn lockfile_json(value: Lockfile) -> LockfileResult {
+    let mut encoded: Array = []
+    let mut index: Int = 0
+    let mut previous: String = ""
+    while index < len(value.entries) {
+        let entry: LockEntry = value.entries[index]
+        if !lock_entry_ordered(entry, previous) {
+            return LockfileResult.Error("KRY5009 invalid lockfile entry order or metadata")
+        }
+        encoded = array_push(encoded, lock_entry_json(entry))
+        previous = entry.name
+        index = index + 1
+    }
+    let package_json: String = join_strings(encoded, 0, len(encoded), ",\n")
+    return LockfileResult.Ok("{\n  \"format\": \"kryndel-lock\",\n  \"packages\": [\n" + package_json + "\n  ],\n  \"version\": 1\n}\n")
 }
 
 pub fn read(path: String) -> ManifestResult {

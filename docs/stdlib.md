@@ -30,10 +30,12 @@ The core modules now expose these non-generic APIs directly in Kryndel:
 | `collections/bytes` | `from_array`, `length`, `octet`, `join` | Source wrappers over `bytes(Array)`, `len`, `INDEX`, and `Bytes + Bytes` |
 | `testing` | `assert_true`, `assert_equal_int`, `assert_equal_string` | Source wrappers over visible assertion primitives; failures use `KRY6401` and `KRY6402` |
 | `core/filesystem` | `read_bytes`, `read_text`, `write_bytes`, `list_dir`, `stat` | Source wrappers over explicit `fs.*` capability; metadata uses `FileMetadata` and errors use `KRY6301`–`KRY6304` |
-| `core/manifest` | `parse(String) -> ManifestResult`, `read(String) -> ManifestResult` | Strict source parser over `Bytes`/filesystem; semantic error payloads are nominal `ManifestResult`, while `packages.py` remains the differential oracle |
+| `core/manifest` | `parse(String) -> ManifestResult`, `read(String) -> ManifestResult`, `lock_entry`, `lockfile`, `lockfile_json` | Source parser now covers version-range classification and canonical lockfile JSON for validated entries; SHA-256 calculation, resolver, staging, and installation remain Python-owned |
 | `core/data` | bounded `StringSlice`/`BytesSlice`, balanced `StringBuilder`, `SpanRecord`, `TokenRecord`, `AstRecord`, and `DiagnosticRecord` constructors/accessors | Real source behavior executed by the bootstrap VM; data layouts and bounds errors are frozen by `data-core-v1.json`, but implementation ownership remains Python |
 
-The fallback accessors are total and therefore do not yet define a value-absent
+The source manifest module's lockfile writer accepts checksums as validated
+hexadecimal inputs; it does not pretend to calculate SHA-256. The fallback
+accessors are total and therefore do not yet define a value-absent
 runtime error. A partial `unwrap` API will be added only after a serializable
 program-error contract is specified. The remaining directories will be added
 only with real APIs and host-boundary tests, rather than empty declarations. The
