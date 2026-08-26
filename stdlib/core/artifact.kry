@@ -1,0 +1,65 @@
+// Source-level KEXE header reader over Bytes.
+// It validates framing only; SHA-256 and JSON/module decoding remain bootstrap
+// boundaries until their source contracts are implemented.
+
+struct Header {
+    version: Int
+    payload_length: Int
+    payload_start: Int
+    payload_end: Int
+    checksum: Bytes
+    payload: Bytes
+}
+
+enum ReadResult {
+    Ok(Header)
+    Error(String)
+}
+
+fn error(message: String) -> ReadResult {
+    return ReadResult.Error("KRY6305 " + message)
+}
+
+fn expected_magic() -> Bytes {
+    return bytes([75, 82, 89, 78, 69, 88, 69, 1])
+}
+
+fn matches_at(value: Bytes, expected: Bytes, start: Int) -> Bool {
+    if start < 0 or start + len(expected) > len(value) { return false }
+    let mut index: Int = 0
+    while index < len(expected) {
+        if value[start + index] != expected[index] { return false }
+        index = index + 1
+    }
+    return true
+}
+
+fn slice_bytes(value: Bytes, start: Int, end: Int) -> Bytes {
+    let mut items: Array = []
+    let mut index: Int = start
+    while index < end {
+        items = array_push(items, value[index])
+        index = index + 1
+    }
+    return bytes(items)
+}
+
+fn read_u32_be(value: Bytes, start: Int) -> Int {
+    return value[start] * 16777216 + value[start + 1] * 65536 + value[start + 2] * 256 + value[start + 3]
+}
+
+pub fn read_header(value: Bytes) -> ReadResult {
+    if len(value) < 44 { return error("artifact is shorter than the KEXE header") }
+    if !matches_at(value, expected_magic(), 0) { return error("invalid KEXE magic") }
+    let payload_length: Int = read_u32_be(value, 8)
+    let payload_end: Int = 44 + payload_length
+    if payload_end != len(value) { return error("KEXE payload length does not match its header") }
+    return ReadResult.Ok(Header {
+        version: 1,
+        payload_length: payload_length,
+        payload_start: 44,
+        payload_end: payload_end,
+        checksum: slice_bytes(value, 12, 44),
+        payload: slice_bytes(value, 44, payload_end),
+    })
+}
