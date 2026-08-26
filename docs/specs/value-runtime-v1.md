@@ -78,6 +78,7 @@ Python exceptions and tracebacks are not part of the interface.
 | `KRY6202` | conversion is not representable | explicit value conversion |
 | `KRY6203` | incompatible collection operation | collection operations |
 | `KRY6204` | value is absent | explicit partial accessor only |
+| `KRY6205` | SHA-256 digest does not match the expected value | source checksum comparison |
 | `KRY6301` | IO failure | host IO boundary |
 | `KRY6302` | file does not exist | filesystem boundary |
 | `KRY6303` | path escapes project root | filesystem boundary |

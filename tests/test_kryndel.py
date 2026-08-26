@@ -1058,6 +1058,21 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(invalid_result.variant_name, "Error")
         self.assertIn("KRY5009", invalid_result.payloads[0])
 
+    def test_source_sha256_matches_known_vectors(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "sha256-v1.json").read_text(encoding="utf-8"))
+        source = (root / "stdlib" / "core" / "sha256.kry").read_text(encoding="utf-8")
+        runtime = VM(compile_source(source, "stdlib/core/sha256.kry"))
+        for vector in fixture["vectors"]:
+            result = runtime.execute("digest", [BytesValue(tuple(vector["input"].encode("utf-8")))])
+            self.assertEqual(result.variant_name, "Ok")
+            self.assertEqual(result.payloads[0], vector["sha256"])
+            verified = runtime.execute("verify", [BytesValue(tuple(vector["input"].encode("utf-8"))), vector["sha256"]])
+            self.assertEqual(verified.variant_name, "Ok")
+        mismatch = runtime.execute("verify", [BytesValue(tuple(b"abc")), fixture["vectors"][0]["sha256"]])
+        self.assertEqual(mismatch.variant_name, "Error")
+        self.assertIn(fixture["mismatch_error"], mismatch.payloads[0])
+
     def test_source_kexe_reader_matches_framing_contract(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "kexe-reader-v1.json").read_text(encoding="utf-8"))
