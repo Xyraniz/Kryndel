@@ -47,7 +47,8 @@ balanced string builder, and nominal Span/Token/AST/diagnostic records for the
 future toolchain. `stdlib/core/lexer.kry` provides a source-level lexer seam for the current keywords, literals, comments, operators, spans, and recovery cases, and attaches a tagged `LiteralValue` for tested integer, float, boolean, string, nil, and EOF tokens.
 
 `stdlib/core/parser.kry` consumes those tokens for a tested AST subset covering
-struct declarations, typed lets, literals, members, calls, and struct literals.
+struct declarations, typed lets, literals, members, calls, and struct literals;
+its `Literal` nodes preserve the tagged lexer payload.
 `stdlib/core/checker.kry` validates that subset and resolves normalized module
 graphs with deterministic missing, duplicate, and cycle diagnostics. `stdlib/core/compiler.kry` lowers the same subset into bytecode records accepted by the source verifier. `stdlib/core/runtime.kry` executes the resulting subset end to end with stack, locals, struct values, and builtin print calls. `tools/kry-seed` emits and runs a raw x86_64 Linux ELF exit-0 seed without Python, `as`, or `ld`. `tools/kry-seed-check` verifies that seed only under an isolated `PATH`/`HOME`, including a spaced output directory and deterministic bytes; it is not a toolchain bundle. `stdlib/core/format.kry` now provides the conservative trailing-whitespace and final-newline formatter contract in source, and `tools/kry-format` exposes it as a no-Python check/rewrite CLI.
 These source modules execute through the Python bootstrap;
@@ -223,5 +224,5 @@ enums, payload enums and match, diagnostics, malformed bytecode/runtime,
 manifests, lockfiles, semver, local resolution, checksums, imports, CLI, KEXE,
 data-core slices/builders/records, source manifest ranges, lockfile JSON,
 normalized bytecode verification, determinism, and security boundaries. The
-current checkout runs 105 Python unit tests; the
+current checkout runs 106 Python unit tests; the
 historical 78-test wording in older release notes is no longer accurate.

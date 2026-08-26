@@ -1,6 +1,6 @@
 // Source-level parser seam over normalized tokens from core/lexer.kry.
-// This first subset intentionally freezes declarations, lets, literals, members,
-// calls, and struct literals before the full language AST is migrated.
+// This subset now preserves tagged literal payloads on Literal AST nodes while
+// retaining the existing declaration/member/call field order.
 
 struct Span {
     start: Int
@@ -9,10 +9,19 @@ struct Span {
     column: Int
 }
 
+struct LiteralValue {
+    category: String
+    int_value: Int
+    float_value: Float
+    bool_value: Bool
+    string_value: String
+}
+
 struct Token {
     kind: String
     text: String
     span: Span
+    literal: LiteralValue
 }
 
 struct AstNode {
@@ -20,6 +29,7 @@ struct AstNode {
     text: String
     span: Span
     children: Array
+    literal: LiteralValue
 }
 
 struct Diagnostic {
@@ -66,6 +76,18 @@ fn token_span(tokens: Array, index: Int) -> Span {
     return item.span
 }
 
+fn empty_literal() -> LiteralValue {
+    return LiteralValue { category: "none", int_value: 0, float_value: 0.0, bool_value: false, string_value: "" }
+}
+
+fn token_literal(tokens: Array, index: Int) -> LiteralValue {
+    if index < 0 or index >= len(tokens) {
+        return empty_literal()
+    }
+    let item: Token = tokens[index]
+    return item.literal
+}
+
 fn merged_span(tokens: Array, first: Int, last: Int) -> Span {
     let start: Span = token_span(tokens, first)
     let end: Span = token_span(tokens, last)
@@ -73,7 +95,11 @@ fn merged_span(tokens: Array, first: Int, last: Int) -> Span {
 }
 
 fn node(kind: String, text: String, location: Span, children: Array) -> AstNode {
-    return AstNode { kind: kind, text: text, span: location, children: children }
+    return AstNode { kind: kind, text: text, span: location, children: children, literal: empty_literal() }
+}
+
+fn literal_node(text: String, location: Span, value: LiteralValue) -> AstNode {
+    return AstNode { kind: "Literal", text: text, span: location, children: [], literal: value }
 }
 
 fn diagnostic(code: String, message: String, location: Span) -> Diagnostic {
@@ -93,10 +119,10 @@ fn failure(tokens: Array, index: Int, message: String) -> ParserState {
 
 fn parse_expression(tokens: Array, index: Int) -> ParserState {
     let kind: String = token_kind(tokens, index)
-    if kind == "INT" or kind == "STRING" {
+    if kind == "INT" or kind == "FLOAT" or kind == "STRING" or kind == "TRUE" or kind == "FALSE" or kind == "NIL" {
         return ParserState {
             next: index + 1,
-            node: node("Literal", token_text(tokens, index), token_span(tokens, index), []),
+            node: literal_node(token_text(tokens, index), token_span(tokens, index), token_literal(tokens, index)),
             error: "",
         }
     }

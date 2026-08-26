@@ -1,0 +1,47 @@
+{
+  "contract": "kryndel-source-typed-ast",
+  "literals": [
+    {
+      "category": "int",
+      "float_value": 0.0,
+      "int_value": 42,
+      "kind": "Literal",
+      "string_value": "",
+      "bool_value": false
+    },
+    {
+      "category": "float",
+      "float_value": 3.5,
+      "int_value": 0,
+      "kind": "Literal",
+      "string_value": "",
+      "bool_value": false
+    },
+    {
+      "category": "bool",
+      "float_value": 0.0,
+      "int_value": 0,
+      "kind": "Literal",
+      "string_value": "",
+      "bool_value": true
+    },
+    {
+      "category": "nil",
+      "float_value": 0.0,
+      "int_value": 0,
+      "kind": "Literal",
+      "string_value": "",
+      "bool_value": false
+    },
+    {
+      "category": "string",
+      "float_value": 0.0,
+      "int_value": 0,
+      "kind": "Literal",
+      "string_value": "ok",
+      "bool_value": false
+    }
+  ],
+  "source": "42 3.5 true nil \"ok\"",
+  "version": 1
+}
