@@ -1085,6 +1085,24 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(recovered.field("tokens")[1].items[0].fields[0][1], "AT")
         self.assertEqual(recovered.field("tokens")[1].items[-1].fields[0][1], "EOF")
 
+    def test_source_lexer_emits_typed_literal_payloads(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "typed-token-v1.json").read_text(encoding="utf-8"))
+        source = (root / "stdlib" / "core" / "lexer.kry").read_text(encoding="utf-8")
+        runtime = VM(compile_source(source, "stdlib/core/lexer.kry"))
+        result = runtime.execute("lex", [fixture["source"]])
+        self.assertEqual(len(result.field("diagnostics")[1].items), 0)
+        actual_tokens = result.field("tokens")[1].items
+        self.assertEqual(len(actual_tokens), len(fixture["tokens"]))
+        for actual, expected in zip(actual_tokens, fixture["tokens"]):
+            self.assertEqual(actual.field("kind")[1], expected["kind"])
+            value = actual.field("literal")[1]
+            self.assertEqual(value.field("category")[1], expected["category"])
+            self.assertEqual(value.field("int_value")[1], expected["int_value"])
+            self.assertAlmostEqual(value.field("float_value")[1], expected["float_value"])
+            self.assertEqual(value.field("bool_value")[1], expected["bool_value"])
+            self.assertEqual(value.field("string_value")[1], expected["string_value"])
+
     def test_source_parser_matches_published_ast_snapshot(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "parser-v1.json").read_text(encoding="utf-8"))

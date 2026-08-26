@@ -8,7 +8,7 @@
 - Added `stdlib/core/data.kry` with bounded Unicode String/Bytes slices, a divide-and-conquer `StringBuilder`, and nominal `SpanRecord`, `TokenRecord`, `AstRecord`, and `DiagnosticRecord` layouts. Added `data-core-v1.json` and VM regression coverage for deterministic values and `KRY6104`/`KRY6202` bounds errors. This is a source compatibility seam under the Python bootstrap, not a native runtime.
 - Extended `stdlib/core/manifest.kry` with source-level version-range parity and nominal `LockEntry`/`Lockfile` values. Its canonical lockfile writer is compared byte for byte with Python `Lockfile.dumps()` and rejects malformed checksum metadata; SHA-256 calculation, resolution, staging, and installation remain bootstrap boundaries.
 - Added `stdlib/core/bytecode.kry` with nominal instruction/function/module records and a structural verifier returning serializable `KRY6305` errors. Added normalized valid/invalid fixtures and regression coverage; JSON/KEXE reading and checksum calculation remain Python-owned.
-- Added `stdlib/core/lexer.kry` with source-level scanning of current keywords, identifiers, numbers, strings, escapes, comments, operators, delimiters, EOF, spans, and recovery diagnostics. It reproduces the published snapshot's normalized token text; typed literal payloads and production execution remain Python-owned.
+- Added `stdlib/core/lexer.kry` with source-level scanning of current keywords, identifiers, numbers, strings, escapes, comments, operators, delimiters, EOF, spans, and recovery diagnostics. It reproduces the published snapshot's normalized token text and now attaches a tagged `LiteralValue` for tested int/float/bool/string/nil/EOF categories; production execution remains Python-owned. The `typed-token-v1.json` fixture freezes the payload layout.
 - Added `stdlib/core/parser.kry` with a source-level AST subset over lexer tokens for struct declarations, typed lets, literals, members, calls, and struct literals. Root AST kinds and spans are compared with `parser-v1.json`; full precedence and typed AST payloads remain Python-owned.
 - Added `stdlib/core/checker.kry` with source-level binding/type checks for the parser subset and deterministic dependency-first module resolution. Valid, missing, duplicate, and cyclic module cases are covered; the full type system and native loader remain Python-owned.
 - Added `stdlib/core/compiler.kry` with source-level lowering of the migrated AST subset into normalized bytecode records and a regression that validates its instruction sequence through the source verifier. Full-language compilation, typed constants, linking, and serialization remain Python-owned.
@@ -81,7 +81,7 @@
 - Deterministic `kry doc` source declarations and `kry pack` `.krypkg` source
   archives with fixed metadata, offline operation, and SHA-256 checksums; source
   files are never executed while documenting or packaging.
-- Regression tests expanded to 104, including nested modules, public/private
+- Regression tests expanded to 105, including nested modules, public/private
   symbols, deterministic linking, cycles, ambiguity, project-aware execution,
   source-level core APIs, runtime Boolean values, executable Bytes/UTF-8
   behavior, host-boundary inventory, and structured test failures.

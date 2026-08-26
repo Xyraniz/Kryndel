@@ -1,5 +1,6 @@
 // Source-level lexer seam for the current language subset.
-// Tokens use normalized text; the Python lexer remains the typed-value oracle.
+// Tokens preserve normalized text and now carry a tagged typed-literal payload.
+// The Python lexer remains the differential oracle and production owner.
 
 struct Span {
     start: Int
@@ -8,10 +9,19 @@ struct Span {
     column: Int
 }
 
+struct LiteralValue {
+    category: String
+    int_value: Int
+    float_value: Float
+    bool_value: Bool
+    string_value: String
+}
+
 struct Token {
     kind: String
     text: String
     span: Span
+    literal: LiteralValue
 }
 
 struct Diagnostic {
@@ -46,8 +56,43 @@ fn span(start: Int, end: Int, line: Int, column: Int) -> Span {
     return Span { start: start, end: end, line: line, column: column }
 }
 
+fn literal(category: String, int_value: Int, float_value: Float, bool_value: Bool, string_value: String) -> LiteralValue {
+    return LiteralValue {
+        category: category,
+        int_value: int_value,
+        float_value: float_value,
+        bool_value: bool_value,
+        string_value: string_value,
+    }
+}
+
+fn typed_literal(kind: String, text: String) -> LiteralValue {
+    if kind == "INT" {
+        return literal("int", int(text), 0.0, false, "")
+    }
+    if kind == "FLOAT" {
+        return literal("float", 0, float(text), false, "")
+    }
+    if kind == "TRUE" {
+        return literal("bool", 0, 0.0, true, "")
+    }
+    if kind == "FALSE" {
+        return literal("bool", 0, 0.0, false, "")
+    }
+    if kind == "STRING" {
+        return literal("string", 0, 0.0, false, text)
+    }
+    if kind == "NIL" {
+        return literal("nil", 0, 0.0, false, "")
+    }
+    if kind == "EOF" {
+        return literal("none", 0, 0.0, false, "")
+    }
+    return literal("text", 0, 0.0, false, text)
+}
+
 fn token(kind: String, text: String, location: Span) -> Token {
-    return Token { kind: kind, text: text, span: location }
+    return Token { kind: kind, text: text, span: location, literal: typed_literal(kind, text) }
 }
 
 fn diagnostic(code: String, message: String, location: Span) -> Diagnostic {
