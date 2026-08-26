@@ -1147,6 +1147,24 @@ class KryndelTests(unittest.TestCase):
         duplicate = checker.execute("resolve", [ArrayValue((lib, lib)), "lib"])
         self.assertIn("KRY5015", [item.fields[1][1] for item in duplicate.field("diagnostics")[1].items])
 
+    def test_source_compiler_emits_verifiable_bytecode_subset(self) -> None:
+        root = Path(__file__).parents[1]
+        source = (root / "tests" / "fixtures" / "parser-input.kry").read_text(encoding="utf-8")
+        lexer_runtime = VM(compile_source((root / "stdlib" / "core" / "lexer.kry").read_text(encoding="utf-8"), "stdlib/core/lexer.kry"))
+        parser_runtime = VM(compile_source((root / "stdlib" / "core" / "parser.kry").read_text(encoding="utf-8"), "stdlib/core/parser.kry"))
+        compiler_runtime = VM(compile_source((root / "stdlib" / "core" / "compiler.kry").read_text(encoding="utf-8"), "stdlib/core/compiler.kry"))
+        verifier_runtime = VM(compile_source((root / "stdlib" / "core" / "bytecode.kry").read_text(encoding="utf-8"), "stdlib/core/bytecode.kry"))
+        tokens = lexer_runtime.execute("lex", [source]).field("tokens")[1]
+        items = parser_runtime.execute("parse", [tokens]).field("items")[1]
+        compiled = compiler_runtime.execute("compile", ["compiler-input.kry", items])
+        self.assertEqual(compiled.variant_name, "Ok")
+        bytecode_module = compiled.payloads[0]
+        function = bytecode_module.field("functions")[1].items[0]
+        operations = [instruction.fields[0][1] for instruction in function.field("instructions")[1].items]
+        self.assertEqual(operations, ["PUSH_CONST", "PUSH_CONST", "MAKE_STRUCT", "STORE", "LOAD", "GET_FIELD", "CALL", "POP", "LOAD", "GET_FIELD", "CALL", "POP", "RETURN"])
+        verified = verifier_runtime.execute("verify", [bytecode_module])
+        self.assertEqual(verified.variant_name, "Ok")
+
     def test_source_bytecode_verifier_matches_structural_contract(self) -> None:
         root = Path(__file__).parents[1]
         fixture = json.loads((root / "tests" / "fixtures" / "bytecode-native-verifier-v1.json").read_text(encoding="utf-8"))

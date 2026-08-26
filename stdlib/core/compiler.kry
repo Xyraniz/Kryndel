@@ -1,0 +1,168 @@
+// Source-level compiler seam over the parser/checker subset.
+// It emits normalized bytecode records; the Python compiler remains the full oracle.
+
+struct Span {
+    start: Int
+    end: Int
+    line: Int
+    column: Int
+}
+
+struct AstNode {
+    kind: String
+    text: String
+    span: Span
+    children: Array
+}
+
+struct InstructionRecord {
+    op: String
+    line: Int
+    text: String
+    text2: String
+    number: Int
+    names: Array
+}
+
+struct FunctionRecord {
+    name: String
+    arity: Int
+    parameters: Array
+    constants: Array
+    instructions: Array
+}
+
+struct ModuleRecord {
+    name: String
+    entry: String
+    version: Int
+    functions: Array
+}
+
+enum CompileResult {
+    Ok(ModuleRecord)
+    Error(String)
+}
+
+struct CompileState {
+    constants: Array
+    instructions: Array
+    error: String
+}
+
+fn instruction(op: String, location: Span, text: String, text2: String, number: Int, names: Array) -> InstructionRecord {
+    return InstructionRecord { op: op, line: location.line, text: text, text2: text2, number: number, names: names }
+}
+
+fn add_constant(constants: Array, value: String) -> Array {
+    let mut index: Int = 0
+    while index < len(constants) {
+        if constants[index] == value { return constants }
+        index = index + 1
+    }
+    return array_push(constants, value)
+}
+
+fn constant_index(constants: Array, value: String) -> Int {
+    let mut index: Int = 0
+    while index < len(constants) {
+        if constants[index] == value { return index }
+        index = index + 1
+    }
+    return -1
+}
+
+fn with_instruction(state: CompileState, value: InstructionRecord) -> CompileState {
+    return CompileState { constants: state.constants, instructions: array_push(state.instructions, value), error: state.error }
+}
+
+fn compile_expression(value: AstNode, state: CompileState) -> CompileState {
+    if value.kind == "Literal" {
+        let constants: Array = add_constant(state.constants, value.text)
+        let index: Int = constant_index(constants, value.text)
+        return with_instruction(CompileState { constants: constants, instructions: state.instructions, error: "" }, instruction("PUSH_CONST", value.span, "", "", index, []))
+    }
+    if value.kind == "Name" {
+        return with_instruction(state, instruction("LOAD", value.span, value.text, "", 0, []))
+    }
+    if value.kind == "Member" {
+        if len(value.children) != 1 {
+            return CompileState { constants: state.constants, instructions: state.instructions, error: "KRY4001 invalid member" }
+        }
+        let target: CompileState = compile_expression(value.children[0], state)
+        if target.error != "" { return target }
+        return with_instruction(target, instruction("GET_FIELD", value.span, value.text, "", 0, []))
+    }
+    if value.kind == "Call" {
+        if len(value.children) < 1 {
+            return CompileState { constants: state.constants, instructions: state.instructions, error: "KRY4002 invalid call" }
+        }
+        let callee: AstNode = value.children[0]
+        if callee.kind != "Name" {
+            return CompileState { constants: state.constants, instructions: state.instructions, error: "KRY4002 unsupported callee" }
+        }
+        let mut result: CompileState = state
+        let mut index: Int = 1
+        while index < len(value.children) {
+            result = compile_expression(value.children[index], result)
+            if result.error != "" { return result }
+            index = index + 1
+        }
+        return with_instruction(result, instruction("CALL", value.span, callee.text, "", len(value.children) - 1, []))
+    }
+    if value.kind == "StructLiteral" {
+        let mut result: CompileState = state
+        let mut names: Array = []
+        let mut index: Int = 0
+        while index < len(value.children) {
+            let field: AstNode = value.children[index]
+            names = array_push(names, field.text)
+            if len(field.children) == 1 {
+                result = compile_expression(field.children[0], result)
+                if result.error != "" { return result }
+            }
+            index = index + 1
+        }
+        return with_instruction(result, instruction("MAKE_STRUCT", value.span, value.text, "", 0, names))
+    }
+    return CompileState { constants: state.constants, instructions: state.instructions, error: "KRY4003 unsupported expression" }
+}
+
+fn compile_statement(value: AstNode, state: CompileState) -> CompileState {
+    if value.kind == "StructDecl" {
+        return state
+    }
+    if value.kind == "LetStmt" {
+        if len(value.children) != 2 { return CompileState { constants: state.constants, instructions: state.instructions, error: "KRY4004 invalid let" } }
+        let result: CompileState = compile_expression(value.children[1], state)
+        if result.error != "" { return result }
+        return with_instruction(result, instruction("STORE", value.span, value.text, "", 0, []))
+    }
+    if value.kind == "ExprStmt" {
+        if len(value.children) != 1 { return state }
+        let result: CompileState = compile_expression(value.children[0], state)
+        if result.error != "" { return result }
+        return with_instruction(result, instruction("POP", value.span, "", "", 0, []))
+    }
+    return CompileState { constants: state.constants, instructions: state.instructions, error: "KRY4005 unsupported statement" }
+}
+
+pub fn compile(name: String, items: Array) -> CompileResult {
+    let mut state: CompileState = CompileState { constants: [], instructions: [], error: "" }
+    let mut index: Int = 0
+    while index < len(items) {
+        state = compile_statement(items[index], state)
+        if state.error != "" { return CompileResult.Error(state.error) }
+        index = index + 1
+    }
+    let ret_span: Span = Span { start: 0, end: 1, line: 1, column: 1 }
+    let with_return: CompileState = with_instruction(state, instruction("RETURN", ret_span, "", "", 0, []))
+    let function_value: FunctionRecord = FunctionRecord {
+        name: "main",
+        arity: 0,
+        parameters: [],
+        constants: with_return.constants,
+        instructions: with_return.instructions,
+    }
+    return CompileResult.Ok(ModuleRecord { name: name, entry: "main", version: 1, functions: [function_value] })
+}
