@@ -1187,6 +1187,24 @@ class KryndelTests(unittest.TestCase):
         duplicate = checker.execute("resolve", [ArrayValue((lib, lib)), "lib"])
         self.assertIn("KRY5015", [item.fields[1][1] for item in duplicate.field("diagnostics")[1].items])
 
+    def test_source_checker_uses_typed_literal_payloads(self) -> None:
+        root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "typed-checker-v1.json").read_text(encoding="utf-8"))
+        lexer = VM(compile_source((root / "stdlib" / "core" / "lexer.kry").read_text(encoding="utf-8"), "stdlib/core/lexer.kry"))
+        parser = VM(compile_source((root / "stdlib" / "core" / "parser.kry").read_text(encoding="utf-8"), "stdlib/core/parser.kry"))
+        checker = VM(compile_source((root / "stdlib" / "core" / "checker.kry").read_text(encoding="utf-8"), "stdlib/core/checker.kry"))
+
+        def check(source_text: str):
+            tokens = lexer.execute("lex", [source_text]).field("tokens")[1]
+            parsed = parser.execute("parse", [tokens])
+            self.assertEqual(len(parsed.field("diagnostics")[1].items), 0)
+            return checker.execute("check", [parsed.field("items")[1]])
+
+        valid = check(fixture["valid"]["source"])
+        self.assertEqual(len(valid.field("diagnostics")[1].items), 0)
+        invalid = check(fixture["invalid"]["source"])
+        self.assertIn(fixture["invalid"]["diagnostic"], [item.field("code")[1] for item in invalid.field("diagnostics")[1].items])
+
     def test_source_compiler_emits_verifiable_bytecode_subset(self) -> None:
         root = Path(__file__).parents[1]
         source = (root / "tests" / "fixtures" / "parser-input.kry").read_text(encoding="utf-8")
