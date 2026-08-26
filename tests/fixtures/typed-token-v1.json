@@ -1,0 +1,71 @@
+{
+  "contract": "kryndel-source-typed-token",
+  "source": "42 3.5 true false nil \"A\\n\" +",
+  "tokens": [
+    {
+      "category": "int",
+      "float_value": 0.0,
+      "int_value": 42,
+      "kind": "INT",
+      "string_value": "",
+      "bool_value": false
+    },
+    {
+      "category": "float",
+      "float_value": 3.5,
+      "int_value": 0,
+      "kind": "FLOAT",
+      "string_value": "",
+      "bool_value": false
+    },
+    {
+      "category": "bool",
+      "float_value": 0.0,
+      "int_value": 0,
+      "kind": "TRUE",
+      "string_value": "",
+      "bool_value": true
+    },
+    {
+      "category": "bool",
+      "float_value": 0.0,
+      "int_value": 0,
+      "kind": "FALSE",
+      "string_value": "",
+      "bool_value": false
+    },
+    {
+      "category": "nil",
+      "float_value": 0.0,
+      "int_value": 0,
+      "kind": "NIL",
+      "string_value": "",
+      "bool_value": false
+    },
+    {
+      "category": "string",
+      "float_value": 0.0,
+      "int_value": 0,
+      "kind": "STRING",
+      "string_value": "A\n",
+      "bool_value": false
+    },
+    {
+      "category": "text",
+      "float_value": 0.0,
+      "int_value": 0,
+      "kind": "PLUS",
+      "string_value": "+",
+      "bool_value": false
+    },
+    {
+      "category": "none",
+      "float_value": 0.0,
+      "int_value": 0,
+      "kind": "EOF",
+      "string_value": "",
+      "bool_value": false
+    }
+  ],
+  "version": 1
+}

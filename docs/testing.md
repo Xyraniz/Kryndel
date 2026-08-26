@@ -8,7 +8,7 @@ PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite contains 104 tests in the current checkout and covers:
+The suite contains 105 tests in the current checkout and covers:
 
 | Layer | Contract |
 | --- | --- |
@@ -41,7 +41,9 @@ source bytecode verifier test checks normalized v1 records, entry presence,
 opcode/operand bounds, and malformed metadata without using host dictionaries.
 The source lexer test compares the published snapshot's token kinds, normalized
 text, order, and spans, then exercises nested-comment, invalid-character, and
-unterminated-string recovery. The source parser test feeds those source
+unterminated-string recovery. A typed-token fixture additionally checks tagged
+integer, float, boolean, string, nil, text, and EOF payload fields. The source
+parser test feeds those source
 lexer tokens into `stdlib/core/parser.kry` and compares AST root kinds and
 spans with `parser-v1.json`. The source checker test then validates the
 lexer-parser-checker pipeline, primitive mismatch and unknown-name diagnostics,
