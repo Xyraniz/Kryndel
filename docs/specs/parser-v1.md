@@ -5,3 +5,18 @@ The bootstrap parser now exposes `kry parse source.kry`, which emits a determini
 The optional `--fixture` argument compares the full JSON structure against a frozen oracle. `tests/fixtures/parser-input.kry` uses syntax already accepted by the compiler, and `tests/fixtures/parser-v1.json` freezes the resulting AST and empty diagnostic list. The command does not execute source code and does not use network or package resolution.
 
 > This is a bootstrap parser/AST snapshot seam. It is not a Kryndel-native parser and cannot be used to claim self-hosting. A future native parser must reproduce the same structure and diagnostics before the Python parser is retired.
+
+## Source-level parser milestone
+
+`stdlib/core/parser.kry` consumes normalized `Token` records from
+`stdlib/core/lexer.kry` and produces nominal `ParseResult`, `AstNode`, `Span`,
+and `Diagnostic` values. The first subset parses struct declarations, typed
+`let` statements, integer and string literals, member access, calls with up to
+two arguments, and struct literals. It preserves source order and half-open
+spans, and returns `KRY2001` diagnostics for recoverable subset failures.
+
+The source parser is executed through the bootstrap VM and is compared against
+`parser-v1.json` for root AST record kinds and spans. Full expression precedence,
+functions, enums, match, imports, attributes, and complete diagnostic recovery
+remain to be migrated. The bootstrap parser remains the typed AST oracle, so
+this milestone does not claim a native parser or self-hosting.
