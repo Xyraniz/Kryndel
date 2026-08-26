@@ -31,7 +31,8 @@ codepoints equivalente a la del runtime completo.
 `decode_bytecode(String)` añade un decoder de schema sobre el parser general.
 Valida el formato `kryndel-bytecode`, la versión 1, la identidad del módulo, un
 objeto de funciones, constantes escalares y el subset de instrucciones
-`PUSH_CONST`, `PUSH_NIL`, `LOAD`, `STORE`, `POP` y `RETURN`. Devuelve registros
+`PUSH_CONST`, `PUSH_NIL`, `LOAD`, `STORE`, `JUMP`, `JUMP_IF_FALSE`, `POP` y
+`RETURN`. Devuelve registros
 nominales normalizados con los mismos campos que consume el verificador fuente;
 la regresión pasa el resultado por `stdlib/core/bytecode.kry` y obtiene `Ok`.
 
