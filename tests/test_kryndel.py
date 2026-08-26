@@ -1078,6 +1078,8 @@ class KryndelTests(unittest.TestCase):
         fixture = json.loads((root / "tests" / "fixtures" / "kexe-reader-v1.json").read_text(encoding="utf-8"))
         source = (root / "stdlib" / "core" / "artifact.kry").read_text(encoding="utf-8")
         runtime = VM(compile_source(source, "stdlib/core/artifact.kry"))
+        sha_source = (root / "stdlib" / "core" / "sha256.kry").read_text(encoding="utf-8")
+        sha_runtime = VM(compile_source(sha_source, "stdlib/core/sha256.kry"))
         valid = runtime.execute("read_header", [BytesValue(tuple(fixture["valid"]["bytes"]))])
         self.assertEqual(valid.variant_name, "Ok")
         header = valid.payloads[0]
@@ -1085,8 +1087,18 @@ class KryndelTests(unittest.TestCase):
         self.assertEqual(header.field("payload_length")[1], fixture["valid"]["payload_length"])
         self.assertEqual(header.field("payload_start")[1], fixture["valid"]["payload_start"])
         self.assertEqual(header.field("payload_end")[1], fixture["valid"]["payload_end"])
-        self.assertEqual(header.field("checksum")[1].items, tuple([0] * fixture["valid"]["checksum_length"]))
+        self.assertEqual(header.field("checksum")[1].items, tuple(fixture["valid"]["bytes"][12:12 + fixture["valid"]["checksum_length"]]))
+        self.assertEqual(header.field("checksum_hex")[1], fixture["valid"]["checksum_hex"])
         self.assertEqual(header.field("payload")[1].items, tuple(fixture["valid"]["payload"]))
+        digest = sha_runtime.execute("verify", [header.field("payload")[1], header.field("checksum_hex")[1]])
+        self.assertEqual(digest.variant_name, "Ok")
+        tampered = list(fixture["valid"]["bytes"])
+        tampered[-1] = 100
+        tampered_header = runtime.execute("read_header", [BytesValue(tuple(tampered))])
+        self.assertEqual(tampered_header.variant_name, "Ok")
+        mismatch = sha_runtime.execute("verify", [tampered_header.payloads[0].field("payload")[1], tampered_header.payloads[0].field("checksum_hex")[1]])
+        self.assertEqual(mismatch.variant_name, "Error")
+        self.assertIn("KRY6205", mismatch.payloads[0])
         for malformed in fixture["invalid"].values():
             result = runtime.execute("read_header", [BytesValue(tuple(malformed))])
             self.assertEqual(result.variant_name, "Error")

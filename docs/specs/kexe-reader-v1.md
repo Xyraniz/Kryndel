@@ -11,8 +11,9 @@ del archivo.
 `stdlib/core/artifact.kry` implementa `read_header(Bytes) -> ReadResult`. Valida
 la longitud mínima, la magia y la igualdad entre `44 + payload_length` y el
 tamaño del buffer. Si la estructura es válida, devuelve un `Header` nominal con
-la versión, offsets, longitud, bytes del checksum y bytes del payload. Los
-bytes se copian a valores `Bytes` nominales; no se devuelven mappings del host.
+la versión, offsets, longitud, bytes del checksum, su representación hexadecimal
+minúscula de 64 caracteres y bytes del payload. Los bytes se copian a valores
+`Bytes` nominales; no se devuelven mappings del host.
 
 | Caso | Resultado v1 |
 | --- | --- |
@@ -23,14 +24,16 @@ bytes se copian a valores `Bytes` nominales; no se devuelven mappings del host.
 
 ## Límites
 
-Este es un lector de framing, no un verificador completo. El campo de 32 bytes
-se extrae, pero todavía no se calcula SHA-256 en Kryndel source. Tampoco se
-decodifica el JSON del payload, no se construye un `ModuleRecord` completo y no
-se ejecutan bytes KEXE. La lexer, parser, checker, compiler, VM, CLI y la ruta
-normal de artefactos siguen siendo implementaciones del bootstrap Python.
+Este es un lector de framing conectado al comparador SHA-256 fuente, no un
+verificador completo. El campo de 32 bytes se extrae y se canonicaliza para
+`stdlib/core/sha256.kry`; la regresión valida el payload `abc` y rechaza una
+mutación con `KRY6205`. Todavía no se decodifica el JSON del payload, no se
+construye un `ModuleRecord` completo y no se ejecutan bytes KEXE. La lexer,
+parser, checker, compiler, VM, CLI y la ruta normal de artefactos siguen siendo
+implementaciones del bootstrap Python.
 
 El fixture `tests/fixtures/kexe-reader-v1.json` y su regresión fijan la magia,
 la longitud big-endian, los offsets, la extracción del digest, el payload y los
-rechazos de framing. La siguiente ampliación separable es un SHA-256 fuente
-con vectores conocidos; sólo después de esa etapa puede plantearse verificar el
-digest de KEXE sin el bootstrap.
+rechazos de framing. La siguiente ampliación separable es decodificar el JSON fuente del payload y
+construir un `ModuleRecord` validable; sólo después de esa etapa puede plantearse
+verificar y ejecutar un KEXE completo sin el bootstrap.
