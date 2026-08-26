@@ -1,6 +1,6 @@
 // Minimal direct backend for the first native seed target.
 // The complete compiler backend remains pending; this target only accepts an
-// empty main function and emits a Linux x86_64 exit-0 program.
+// empty main function and emits a Linux x86_64 exit-status seed for 0..255.
 
 struct FunctionRecord {
     name: String
@@ -47,16 +47,23 @@ pub fn seed_module() -> ModuleRecord {
     return ModuleRecord { name: "seed", entry: "main", version: 1, functions: [main] }
 }
 
-fn x86_64_linux_exit0() -> String {
-    return ".global _start\n.section .text\n_start:\n    mov $60, %rax\n    xor %rdi, %rdi\n    syscall\n"
+fn x86_64_linux_exit(code: Int) -> String {
+    return ".global _start\n.section .text\n_start:\n    mov $60, %rax\n    mov $" + str(code) + ", %rdi\n    syscall\n"
 }
 
-pub fn emit(value: ModuleRecord, target: String) -> BackendResult {
+pub fn emit_exit(value: ModuleRecord, target: String, code: Int) -> BackendResult {
     if target != "x86_64-linux" {
         return backend_error("KRY8001 unsupported target")
     }
     if value.version != 1 or value.entry != "main" or !empty_main(value.functions) {
         return backend_error("KRY8002 seed backend accepts only an empty main module")
     }
-    return backend_ok(x86_64_linux_exit0())
+    if code < 0 or code > 255 {
+        return backend_error("KRY8003 exit status must be in 0..255")
+    }
+    return backend_ok(x86_64_linux_exit(code))
+}
+
+pub fn emit(value: ModuleRecord, target: String) -> BackendResult {
+    return emit_exit(value, target, 0)
 }

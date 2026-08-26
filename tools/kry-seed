@@ -1,16 +1,28 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 1 ]; then
-    printf 'usage: %s OUTPUT\n' "$0" >&2
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+    printf 'usage: %s OUTPUT [EXIT_STATUS]\n' "$0" >&2
     exit 64
 fi
 
 output=$1
+code=${2:-0}
+case "$code" in
+    ''|*[!0-9]*)
+        printf 'error: exit status must be an integer in 0..255\n' >&2
+        exit 64
+        ;;
+esac
+if [ "$code" -gt 255 ]; then
+    printf 'error: exit status must be in 0..255\n' >&2
+    exit 64
+fi
+code_oct=$(printf '%03o' "$code")
 tmp="${output}.tmp.$$"
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
-# ELF64 little-endian x86_64 Linux, one RX PT_LOAD segment, _start exits 0.
+# ELF64 little-endian x86_64 Linux, one RX PT_LOAD segment, _start exits code.
 printf '%b' \
     '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000' \
     '\002\000\076\000\001\000\000\000' \
@@ -26,7 +38,7 @@ printf '%b' \
     '\204\000\000\000\000\000\000\000' \
     '\204\000\000\000\000\000\000\000' \
     '\000\020\000\000\000\000\000\000' \
-    '\270\074\000\000\000\277\000\000\000\000\017\005' \
+    '\270\074\000\000\000\277' "\\$code_oct\000\000\000\017\005" \
     > "$tmp"
 
 chmod 755 "$tmp"
