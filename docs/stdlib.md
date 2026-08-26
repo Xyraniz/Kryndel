@@ -35,6 +35,7 @@ The core modules now expose these non-generic APIs directly in Kryndel:
 | `core/bytecode` | nominal `InstructionRecord`, `FunctionRecord`, `ModuleRecord`, and `verify` | Source-level structural verifier for normalized v1 records; JSON reading, KEXE parsing, and checksum calculation remain Python |
 | `core/lexer` | `lex(String) -> LexerResult`, `read(String) -> LexerResult` | Source-level lexer for current keywords, literals, comments, operators, delimiters, spans, and recovery; typed literal payloads and runtime execution remain bootstrap-owned |
 | `core/parser` | `parse(Array) -> ParseResult` over nominal lexer tokens | Source-level parser subset for structs, lets, literals, members, calls, and struct literals; full language AST and typed parser execution remain bootstrap-owned |
+| `core/checker` | `check(Array) -> CheckResult`, `module`, `resolve` | Source-level semantic and dependency checks for the parser subset; complete type identity, imports, visibility, and native module loading remain bootstrap-owned |
 
 The source manifest module's lockfile writer accepts checksums as validated
 hexadecimal inputs; it does not pretend to calculate SHA-256. The fallback
