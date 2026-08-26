@@ -10,8 +10,10 @@ salida se coloca en un directorio cuyo nombre contiene espacios, se genera dos
 veces y se compara byte a byte.
 
 Después valida la magia ELF64, los permisos ejecutables y la ejecución del
-archivo con `HOME` vacío y un entorno mínimo. La expectativa funcional es un
-proceso Linux `x86_64` que termina con código cero y no escribe salida.
+archivo con `HOME` vacío y un entorno mínimo. La expectativa del checker sigue
+siendo un proceso Linux `x86_64` que termina con código cero y no escribe salida;
+la interfaz independiente `tools/kry-seed OUTPUT [EXIT_STATUS]` también permite
+probar estados explícitos de 0..255.
 
 ## Resultado
 
@@ -20,7 +22,7 @@ El contrato se limita a estos hechos observables:
 | Propiedad | Garantía v1 |
 | --- | --- |
 | Entrada | Ningún archivo de programa; el seed representa un `main` vacío |
-| Salida | ELF64 little-endian `x86_64` Linux raw, ejecutable, exit-0 |
+| Salida | ELF64 little-endian `x86_64` Linux raw, ejecutable; el checker verifica exit-0 y el generador acepta 0..255 |
 | Reproducibilidad | Dos ejecuciones producen bytes idénticos |
 | Aislamiento | `PATH` mínimo y `HOME` vacío durante generación y ejecución |
 | Espacios | El artefacto se genera en una ruta con espacios |

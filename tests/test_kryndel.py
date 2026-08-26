@@ -1304,14 +1304,23 @@ class KryndelTests(unittest.TestCase):
 
     def test_source_backend_emits_deterministic_x86_64_seed(self) -> None:
         root = Path(__file__).parents[1]
+        fixture = json.loads((root / "tests" / "fixtures" / "backend-seed-v2.json").read_text(encoding="utf-8"))
         backend = VM(compile_source((root / "stdlib" / "core" / "backend.kry").read_text(encoding="utf-8"), "stdlib/core/backend.kry"))
         seed = backend.execute("seed_module", [])
-        first = backend.execute("emit", [seed, "x86_64-linux"])
-        second = backend.execute("emit", [seed, "x86_64-linux"])
+        first = backend.execute("emit", [seed, fixture["target"]])
+        second = backend.execute("emit", [seed, fixture["target"]])
         self.assertEqual(first.variant_name, "Ok")
         self.assertEqual(first.payloads[0], second.payloads[0])
-        self.assertIn(".global _start", first.payloads[0])
-        self.assertIn("mov $60, %rax", first.payloads[0])
+        for marker in fixture["markers"]:
+            self.assertIn(marker, first.payloads[0])
+        for code in fixture["supported_exit_statuses"]:
+            emitted = backend.execute("emit_exit", [seed, fixture["target"], code])
+            self.assertEqual(emitted.variant_name, "Ok")
+            self.assertIn("mov $" + str(code) + ", %rdi", emitted.payloads[0])
+        for code in fixture["invalid_exit_statuses"]:
+            invalid = backend.execute("emit_exit", [seed, fixture["target"], code])
+            self.assertEqual(invalid.variant_name, "Error")
+            self.assertIn(fixture["error"], invalid.payloads[0])
         unsupported = backend.execute("emit", [seed, "wasm32"])
         self.assertEqual(unsupported.variant_name, "Error")
         self.assertIn("KRY8001", unsupported.payloads[0])
@@ -1333,8 +1342,20 @@ class KryndelTests(unittest.TestCase):
             self.assertEqual(executed.returncode, 0)
             self.assertEqual(executed.stdout, b"")
             self.assertEqual(executed.stderr, b"")
-
+            status_output = Path(directory) / "kry-seed-status-7"
+            built_status = subprocess.run(
+                [str(root / "tools" / "kry-seed"), str(status_output), "7"],
+                env={"PATH": "/usr/bin:/bin"},
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(built_status.returncode, 0, built_status.stderr)
+            status_run = subprocess.run([str(status_output)], capture_output=True)
+            self.assertEqual(status_run.returncode, 7)
+            self.assertEqual(status_run.stdout, b"")
+            self.assertEqual(status_run.stderr, b"")
     def test_seed_offline_checker_isolated_and_seed_only(self) -> None:
+
         root = Path(__file__).parents[1]
         checked = subprocess.run(
             [str(root / "tools" / "kry-seed-check")],
