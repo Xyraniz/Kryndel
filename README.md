@@ -49,7 +49,7 @@ the current keywords, literals, comments, operators, spans, and recovery cases.
 `stdlib/core/parser.kry` consumes those tokens for a tested AST subset covering
 struct declarations, typed lets, literals, members, calls, and struct literals.
 `stdlib/core/checker.kry` validates that subset and resolves normalized module
-graphs with deterministic missing, duplicate, and cycle diagnostics. `stdlib/core/compiler.kry` lowers the same subset into bytecode records accepted by the source verifier. `stdlib/core/runtime.kry` executes the resulting subset end to end with stack, locals, struct values, and builtin print calls.
+graphs with deterministic missing, duplicate, and cycle diagnostics. `stdlib/core/compiler.kry` lowers the same subset into bytecode records accepted by the source verifier. `stdlib/core/runtime.kry` executes the resulting subset end to end with stack, locals, struct values, and builtin print calls. `tools/kry-seed` emits and runs a raw x86_64 Linux ELF exit-0 seed without Python, `as`, or `ld`.
 These source modules execute through the Python bootstrap;
 the compiler and VM remain Python implementations.
 
@@ -223,5 +223,5 @@ enums, payload enums and match, diagnostics, malformed bytecode/runtime,
 manifests, lockfiles, semver, local resolution, checksums, imports, CLI, KEXE,
 data-core slices/builders/records, source manifest ranges, lockfile JSON,
 normalized bytecode verification, determinism, and security boundaries. The
-current checkout runs 99 Python unit tests; the
+current checkout runs 101 Python unit tests; the
 historical 78-test wording in older release notes is no longer accurate.
