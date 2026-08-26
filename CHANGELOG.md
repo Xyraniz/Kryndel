@@ -14,7 +14,7 @@
 - Added `stdlib/core/compiler.kry` with source-level lowering of the migrated AST subset into normalized bytecode records and a regression that validates its instruction sequence through the source verifier. Full-language compilation, typed constants, linking, and serialization remain Python-owned.
 - Added `stdlib/core/runtime.kry` with a source-level stack/local runtime for the compiler subset, including constants, stores, struct values, fields, builtin print calls, returns, and stable runtime errors. The end-to-end path still executes through the Python VM and does not claim native runtime independence.
 - Added `stdlib/core/backend.kry` with a deterministic x86_64 Linux seed backend for an empty `main`, emitting exit-0 assembly and rejecting unsupported targets. It is a narrow direct-backend seam, not a complete object/linker pipeline.
-- Added `tools/kry-seed`, a local no-Python raw ELF64 seed wrapper. It emits a statically valid x86_64 Linux exit-0 binary without relying on `as`, `ld`, or Python and is covered by an executable integration test.
+- Added `tools/kry-seed`, a local no-Python raw ELF64 seed wrapper. It emits a statically valid x86_64 Linux exit-0 binary without relying on `as`, `ld`, or Python and is covered by an executable integration test. Added `tools/kry-seed-check` and `seed-offline-v1.md` to verify that seed only with isolated `PATH`/`HOME`, a spaced output directory, deterministic bytes, and direct execution; this is not a complete toolchain bundle.
 - Added `stdlib/core/format.kry` with the conservative formatter contract: trailing spaces/tabs are removed, trailing blank lines are dropped, the final newline is canonicalized, and idempotence is tested. Added `tools/kry-format`, a no-Python check/rewrite CLI with empty-file coverage; the regular compiler and VM remain Python-bootstrap components.
 - Added the first toolchain-oriented immutable collection primitive, `array_push(Array, Any) -> Array`, with the `stdlib/collections/sequences.kry` wrapper, deterministic fixture, stable `KRY6203` error, and regression tests. The operation still executes in the bootstrap VM.
 - Added `stdlib/core/manifest.kry`, a real strict-subset manifest parser over `fs.read_text`, with nominal `Dependency`, `Manifest`, and `ManifestResult` values and valid/invalid execution coverage. The Python manifest parser remains the differential oracle until UTF-8 diagnostics and all version-requirement edge cases match byte for byte.
@@ -81,7 +81,7 @@
 - Deterministic `kry doc` source declarations and `kry pack` `.krypkg` source
   archives with fixed metadata, offline operation, and SHA-256 checksums; source
   files are never executed while documenting or packaging.
-- Regression tests expanded to 103, including nested modules, public/private
+- Regression tests expanded to 104, including nested modules, public/private
   symbols, deterministic linking, cycles, ambiguity, project-aware execution,
   source-level core APIs, runtime Boolean values, executable Bytes/UTF-8
   behavior, host-boundary inventory, and structured test failures.

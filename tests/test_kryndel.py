@@ -1213,6 +1213,19 @@ class KryndelTests(unittest.TestCase):
             self.assertEqual(executed.stdout, b"")
             self.assertEqual(executed.stderr, b"")
 
+    def test_seed_offline_checker_isolated_and_seed_only(self) -> None:
+        root = Path(__file__).parents[1]
+        checked = subprocess.run(
+            [str(root / "tools" / "kry-seed-check")],
+            env={"PATH": "/usr/bin:/bin", "HOME": ""},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertIn("seed-only offline check passed", checked.stdout)
+        self.assertIn("raw x86_64 Linux ELF64 empty-main exit-0 seed", checked.stdout)
+        self.assertIn("not verified: compiler, runtime, package tooling, or full Kryndel CLI", checked.stdout)
+
     def test_source_formatter_matches_conservative_python_contract(self) -> None:
         root = Path(__file__).parents[1]
         formatter = VM(compile_source((root / "stdlib" / "core" / "format.kry").read_text(encoding="utf-8"), "stdlib/core/format.kry"))
