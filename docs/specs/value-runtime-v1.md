@@ -84,7 +84,8 @@ Python exceptions and tracebacks are not part of the interface.
 | `KRY6304` | malformed program input | source/manifest readers |
 | `KRY6305` | malformed bytecode | bytecode reader/verifier |
 | `KRY6401` | assertion condition is false | test assertion boundary |
-| `KRY6402` | assertion values are unequal | test assertion boundary |
+| `KRY6402` | assertion values are unequal | assertion boundary |
+| `KRY7006` | unsupported typed constant category | source runtime constant decoder |
 
 `Option`/`Result` fallback operations are total and must not produce
 `KRY6204`: `unwrap_or` returns its fallback for `None`, and `get_or` returns
@@ -127,12 +128,16 @@ bootstrap boundaries until a Kryndel-native test runner replaces them.
 
 `stdlib/core/runtime.kry` executes the normalized bytecode subset emitted by
 `stdlib/core/compiler.kry`. It provides nominal `Value` and `RuntimeResult`
-records, a stack and local-binding model, constants, `LOAD`/`STORE`, struct
-construction and field access, builtin `print`/`println` calls, `POP`, and
-`RETURN`. It reports stable `KRY7001`–`KRY7005` failures for malformed constants,
-stack underflow, unknown callables, unsupported opcodes, and a missing entry.
+records, a stack and local-binding model, tagged constants, `LOAD`/`STORE`,
+struct construction and field access, builtin `print`/`println` calls, `POP`,
+and `RETURN`. A `PUSH_CONST` category decodes into `Int`, `Float`, `Bool`, or
+`String`; `PUSH_NIL` produces `Nil`. The public `decode_constant` seam also
+rejects unsupported categories with `KRY7006`. It reports stable `KRY7001`–`KRY7005`
+failures for malformed constants, stack underflow, unknown callables, unsupported
+opcodes, and a missing entry.
 
 An end-to-end regression compiles the parser fixture and executes it through the
-source runtime. This module is still interpreted by the Python VM; it does not
+source runtime. The typed-constant fixture also freezes the compiler metadata
+and nominal decoded values. This module is still interpreted by the Python VM; it does not
 read KEXE bytes, implement the complete opcode set, provide host IO, or establish
 an independent Kryndel runtime.

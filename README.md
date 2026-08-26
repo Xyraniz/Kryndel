@@ -52,7 +52,8 @@ its `Literal` nodes preserve the tagged lexer payload.
 `stdlib/core/checker.kry` validates that subset, consumes tagged literal payloads
 for Int/Float/Bool/String/Void assignments, and resolves normalized module
 graphs with deterministic missing, duplicate, and cycle diagnostics.
-`stdlib/core/compiler.kry` lowers the same subset into bytecode records accepted by the source verifier. `stdlib/core/runtime.kry` executes the resulting subset end to end with stack, locals, struct values, and builtin print calls. `tools/kry-seed` emits and runs a raw x86_64 Linux ELF exit-0 seed without Python, `as`, or `ld`. `tools/kry-seed-check` verifies that seed only under an isolated `PATH`/`HOME`, including a spaced output directory and deterministic bytes; it is not a toolchain bundle. `stdlib/core/format.kry` now provides the conservative trailing-whitespace and final-newline formatter contract in source, and `tools/kry-format` exposes it as a no-Python check/rewrite CLI.
+`stdlib/core/compiler.kry` lowers the same subset into bytecode records accepted by the source verifier, preserving typed constant categories. `stdlib/core/runtime.kry` executes the resulting subset end to end with stack, locals, struct values, builtin print calls, and typed Int/Float/Bool/String/Nil constant decoding.
+`tools/kry-seed` emits and runs a raw x86_64 Linux ELF exit-0 seed without Python, `as`, or `ld`. `tools/kry-seed-check` verifies that seed only under an isolated `PATH`/`HOME`, including a spaced output directory and deterministic bytes; it is not a toolchain bundle. `stdlib/core/format.kry` now provides the conservative trailing-whitespace and final-newline formatter contract in source, and `tools/kry-format` exposes it as a no-Python check/rewrite CLI.
 These source modules execute through the Python bootstrap;
 the compiler and VM remain Python implementations.
 
@@ -226,5 +227,5 @@ enums, payload enums and match, diagnostics, malformed bytecode/runtime,
 manifests, lockfiles, semver, local resolution, checksums, imports, CLI, KEXE,
 data-core slices/builders/records, source manifest ranges, lockfile JSON,
 normalized bytecode verification, determinism, and security boundaries. The
-current checkout runs 107 Python unit tests; the
+current checkout runs 108 Python unit tests; the
 historical 78-test wording in older release notes is no longer accurate.

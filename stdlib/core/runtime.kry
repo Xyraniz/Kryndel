@@ -1,5 +1,6 @@
 // Source-level runtime seam for normalized bytecode-v1 records.
-// It executes the compiler subset; the Python VM remains the production runtime.
+// It decodes the compiler subset's tagged constants; the Python VM remains the
+// production runtime.
 
 struct InstructionRecord {
     op: String
@@ -36,6 +37,8 @@ struct Value {
     number: Int
     values: Array
     names: Array
+    float_number: Float
+    bool_value: Bool
 }
 
 enum RuntimeResult {
@@ -52,19 +55,42 @@ fn runtime_ok(value: Value) -> RuntimeResult {
 }
 
 fn nil_value() -> Value {
-    return Value { kind: "Nil", text: "", number: 0, values: [], names: [] }
+    return Value { kind: "Nil", text: "", number: 0, values: [], names: [], float_number: 0.0, bool_value: false }
 }
 
 fn string_value(value: String) -> Value {
-    return Value { kind: "String", text: value, number: 0, values: [], names: [] }
+    return Value { kind: "String", text: value, number: 0, values: [], names: [], float_number: 0.0, bool_value: false }
 }
 
 fn int_value(value: Int) -> Value {
-    return Value { kind: "Int", text: "", number: value, values: [], names: [] }
+    return Value { kind: "Int", text: "", number: value, values: [], names: [], float_number: 0.0, bool_value: false }
+}
+
+fn float_value(value: Float) -> Value {
+    return Value { kind: "Float", text: "", number: 0, values: [], names: [], float_number: value, bool_value: false }
+}
+
+fn bool_value(value: Bool) -> Value {
+    return Value { kind: "Bool", text: "", number: 0, values: [], names: [], float_number: 0.0, bool_value: value }
 }
 
 fn struct_value(type_name: String, values: Array, names: Array) -> Value {
-    return Value { kind: type_name, text: "", number: 0, values: values, names: names }
+    return Value { kind: type_name, text: "", number: 0, values: values, names: names, float_number: 0.0, bool_value: false }
+}
+
+fn typed_constant(raw: String, category: String) -> Value {
+    if category == "int" { return int_value(int(raw)) }
+    if category == "float" { return float_value(float(raw)) }
+    if category == "bool" { return bool_value(raw == "true") }
+    return string_value(raw)
+}
+
+pub fn decode_constant(raw: String, category: String) -> RuntimeResult {
+    if category == "nil" { return runtime_ok(nil_value()) }
+    if category != "int" and category != "float" and category != "bool" and category != "string" and category != "text" {
+        return runtime_error("KRY7006 unsupported constant category")
+    }
+    return runtime_ok(typed_constant(raw, category))
 }
 
 fn find_function(functions: Array, name: String) -> FunctionRecord {
@@ -154,7 +180,7 @@ fn run_function(function_value: FunctionRecord, module: ModuleRecord) -> Runtime
             if instruction.number < 0 or instruction.number >= len(function_value.constants) {
                 return runtime_error("KRY7001 invalid constant index")
             }
-            stack = array_push(stack, string_value(function_value.constants[instruction.number]))
+            stack = array_push(stack, typed_constant(function_value.constants[instruction.number], instruction.text))
         } else if instruction.op == "PUSH_NIL" {
             stack = array_push(stack, nil_value())
         } else if instruction.op == "LOAD" {
