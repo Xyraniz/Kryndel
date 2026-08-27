@@ -1,7 +1,0 @@
-let window: UiNode = ui.window("Kryndel Dashboard", 960, 600)
-let content: UiNode = ui.vbox(window)
-let title: UiNode = ui.label(content, "Welcome to Kryndel")
-let button: UiNode = ui.button(content, "Continue")
-ui.on_click(button, "on_continue")
-ui.show(window)
-ui.run()

@@ -38,17 +38,19 @@ expected='720
 2
 😀
 Kry'
-actual=$(PATH="/usr/bin:/bin" "$root/tools/kry-native" run "$work/core.kry")
+test "$(PATH="/usr/bin:/bin" "$root/tools/kry" version)" = 'Kryndel 1.0.0'
+actual=$(PATH="/usr/bin:/bin" "$root/tools/kry" run "$work/core.kry")
 test "$actual" = "$expected"
-PATH="/usr/bin:/bin" "$root/tools/kry-native" check "$work/core.kry"
-PATH="/usr/bin:/bin" "$root/tools/kry-native" build "$work/core.kry" -o "$work/core.kexe"
-PATH="/usr/bin:/bin" "$root/tools/kry-native" build "$work/core.kry" -o "$work/core-second.kexe"
+check_output=$(PATH="/usr/bin:/bin" "$root/tools/kry" check "$work/core.kry")
+test -z "$check_output"
+PATH="/usr/bin:/bin" "$root/tools/kry" build "$work/core.kry" -o "$work/core.kexe"
+PATH="/usr/bin:/bin" "$root/tools/kry" build "$work/core.kry" -o "$work/core-second.kexe"
 cmp -s "$work/core.kexe" "$work/core-second.kexe"
-artifact_actual=$(PATH="/usr/bin:/bin" "$root/tools/kry-native" run "$work/core.kexe")
+artifact_actual=$(PATH="/usr/bin:/bin" "$root/tools/kry" run "$work/core.kexe")
 test "$artifact_actual" = "$expected"
 cp "$work/core.kexe" "$work/core-trailing.kexe"
 printf x >> "$work/core-trailing.kexe"
-if PATH="/usr/bin:/bin" "$root/tools/kry-native" run "$work/core-trailing.kexe" >/dev/null 2>"$work/artifact-error.txt"; then
+if PATH="/usr/bin:/bin" "$root/tools/kry" run "$work/core-trailing.kexe" >/dev/null 2>"$work/artifact-error.txt"; then
     printf '%s\n' 'native core accepted a malformed artifact' >&2
     exit 1
 fi
@@ -57,11 +59,11 @@ grep -q 'malformed native artifact' "$work/artifact-error.txt"
 cat > "$work/bad.kry" <<'KRY'
 println(missing)
 KRY
-if PATH="/usr/bin:/bin" "$root/tools/kry-native" run "$work/bad.kry" 2> "$work/error.txt"; then
+if PATH="/usr/bin:/bin" "$root/tools/kry" run "$work/bad.kry" 2> "$work/error.txt"; then
     printf '%s\n' 'native core accepted an unknown variable' >&2
     exit 1
 fi
 grep -q 'unknown variable' "$work/error.txt"
 ! grep -q 'Traceback' "$work/error.txt"
 
-printf '%s\n' 'native core integration: ok'
+printf '%s\n' 'native integration: ok'

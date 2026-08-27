@@ -1,274 +1,71 @@
 # Kryndel
 
-Kryndel 0.1.0 — First Light is a dependency-free language bootstrap. The
-compiler and VM are currently written in Python's standard library. Kryndel is
-not self-hosted yet; this repository is building the stable interfaces needed
-to replace that bootstrap over time.
+Kryndel es un lenguaje pequeño y expresivo para programación estructurada. Esta distribución tiene una única implementación ejecutable: `native/kry.c`. El núcleo incluye lexer, parser, evaluador, funciones, control de flujo, valores dinámicos, arrays, texto UTF-8, bytes, aserciones y artefactos reproducibles, sin necesitar un intérprete escrito en otro lenguaje.
 
-The transition is explicit: **stage-0** is the Python bootstrap and differential
-oracle, **stage-1** is the set of Kryndel source seams, **stage-2** is the
-planned native runtime, **stage-3** is the planned native compiler, and
-**stage-4** is the planned distributable bundle. A source module interpreted by
-`kryndel/vm.py` is still a **seam fuente bajo bootstrap Python**, not a native
-implementation.
+> La ruta normal del proyecto es `tools/kry`. El repositorio no contiene una carpeta de bootstrap ni archivos fuente `.py`.
 
-## Native core
+## Inicio rápido
 
-Kryndel now includes an independent native core in [`native/kry.c`](native/kry.c). Build it once with a C11 compiler using `make native`; after that, `build/kry` executes supported Kryndel programs without Python, Rust, or another language runtime. The convenience launcher [`tools/kry-native`](tools/kry-native) builds the binary on demand and forwards commands directly to it. See [`docs/native.md`](docs/native.md) for the exact boundary and supported subset.
+Se necesita un compilador C11 únicamente para construir el ejecutable nativo. Después de la primera construcción, los comandos se ejecutan directamente mediante `build/kry`.
 
 ```bash
-make native
-./build/kry run examples/fibonacci.kry
-./build/kry build examples/hello.kry -o /tmp/hello.kexe
-./build/kry run /tmp/hello.kexe
+make
+./tools/kry run examples/hello.kry
+./tools/kry run examples/fibonacci.kry
+./tools/kry check examples/control_flow.kry
+./tools/kry build examples/hello.kry -o /tmp/hello.kexe
+./tools/kry run /tmp/hello.kexe
 ```
 
-The native path currently covers the productive core: values, arrays, Bytes, operators, functions, recursion, conditionals, loops, assignments, assertions, and console output. It reports unsupported structs, enums, imports, and pattern matching directly instead of falling back to Python. The broader Python bootstrap remains as the reference implementation for the complete historical language and KEXE v1 contracts; the native core is the first independent execution route, not yet the final self-hosting compiler.
+La CLI también acepta un archivo como abreviatura de `run` y ofrece `version` y `--help`.
 
-## Current language
+| Comando | Función |
+| --- | --- |
+| `kry check archivo.kry` | Lexa y analiza el archivo sin ejecutar el programa. |
+| `kry run archivo.kry` | Ejecuta una fuente Kryndel o un artefacto `.kexe`. |
+| `kry build archivo.kry [-o salida.kexe]` | Valida y empaqueta la fuente en un contenedor determinista. |
+| `kry version` | Muestra la versión del lenguaje y del ejecutable. |
+| `kry --help` | Muestra la ayuda de la CLI. |
 
-The front end supports explicit primitive types, immutable/mutable bindings,
-functions, recursion, control flow, nominal structs, and nominal algebraic
-enums. Structs and enum values are checked before execution and compiled to
-deterministic portable bytecode.
+## Lenguaje disponible
 
-Unit and positional enum variants are supported:
+La implementación ofrece declaraciones `let`, parámetros y funciones `fn`, valores `Int`, `Float`, `Bool`, `String`, `Bytes`, `Array` y `nil`, expresiones aritméticas y booleanas, concatenación de strings y arrays, indexación, `if`/`else`, `while`, `return`, `break`, `continue`, comentarios de línea y bloque, además de llamadas a funciones definidas por el usuario.
 
 ```kryndel
-enum Message {
-    Quit
-    Move(Int, Int)
-    Text(String)
+fn factorial(n: Int) -> Int {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
 }
 
-let message: Message = Message.Move(10, 20)
-match message {
-    Message.Quit => println("quit")
-    Message.Move(x, y) => println(x + y)
-    Message.Text(text) => println(text)
-}
+let answer: Int = factorial(6)
+println("factorial = " + str(answer))
+assert(answer == 720)
 ```
 
-`match` supports enum variants, positional bindings, blocks, `_`, ordered
-branches, duplicate detection, and exhaustiveness diagnostics. It does not yet
-support arbitrary patterns, struct destructuring, guards, OR patterns, macros,
-generics, ownership, borrowing, or lifetimes.
+Los builtins mínimos forman la biblioteca incorporada: `print`, `println`, `len`, `bytes`, `string_to_bytes`, `bytes_to_string`, `array_push`, `int`, `float`, `str`, `assert` y `assert_eq`. Los strings se validan como UTF-8 cuando una operación depende de caracteres y la indexación devuelve un code point como string.
 
-The first Kryndel-native collection values are immutable homogeneous arrays and
-fixed-width tuples: `[1, 2]`, `(1, "two")`, `len(value)`, `left + right`,
-`array_push(value, item)`, and safe `value[index]`. `Bytes` is an immutable nominal octet sequence. The
-Kryndel-visible APIs `bytes(Array)`, `string_to_bytes(String)`, and
-`bytes_to_string(Bytes)` construct, encode, and strictly decode it; `len` counts
-octets, `Bytes[index]` returns an `Int` in `0..255`, and `Bytes + Bytes`
-concatenates without normalization or lossy replacement. `Option` and `Result` are ordinary non-generic enums in `stdlib/core`; their Kryndel-native modules
-expose constructors, predicates, and total `unwrap_or`/`get_or` fallback
-accessors. `stdlib/core/data.kry` also exposes bounded String/Bytes slices, a
-balanced string builder, and nominal Span/Token/AST/diagnostic records for the
-future toolchain. `stdlib/core/lexer.kry` provides a source-level lexer seam for the current keywords, literals, comments, operators, spans, and recovery cases, and attaches a tagged `LiteralValue` for tested integer, float, boolean, string, nil, and EOF tokens.
+## Diseño de ejecución
 
-`stdlib/core/parser.kry` consumes those tokens for a tested AST subset covering
-struct declarations, typed lets, literals, members, calls, and struct literals;
-its `Literal` nodes preserve the tagged lexer payload. `stdlib/core/value.kry`
-freezes a nominal `Value` discriminant order and records for scalar, collection,
-struct, enum, toolchain, diagnostic, and filesystem values; its constructors and
-`tests/fixtures/value-layout-v1.json` are a source compatibility seam under the
-bootstrap VM, not a native runtime claim.
-`stdlib/core/checker.kry` validates that subset, consumes tagged literal payloads
-for Int/Float/Bool/String/Void assignments, and resolves normalized module
-graphs with deterministic missing, duplicate, and cycle diagnostics.
-`stdlib/core/compiler.kry` lowers the same subset into bytecode records accepted by the source verifier, preserving typed constant categories. `stdlib/core/runtime.kry` executes the verified runtime subset end to end with stack frames, locals, typed Int/Float/Bool/String/Nil values, structs, enums, arrays, tuples, indexing, arithmetic, comparisons, jumps, internal calls, builtin output, `bytes`, immutable `array_push`, `assert`, and `assert_eq`; `runtime-source-v1.json` and `runtime-builtins-v1.json` freeze representative programs and negative codes. The source module remains interpreted by the Python bootstrap, and strict UTF-8 conversion remains a pending boundary.
-`stdlib/core/backend.kry` also lowers one JSON-decoded `PUSH_CONST`/`RETURN` program and one fixed conditional-jump seed to bounded x86_64 Linux exit assembly, and `emit_elf_exit` returns the exact 132-byte ELF64 seed as `Bytes` with the exit status patched directly. A regression executes those bytes from a path with spaces. `tools/kry-seed` emits and runs a raw x86_64 Linux ELF empty-main seed with a validated exit status in 0..255, without Python, `as`, or `ld`; the source backend now also emits and executes a bounded `PUSH_CONST`/`PUSH_CONST`/`BINARY(+)`/`RETURN` ELF image directly, while general lowering remains unimplemented.
-`tools/kry-seed-check` verifies that seed only under an isolated `PATH`/`HOME`, including a spaced output directory and deterministic bytes; it is not a toolchain bundle. `tools/kry-native-run` and `tools/kry-native-run-check` add a narrower KRYSEED1 native-runtime checkpoint: a fixed x86_64 ELF reads a bounded framed module, writes its payload to stdout, returns the first payload byte, and rejects malformed or missing files without Python or a dynamic loader. The launcher still materializes that fixed image with POSIX shell utilities, so this is not the final bundle or normal CLI.
+El comando `check` ejecuta el mismo lexer y parser que `run`, por lo que un archivo que pasa la comprobación tiene una ruta de ejecución idéntica. `build` conserva la fuente validada en un formato binario con cabecera `KRYNATIVE1`, tamaño little-endian de 64 bits y payload exacto. `run` valida la cabecera, el tamaño y vuelve a analizar el payload mediante el mismo núcleo; no hay código generado por un segundo lenguaje ni runtime oculto.
 
-`stdlib/core/artifact.kry` now reads and rebuilds KEXE v1 framing bytes, validates magic and payload length, and canonicalizes checksum text for the source verifier. `stdlib/core/sha256.kry` implements and verifies SHA-256 over `Bytes` with known vectors; a source-level regression validates an extracted KEXE payload and rejects tampering. `stdlib/core/json.kry` parses the tested JSON value grammar into nominal values, decodes every v1 instruction metadata shape from strings, payload bytes, or controlled `fs.read_text` input, and emits canonical JSON with typed scalar categories. A regression now composes the real KEXE framing, source SHA-256, source schema decoder, verifier, and source runtime; full native compiler, artifact/package ownership, and final bundle paths remain under the Python bootstrap.
-`stdlib/core/format.kry` provides the conservative trailing-whitespace and final-newline formatter contract in source, and `tools/kry-format` exposes it as a no-Python check/rewrite CLI. `tools/kry-kexe-check` independently validates KEXE v1 framing, payload length, SHA-256, and symlink rejection using a minimal host utility boundary; it does not decode or execute modules and is not part of the final bundle. `tools/kry-bundle-check` audits candidate bundle directories for forbidden Python/toolchain invocations, caches, artifacts, and symlinks; it validates packaging policy but does not create a bundle.
-These source modules execute through the Python bootstrap;
-the compiler and VM remain Python implementations.
+La implementación es deliberadamente pequeña y tree-walk. Esto mantiene el comportamiento fácil de auditar y permite que el lenguaje sea utilizable hoy. El siguiente crecimiento natural es añadir módulos y tipos nominales dentro de este mismo núcleo, sin reintroducir un bootstrap externo.
 
+## Estructura
 
-## Diagnostics
+| Ruta | Propósito |
+| --- | --- |
+| `native/kry.c` | Lexer, parser, runtime, builtins, CLI y formato de artefacto. |
+| `tools/kry` | Lanzador que construye `build/kry` cuando hace falta. |
+| `examples/` | Programas Kryndel ejecutables. |
+| `tests/` | Pruebas de integración del ejecutable nativo. |
+| `docs/` | Contratos de lenguaje, arquitectura y pruebas. |
 
-Every compiler diagnostic has a stable `KRY` code, severity, source file,
-primary span, optional secondary spans, message, notes, help, and an optional
-correction suggestion. Lexer, parser, name/type, bytecode/runtime, and package
-errors use separate code ranges. Human output remains the default:
+## Verificación
 
 ```bash
-PYTHONPATH=. python3 -m kryndel check examples/enums.kry --format human
-PYTHONPATH=. python3 -m kryndel check examples/enums.kry --format json
+make test
 ```
 
-JSON is deterministic and intended for editors and CI. The CLI returns zero on
-success and one on compilation, runtime, artifact, or package failure.
-
-## Local Kryndel packages
-
-Kryndel packages are not Python packages and the package manager never calls
-pip. A project uses the strict manifest subset documented in
-[`docs/specs/manifest-v1.md`](docs/specs/manifest-v1.md):
-
-```toml
-[package]
-name = "demo"
-version = "0.1.0"
-edition = "2026"
-
-[dependencies]
-request = "1.0.0"
-```
-
-The implemented registry is local and offline:
-
-```text
-.kryndel/registry/request/1.0.0/kry.toml
-.kryndel/registry/request/1.0.0/src/
-.kryndel/registry/request/1.0.0/checksum
-```
-
-Supported commands are `new`, `init`, `add`, `remove`, `install`, `update`,
-`list`, `tree`, `check`, `build`, `run`, `inspect`, `fmt`, `test`, `doc`, `pack`,
-`reproducible`, `inspect-bytecode`, `verify-bytecode`, `verify-artifact`,
-`abi`, `host-report`, `autonomy-audit`, and `clean`. The `autonomy-audit`
-report identifies the normal Python route, its pending replacements, and the
-four implementation states (`Kryndel-native`, `host capability nativa mínima`,
-`bootstrap Python`, and `no implementado`):
-
-```bash
-PYTHONPATH=. python3 -m kryndel autonomy-audit
-```
-
-```bash
-PYTHONPATH=. python3 -m kryndel init demo
-cd demo
-PYTHONPATH=.. python3 -m kryndel add request --path ../request
-PYTHONPATH=.. python3 -m kryndel install --offline
-PYTHONPATH=.. python3 -m kryndel list
-PYTHONPATH=.. python3 -m kryndel tree
-```
-
-The resolver supports exact, caret, tilde, and simple range semver, transitive
-dependencies, cycles, incompatible versions, duplicate declarations, missing
-manifests, invalid names/versions, checksums, and deterministic `kry.lock`.
-Installations are staged before replacement. Package source is copied but never
-executed; symlink escape, path traversal, malformed manifests, and checksum
-errors are rejected. Remote registries are not implemented or implied.
-
-Imports now resolve real installed source modules. The top-level package must be declared in the project manifest and installed offline. A package root is `src/lib.kry`; child modules use a unique `src/name.kry`, `src/name/mod.kry`, or the compatibility form `src/name/lib.kry`. Dotted paths resolve recursively, so `import request.http.client` searches the corresponding nested module path and rejects missing or ambiguous candidates. Imports are traversed deterministically and circular graphs are rejected.
-
-Declarations are private by default. The first visibility form is intentionally small:
-
-```kryndel
-pub fn get(value: Int) -> Int {
-    return value + 1
-}
-```
-
-Project compilation links exported functions under their fully qualified module names. A caller can use `request.http.client.get(41)`. Private functions remain available inside their defining module but cannot be called from another module. This milestone does not yet implement aliases, reexports, imported struct/enum types, traits, or generics.
-
-## Artifacts and bytecode
-
-`build` writes a `.kexe` Kryndel artifact. This is a portable Kryndel VM
-container, not a Windows PE or native executable. Its header contains a magic
-marker, payload length, and SHA-256 checksum. `inspect` validates and reports
-the module without executing it. The loader rejects symlink paths, payloads
-larger than 16 MiB, duplicate JSON keys, non-finite numbers, and malformed
-record metadata before the VM can receive a module. The versioned bytecode
-contract is in
-[`docs/specs/bytecode-v1.md`](docs/specs/bytecode-v1.md).
-
-```bash
-PYTHONPATH=. python3 -m kryndel build examples/enums.kry -o examples/enums.kexe
-PYTHONPATH=. python3 -m kryndel inspect examples/enums.kexe
-PYTHONPATH=. python3 -m kryndel run examples/enums.kexe
-```
-
-## Architecture
-
-```text
-UTF-8 source
-    -> lexer -> tokens and lexical diagnostics
-    -> parser -> dataclass AST and recoverable parse diagnostics
-    -> checker -> names, types, module interfaces, imports, exhaustiveness
-    -> compiler -> deterministic linked bytecode Module
-    -> VM/artifact -> checked execution or portable serialization
-```
-
-The initial test contract is also language-shaped and host-independent:
-
-```kryndel
-@test
-fn test_answer() -> Void {
-    println(42)
-}
-```
-
-`kry test` discovers these zero-argument functions under `tests/**/*.kry` and
-executes each file in an isolated VM. Assertions are available through
-`assert(Bool)` and `assert_eq(Any, Any)`, with typed source wrappers in
-`stdlib/testing/testing.kry`. Human results show every test; `kry test --format
-json` emits a deterministic versioned report and returns one if any test fails.
-`kry fmt` currently normalizes trailing horizontal whitespace and the final
-newline without rewriting token spacing; `kry reproducible` compiles the
-selected source twice and compares bytecode; `kry verify-bytecode` and
-`kry verify-artifact` validate structural contracts and the bounded executable
-operand-stack preflight before execution. `--format json` exposes stable
-verification diagnostics. `kry host-report` emits
-the offline inventory of every VM intrinsic and fails when dispatch, signature,
-error metadata, fixture, or replacement information is missing. `kry doc`
-emits deterministic source declarations, and `kry pack` writes a reproducible
-`.krypkg` source archive with a SHA-256 checksum; neither command executes
-source files.
-
-The Python bootstrap owns the lexer, recursive-descent parser, checker,
-module graph, compiler, VM, artifact container, CLI, local package resolver, and
-the runtime implementation behind `stdlib/core/data.kry`.
-Bytes execution, assertions, host-report, doc, pack, and the current test runner
-are also bootstrap implementations behind visible contracts. Their language-level
-signatures and deterministic fixtures are frozen, but no self-hosted
-implementation is claimed. The controlled filesystem boundary is now also
-available through `fs.read_bytes`, `fs.read_text`, `fs.write_bytes`, `fs.list_dir`, and `fs.stat`,
-with executable wrappers in `stdlib/core/filesystem.kry`; it remains a temporary
-VM capability rooted explicitly by the embedding. The complete implementation audit is in
-[`docs/roadmap-status.md`](docs/roadmap-status.md).
-The source language contracts, spans, diagnostic JSON, visibility rules,
-module-resolution rules, bytecode JSON, qualified function names, KEXE checksum
-rules, manifest subset, lockfile, semver, and package checksum algorithm are
-language-independent and are future self-hosting boundaries.
-
-## Route to self-hosting
-
-The first self-hosted compiler must also reproduce module discovery,
-visibility/export rules, qualified function linkage, diagnostics, and bytecode
-serialization. Before rewriting those components in Kryndel, the project must
-stabilize diagnostic codes/spans, AST meaning, nominal type rules, bytecode v1,
-artifact checksums, manifest/lockfile formats, module graph fixtures, and
-reproducibility tests. Python remains the bootstrap implementation until a
-Kryndel compiler/runtime can build and run itself; Kryndel is not self-hosted
-at this milestone.
-
-## Repository layout
-
-```text
-kryndel/       lexer, AST, parser, checker, compiler, VM, artifacts, packages, CLI
-examples/      runnable language examples
-docs/          language, architecture, testing, roadmap, and versioned format contracts
-tests/         standard-library-only regression suite
-```
-
-Run the suite from the repository root:
-
-```bash
-PYTHONPATH=. python3 -m py_compile kryndel/*.py tests/test_kryndel.py
-PYTHONPATH=. python3 -m unittest discover -s tests -v
-```
-
-The test suite is the language contract. It covers the nominal value-layout
-fixture and source constructors in addition to existing structs and unit enums,
-payload enums and match, diagnostics, malformed bytecode/runtime,
-manifests, lockfiles, semver, local resolution, checksums, imports, CLI, KEXE,
-data-core slices/builders/records, source manifest ranges, lockfile JSON,
-normalized bytecode verification, determinism, and security boundaries. The pre-change checkout measured **117 Python unit tests**; the audit, KEXE, bundle-policy, and runtime-builtins checkpoints add one
-regression each, so the post-change suite measures **121 tests**.
-The historical 78- and 113-test wording in older release notes is no longer
-accurate. These counts measure the bootstrap suite, not independence from
-Python.
+La suite comprueba construcción con advertencias estrictas, ejecución de ejemplos, control de flujo, UTF-8, conversiones a bytes, errores de nombres desconocidos, empaquetado determinista y lectura de artefactos. Para retirar archivos temporales se usa `make clean`.
