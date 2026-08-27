@@ -1,0 +1,28 @@
+struct Point {
+    x: Int,
+    y: Int
+}
+
+enum Color {
+    Red,
+    Blue
+}
+
+fn maybe_positive(value: Int) -> Option[Int] {
+    if value > 0 {
+        return some(value)
+    }
+    return none()
+}
+
+let point: Point = Point{ x: 2, y: 3 }
+let color: Color = Color::Blue
+println(point.x + point.y)
+match color {
+    Color::Red => { println("red") }
+    Color::Blue => { println("blue") }
+}
+match maybe_positive(7) {
+    some(value) => { println(value) }
+    none => { println(0) }
+}

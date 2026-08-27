@@ -1,40 +1,46 @@
-# Implementación nativa
+# Native implementation
 
-`native/kry.c` es el núcleo completo de la distribución actual. Se compila como un ejecutable C11 llamado `build/kry`; `tools/kry` sólo automatiza esa construcción bajo demanda y reenvía todos los argumentos.
+`native/kry.c` is the complete implementation of the shipped toolchain. It compiles as a C11 executable named `build/kry`; `tools/kry` only performs an on-demand build and forwards all arguments.
 
 ```bash
 make
 ./tools/kry --version
 ./tools/kry check examples/control_flow.kry
-./tools/kry run examples/control_flow.kry
+./tools/kry run examples/fibonacci.kry
 ```
 
-El binario no carga módulos de otro lenguaje ni necesita una instalación de Python, Rust, Node o un runtime equivalente para ejecutar programas Kryndel. La única herramienta de compilación externa es un compilador C11 en el momento de construir el binario.
+The executable does not load modules from another language and does not require Python, Rust, Node, or an equivalent runtime to execute Kryndel programs. The only external build dependency is a C11 compiler.
 
-## Contrato de comandos
+## Command contract
 
-| Entrada | Comportamiento | Código de éxito |
+| Invocation | Behavior | Success code |
 | --- | --- | ---: |
-| `check fuente.kry` | Lee, lexifica y parsea la fuente. | `0` |
-| `run fuente.kry` | Repite la validación y ejecuta el programa. | `0` |
-| `run archivo.kexe` | Valida el contenedor y ejecuta su payload. | `0` |
-| `build fuente.kry` | Valida y escribe un `.kexe`. | `0` |
-| `version` | Imprime la versión. | `0` |
-| Uso inválido | Imprime ayuda. | `2` |
-| Error de fuente o runtime | Imprime diagnóstico. | `1` |
+| `check source.kry` | Read, lex, parse, resolve modules, and type-check without effects. | `0` |
+| `run source.kry` | Check and execute source. | `0` |
+| `run file.kexe` | Validate the container and execute its source payload. | `0` |
+| `build source.kry` | Check and write a deterministic artifact. | `0` |
+| `fmt [--check\|-w] source.kry` | Check and format valid source deterministically. | `0` |
+| `repl` | Run the interactive read-evaluate-print loop. | `0` |
+| `doctor` | Report native installation readiness. | `0` |
+| `version` | Print the compiler version. | `0` |
+| Invalid usage | Print a categorized CLI error. | `2` |
+| Source, type, runtime, artifact, or I/O failure | Print a categorized diagnostic. | `1` |
+| Missing C11 compiler in launcher | Print an actionable installation message. | `69` |
 
-## Formato KRYNATIVE1
+Diagnostics use the stable form `error[category]: file:line:column`, followed by a short message, source excerpt, and caret when source is available.
 
-El formato es intencionalmente simple y determinista:
+## KRYNATIVE1 format
+
+The format is intentionally simple and deterministic:
 
 ```text
 11 bytes:  KRYNATIVE1\n
-8 bytes:   longitud little-endian del payload
-N bytes:   fuente Kryndel exacta
+8 bytes:   unsigned little-endian payload length
+N bytes:   exact Kryndel source payload
 ```
 
-La longitud debe coincidir con el tamaño restante. Un archivo que contiene bytes extra, una cabecera incompleta o una longitud inconsistente se rechaza antes de la ejecución. Construir dos veces la misma fuente produce el mismo archivo byte por byte.
+The length must equal the remaining file size. A truncated header, inconsistent length, or trailing byte is rejected before evaluation. The payload is checked again through the ordinary native source pipeline during `run`.
 
-## Portabilidad
+## Portability
 
-El código usa tipos de ancho explícito para el formato, la biblioteca estándar C para I/O y memoria, y no genera ensamblador ni enlaza objetos durante `run`. La interfaz de `tools/kry` detecta `CC` o un compilador C disponible; si no encuentra uno, devuelve `69` con una instrucción clara en vez de intentar una ruta alternativa.
+The source uses fixed-width integer types for arithmetic and artifact fields, explicit overflow checks, standard C and POSIX file APIs, and no locale-dependent output. GCC and Clang static checks are part of the test matrix. Release workflows build native binaries for supported platforms without fabricating artifacts on platforms that are unavailable to the local environment.

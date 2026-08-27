@@ -1,16 +1,16 @@
-# Contribuir a Kryndel
+# Contributing to Kryndel
 
-Kryndel tiene una implementación nativa deliberadamente pequeña. Una modificación de sintaxis debe considerar lexer, parser, runtime, ejemplos, diagnósticos y documentación. Mantén la cadena de ejecución dentro de `native/kry.c` o añade código Kryndel que pueda ser ejecutado por la CLI existente; no agregues un intérprete paralelo ni una dependencia de runtime en otro lenguaje.
+Kryndel has one deliberately small native implementation. A syntax change must consider the lexer, parser, checker, runtime, diagnostics, examples, tests, and documentation. Keep the execution pipeline inside the native implementation; do not add a parallel interpreter or a runtime dependency in another language.
 
-## Desarrollo local
+## Local development
 
-Se requiere un compilador C11 para construir el ejecutable:
+A C11 compiler is required to build the executable:
 
 ```bash
 make test
 ```
 
-La CLI se puede probar directamente:
+The command-line tool can be exercised directly:
 
 ```bash
 ./tools/kry check examples/hello.kry
@@ -19,16 +19,16 @@ La CLI se puede probar directamente:
 ./tools/kry run /tmp/hello.kexe
 ```
 
-## Cambios de lenguaje
+## Language changes
 
-Implementa una rebanada vertical coherente. El lexer debe producir posiciones estables, el parser debe rechazar sintaxis incompleta y el runtime debe emitir errores deterministas. Todo comportamiento nuevo necesita un ejemplo positivo en `examples/` y una regresión en `tests/native-core.sh` cuando afecte a la CLI o al formato de artefactos.
+Implement a coherent vertical slice. The lexer must produce stable positions, the parser must reject incomplete syntax, the checker must reject invalid programs before execution, and the runtime must emit deterministic English diagnostics. New behavior needs a positive example and focused regression coverage. Changes to the CLI or artifact format must also update the end-to-end integration test.
 
-Conserva la determinación: no introduzcas fechas, identificadores aleatorios, rutas absolutas ni salida dependiente de la locale. No incluyas binarios, `build/` ni artefactos `.kexe` en los commits.
+Preserve determinism. Do not introduce dates, random identifiers, absolute paths in generated output, locale-dependent formatting, or network-dependent tests. Do not commit binaries, `build/`, `.kexe` artifacts, temporary files, or tracked Python source.
 
-## Revisión
+## Review checklist
 
-Antes de abrir un cambio, ejecuta `make test`, revisa `git diff --check` y confirma que `find . -type f -name '*.py'` no devuelve resultados. La documentación debe describir el comportamiento realmente implementado, incluyendo límites conocidos.
+Before opening a change, run `make test`, `make test-sanitized`, `make test-static`, and `make check-docs`. Review `git diff --check`, confirm that the working tree contains only intentional changes, and verify that the documentation describes the implemented behavior rather than a planned feature.
 
-## Licencia
+## License
 
-Las contribuciones se distribuyen bajo la licencia MIT del repositorio.
+Contributions are distributed under the repository MIT license.
