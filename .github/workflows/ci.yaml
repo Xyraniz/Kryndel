@@ -22,6 +22,10 @@ jobs:
         run: make test-static CC=gcc
       - name: Run documentation audit
         run: make check-docs
+      - name: Run fuzz smoke checks
+        run: make fuzz-smoke CC=gcc
+      - name: Generate coverage report
+        run: make coverage CC=gcc
 
   clang:
     name: Clang native toolchain
@@ -42,6 +46,15 @@ jobs:
         uses: actions/checkout@v4
       - name: Run AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer
         run: make test-sanitized CC=clang
+
+  thread-sanitized:
+    name: ThreadSanitizer concurrency checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Run bounded concurrency suite under ThreadSanitizer
+        run: make test-thread-sanitized CC=clang
 
   repository-policy:
     name: Repository policy

@@ -16,7 +16,7 @@ if git ls-files | grep -v '^tests/check-docs.sh$' | xargs -r grep -nE 'TODO|FIXM
     echo 'documentation check: stale implementation claim found' >&2
     exit 1
 fi
-for required in README.md CHANGELOG.md CONTRIBUTING.md docs/language.md docs/architecture.md docs/native.md docs/testing.md docs/modules.md docs/types.md docs/diagnostics.md docs/stdlib.md docs/release.md native/README.md; do
+for required in README.md CHANGELOG.md CONTRIBUTING.md docs/language.md docs/architecture.md docs/native.md docs/testing.md docs/modules.md docs/types.md docs/diagnostics.md docs/stdlib.md docs/release.md docs/memory.md docs/concurrency.md docs/system.md native/README.md; do
     test -s "$required"
 done
 printf '%s\n' 'documentation check: ok'

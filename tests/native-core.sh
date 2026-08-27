@@ -39,7 +39,7 @@ expected='720
 2
 😀
 Kry'
-test "$(PATH="/usr/bin:/bin" run version)" = 'Kryndel 1.1.0'
+test "$(PATH="/usr/bin:/bin" run version)" = 'Kryndel 1.2.0'
 test "$(PATH="/usr/bin:/bin" run run "$work/core.kry")" = "$expected"
 test -z "$(PATH="/usr/bin:/bin" run check "$work/core.kry")"
 PATH="/usr/bin:/bin" run build "$work/core.kry" -o "$work/core.kexe"
@@ -54,7 +54,7 @@ dd if="$work/core.kexe" of="$work/truncated.kexe" bs=1 count=10 status=none
 if run run "$work/truncated.kexe" >/dev/null 2>"$work/error"; then exit 1; fi
 grep -q 'malformed native artifact: truncated header' "$work/error"
 cp "$work/core.kexe" "$work/bad-length.kexe"
-printf '\000' | dd of="$work/bad-length.kexe" bs=1 seek=11 conv=notrunc status=none
+printf '\000' | dd of="$work/bad-length.kexe" bs=1 seek=41 conv=notrunc status=none
 if run run "$work/bad-length.kexe" >/dev/null 2>"$work/error"; then exit 1; fi
 grep -q 'length' "$work/error"
 
@@ -143,6 +143,58 @@ some(1)
 none
 ok(1)
 err(bad)'
+
+cat > "$work/system.kry" <<'KRY'
+let content: Result[String, String] = fs_read_text("examples/hello.kry")
+match content {
+    ok(text) => { assert(len(text) > 0) }
+    err(problem) => { assert(false) }
+}
+let written: Result[Nil, String] = fs_write_text("build/kry-test-stdlib.txt", "Kryndel")
+match written {
+    ok(value) => { assert(value == nil) }
+    err(problem) => { assert(false) }
+}
+let environment: Option[String] = env_get("PATH")
+match environment {
+    some(value) => { assert(len(value) > 0) }
+    none => { assert(false) }
+}
+KRY
+run run "$work/system.kry"
+test "$(cat build/kry-test-stdlib.txt)" = Kryndel
+rm -f build/kry-test-stdlib.txt
+
+cat > "$work/threads.kry" <<'KRY'
+let channel: Channel[Int] = thread_channel()
+fn worker() -> Nil {
+    thread_send(channel, 42)
+}
+let worker_thread: Thread[Nil] = thread_spawn("worker")
+let received: Int = thread_receive_timeout(channel, 1000)
+thread_join(worker_thread)
+println(received)
+KRY
+test "$(run run "$work/threads.kry")" = 42
+
+cat > "$work/worker-failure.kry" <<'KRY'
+fn failing() -> Nil {
+    println(1 / 0)
+}
+let worker_thread: Thread[Nil] = thread_spawn("failing")
+thread_join(worker_thread)
+KRY
+if run run "$work/worker-failure.kry" >"$work/out" 2>"$work/error"; then exit 1; fi
+grep -q 'division by zero' "$work/error"
+
+cat > "$work/closed-channel.kry" <<'KRY'
+let channel: Channel[Int] = thread_channel()
+thread_close(channel)
+thread_close(channel)
+thread_receive_timeout(channel, 1000)
+KRY
+if run run "$work/closed-channel.kry" >"$work/out" 2>"$work/error"; then exit 1; fi
+grep -q 'closed channel' "$work/error"
 
 printf 'let x: Int = 1   \nprintln(x)\n' > "$work/fmt.kry"
 test "$(run fmt "$work/fmt.kry")" = 'let x: Int = 1
