@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+binary="$root/build/kry"
+source="$root/native/kry.c"
+
+if [ ! -x "$binary" ] || [ "$source" -nt "$binary" ]; then
+    compiler=${CC:-}
+    if [ -z "$compiler" ]; then
+        compiler=$(command -v cc 2>/dev/null || command -v gcc 2>/dev/null || true)
+    fi
+    if [ -z "$compiler" ]; then
+        printf '%s\n' 'kry-native: no C compiler found; set CC or install a C11 compiler' >&2
+        exit 69
+    fi
+    mkdir -p "$root/build"
+    "$compiler" -std=c11 -O2 -Wall -Wextra -Wpedantic "$source" -o "$binary"
+fi
+
+exec "$binary" "$@"

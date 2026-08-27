@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added the independent native core in `native/kry.c`, a C11 lexer, parser, tree-walk runtime, and CLI for the productive language subset. `make native` builds `build/kry`; `tools/kry-native` builds on demand. The native path executes functions, recursion, control flow, arrays, UTF-8 strings, Bytes, assertions, and native source artifacts without Python or Rust. Unsupported structs, enums, imports, and full static-checker features fail explicitly instead of delegating to the bootstrap. See `docs/native.md` and `tests/native-core.sh`.
+
 - Added eight bounded bootstrap verification checkpoints: strict JSON decoding that rejects duplicate keys and non-finite numbers; exact instruction/function/module record validation; portable scalar constant checks; structural and callable validation with `KRY7001`–`KRY7007`; branch-aware operand-stack preflight with bounded states and stack depth under `KRY7008`; KEXE regular-file, symlink, size, checksum, and schema guards; CLI verification before VM execution with JSON diagnostics; and the `verification-boundary-v1.json` fixture plus documentation. These changes harden the Python bootstrap path and do not claim a native runtime, self-hosting, or a final bundle.
 
 - Added `kry autonomy-audit` and `docs/specs/autonomy-audit-v1.md`. The deterministic report exposes the normal Python bootstrap route, exact repository invocations, pending replacements, and a four-state matrix distinguishing `Kryndel-native`, `host capability nativa mínima`, `bootstrap Python`, and `no implementado`. This is an audit boundary, not a native or self-hosting claim.

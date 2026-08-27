@@ -12,6 +12,19 @@ planned native runtime, **stage-3** is the planned native compiler, and
 `kryndel/vm.py` is still a **seam fuente bajo bootstrap Python**, not a native
 implementation.
 
+## Native core
+
+Kryndel now includes an independent native core in [`native/kry.c`](native/kry.c). Build it once with a C11 compiler using `make native`; after that, `build/kry` executes supported Kryndel programs without Python, Rust, or another language runtime. The convenience launcher [`tools/kry-native`](tools/kry-native) builds the binary on demand and forwards commands directly to it. See [`docs/native.md`](docs/native.md) for the exact boundary and supported subset.
+
+```bash
+make native
+./build/kry run examples/fibonacci.kry
+./build/kry build examples/hello.kry -o /tmp/hello.kexe
+./build/kry run /tmp/hello.kexe
+```
+
+The native path currently covers the productive core: values, arrays, Bytes, operators, functions, recursion, conditionals, loops, assignments, assertions, and console output. It reports unsupported structs, enums, imports, and pattern matching directly instead of falling back to Python. The broader Python bootstrap remains as the reference implementation for the complete historical language and KEXE v1 contracts; the native core is the first independent execution route, not yet the final self-hosting compiler.
+
 ## Current language
 
 The front end supports explicit primitive types, immutable/mutable bindings,

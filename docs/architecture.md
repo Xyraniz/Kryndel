@@ -1,16 +1,20 @@
 # Kryndel architecture
 
-Kryndel is a Python standard-library bootstrap with explicit boundaries. The
-boundaries are contracts for a future independent compiler/runtime; they are
-not a claim that the current implementation is self-hosted.
+Kryndel has two deliberately separated implementation routes. The historical
+stage-0 compiler and VM are a Python standard-library bootstrap with explicit
+language-independent contracts. The repository also contains an independent
+native core in `native/kry.c` for the productive subset. The native core is a
+real standalone execution path, while the broader bootstrap remains the
+reference implementation until the full language and toolchain are migrated.
 
 ## Transition stages
 
 | Stage | Ownership | Current evidence |
 | --- | --- | --- |
-| stage-0 | Python bootstrap compiler, VM, CLI, and differential oracle | `kryndel/*.py`; normal route is `python3 -m kryndel` |
+| native-core | Native C11 lexer, parser, tree-walk runtime, and CLI for the productive subset | `native/kry.c`, `Makefile`, `tools/kry-native`, and `tests/native-core.sh`; independent of Python and Rust after build |
+| stage-0 | Python bootstrap compiler, VM, CLI, and differential oracle | `kryndel/*.py`; reference route for the complete historical language |
 | stage-1 | Kryndel source seams and frozen contracts | `stdlib/**/*.kry` plus versioned fixtures; source seams still run through stage-0 |
-| stage-2 | Native artifact reader, verifier, runtime, and capability table | Not implemented; the fixed seed utilities are only host-capability checkpoints |
+| stage-2 | Native artifact reader, verifier, runtime, and capability table for the full v1 toolchain | The native core exists for a source-artifact subset; historical KEXE reader and full capability table remain unimplemented natively |
 | stage-3 | Native compiler, module loader, package manager, and productive CLI | Not implemented |
 | stage-4 | Reproducible target-specific user bundle | Not implemented |
 | stage-5 | Native compiler self-build and two equivalent clean rebuilds | Not implemented |
@@ -23,6 +27,10 @@ ownership.
 ## Pipeline
 
 ```text
+Independent native route:
+UTF-8 source -> C11 lexer -> native parser -> native tree-walk runtime -> stdout/native artifact
+
+Historical full route:
 UTF-8 SourceFile
     |
     v
@@ -147,10 +155,12 @@ top-level statements are not implicitly executed.
 
 ## Python boundary and self-hosting
 
-Currently Python owns all implementation code and the host filesystem/clock/
-stdout bridges. The source-level data core now defines bounded readers, balanced
-string assembly, and nominal toolchain record layouts, but those declarations are
-executed by the Python VM and do not retire Python ownership. `kry host-report`
+The full historical implementation still has Python ownership of the lexer,
+parser, checker, compiler, VM, artifact container, package manager, and host
+bridges. The native core owns its own lexer, parser, evaluator, console bridge,
+value model, and native source artifact reader for the documented subset. The
+source-level data core still executes through the Python VM and does not retire
+Python ownership for the broader toolchain. `kry host-report`
 emits the deterministic inventory and fails if VM dispatch names, visible
 signatures, or error metadata diverge. The measured dependency inventory is in
 [`host-dependency-inventory.md`](host-dependency-inventory.md). The
