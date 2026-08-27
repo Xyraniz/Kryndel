@@ -8,78 +8,17 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Standard-library test suite
+  native:
+    name: Native language toolchain
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-      - name: Run tests
-        run: PYTHONPATH=. python3 -m unittest discover -s tests -v
-      - name: Re-run strict bootstrap verification boundary
+      - name: Build and check examples
+        run: make check
+      - name: Run integration suite
+        run: PATH="/usr/bin:/bin" HOME= LC_ALL=C make test
+      - name: Reject removed bootstrap artifacts
         run: |
-          PYTHONPATH=. python3 -m unittest discover -s tests -p 'test_kryndel.py' -v
-      - name: Compile examples through the bootstrap oracle
-        run: |
-          PYTHONPATH=. python3 -m kryndel check examples/hello.kry
-          PYTHONPATH=. python3 -m kryndel check examples/fibonacci.kry
-          PYTHONPATH=. python3 -m kryndel check examples/ui_tree.kry
-          PYTHONPATH=. python3 -m kryndel check examples/structs.kry
-          PYTHONPATH=. python3 -m kryndel check examples/enums.kry
-      - name: Audit the normal Python route
-        run: PYTHONPATH=. python3 -m kryndel autonomy-audit
-
-  non-python-checkpoints:
-    name: No-Python checkpoint utilities
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-      - name: Verify formatter without Python
-        run: |
-          work="$(mktemp -d)"
-          trap 'rm -rf "$work"' EXIT
-          printf 'let x: Int = 1  \n\n' > "$work/input.kry"
-          PATH="/usr/bin:/bin" ./tools/kry-format --check "$work/input.kry" && exit 1 || test "$?" -eq 1
-          PATH="/usr/bin:/bin" ./tools/kry-format "$work/input.kry"
-          PATH="/usr/bin:/bin" ./tools/kry-format --check "$work/input.kry"
-      - name: Verify native seed runtime without Python
-        run: PATH="/usr/bin:/bin" HOME= ./tools/kry-native-run-check
-      - name: Verify seed bytes without Python
-        run: PATH="/usr/bin:/bin" HOME= ./tools/kry-seed-check
-
-  kexe-boundary:
-    name: KEXE boundary isolation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-      - name: Generate a differential artifact in stage-0 only
-        run: |
-          PYTHONPATH=. python3 -m kryndel build examples/hello.kry -o "$RUNNER_TEMP/hello.kexe"
-      - name: Verify KEXE framing and checksum without Python
-        run: PATH="/usr/bin:/bin" HOME= LC_ALL=C ./tools/kry-kexe-check "$RUNNER_TEMP/hello.kexe"
-
-  bundle-policy:
-    name: Candidate bundle policy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-      - name: Create a clean candidate directory with POSIX tools
-        run: |
-          mkdir -p "$RUNNER_TEMP/kry-bundle/bin" "$RUNNER_TEMP/kry-bundle/stdlib"
-          printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/kry-bundle/bin/kry"
-          printf 'core source\n' > "$RUNNER_TEMP/kry-bundle/stdlib/core.kry"
-      - name: Audit candidate contents without Python
-        run: PATH="/usr/bin:/bin" HOME= LC_ALL=C ./tools/kry-bundle-check "$RUNNER_TEMP/kry-bundle"
-  native-core:
-    name: Native core without Python
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-      - name: Build and smoke-test native core
-        run: make native-check
-      - name: Run integration contract without Python
-        run: PATH="/usr/bin:/bin" HOME= LC_ALL=C ./tests/native-core.sh
+          test ! -d kryndel
+          test -z "$(find . -type f -name '*.py' -not -path './.git/*' -print)"

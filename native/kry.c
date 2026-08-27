@@ -13,10 +13,11 @@
 /*
  * Kryndel native runtime
  *
- * This file intentionally has no dependency on the Python bootstrap or on a
- * third-party runtime.  It is a small, native, tree-walk implementation of
- * the productive core language.  The bootstrap remains available for the
- * historical bytecode contracts; this executable is the independent route.
+ * This file is the implementation of the Kryndel command-line tool. It has
+ * no dependency on an interpreter, package manager, or runtime written in
+ * another language: source is lexed, parsed, and evaluated here. The native
+ * artifact format stores validated source for deterministic replay by this
+ * same executable.
  */
 
 typedef struct {
@@ -1055,7 +1056,7 @@ static int execute_input(const char *path, char *data, size_t length, bool check
 }
 
 static void usage(void) {
-    puts("Kryndel native 0.2.0");
+    puts("Kryndel 1.0.0");
     puts("Usage:");
     puts("  kry check <file.kry>       Parse and validate a source file");
     puts("  kry run <file.kry|.kexe>  Execute a source file or native artifact");
@@ -1069,7 +1070,7 @@ static char *default_artifact_path(const char *input) {
 
 int main(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) { usage(); return argc < 2 ? 2 : 0; }
-    if (strcmp(argv[1], "--version") == 0) { puts("Kryndel native 0.2.0"); return 0; }
+    if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "version") == 0) { puts("Kryndel 1.0.0"); return 0; }
     const char *command = argv[1]; const char *input = NULL; bool check_only = false; bool build = false; const char *output = NULL;
     if (strcmp(command, "check") == 0) { if (argc != 3) { usage(); return 2; } input = argv[2]; check_only = true; }
     else if (strcmp(command, "run") == 0) { if (argc != 3) { usage(); return 2; } input = argv[2]; }
@@ -1077,6 +1078,15 @@ int main(int argc, char **argv) {
     else { input = argv[1]; }
     size_t length = 0; char *data = read_file(input, &length); if (!data) return 1;
     if (build) {
+        if (has_magic(data, length)) {
+            fprintf(stderr, "kry: build expects a .kry source file, not an artifact\n");
+            free(data);
+            return 2;
+        }
+        if (execute_input(input, data, length, true) != 0) {
+            free(data);
+            return 1;
+        }
         bool owns_output = false;
         if (!output) { output = default_artifact_path(input); owns_output = true; }
         bool ok = write_artifact(output, data, length);

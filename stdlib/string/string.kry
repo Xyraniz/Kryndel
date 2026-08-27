@@ -1,8 +1,0 @@
-// String operations intentionally delegate only to the visible core len API.
-pub fn length(value: String) -> Int {
-    return len(value)
-}
-
-pub fn joined(left: String, right: String) -> String {
-    return left + right
-}

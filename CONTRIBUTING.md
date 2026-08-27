@@ -1,57 +1,34 @@
-# Contributing to Kryndel
+# Contribuir a Kryndel
 
-Kryndel is a language project. A small syntax change can affect diagnostics, bytecode, runtime behavior, examples, and future compatibility, so contributions should explain the semantic rule before changing implementation code.
+Kryndel tiene una implementación nativa deliberadamente pequeña. Una modificación de sintaxis debe considerar lexer, parser, runtime, ejemplos, diagnósticos y documentación. Mantén la cadena de ejecución dentro de `native/kry.c` o añade código Kryndel que pueda ser ejecutado por la CLI existente; no agregues un intérprete paralelo ni una dependencia de runtime en otro lenguaje.
 
-## Development environment
+## Desarrollo local
 
-The current bootstrap requires Python 3.10 or newer and uses only the standard library at runtime. This remains a stage-0 development dependency. The independent native core requires a C11 compiler only for its build step. From a checkout, run both validation paths:
-
-```bash
-PYTHONPATH=. python3 -m unittest discover -s tests -v
-make native-check
-PATH="/usr/bin:/bin" HOME= LC_ALL=C ./tests/native-core.sh
-```
-
-The examples can be checked with:
+Se requiere un compilador C11 para construir el ejecutable:
 
 ```bash
-PYTHONPATH=. python3 -m kryndel check examples/hello.kry
-PYTHONPATH=. python3 -m kryndel check examples/fibonacci.kry
-PYTHONPATH=. python3 -m kryndel check examples/ui_tree.kry
+make test
 ```
 
-The transition audit is part of every migration checkpoint:
+La CLI se puede probar directamente:
 
 ```bash
-PYTHONPATH=. python3 -m kryndel autonomy-audit
-PATH="/usr/bin:/bin" HOME= ./tools/kry-format --check examples/hello.kry
-PATH="/usr/bin:/bin" HOME= ./tools/kry-native-run-check
+./tools/kry check examples/hello.kry
+./tools/kry run examples/fibonacci.kry
+./tools/kry build examples/hello.kry -o /tmp/hello.kexe
+./tools/kry run /tmp/hello.kexe
 ```
 
-The first command reports the bootstrap route and the four implementation states.
-The native commands exercise the independent productive core. The existing
-formatter, seed, KEXE checker, and bundle-policy commands remain narrow
-host-capability checkpoints and do not replace the full historical compiler,
-package manager, or KEXE v1 CLI.
+## Cambios de lenguaje
 
-## Change process
+Implementa una rebanada vertical coherente. El lexer debe producir posiciones estables, el parser debe rechazar sintaxis incompleta y el runtime debe emitir errores deterministas. Todo comportamiento nuevo necesita un ejemplo positivo en `examples/` y una regresión en `tests/native-core.sh` cuando afecte a la CLI o al formato de artefactos.
 
-Begin with a short design note in the relevant file under `docs/`. Describe the syntax, type behavior, runtime behavior, failure behavior, and compatibility impact. If the feature is not fully specified, keep it out of the parser rather than accepting syntax with undefined semantics.
+Conserva la determinación: no introduzcas fechas, identificadores aleatorios, rutas absolutas ni salida dependiente de la locale. No incluyas binarios, `build/` ni artefactos `.kexe` en los commits.
 
-Implement the smallest coherent vertical slice: tokens, AST, type checking, compiler, runtime, documentation, and tests. Keep phase boundaries intact. The lexer should not perform type checks, the parser should not execute code, the type checker should not perform side effects, and the VM should not reinterpret source syntax. For native-transition work, label each component as `Kryndel-native`, `host capability nativa mínima`, `bootstrap Python`, or `no implementado`; a `.kry` source seam executed by the VM remains bootstrap Python.
+## Revisión
 
-Every bug fix needs a regression test. Valid programs should be accompanied by at least one invalid program when the change affects diagnostics or type rules. Tests should assert stable diagnostic codes and important message fragments instead of depending on an entire rendered paragraph.
+Antes de abrir un cambio, ejecuta `make test`, revisa `git diff --check` y confirma que `find . -type f -name '*.py'` no devuelve resultados. La documentación debe describir el comportamiento realmente implementado, incluyendo límites conocidos.
 
-## Code style
+## Licencia
 
-Use the standard library and clear type annotations. Prefer small functions with one responsibility. Keep public names descriptive and avoid hidden global state. Preserve deterministic output: no timestamps, random identifiers, machine-specific paths, or locale-dependent formatting should enter bytecode or artifacts.
-
-Comments should explain an invariant or a non-obvious tradeoff. They should not restate the next line of code. Public behavior belongs in the language reference or README rather than only in comments.
-
-## Pull requests
-
-A pull request should state what changed, why the semantic rule is correct, and how it was tested. Include the complete test command and any example output that helps reviewers understand user-visible behavior. Do not claim native executable generation, memory safety, ownership, self-hosting, or production readiness unless the implementation and tests actually support the claim. Keep bootstrap migration commits on a separate branch; do not force-push or publish to `main` without explicit authorization.
-
-## License
-
-By contributing, you agree that your contribution is available under the MIT License in this repository.
+Las contribuciones se distribuyen bajo la licencia MIT del repositorio.

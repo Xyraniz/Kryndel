@@ -1,4 +1,0 @@
-// lexer fixture
-let answer: Int = 42
-let text: String = "A😀"
-println(answer + 1)

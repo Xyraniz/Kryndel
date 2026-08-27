@@ -1,9 +1,0 @@
-{
-  "compiler_source": "let count: Int = 42\nlet ratio: Float = 3.5\nlet enabled: Bool = true\nlet text: String = \"ok\"\nlet empty: Void = nil\n",
-  "constant_categories": ["int", "float", "bool", "string"],
-  "constants": ["42", "3.5", "true", "ok"],
-  "contract": "kryndel-source-typed-bytecode",
-  "operations": ["PUSH_CONST", "STORE", "PUSH_CONST", "STORE", "PUSH_CONST", "STORE", "PUSH_CONST", "STORE", "PUSH_NIL", "STORE", "RETURN"],
-  "unsupported_category_error": "KRY7006",
-  "version": 1
-}

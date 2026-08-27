@@ -1,0 +1,24 @@
+// A compact end-to-end Kryndel program.
+fn sum_to(limit: Int) -> Int {
+    let mut total: Int = 0
+    let mut index: Int = 0
+    while index <= limit {
+        if index == 3 {
+            index = index + 1
+            continue
+        }
+        total = total + index
+        if total > 10 {
+            break
+        }
+        index = index + 1
+    }
+    return total
+}
+
+let values: Array = [1, 2]
+let extended: Array = array_push(values, 3)
+assert_eq(sum_to(5), 12)
+assert_eq(len(extended), 3)
+println(sum_to(5))
+println(extended)
