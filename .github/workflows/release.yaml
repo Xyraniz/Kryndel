@@ -30,11 +30,14 @@ jobs:
           mkdir -p dist
           cp build/kry "dist/kry-${{ matrix.os }}"
           tar -C dist -czf "kry-${{ matrix.os }}.tar.gz" "kry-${{ matrix.os }}"
+          if command -v sha256sum >/dev/null 2>&1; then sha256sum "kry-${{ matrix.os }}.tar.gz"; else shasum -a 256 "kry-${{ matrix.os }}.tar.gz"; fi > "kry-${{ matrix.os }}.tar.gz.sha256"
+          printf '{"SPDXID":"SPDXRef-DOCUMENT","spdxVersion":"SPDX-2.3","name":"Kryndel native release","documentNamespace":"https://github.com/Xyraniz/Kryndel/releases/${GITHUB_REF_NAME}","packages":[{"SPDXID":"SPDXRef-Package-Kryndel","name":"Kryndel","versionInfo":"%s","downloadLocation":"NOASSERTION"}]}' "${GITHUB_REF_NAME#v}" > "kry-${{ matrix.os }}.spdx.json"
+          printf 'repository=%s\nref=%s\ncommit=%s\nplatform=${{ matrix.os }}\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$GITHUB_SHA" > "kry-${{ matrix.os }}.provenance.txt"
       - name: Upload release asset
         uses: actions/upload-artifact@v4
         with:
           name: kry-${{ matrix.os }}
-          path: kry-${{ matrix.os }}.tar.gz
+          path: kry-${{ matrix.os }}.*
 
   publish:
     name: Publish release assets
@@ -49,4 +52,4 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.tar.gz
+          files: dist/kry-*.tar.gz dist/kry-*.sha256 dist/*.spdx.json dist/*.provenance.txt

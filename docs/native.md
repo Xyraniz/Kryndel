@@ -27,19 +27,28 @@ The executable does not load modules from another language and does not require 
 | Source, type, runtime, artifact, or I/O failure | Print a categorized diagnostic. | `1` |
 | Missing C11 compiler in launcher | Print an actionable installation message. | `69` |
 
-Diagnostics use the stable form `error[category]: file:line:column`, followed by a short message, source excerpt, and caret when source is available.
+Diagnostics use the stable form `error[category]: file:line:column`, followed by a short message, source excerpt, and caret when source is available. `--json` emits one machine-readable object with a stable `KRY001`–`KRY008` code, category, severity, source, line, column, and message.
 
-## KRYNATIVE1 format
+## KRYNATIVE2 format
 
-The format is intentionally simple and deterministic:
+The artifact is a deterministic, self-contained bundle. It is written through a temporary file, flushed and synchronized, then renamed atomically:
 
 ```text
-11 bytes:  KRYNATIVE1\n
-8 bytes:   unsigned little-endian payload length
-N bytes:   exact Kryndel source payload
+KRYNATIVE2\n
+u32 format version
+u32 compiler-version length, bytes
+u32 target length, bytes
+u32 source-entry count
+u64 payload byte length
+repeat source-entry count:
+  u32 logical path length, bytes
+  u64 source length, exact UTF-8 source bytes
+  32-byte SHA-256 of those source bytes
 ```
 
-The length must equal the remaining file size. A truncated header, inconsistent length, or trailing byte is rejected before evaluation. The payload is checked again through the ordinary native source pipeline during `run`.
+Entries are ordered by logical path; the first entry is `<root>` and module entries are relative, traversal-safe paths. The decoder rejects incompatible compiler or target metadata, truncated fields, integer-size inconsistencies, duplicate entries, invalid hashes, unsafe paths, trailing bytes, and source artifacts masquerading as modules. `run file.kexe` reuses the normal parse, module, checker, and runtime pipeline over the embedded sources, so a missing external module cannot change execution.
+
+The former `KRYNATIVE1` single-source container is intentionally rejected as an incompatible artifact rather than silently interpreted.
 
 ## Portability
 

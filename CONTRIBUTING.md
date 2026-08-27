@@ -27,7 +27,7 @@ Preserve determinism. Do not introduce dates, random identifiers, absolute paths
 
 ## Review checklist
 
-Before opening a change, run `make test`, `make test-sanitized`, `make test-static`, and `make check-docs`. Review `git diff --check`, confirm that the working tree contains only intentional changes, and verify that the documentation describes the implemented behavior rather than a planned feature.
+Before opening a change, run `make test`, `make test-sanitized`, `make test-thread-sanitized`, `make test-static`, and `make check-docs`. Review `git diff --check`, confirm that the working tree contains only intentional changes, and verify that the documentation describes the implemented behavior rather than a planned feature. Thread or system changes must update the matching guides in `docs/concurrency.md`, `docs/memory.md`, and `docs/system.md`.
 
 ## License
 

@@ -42,6 +42,8 @@ Supported statements are `let`, `let mut`, expression statements, assignment, `f
 | `Nil` | `nil` | Explicit empty value. |
 | `Option[T]` | `some(7)`, `none()` | Explicit presence or absence. |
 | `Result[T, E]` | `ok(7)`, `err("bad")` | Explicit success or error value. |
+| `Channel[T]` | `thread_channel()` | Bounded synchronized channel for copy-safe values. |
+| `Thread[T]` | `thread_spawn("worker")` | OS-backed worker handle whose result type is `T`. |
 | `Struct` | `Point{ x: 1, y: 2 }` | Named fields checked against a declaration. |
 | `Enum` | `Color::Red` | Tagged variant checked against a declaration. |
 
@@ -71,7 +73,7 @@ The checker reports unknown functions, wrong arity, wrong argument types, unreso
 
 ## Structs, enums, and matching
 
-Structs declare named, typed fields. Enums declare a finite set of variants. `match` checks enum variants and requires either every variant or a `_` wildcard:
+Structs declare named, typed fields. Enums declare a finite set of variants. `match` checks enum variants and requires either every variant or a `_` wildcard. `Option[T]` requires both `some(name)` and `none` unless `_` is present; `Result[T, E]` requires both `ok(name)` and `err(name)`. Duplicate alternatives are rejected:
 
 ```kryndel
 enum Color { Red, Blue }
@@ -82,7 +84,13 @@ match color {
 }
 ```
 
-`Option[T]` patterns use `some(name)` and `none`; `Result[T, E]` patterns use `ok(name)` and `err(name)`. Pattern bindings are immutable and local to the arm.
+`Option[T]` patterns use `some(name)` and `none`; `Result[T, E]` patterns use `ok(name)` and `err(name)`. Pattern bindings are immutable and local to the arm. A `nil` pattern is an alias for an empty `Option`, not a `Result` alternative.
+
+## Threads and channels
+
+The stable concurrency API uses seven explicit builtins: `thread_channel`, `thread_spawn`, `thread_send`, `thread_receive`, `thread_receive_timeout`, `thread_join`, and `thread_close`. A channel is a bounded single-slot synchronization object. Worker functions are named, take no arguments, and return a declared type. `thread_send` accepts only Copy values: primitives, strings, bytes, enums, and recursively Copy arrays, options, and results. Structs, channel handles, and thread handles are not transferable values.
+
+Workers receive only global channel handles through a private runtime scope; ordinary global values and mutable application data are not exposed to a worker. Channel operations are synchronized with a mutex and condition variables. Closing a channel wakes blocked senders and receivers; `thread_receive_timeout` provides a bounded millisecond deadline; the runtime closes channels and joins outstanding workers during program shutdown. Worker failures are propagated by `thread_join` and by shutdown when no earlier error exists.
 
 ## Modules
 
