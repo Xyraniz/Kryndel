@@ -8,17 +8,49 @@ permissions:
   contents: read
 
 jobs:
-  native:
-    name: Native language toolchain
+  gcc:
+    name: GCC native toolchain
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v4
       - name: Build and check examples
-        run: make check
+        run: make check CC=gcc
       - name: Run integration suite
-        run: PATH="/usr/bin:/bin" HOME= LC_ALL=C make test
-      - name: Reject removed bootstrap artifacts
+        run: PATH="/usr/bin:/bin" HOME= LC_ALL=C make test CC=gcc
+      - name: Run static checks
+        run: make test-static CC=gcc
+      - name: Run documentation audit
+        run: make check-docs
+
+  clang:
+    name: Clang native toolchain
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Run static checks
+        run: make test-static CC=clang
+      - name: Build and run integration suite
+        run: PATH="/usr/bin:/bin" HOME= LC_ALL=C make test CC=clang
+
+  sanitized:
+    name: Sanitized native execution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Run AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer
+        run: make test-sanitized CC=clang
+
+  repository-policy:
+    name: Repository policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Reject removed bootstrap and generated artifacts
         run: |
           test ! -d kryndel
           test -z "$(find . -type f -name '*.py' -not -path './.git/*' -print)"
+          test -z "$(find . -type f \( -name '*.kexe' -o -name 'kry' \) -not -path './tools/kry' -not -path './.git/*' -print)"

@@ -1,30 +1,29 @@
-# Pruebas
+# Testing
 
-La suite se ejecuta desde la raíz del repositorio y no requiere un entorno de paquetes. `make test` compila el núcleo con advertencias estrictas y ejecuta la integración bajo una ruta mínima.
+The test suite runs from the repository root and requires no package environment. `make test` builds the native executable with strict warnings, checks the shipped examples, and runs the same integration executable exposed to users.
 
 ```bash
 make test
+make test-sanitized
+make test-static
+make check-docs
 ```
 
-La prueba principal cubre una muestra vertical del lenguaje: funciones recursivas, `if`, `while`, bindings mutables, operadores, arrays, strings Unicode, bytes, aserciones, diagnóstico de variables desconocidas, construcción determinista y ejecución de artefactos.
+The integration test covers recursive functions, `if`, `while`, mutable bindings, checked operators, homogeneous arrays, Unicode strings, bytes, assertions, static diagnostics, modules, enums, deterministic artifacts, formatter behavior, and malformed input. Sanitizer execution uses AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer without disabling leak detection.
 
-| Caso | Verificación |
+| Area | Required coverage |
 | --- | --- |
-| `examples/hello.kry` | Salida de texto y ejecución básica. |
-| `examples/fibonacci.kry` | Recursión y retorno de enteros. |
-| `examples/bytes.kry` | UTF-8, bytes e indexación. |
-| `examples/control_flow.kry` | Condicionales, bucles, `break`, `continue` y arrays. |
-| `tests/native-core.sh` | CLI, artefactos, determinismo y errores. |
+| Lexer | UTF-8 source, line and block comments, nested comments, escapes, malformed literals, invalid characters, and exact positions. |
+| Parser | Incomplete expressions, malformed blocks, declarations, imports, patterns, precedence, and nested scopes. |
+| Type checker | Unknown types, mismatched declarations, immutable assignment, invalid operators, non-Boolean conditions, unknown functions, arity, and return mismatches. |
+| Mutability | Immutable rejection, mutable success, shadowing, branch scopes, loop scopes, and function scopes. |
+| Runtime | Division by zero, out-of-bounds indexing, invalid UTF-8, conversions, assertions, recursion, and control-flow misuse. |
+| Numeric safety | Overflow, underflow, minimum integer negation, `abs(Int minimum)`, literal overflow, and allocation-size checks. |
+| Builtins | Every registry entry, valid signatures, invalid signatures, conversion edges, and deterministic output. |
+| Modules | Relative resolution, public exports, duplicate names, cycles, missing files, traversal rejection, and deterministic behavior. |
+| Artifacts | Deterministic builds, exact header, exact length, trailing bytes, truncated payloads, invalid payloads, and replay. |
+| CLI | Help, version, invalid arguments, exit codes, REPL, formatter, doctor, and missing compiler. |
+| Memory | Representative success and failure paths under all available sanitizers. |
+| Documentation | English-only audit and synchronization between documented and implemented commands and builtins. |
 
-Los tests usan `PATH` y `HOME` controlados cuando verifican el launcher. No se acepta silenciosamente una ruta alternativa: si no existe un compilador C11 durante la construcción, la operación falla con un mensaje explícito.
-
-Para validar manualmente un programa:
-
-```bash
-./tools/kry check mi_programa.kry
-./tools/kry run mi_programa.kry
-./tools/kry build mi_programa.kry -o mi_programa.kexe
-./tools/kry run mi_programa.kexe
-```
-
-Un cambio de sintaxis debe incluir un ejemplo positivo y, cuando corresponda, un archivo que produzca un error estable. Un cambio en el formato de artefactos debe probar al menos una copia idéntica y una alteración de longitud o payload.
+GCC and Clang are used where available. Tests do not require network access. A syntax change must include a positive example and a stable negative assertion where appropriate. An artifact change must include identical builds and a length or payload mutation.

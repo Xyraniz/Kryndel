@@ -1,12 +1,12 @@
 # Kryndel
 
-Kryndel es un lenguaje pequeño y expresivo para programación estructurada. Esta distribución tiene una única implementación ejecutable: `native/kry.c`. El núcleo incluye lexer, parser, evaluador, funciones, control de flujo, valores dinámicos, arrays, texto UTF-8, bytes, aserciones y artefactos reproducibles, sin necesitar un intérprete escrito en otro lenguaje.
+Kryndel is a small, readable language for structured programming. This repository ships one native C11 implementation in `native/kry.c`; it lexes, parses, statically checks, and evaluates Kryndel source without a Python bootstrap, a hidden interpreter, or a second runtime.
 
-> La ruta normal del proyecto es `tools/kry`. El repositorio no contiene una carpeta de bootstrap ni archivos fuente `.py`.
+> The normal user-facing entry point is `tools/kry`. The repository contains no bootstrap directory and no tracked Python source.
 
-## Inicio rápido
+## Quick start
 
-Se necesita un compilador C11 únicamente para construir el ejecutable nativo. Después de la primera construcción, los comandos se ejecutan directamente mediante `build/kry`.
+A C11 compiler is required only for the first native build. After that, the launcher rebuilds `build/kry` when the source is newer and forwards every command to the native executable.
 
 ```bash
 make
@@ -15,21 +15,26 @@ make
 ./tools/kry check examples/control_flow.kry
 ./tools/kry build examples/hello.kry -o /tmp/hello.kexe
 ./tools/kry run /tmp/hello.kexe
+./tools/kry doctor
 ```
 
-La CLI también acepta un archivo como abreviatura de `run` y ofrece `version` y `--help`.
+| Command | Behavior | Success code |
+| --- | --- | ---: |
+| `kry check file.kry` | Lex, parse, resolve modules, and statically validate without executing user code. | `0` |
+| `kry run file.kry` | Check and execute a source file. | `0` |
+| `kry run file.kexe` | Validate and execute a deterministic native artifact. | `0` |
+| `kry build file.kry [-o output.kexe]` | Check and package the exact source payload. | `0` |
+| `kry fmt [--check\|-w] file.kry` | Format valid source by removing trailing whitespace and enforcing a final newline. | `0` |
+| `kry repl` | Start an interactive read-evaluate-print loop. | `0` |
+| `kry doctor` | Report native compiler, source, output-directory, and locale readiness. | `0` |
+| `kry version` | Print the compiler version. | `0` |
+| `kry --help` | Print complete command help. | `0` |
 
-| Comando | Función |
-| --- | --- |
-| `kry check archivo.kry` | Lexa y analiza el archivo sin ejecutar el programa. |
-| `kry run archivo.kry` | Ejecuta una fuente Kryndel o un artefacto `.kexe`. |
-| `kry build archivo.kry [-o salida.kexe]` | Valida y empaqueta la fuente en un contenedor determinista. |
-| `kry version` | Muestra la versión del lenguaje y del ejecutable. |
-| `kry --help` | Muestra la ayuda de la CLI. |
+Invalid command usage returns `2`; source, static, runtime, artifact, and I/O failures return `1`; the launcher returns `69` when no C11 compiler can be found.
 
-## Lenguaje disponible
+## Language overview
 
-La implementación ofrece declaraciones `let`, parámetros y funciones `fn`, valores `Int`, `Float`, `Bool`, `String`, `Bytes`, `Array` y `nil`, expresiones aritméticas y booleanas, concatenación de strings y arrays, indexación, `if`/`else`, `while`, `return`, `break`, `continue`, comentarios de línea y bloque, además de llamadas a funciones definidas por el usuario.
+Kryndel uses braces for blocks and familiar infix expressions. Bindings are immutable by default, while `let mut` is required for assignment. Function parameters and return types are explicit, ordinary declarations infer their types, and `if`, `while`, `assert`, `&&`, and `||` require `Bool` rather than applying implicit truthiness.
 
 ```kryndel
 fn factorial(n: Int) -> Int {
@@ -44,28 +49,39 @@ println("factorial = " + str(answer))
 assert(answer == 720)
 ```
 
-Los builtins mínimos forman la biblioteca incorporada: `print`, `println`, `len`, `bytes`, `string_to_bytes`, `bytes_to_string`, `array_push`, `int`, `float`, `str`, `assert` y `assert_eq`. Los strings se validan como UTF-8 cuando una operación depende de caracteres y la indexación devuelve un code point como string.
+The initial type system contains `Int`, `Float`, `Bool`, `String`, `Bytes`, homogeneous `Array[T]`, `Nil`, `Option[T]`, `Result[T, E]`, structs, and enums. The checker validates declarations, assignments, function calls, return types, operators, indexing, builtins, and control-flow conditions before runtime begins. Bare `Array` remains accepted for compatibility and receives a homogeneous element type from its initializer; new code should prefer `Array[T]`.
 
-## Diseño de ejecución
+## Builtins and safety
 
-El comando `check` ejecuta el mismo lexer y parser que `run`, por lo que un archivo que pasa la comprobación tiene una ruta de ejecución idéntica. `build` conserva la fuente validada en un formato binario con cabecera `KRYNATIVE1`, tamaño little-endian de 64 bits y payload exacto. `run` valida la cabecera, el tamaño y vuelve a analizar el payload mediante el mismo núcleo; no hay código generado por un segundo lenguaje ni runtime oculto.
+The authoritative builtin registry defines `print`, `println`, `len`, `bytes`, `string_to_bytes`, `bytes_to_string`, `array_push`, `int`, `float`, `str`, `bool`, `assert`, `assert_eq`, `abs`, `sqrt`, `some`, `none`, `ok`, and `err`. Conversions are explicit, complete, and deterministic: partial numeric parses such as `int("12xyz")` are rejected, UTF-8 conversions validate their input, and `abs(Int minimum)` fails instead of overflowing.
 
-La implementación es deliberadamente pequeña y tree-walk. Esto mantiene el comportamiento fácil de auditar y permite que el lenguaje sea utilizable hoy. El siguiente crecimiento natural es añadir módulos y tipos nominales dentro de este mismo núcleo, sin reintroducir un bootstrap externo.
+Integer addition, subtraction, multiplication, negation, division, remainder, literal parsing, and allocation-size calculations are checked. Floating-point literals and results must be finite. Arrays, bytes, strings, structs, options, and results are immutable values; concatenation and `array_push` allocate new collections, while function calls pass value representations whose immutable collection storage cannot be modified in place.
 
-## Estructura
+## Modules and data types
 
-| Ruta | Propósito |
+A source file may import a relative `.kry` module. Resolution is deterministic relative to the importing file, absolute paths and `..` traversal are rejected, cycles are diagnosed, and only declarations marked `pub` are exported. Structs have checked named fields. Enums have checked variants and support exhaustive `match` statements. `Option[T]` and `Result[T, E]` are explicit tagged values rather than untyped error signaling.
+
+## Native execution and artifacts
+
+The implementation is intentionally a small tree-walk toolchain. `check` and `build` share the lexer, parser, module loader, and type checker with `run`, but `check` and `build` never evaluate user expressions. `build` writes the exact source into a deterministic `KRYNATIVE1` container; `run` validates the header, little-endian payload length, and exact file length before parsing the payload through the same native pipeline.
+
+## Repository structure
+
+| Path | Purpose |
 | --- | --- |
-| `native/kry.c` | Lexer, parser, runtime, builtins, CLI y formato de artefacto. |
-| `tools/kry` | Lanzador que construye `build/kry` cuando hace falta. |
-| `examples/` | Programas Kryndel ejecutables. |
-| `tests/` | Pruebas de integración del ejecutable nativo. |
-| `docs/` | Contratos de lenguaje, arquitectura y pruebas. |
+| `native/kry.c` | Native lexer, parser, checker, runtime, modules, artifacts, formatter, REPL, doctor, and CLI. |
+| `tools/kry` | Portable on-demand C11 builder and launcher. |
+| `examples/` | Positive Kryndel programs. |
+| `tests/` | Integration, static, sanitizer, and documentation checks. |
+| `docs/` | Language, architecture, module, type, diagnostics, standard-library, testing, and release contracts. |
 
-## Verificación
+## Verification
 
 ```bash
 make test
+make test-sanitized
+make test-static
+make check-docs
 ```
 
-La suite comprueba construcción con advertencias estrictas, ejecución de ejemplos, control de flujo, UTF-8, conversiones a bytes, errores de nombres desconocidos, empaquetado determinista y lectura de artefactos. Para retirar archivos temporales se usa `make clean`.
+The test matrix uses the same executable exposed to users, checks representative success and failure paths, verifies deterministic artifacts, exercises module and enum behavior, and keeps the native implementation free of a Python bootstrap or a parallel interpreter.

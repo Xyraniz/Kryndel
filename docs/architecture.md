@@ -1,41 +1,49 @@
-# Arquitectura nativa
+# Native architecture
 
-Kryndel se distribuye como un ejecutable nativo pequeño. La cadena de ejecución es única y directa:
+Kryndel is distributed as one native executable. The source pipeline is deliberately direct:
 
 ```text
-fuente UTF-8
+UTF-8 source
     -> lexer
-    -> parser y AST en memoria
-    -> evaluador tree-walk
-    -> salida, errores o artefacto KRYNATIVE1
+    -> parser and AST
+    -> module resolver
+    -> static type checker
+    -> tree-walk evaluator
+    -> output, diagnostics, or KRYNATIVE1 artifact
 ```
 
-El lexer convierte caracteres en tokens con línea y columna. El parser construye expresiones, declaraciones, funciones y bloques. El evaluador resuelve nombres por entorno léxico, crea un entorno por llamada de función y aplica los operadores y builtins. `check` recorre las mismas dos primeras etapas sin ejecutar efectos; `run` añade la evaluación.
+`check`, `run`, and `build` share the lexer, parser, module resolver, and checker. `check` stops before evaluation; `build` stops before evaluation and stores the exact validated source; `run` evaluates the checked program. The formatter also parses and checks before producing output, so invalid source is never silently rewritten.
 
-| Componente | Responsabilidad | Dependencias de ejecución |
+| Component | Responsibility | Runtime dependency |
 | --- | --- | --- |
-| Lexer | Comentarios, identificadores, literales, operadores y posiciones. | C estándar y memoria del proceso. |
-| Parser | Funciones, bindings, expresiones, bloques y control de flujo. | AST interno del ejecutable. |
-| Runtime | Valores, entornos, llamadas, recursión, arrays, bytes y UTF-8. | C estándar y stdout/stderr. |
-| Artefactos | Cabecera, longitud, payload y validación exacta. | `stdio` para lectura y escritura. |
-| CLI | `check`, `run`, `build`, `version` y ayuda. | Sistema de archivos para las rutas explícitas. |
+| Lexer | UTF-8 validation, comments, identifiers, literals, operators, and positions. | C standard library and process memory. |
+| Parser | Expressions, bindings, functions, modules, data declarations, blocks, and patterns. | Native AST. |
+| Type checker | Type inference, annotations, calls, operators, mutability, returns, conditions, and exhaustiveness. | Native type model and source locations. |
+| Module resolver | Relative source lookup, public exports, cycle detection, and traversal rejection. | Explicit filesystem paths only. |
+| Runtime | Values, scopes, calls, recursion, collections, UTF-8, options, results, and control flow. | C standard library and stdout/stderr. |
+| Artifact reader/writer | Deterministic header, little-endian length, exact payload, and replay validation. | Binary file I/O. |
+| CLI | `check`, `run`, `build`, `fmt`, `repl`, `doctor`, `version`, and help. | Explicit command-line and filesystem inputs. |
 
-No existe una segunda implementación que el ejecutable invoque como fallback. Los errores de léxico, sintaxis y ejecución se producen desde el mismo binario y conservan el archivo, la línea y la columna disponibles.
+## Ownership and values
 
-## Memoria y semántica
+All compiler and runtime allocations are tracked by a per-invocation arena. The arena is released after successful checking, runtime failure, parser failure, module failure, malformed artifact input, and every other ordinary command path. The launcher and CLI keep only file buffers that they explicitly free after the invocation.
 
-Los valores son inmutables al evaluarse. Una asignación reemplaza el binding del entorno más cercano que ya contiene el nombre; `let mut` documenta la intención mutable de la fuente, mientras que el núcleo actual no realiza todavía un chequeo estático de mutabilidad. Arrays y bytes se copian al construir resultados de concatenación o `array_push`, lo que evita aliasing observable entre esas operaciones.
+Kryndel values are immutable after construction. Bindings carry a mutability bit, and assignments are permitted only for bindings declared with `let mut`. Arrays, bytes, and strings are not mutated in place; concatenation and `array_push` create new storage, while function calls pass value representations that are safe to share because collection elements cannot be assigned. Struct fields, enum tags, option contents, and result contents are also immutable.
 
-Las llamadas de función son por valor y se ejecutan en un entorno hijo. Las funciones no son valores de primera clase todavía: una llamada debe usar un nombre sencillo que corresponda a un builtin o a una función declarada en el programa. El control de flujo usa `return`, `break` y `continue`; `return` fuera de una función y el control de bucle fuera de un `while` son errores explícitos.
+Lexical scopes are represented by parent-linked environments. A declaration is local to the current scope and may shadow a parent name. Lookup and assignment walk from the innermost scope outward; an assignment to an outer immutable binding is rejected by both checker and runtime.
 
-## Artefactos
+## Numeric behavior
 
-`build` acepta una fuente Kryndel, la valida y escribe:
+`Int` is a signed 64-bit value. Addition, subtraction, multiplication, unary negation, division, remainder, and `abs` use explicit boundary checks. Division and remainder by zero, `Int` minimum negation, `Int` minimum absolute value, and the `Int` minimum divided by `-1` are deterministic errors. Float literals and results must be finite; float division by positive or negative zero is rejected. Allocation byte counts are checked before multiplication or addition.
 
-| Campo | Tamaño | Contenido |
+## Artifact format
+
+`build` accepts a source file, validates it, and writes the following deterministic container:
+
+| Field | Size | Content |
 | --- | ---: | --- |
 | Magic | 11 bytes | ASCII `KRYNATIVE1\n`. |
-| Longitud | 8 bytes | Entero little-endian sin signo del payload. |
-| Payload | variable | La fuente Kryndel exacta, sin transformación. |
+| Length | 8 bytes | Unsigned little-endian payload length. |
+| Payload | Variable | Exact Kryndel source bytes, unchanged. |
 
-El lector sólo acepta un tamaño que coincida exactamente con el archivo. El artefacto no contiene instrucciones de otro compilador y `run` vuelve a pasar el payload por el lexer y parser nativos.
+The reader rejects a truncated header, an impossible length, trailing bytes, and any payload that fails the ordinary lexer, parser, module, or checker pipeline. Building the same source twice produces identical bytes. The artifact contains no instructions produced by another compiler and no hidden host-language interpreter.

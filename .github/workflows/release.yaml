@@ -1,0 +1,52 @@
+name: Kryndel Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  native-release:
+    name: Build native release (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Build and verify
+        run: |
+          make clean
+          make test
+          make test-static
+      - name: Package native executable
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build/kry "dist/kry-${{ matrix.os }}"
+          tar -C dist -czf "kry-${{ matrix.os }}.tar.gz" "kry-${{ matrix.os }}"
+      - name: Upload release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: kry-${{ matrix.os }}
+          path: kry-${{ matrix.os }}.tar.gz
+
+  publish:
+    name: Publish release assets
+    needs: native-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
