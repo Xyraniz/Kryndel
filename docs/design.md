@@ -4,7 +4,7 @@ This record defines the stable execution and semantic contract for the current K
 
 ## Execution
 
-The development and reference backend is a checked tree-walk evaluator in `native/kry.c`. `kry check`, `kry run`, `kry build`, module loading, formatting validation, the REPL, and artifact execution share the same lexer, parser, module resolver, type checker, value representation, and evaluator. A `.kexe` file is a deterministic source container, not a machine-code executable. Release builds currently produce the same native C11 command-line tool; an ahead-of-time Kryndel code generator is a separate future backend and is not advertised as available.
+The development and reference backend is the modular Go toolchain in `cmd/kry` and `internal/kry`. `kry check`, `kry run`, `kry build`, module loading, formatting validation, the REPL, and artifact execution share the same lexer, parser, module resolver, type checker, validated IR, value representation, and runtime. A `.kexe` file is a deterministic source container, not a machine-code executable. Released binaries are built with `CGO_ENABLED=0` and require no external runtime.
 
 ## Values and ownership
 
@@ -20,13 +20,13 @@ This model makes ordinary source evaluation deterministic and prevents accidenta
 
 The stable language provides OS-backed `Thread[T]` workers and bounded single-slot `Channel[T]` values through explicit `thread_*` builtins. A worker is spawned by the name of a zero-argument function, receives a private child scope containing only global channel handles, and reports its first diagnostic through `thread_join`. `thread_send` permits only recursively Copy values: primitives, strings, bytes, enums, and arrays, options, or results composed of Copy values. Structs and synchronization handles are not transferable.
 
-Channel operations use a mutex and condition variables. Send and receive wait on state predicates, and close wakes blocked operations. The parent runtime closes channels and joins outstanding workers at shutdown, including after an earlier runtime failure. This is a deliberately small concurrency model; async scheduling, atomics, read-write locks, cancellation tokens, and arbitrary shared mutable state are outside the stable API.
+Channel operations use Go synchronization primitives and predicate-based waits. Send and receive wait on state predicates, and close wakes blocked operations. The parent runtime closes channels and joins outstanding workers at shutdown, including after an earlier runtime failure. This is a deliberately small concurrency model; async scheduling, atomics, read-write locks, cancellation tokens, and arbitrary shared mutable state are outside the stable API.
 
 ## Errors and unsafe boundaries
 
 Lexical, parse, type, artifact, runtime, I/O, CLI, and resource failures are represented by deterministic diagnostics and non-zero process status. User-visible operations that can fail are reported rather than silently coerced. Checked integer arithmetic rejects overflow, division by zero, minimum-integer negation, and invalid absolute value. Floating-point literals and computed results must remain finite. `Option[T]` and `Result[T, E]` are explicit tagged values in the current expression and pattern surface. OS resource wrappers that return them are outside the stable source API.
 
-The stable language has no `unsafe` block and no FFI or raw-pointer operation. Native implementation code uses ordinary C APIs internally, while source programs cannot cross that boundary. A future unsafe boundary must be syntactically explicit, checker-visible, and isolated from safe standard-library wrappers.
+The stable language has no `unsafe` block and no FFI or raw-pointer operation. The implementation exposes only explicit, checked standard-library capabilities to source programs. A future unsafe boundary must be syntactically explicit, checker-visible, and isolated from safe standard-library wrappers.
 
 ## Modules and packaging
 
@@ -42,8 +42,8 @@ The stable syntax is `let`, `let mut`, `fn`, `if`, `else`, `while`, `return`, `b
 
 ## Performance
 
-The current performance claim is limited to a small native C11 toolchain with checked execution and deterministic startup behavior. No Kryndel program-level native-code performance claim is made. Benchmarks should measure startup, integer loops, function calls, collections, source checking, and artifact replay separately. A future bytecode or native backend must consume the checked representation or a semantics-preserving lowering and must pass differential tests against the tree-walk evaluator before release claims are made.
+The current performance claim is limited to a small Go toolchain with checked execution and deterministic startup behavior. The runtime executes a checked, bounded intermediate representation; no Kryndel program-level native-code performance claim is made. Benchmarks should measure startup, integer loops, function calls, collections, source checking, and artifact replay separately.
 
 ## Stability rule
 
-Documentation describes only behavior exercised by tests and available through the CLI. Planned language areas are labeled as future design work rather than presented as stable commands or primitives. The single native implementation remains authoritative until a second backend can share the same semantic definitions and differential test suite.
+Documentation describes only behavior exercised by tests and available through the CLI. Planned language areas are labeled as future design work rather than presented as stable commands or primitives. The single Go implementation remains authoritative; a second backend would require the same semantic definitions and differential test suite.

@@ -1,6 +1,6 @@
 # Standard library and builtins
 
-Kryndel keeps its standard library small and explicit. The current release provides a native builtin registry shared by the parser-facing checker, runtime, and documentation. Builtins are ordinary calls and are checked before execution.
+Kryndel keeps its standard library small and explicit. The current release provides one Go builtin registry shared by the checker, runtime, CLI help, tests, and documentation. Builtins are ordinary calls and are checked before execution.
 
 | Builtin | Registry signature | Behavior and failure rule |
 | --- | --- | --- |
@@ -46,12 +46,12 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `thread_receive` | `thread_receive(channel: Channel[T]) -> T` | Receives a value while synchronized; a closed empty channel is rejected. |
 | `thread_receive_timeout` | `thread_receive_timeout(channel: Channel[T], milliseconds: Int) -> T` | Receives with a bounded deadline; negative durations and elapsed deadlines are rejected. |
 | `thread_try_receive` | `thread_try_receive(channel: Channel[T]) -> Result[T, String]` | Returns `empty` or `closed` instead of blocking. |
-| `thread_join` | `thread_join(thread: Thread[T]) -> Nil` | Joins a worker and propagates worker failures. |
-| `thread_join_timeout` | `thread_join_timeout(thread: Thread[T], milliseconds: Int) -> Result[Nil, String]` | Returns `timeout` without detaching the worker. |
+| `thread_join` | `thread_join(thread: Thread[T]) -> T` | Joins a worker, returns its result, and propagates worker failures. |
+| `thread_join_timeout` | `thread_join_timeout(thread: Thread[T], milliseconds: Int) -> Result[T, String]` | Returns the worker result or `timeout` without detaching it. |
 | `thread_cancel` | `thread_cancel(thread: Thread[T]) -> Nil` | Requests cooperative cancellation and wakes channel waits. |
 | `thread_close` | `thread_close(channel: Channel[T]) -> Nil` | Closes a channel and wakes blocked operations; repeated close is harmless. |
 | `fs_read_bytes`, `fs_write_bytes`, `fs_exists` | Typed byte-file and existence operations. | Reject NUL paths and return I/O failures as `Result`. |
 
 String-to-number conversion rejects whitespace-dependent partial parses and inputs such as `"12xyz"`. Float values and results must be finite. Integer arithmetic and `abs(Int minimum)` are checked. `Bytes` conversion never applies an implicit text encoding to arbitrary values.
 
-The native registry is the authoritative list. The CLI help renders its signatures and descriptions. Adding a builtin requires a registry entry, checker behavior, runtime behavior, documentation, and positive and negative tests. Directory, process, network, terminal, and FFI modules are outside the stable source API and are described as future design work in `docs/design.md`.
+The Go registry is the authoritative list. The CLI help renders its signatures and descriptions. Adding a builtin requires a registry entry, checker behavior, runtime behavior, documentation, and positive and negative tests. Directory, process, network, terminal, and FFI modules are outside the stable source API and are described as future design work in `docs/design.md`.

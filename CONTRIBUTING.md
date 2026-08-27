@@ -1,10 +1,10 @@
 # Contributing to Kryndel
 
-Kryndel has one deliberately small native implementation. A syntax change must consider the lexer, parser, checker, runtime, diagnostics, examples, tests, and documentation. Keep the execution pipeline inside the native implementation; do not add a parallel interpreter or a runtime dependency in another language.
+Kryndel has one deliberately small Go implementation. A syntax change must consider the lexer, parser, checker, IR, runtime, diagnostics, examples, tests, and documentation. Keep the execution pipeline inside the Go implementation; do not add a parallel interpreter or a runtime dependency in another language.
 
 ## Local development
 
-A C11 compiler is required to build the executable:
+Go 1.22 or newer is required to build the executable from source; released binaries need no toolchain:
 
 ```bash
 make test
@@ -27,7 +27,7 @@ Preserve determinism. Do not introduce dates, random identifiers, absolute paths
 
 ## Review checklist
 
-Before opening a change, run `make test`, `make test-sanitized`, `make test-thread-sanitized`, `make test-static`, and `make check-docs`. Review `git diff --check`, confirm that the working tree contains only intentional changes, and verify that the documentation describes the implemented behavior rather than a planned feature. Thread or system changes must update the matching guides in `docs/concurrency.md`, `docs/memory.md`, and `docs/system.md`.
+Before opening a change, run `make test`, `make test-static`, `make test-race`, `make fuzz-smoke`, `make coverage`, and `make check-docs`. Review `git diff --check`, confirm that the working tree contains only intentional changes, and verify that the documentation describes the implemented behavior rather than a planned feature. Thread or system changes must update the matching guides in `docs/concurrency.md`, `docs/memory.md`, and `docs/system.md`.
 
 ## License
 
