@@ -4,10 +4,12 @@ Kryndel is a language project. A small syntax change can affect diagnostics, byt
 
 ## Development environment
 
-The current bootstrap requires Python 3.10 or newer and uses only the standard library at runtime. This is a stage-0 development dependency, not a claim about the final user bundle. From a checkout, the test command is:
+The current bootstrap requires Python 3.10 or newer and uses only the standard library at runtime. This remains a stage-0 development dependency. The independent native core requires a C11 compiler only for its build step. From a checkout, run both validation paths:
 
 ```bash
 PYTHONPATH=. python3 -m unittest discover -s tests -v
+make native-check
+PATH="/usr/bin:/bin" HOME= LC_ALL=C ./tests/native-core.sh
 ```
 
 The examples can be checked with:
@@ -27,8 +29,10 @@ PATH="/usr/bin:/bin" HOME= ./tools/kry-native-run-check
 ```
 
 The first command reports the bootstrap route and the four implementation states.
-The latter commands cover only the currently verified host-capability checkpoints;
-they do not replace the compiler, runtime, package manager, or CLI.
+The native commands exercise the independent productive core. The existing
+formatter, seed, KEXE checker, and bundle-policy commands remain narrow
+host-capability checkpoints and do not replace the full historical compiler,
+package manager, or KEXE v1 CLI.
 
 ## Change process
 

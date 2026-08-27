@@ -7,6 +7,7 @@ not counted as Kryndel-native implementation.
 
 | Prompt task | Status after this iteration | Evidence or blocking contract |
 | --- | --- | --- |
+| 0-native. Independent productive core | Implemented for the documented subset | `native/kry.c` provides its own lexer, parser, evaluator, values, console/Bytes builtins, diagnostics, and `KRYNATIVE1` source artifacts; `make native`, `tools/kry-native`, and `tests/native-core.sh` run without Python or Rust after the one-time C build. Full language self-hosting is still pending. |
 | 0. Contracts, documentation, and CI audit | Completed as a bootstrap audit checkpoint | `kry autonomy-audit`, `autonomy-audit-v1.md`, four-state matrix, measured 117-test baseline, and isolated no-Python CI jobs; this does not remove Python |
 | 1. Bytes and strict UTF-8 | Complete in the bootstrap | `BytesValue`, visible conversions, `bytes-v1.json`, runtime tests, ABI and language docs |
 | 1a. Toolchain data core | Compatibility seam complete under bootstrap; native ownership pending | `stdlib/core/data.kry`, `data-core-v1.json`, bounded String/Bytes readers, balanced builder, nominal records, and VM regression tests; primitive values still execute through Python |

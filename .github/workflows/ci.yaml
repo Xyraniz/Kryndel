@@ -73,3 +73,13 @@ jobs:
           printf 'core source\n' > "$RUNNER_TEMP/kry-bundle/stdlib/core.kry"
       - name: Audit candidate contents without Python
         run: PATH="/usr/bin:/bin" HOME= LC_ALL=C ./tools/kry-bundle-check "$RUNNER_TEMP/kry-bundle"
+  native-core:
+    name: Native core without Python
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Build and smoke-test native core
+        run: make native-check
+      - name: Run integration contract without Python
+        run: PATH="/usr/bin:/bin" HOME= LC_ALL=C ./tests/native-core.sh

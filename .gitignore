@@ -1,0 +1,5 @@
+build/
+*.kexe
+*.krypkg
+__pycache__/
+*.pyc
