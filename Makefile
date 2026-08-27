@@ -1,77 +1,54 @@
-ifeq ($(origin CC),default)
-CC := $(shell command -v cc 2>/dev/null || command -v gcc 2>/dev/null || command -v clang 2>/dev/null || echo no-usable-c11-compiler)
-endif
-CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Wpedantic
-LDFLAGS ?= -lm -pthread
+GO ?= go
+BINARY := build/kry
+.PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs release clean
+all: build
 
-.PHONY: all native check test test-features test-sanitized test-thread-sanitized test-static fuzz-smoke coverage benchmark check-docs clean
-
-all: native
-
-native: build/kry
-
-build/kry: native/kry.c native/kry_artifacts.inc
-	@if [ "$(CC)" = "no-usable-c11-compiler" ]; then echo 'kry: no usable C11 compiler found; set CC to GCC or Clang, or install a native compiler' >&2; exit 69; fi
-	mkdir -p $(@D)
-	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
-
-check: native
-	./build/kry check examples/hello.kry
-	./build/kry check examples/fibonacci.kry
-	./build/kry check examples/bytes.kry
-	./build/kry check examples/control_flow.kry
-	./build/kry check examples/typed_data.kry
-	./build/kry check examples/module_demo.kry
-
-# The integration suite invokes the same executable exposed to users.
-test: native check test-features fuzz-smoke
-	./tests/native-core.sh
-	KRY_BIN=./build/kry ./tests/edge-cases.sh
-
-test-features: native
-	KRY_BIN=./build/kry ./tests/feature-regressions.sh
-
-fuzz-smoke: native
-	KRY_BIN=./build/kry ./tests/fuzz-smoke.sh
-
-coverage: native
-	@command -v gcov >/dev/null 2>&1 || { echo "gcov unavailable" >&2; exit 69; }
-	rm -f native/*.gcda native/*.gcno *.gcov
-	$(CC) -std=c11 -O0 -g --coverage native/kry.c $(LDFLAGS) -o build/kry-coverage
-	KRY_BIN=./build/kry-coverage ./tests/native-core.sh
-	KRY_BIN=./build/kry-coverage ./tests/edge-cases.sh
-	KRY_BIN=./build/kry-coverage ./tests/feature-regressions.sh
-	gcov -b -c build/kry-coverage-kry.gcno > build/coverage.txt
-	mv -f *.gcov build/
-
-benchmark: native
-	@echo 'benchmark: startup'
-	./build/kry version >/dev/null
-	@echo 'benchmark: checker'
-	./build/kry check examples/fibonacci.kry >/dev/null
-	@echo 'benchmark: ok'
-
-# Sanitizers are intentionally enabled without disabling leak detection.
-test-sanitized:
+build:
 	mkdir -p build
-	$(CC) -std=c11 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefined,leak native/kry.c $(LDFLAGS) -o build/kry-sanitized
-	KRY_BIN=./build/kry-sanitized ./tests/native-core.sh
-	KRY_BIN=./build/kry-sanitized ./tests/edge-cases.sh
-	KRY_BIN=./build/kry-sanitized ./tests/feature-regressions.sh
+	$(GO) build -trimpath -ldflags='-s -w' -o $(BINARY) ./cmd/kry
 
-test-thread-sanitized:
+check: build
+	$(BINARY) check examples/hello.kry
+	$(BINARY) check examples/fibonacci.kry
+	$(BINARY) check examples/bytes.kry
+	$(BINARY) check examples/control_flow.kry
+	$(BINARY) check examples/typed_data.kry
+	$(BINARY) check examples/module_demo.kry
+
+test: build check
+	$(GO) test ./...
+	$(BINARY) run examples/hello.kry
+	$(BINARY) run examples/fibonacci.kry
+	$(BINARY) run examples/bytes.kry
+	$(BINARY) run examples/control_flow.kry
+	$(BINARY) run examples/typed_data.kry
+	$(BINARY) run examples/module_demo.kry
+
+test-static: build
+	@test -z "$$($(GO)fmt -l cmd internal)" || (echo 'gofmt check failed' >&2; exit 1)
+	$(GO) vet ./...
+	$(GO) test -count=1 ./...
+
+test-race:
+	$(GO) test -race -count=1 ./...
+
+coverage:
 	mkdir -p build
-	$(CC) -std=c11 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=thread native/kry.c $(LDFLAGS) -o build/kry-thread-sanitized
-	KRY_BIN=./build/kry-thread-sanitized ./tests/native-core.sh
-	KRY_BIN=./build/kry-thread-sanitized ./tests/edge-cases.sh
-	KRY_BIN=./build/kry-thread-sanitized ./tests/feature-regressions.sh
+	$(GO) test -covermode=atomic -coverprofile=build/coverage.out ./...
 
-# Static compilation is kept separate so CI can use both GCC and Clang.
-test-static:
-	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror -fsyntax-only native/kry.c
+fuzz-smoke:
+	$(GO) test -run='TestFuzzSmoke' -count=1 ./...
 
 check-docs:
-	./tests/check-docs.sh
+	$(GO) test -run='TestDocumentation' -count=1 ./...
+
+release: build
+	mkdir -p dist
+	for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
+	  os=$${target%/*}; arch=$${target#*/}; ext=; test "$$os" = windows && ext=.exe; \
+	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w' -o "dist/kry-$$os-$$arch$$ext" ./cmd/kry; \
+	done
+	sha256sum dist/kry-* > dist/SHA256SUMS
 
 clean:
-	rm -rf build
+	rm -rf build dist

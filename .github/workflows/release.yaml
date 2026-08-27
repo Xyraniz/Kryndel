@@ -8,40 +8,79 @@ on:
 permissions:
   contents: write
 
+env:
+  GO_VERSION: '1.22.x'
+
 jobs:
-  native-release:
-    name: Build native release (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  verify:
+    name: Verify Go toolchain
+    runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-      - name: Build and verify
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Run release gate
         run: |
           make clean
           make test
           make test-static
-      - name: Package native executable
-        shell: bash
+          make test-race
+          make coverage
+
+  release:
+    name: Build release (${{ matrix.goos }}-${{ matrix.goarch }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build self-contained binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
         run: |
           mkdir -p dist
-          cp build/kry "dist/kry-${{ matrix.os }}"
-          tar -C dist -czf "kry-${{ matrix.os }}.tar.gz" "kry-${{ matrix.os }}"
-          if command -v sha256sum >/dev/null 2>&1; then sha256sum "kry-${{ matrix.os }}.tar.gz"; else shasum -a 256 "kry-${{ matrix.os }}.tar.gz"; fi > "kry-${{ matrix.os }}.tar.gz.sha256"
-          printf '{"SPDXID":"SPDXRef-DOCUMENT","spdxVersion":"SPDX-2.3","name":"Kryndel native release","documentNamespace":"https://github.com/Xyraniz/Kryndel/releases/${GITHUB_REF_NAME}","packages":[{"SPDXID":"SPDXRef-Package-Kryndel","name":"Kryndel","versionInfo":"%s","downloadLocation":"NOASSERTION"}]}' "${GITHUB_REF_NAME#v}" > "kry-${{ matrix.os }}.spdx.json"
-          printf 'repository=%s\nref=%s\ncommit=%s\nplatform=${{ matrix.os }}\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$GITHUB_SHA" > "kry-${{ matrix.os }}.provenance.txt"
-      - name: Upload release asset
+          suffix=
+          test "${{ matrix.goos }}" = windows && suffix=.exe
+          go build -trimpath -ldflags='-s -w' -o "dist/kry-${{ matrix.goos }}-${{ matrix.goarch }}${suffix}" ./cmd/kry
+      - name: Generate checksums, SBOM, and provenance
+        shell: bash
+        run: |
+          cd dist
+          sha256sum kry-* > SHA256SUMS
+          printf '{"SPDXID":"SPDXRef-DOCUMENT","spdxVersion":"SPDX-2.3","name":"Kryndel Go release","documentNamespace":"https://github.com/Xyraniz/Kryndel/releases/${GITHUB_REF_NAME}","packages":[{"SPDXID":"SPDXRef-Package-Kryndel","name":"Kryndel","versionInfo":"%s","downloadLocation":"NOASSERTION","licenseConcluded":"NOASSERTION"}]}' "${GITHUB_REF_NAME#v}" > "kry-${{ matrix.goos }}-${{ matrix.goarch }}.spdx.json"
+          printf 'repository=%s\nref=%s\ncommit=%s\ntarget=${{ matrix.goos }}/${{ matrix.goarch }}\ncompiler=go-${GO_VERSION}\ncgo=disabled\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$GITHUB_SHA" > "kry-${{ matrix.goos }}-${{ matrix.goarch }}.provenance.txt"
+      - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
-          name: kry-${{ matrix.os }}
-          path: kry-${{ matrix.os }}.*
+          name: kry-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
 
   publish:
     name: Publish release assets
-    needs: native-release
+    needs: release
     runs-on: ubuntu-latest
     steps:
       - name: Download built assets
@@ -52,4 +91,4 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/kry-*.tar.gz dist/kry-*.sha256 dist/*.spdx.json dist/*.provenance.txt
+          files: dist/*

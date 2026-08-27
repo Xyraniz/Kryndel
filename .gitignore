@@ -1,3 +1,5 @@
 build/
+dist/
 *.kexe
 *.krypkg
+coverage.out

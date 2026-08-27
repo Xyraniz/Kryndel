@@ -8,20 +8,21 @@ UTF-8 source
     -> parser and AST
     -> module resolver
     -> static type checker
-    -> tree-walk evaluator and synchronized thread runtime
-    -> output, diagnostics, or versioned KRYNATIVE2 bundle
+    -> validated intermediate representation
+    -> bounded VM/runtime and synchronized worker scheduler
+    -> output, diagnostics, or versioned KRYNATIVE3 bundle
 ```
 
 `check`, `run`, and `build` share the lexer, parser, module resolver, and checker. `check` stops before evaluation; `build` stops before evaluation and stores the exact validated root and imported sources; `run` evaluates the checked program or embedded artifact graph. The formatter also parses and checks before producing output, so invalid source is never silently rewritten.
 
 | Component | Responsibility | Runtime dependency |
 | --- | --- | --- |
-| Lexer | UTF-8 validation, comments, identifiers, literals, operators, and positions. | C standard library and process memory. |
+| Lexer | UTF-8 validation, comments, identifiers, literals, operators, positions, and token limits. | Go standard library only. |
 | Parser | Expressions, bindings, functions, modules, data declarations, blocks, and patterns. | Native AST. |
 | Type checker | Type inference, annotations, calls, operators, mutability, returns, conditions, and exhaustiveness. | Native type model and source locations. |
 | Module resolver | Relative source lookup, public exports, cycle detection, and traversal rejection. | Explicit filesystem paths only. |
-| Runtime | Values, scopes, calls, recursion, collections, UTF-8, options, results, control flow, channels, and workers. | C standard library, pthreads, and stdout/stderr. |
-| Artifact reader/writer | Versioned KRYNATIVE2 metadata, deterministic source bundle, SHA-256 hashes, atomic writes, and strict replay validation. | Binary file I/O and POSIX sync/rename. |
+| Runtime | Validated IR execution, values, scopes, calls, recursion, collections, UTF-8, options, results, control flow, channels, workers, safepoints, and budgets. | Go standard library only. |
+| Artifact reader/writer | Versioned KRYNATIVE3 metadata, deterministic source bundle, SHA-256 hashes, atomic writes, and strict replay validation. | Go binary/file APIs. |
 | CLI | `check`, `run`, `build`, `fmt`, `repl`, `doctor`, `version`, and help. | Explicit command-line and filesystem inputs. |
 
 ## Ownership and values
@@ -34,7 +35,7 @@ Lexical scopes are represented by parent-linked environments. A declaration is l
 
 ## Concurrency and cleanup
 
-`Channel[T]` is a FIFO queue guarded by a pthread mutex and two condition variables. Send and receive operations use predicate-based waits, try/timed variants return typed status values, and close broadcasts to both wait sets. `Thread[T]` owns an OS thread handle. Worker functions are named zero-argument functions, execute in a channel-only worker-safe scope, and report their first diagnostic through `thread_join`; worker safety is propagated through the reachable call graph. The parent runtime requests cooperative cancellation, closes channels, and joins outstanding workers on every ordinary exit path, including an earlier runtime failure. Worker-local arenas release their allocations after execution; channel synchronization primitives are destroyed after all workers have joined.
+`Channel[T]` is a FIFO queue backed by Go synchronization primitives. Send and receive operations use predicate-based waits, try/timed variants return typed status values, and close wakes both wait sets. `Thread[T]` owns a managed worker and a result channel. Worker functions are named zero-argument functions, execute in a channel-only worker-safe scope, and report their first diagnostic through `thread_join`; worker safety is propagated through the reachable call graph. The parent runtime requests cooperative cancellation, closes channels, and joins outstanding workers on every ordinary exit path, including an earlier runtime failure. Worker-local arenas release their allocations after execution; channel synchronization primitives are destroyed after all workers have joined.
 
 ## Numeric behavior
 
@@ -42,4 +43,4 @@ Lexical scopes are represented by parent-linked environments. A declaration is l
 
 ## Artifact format
 
-`build` accepts a source file, validates it, and writes a deterministic KRYNATIVE2 bundle with a fixed magic, semantic version, compiler/target metadata, exact payload length, an ordered `<root>` plus imported source entries, and a SHA-256 hash for every source. The writer uses a temporary file, flush/sync, and atomic rename. The reader rejects incompatible metadata, truncated or oversized fields, duplicate or unsafe paths, invalid hashes, trailing bytes, and any embedded source that fails the ordinary lexer, parser, module, or checker pipeline. Building the same source twice produces identical bytes. The artifact contains no instructions produced by another compiler and no hidden host-language interpreter.
+`build` accepts a source file, validates it, and writes a deterministic KRYNATIVE3 bundle with a fixed magic, semantic version, compiler/target metadata, exact payload length, an ordered `<root>` plus imported source entries, and a SHA-256 hash for every source. The writer uses a temporary file, flush/sync, and atomic rename. The reader rejects incompatible metadata, truncated or oversized fields, duplicate or unsafe paths, invalid hashes, trailing bytes, and any embedded source that fails the ordinary lexer, parser, module, or checker pipeline. Building the same source twice produces identical bytes. The artifact contains no instructions produced by another compiler and no hidden host-language interpreter.

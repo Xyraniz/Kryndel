@@ -1,12 +1,12 @@
 # Kryndel
 
-Kryndel is a small, readable language for structured programming. This repository ships one native C11 implementation in `native/kry.c`; it lexes, parses, statically checks, and evaluates Kryndel source without a Python bootstrap, a hidden interpreter, or a second runtime.
+Kryndel is a small, readable language for structured programming. This repository ships one coherent Go implementation; it lexes, parses, statically checks, validates an intermediate representation, and executes Kryndel source without C, Python, Rust, Node.js, a hidden interpreter, or a second runtime.
 
 > The normal user-facing entry point is `tools/kry`. The repository contains no bootstrap directory and no tracked Python source.
 
 ## Quick start
 
-A C11 compiler is required only for the first native build. After that, the launcher rebuilds `build/kry` when the source is newer and forwards every command to the native executable.
+A Go 1.22+ toolchain is required only to build from source. Released executables are self-contained and do not require Go or any external runtime. The repository launcher forwards commands to the built executable and never searches for a host-language compiler.
 
 ```bash
 make
@@ -26,7 +26,7 @@ make
 | `kry build file.kry [-o output.kexe]` | Check and package the root and imported source graph into a deterministic bundle. | `0` |
 | `kry fmt [--check\|-w] file.kry` | Format valid source with deterministic whitespace, indentation, and final newline rules. | `0` |
 | `kry repl` | Start an interactive read-evaluate-print loop. | `0` |
-| `kry doctor` | Report native compiler, source, output-directory, and locale readiness. | `0` |
+| `kry doctor` | Verify the executable, standard-library registry, limits, and runtime capabilities. | `0` |
 | `kry version` | Print the compiler version. | `0` |
 | `kry --help` | Print complete command help. | `0` |
 | `kry --json <command>` | Emit machine-readable diagnostics with stable code and category fields. | command-dependent |
@@ -34,7 +34,7 @@ make
 | `kry --max-source BYTES <command>` | Reject source input above the configured byte limit. | command-dependent |
 | `kry --max-artifact BYTES <command>` | Reject artifact input above the configured byte limit. | command-dependent |
 
-Invalid command usage returns `2`; source, static, runtime, artifact, and I/O failures return `1`; the launcher returns `69` when no C11 compiler can be found.
+Invalid command usage returns `2`; source, static, runtime, artifact, resource, and I/O failures return `1`. A missing built executable returns `69`; distributed binaries do not depend on a compiler.
 
 ## Language overview
 
@@ -71,15 +71,15 @@ Kryndel provides OS-backed named worker functions and FIFO channels with configu
 
 ## Native execution and artifacts
 
-The implementation is intentionally a small tree-walk toolchain. `check` and `build` share the lexer, parser, module loader, and type checker with `run`, but `check` and `build` never evaluate user expressions. `build` writes a deterministic, atomically replaced `KRYNATIVE2` bundle containing the exact root and imported source bytes, logical paths, compiler/target metadata, and SHA-256 hashes; `run` validates every field before executing the embedded graph without consulting external modules.
+The implementation is a modular toolchain. `check` and `build` share the lexer, parser, module loader, type checker, and validated IR with `run`, but `check` and `build` never evaluate user expressions. `build` writes a deterministic, atomically replaced `KRYNATIVE3` bundle containing the exact root and imported source bytes, logical paths, compiler/target metadata, and SHA-256 hashes; `run` validates every field before executing the embedded graph without consulting external modules.
 
 ## Repository structure
 
 | Path | Purpose |
 | --- | --- |
-| `native/kry.c` | Native lexer, parser, checker, runtime, modules, formatter, REPL, doctor, and CLI. |
-| `native/kry_artifacts.inc` | Single included artifact reader/writer component with strict KRYNATIVE2 validation. |
-| `tools/kry` | Portable on-demand C11 builder and launcher. |
+| `cmd/kry` | Portable Go CLI, REPL, formatter, doctor, and release entry point. |
+| `internal/kry` | Modular source, lexer, parser, AST, types, checker, IR, runtime, sandbox, modules, artifacts, and builtins. |
+| `tools/kry` | Thin launcher for the already-built self-contained executable. |
 | `examples/` | Positive Kryndel programs. |
 | `tests/` | Integration, static, sanitizer, and documentation checks. |
 | `docs/` | Language, architecture, module, type, diagnostics, standard-library, testing, and release contracts. |
@@ -88,9 +88,10 @@ The implementation is intentionally a small tree-walk toolchain. `check` and `bu
 
 ```bash
 make test
-make test-sanitized
 make test-static
-make check-docs
+make test-race
+make coverage
+make release
 ```
 
-The test matrix uses the same executable exposed to users, checks representative success and failure paths, verifies deterministic artifacts, exercises module and enum behavior, and keeps the native implementation free of a Python bootstrap or a parallel interpreter.
+The test matrix checks representative success and failure paths, deterministic artifacts, modules, enums, concurrency, sandbox boundaries, malformed inputs, JSON diagnostics, formatter idempotence, fuzz smoke cases, race detection, coverage, and cross-compilation. The implementation and build graph contain no production C, Python, Rust, or Node.js dependency.

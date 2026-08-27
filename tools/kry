@@ -1,45 +1,8 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary="$root/build/kry"
-stamp="$root/build/.kry-build-stamp"
-source="$root/native/kry.c"
-flags='-std=c11 -O2 -Wall -Wextra -Wpedantic'
-
-find_compiler() {
-    if [ -n "${CC:-}" ]; then
-        printf '%s\n' "$CC"
-        return
-    fi
-    for candidate in cc gcc clang; do
-        if command -v "$candidate" >/dev/null 2>&1; then
-            command -v "$candidate"
-            return
-        fi
-    done
-    return 1
-}
-
-compiler=$(find_compiler 2>/dev/null || true)
-if [ -z "$compiler" ] || { ! command -v "$compiler" >/dev/null 2>&1 && [ ! -x "$compiler" ]; }; then
-    printf '%s\n' 'kry: no usable C11 compiler found; set CC to GCC or Clang, or install a native compiler' >&2
+if [ ! -x "$root/build/kry" ]; then
+    printf '%s\n' 'kry: build/kry is missing; run `make build` from the repository checkout' >&2
     exit 69
 fi
-
-source_hash=$(find "$root/native" -maxdepth 1 -type f -print | sort | while IFS= read -r file; do cksum "$file"; done | cksum | awk '{print $1 ":" $2}')
-version=$(sed -n 's/^#define KRY_VERSION "\(.*\)"/\1/p' "$source")
-config=$(printf 'compiler=%s\nflags=%s\nos=%s\narch=%s\nsource=%s\nversion=%s\n' \
-    "$compiler" "$flags" "$(uname -s)" "$(uname -m)" "$source_hash" "$version")
-needs_build=0
-if [ ! -x "$binary" ] || [ ! -f "$stamp" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$config" ]; then
-    needs_build=1
-fi
-if [ "$needs_build" -eq 1 ]; then
-    mkdir -p "$root/build"
-    "$compiler" $flags "$source" -lm -pthread -o "$binary"
-    temporary="$stamp.tmp.$$"
-    printf '%s' "$config" > "$temporary"
-    mv -f "$temporary" "$stamp"
-fi
-KRY_ROOT="$root"; export KRY_ROOT
-exec "$binary" "$@"
+exec "$root/build/kry" "$@"
