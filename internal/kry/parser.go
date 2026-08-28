@@ -31,6 +31,9 @@ func Parse(src *Source, lim Limits) (*Program, *Diagnostic) {
 		case p.check(ENUM):
 			e := p.enumDecl(pub)
 			prog.Enums = append(prog.Enums, e)
+		case p.match(IMPL):
+			p.Pos--
+			prog.Functions = append(prog.Functions, p.implDecl()...)
 		case p.match(IMPORT):
 			t := p.expect(STRING, "import expects a quoted module path")
 			if p.Err != nil {
@@ -159,6 +162,22 @@ func (p *Parser) structDecl(pub bool) *StructDecl {
 	p.expect(RBRACE, "expected '}' after struct declaration")
 	return d
 }
+func (p *Parser) implDecl() []*Function {
+	t := p.expect(IMPL, "expected 'impl'")
+	receiver := p.typeSpec()
+	p.expect(LBRACE, "expected '{' after impl receiver")
+	var out []*Function
+	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
+		pub := p.match(PUB)
+		f := p.function(pub)
+		f.Receiver = receiver
+		f.Tok = t
+		out = append(out, f)
+		p.end()
+	}
+	p.expect(RBRACE, "expected '}' after impl block")
+	return out
+}
 func (p *Parser) enumDecl(pub bool) *EnumDecl {
 	t := p.expect(ENUM, "expected 'enum'")
 	n := p.expect(ID, "expected an enum name")
@@ -206,6 +225,22 @@ func (p *Parser) statement() *Stmt {
 	case p.match(WHILE):
 		s := p.stmtNode(t, StWhile)
 		s.Cond = p.expression()
+		s.Body = p.block()
+		return s
+	case p.match(FOR):
+		s := p.stmtNode(t, StFor)
+		item := p.expect(ID, "for expects a binding name")
+		s.Name = item.Text()
+		p.expect(IN, "for expects 'in' after the binding name")
+		s.Iter = p.expression()
+		s.Body = p.block()
+		return s
+	case p.match(DEFER):
+		s := p.stmtNode(t, StDefer)
+		s.Body = p.block()
+		return s
+	case p.match(UNSAFE):
+		s := p.stmtNode(t, StUnsafe)
 		s.Body = p.block()
 		return s
 	case p.match(MATCH):
@@ -397,10 +432,30 @@ func (p *Parser) unary() *Expr {
 			p.expect(RBRACKET, "expected ']' after index")
 			e = x
 		} else if p.match(DOT) {
-			ft := p.expect(ID, "expected a field name after '.'")
-			x := p.node(ft, ExField)
-			x.Base = e
-			x.Field = ft.Text()
+			ft := p.expect(ID, "expected a field or method name after '.'")
+			if p.match(LPAREN) {
+				x := p.node(ft, ExCall)
+				x.Name = ft.Text()
+				x.Receiver = e
+				if !p.check(RPAREN) {
+					for {
+						x.Args = append(x.Args, p.expression())
+						if !p.match(COMMA) {
+							break
+						}
+					}
+				}
+				p.expect(RPAREN, "expected ')' after method arguments")
+				e = x
+			} else {
+				x := p.node(ft, ExField)
+				x.Base = e
+				x.Field = ft.Text()
+				e = x
+			}
+		} else if p.match(QUESTION) {
+			x := p.node(p.prev(), ExPropagate)
+			x.Operand = e
 			e = x
 		} else {
 			break
@@ -486,6 +541,35 @@ func (p *Parser) primary() *Expr {
 			}
 		}
 		p.expect(RBRACKET, "expected ']' after array literal")
+		return e
+	case p.match(LBRACE):
+		e := p.node(t, ExMap)
+		if !p.check(RBRACE) {
+			for {
+				key := p.expression()
+				p.expect(COLON, "map literals require ':' after each key")
+				e.MapKeys = append(e.MapKeys, key)
+				e.Values = append(e.Values, p.expression())
+				if !p.match(COMMA) {
+					break
+				}
+			}
+		}
+		p.expect(RBRACE, "expected '}' after map literal")
+		return e
+	case p.match(PIPE):
+		e := p.node(t, ExSet)
+		p.expect(LBRACE, "set literals require '|{'")
+		if !p.check(RBRACE) {
+			for {
+				e.Items = append(e.Items, p.expression())
+				if !p.match(COMMA) {
+					break
+				}
+			}
+		}
+		p.expect(RBRACE, "expected '}' after set literal")
+		p.expect(PIPE, "set literals require a closing '|'")
 		return e
 	}
 	p.fail(t, "expected an expression")

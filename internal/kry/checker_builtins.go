@@ -16,7 +16,7 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		if d != nil {
 			return TError, d
 		}
-		if t.Kind != TyString && t.Kind != TyArray && t.Kind != TyBytes {
+		if t.Kind != TyString && t.Kind != TyArray && t.Kind != TyBytes && t.Kind != TyMap && t.Kind != TySet {
 			return bad("len expects String, Array[T], or Bytes")
 		}
 		return TInt, nil
@@ -441,6 +441,250 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("array_join expects Array[String] and String")
 		}
 		return TString, nil
+	case "map_get":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyMap || !typeKnown(t.A) || !typeKnown(t.B) {
+			return bad("map_get expects Map[K,V]")
+		}
+		k, d := arg(1, t.A)
+		if d != nil {
+			return TError, d
+		}
+		if !compatible(t.A, k) {
+			return bad("map_get key type mismatch")
+		}
+		return Opt(t.B), nil
+	case "map_insert":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyMap {
+			return bad("map_insert expects Map[K,V]")
+		}
+		k, d := arg(1, t.A)
+		if d != nil {
+			return TError, d
+		}
+		v, d := arg(2, t.B)
+		if d != nil {
+			return TError, d
+		}
+		if !compatible(t.A, k) || !compatible(t.B, v) {
+			return bad("map_insert key/value type mismatch")
+		}
+		return t, nil
+	case "map_keys":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyMap {
+			return bad("map_keys expects Map[K,V]")
+		}
+		return Arr(t.A), nil
+	case "set_contains":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TySet {
+			return bad("set_contains expects Set[T]")
+		}
+		v, d := arg(1, t.A)
+		if d != nil {
+			return TError, d
+		}
+		if !compatible(t.A, v) {
+			return bad("set_contains value type mismatch")
+		}
+		return TBool, nil
+	case "set_insert":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TySet {
+			return bad("set_insert expects Set[T]")
+		}
+		v, d := arg(1, t.A)
+		if d != nil {
+			return TError, d
+		}
+		if !compatible(t.A, v) {
+			return bad("set_insert value type mismatch")
+		}
+		return t, nil
+	case "set_len":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TySet {
+			return bad("set_len expects Set[T]")
+		}
+		return TInt, nil
+	case "json_parse":
+		t, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(t, TString) {
+			return bad("json_parse expects String")
+		}
+		return Res(TJSON, TString), nil
+	case "json_stringify":
+		t, d := arg(0, TJSON)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(t, TJSON) {
+			return bad("json_stringify expects Json")
+		}
+		return TString, nil
+	case "http_get":
+		t, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(t, TString) {
+			return bad("http_get expects String URL")
+		}
+		return Res(TString, TString), nil
+	case "http_request":
+		m, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		u, d := arg(1, TString)
+		if d != nil {
+			return TError, d
+		}
+		body, d := arg(2, TString)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(m, TString) || !typeEqual(u, TString) || !typeEqual(body, TString) {
+			return bad("http_request expects method, URL, and body Strings")
+		}
+		return Res(TString, TString), nil
+	case "http_request_auth":
+		for i := 0; i < 4; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("http_request_auth expects String arguments")
+			}
+		}
+		return Res(TString, TString), nil
+	case "win_registry_get":
+		for i := 0; i < 2; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("win_registry_get expects String arguments")
+			}
+		}
+		return Res(TString, TString), nil
+	case "win_service_query":
+		t, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(t, TString) {
+			return bad("win_service_query expects a String")
+		}
+		return Res(TString, TString), nil
+	case "win_eventlog_write":
+		for i := 0; i < 2; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("win_eventlog_write expects String arguments")
+			}
+		}
+		return Res(TNil, TString), nil
+	case "win_raw_input":
+		return Res(TBytes, TString), nil
+	case "win_device_io_control":
+		d, e := arg(0, TString)
+		if e != nil {
+			return TError, e
+		}
+		c, e := arg(1, TInt)
+		if e != nil {
+			return TError, e
+		}
+		in, e := arg(2, TBytes)
+		if e != nil {
+			return TError, e
+		}
+		if !typeEqual(d, TString) || !typeEqual(c, TInt) || !typeEqual(in, TBytes) {
+			return bad("win_device_io_control expects String, Int, and Bytes")
+		}
+		return Res(TBytes, TString), nil
+	case "websocket_connect":
+		t, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(t, TString) {
+			return bad("websocket_connect expects a String URL")
+		}
+		return Res(&Type{Kind: TyWebSocket, Name: "WebSocket"}, TString), nil
+	case "websocket_send":
+		s, d := arg(0, &Type{Kind: TyWebSocket, Name: "WebSocket"})
+		if d != nil {
+			return TError, d
+		}
+		m, d := arg(1, TString)
+		if d != nil {
+			return TError, d
+		}
+		if s.Kind != TyWebSocket || !typeEqual(m, TString) {
+			return bad("websocket_send expects WebSocket and String")
+		}
+		return Res(TNil, TString), nil
+	case "websocket_receive":
+		s, d := arg(0, &Type{Kind: TyWebSocket, Name: "WebSocket"})
+		if d != nil {
+			return TError, d
+		}
+		if s.Kind != TyWebSocket {
+			return bad("websocket_receive expects WebSocket")
+		}
+		return Res(TString, TString), nil
+	case "websocket_close":
+		s, d := arg(0, &Type{Kind: TyWebSocket, Name: "WebSocket"})
+		if d != nil {
+			return TError, d
+		}
+		if s.Kind != TyWebSocket {
+			return bad("websocket_close expects WebSocket")
+		}
+		return TNil, nil
+	case "process_run":
+		p, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		a, d := arg(1, Arr(TString))
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(p, TString) || !typeEqual(a, Arr(TString)) {
+			return bad("process_run expects String and Array[String]")
+		}
+		return Res(TInt, TString), nil
 	case "thread_channel", "thread_channel_with_capacity":
 		if b.Name == "thread_channel_with_capacity" {
 			t, d := arg(0, TInt)

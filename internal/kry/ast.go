@@ -22,6 +22,9 @@ const (
 	ExField
 	ExStruct
 	ExEnum
+	ExMap
+	ExSet
+	ExPropagate
 )
 
 type Expr struct {
@@ -38,6 +41,8 @@ type Expr struct {
 	Items                 []*Expr
 	Base                  *Expr
 	Field                 string
+	Receiver              *Expr
+	MapKeys               []*Expr
 	StructName            string
 	Fields                []string
 	Values                []*Expr
@@ -56,6 +61,9 @@ const (
 	StBreak
 	StContinue
 	StMatch
+	StFor
+	StDefer
+	StUnsafe
 )
 
 type Stmt struct {
@@ -70,6 +78,7 @@ type Stmt struct {
 	Cond          *Expr
 	Then, Else    []*Stmt
 	Body          []*Stmt
+	Iter          *Expr
 	Return        *Expr
 	Scrutinee     *Expr
 	Arms          []MatchArm
@@ -107,14 +116,16 @@ type Param struct {
 	Tok  Token
 }
 type Function struct {
-	Name   string
-	Public bool
-	Worker bool
-	Params []Param
-	Return *TypeSpec
-	Body   []*Stmt
-	Tok    Token
-	Module string
+	Name     string
+	Public   bool
+	Worker   bool
+	Params   []Param
+	Return   *TypeSpec
+	Receiver *TypeSpec
+	Unsafe   bool
+	Body     []*Stmt
+	Tok      Token
+	Module   string
 }
 type FieldDecl struct {
 	Name string

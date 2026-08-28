@@ -14,15 +14,18 @@ type Scope struct {
 	Parent *Scope
 	Values map[string]Binding
 	Worker bool
+	Unsafe bool
 	Module string
 }
 
 func NewScope(parent *Scope, worker bool) *Scope {
 	m := ""
+	unsafe := false
 	if parent != nil {
 		m = parent.Module
+		unsafe = parent.Unsafe
 	}
-	return &Scope{Parent: parent, Values: map[string]Binding{}, Worker: worker, Module: m}
+	return &Scope{Parent: parent, Values: map[string]Binding{}, Worker: worker, Unsafe: unsafe, Module: m}
 }
 func (s *Scope) lookup(n string) (Binding, bool) {
 	for q := s; q != nil; q = q.Parent {
@@ -40,12 +43,14 @@ func normalFlow() Flow { return Flow{MayFallthrough: true, Reachable: true} }
 func returnFlow() Flow { return Flow{MustReturn: true, Reachable: true} }
 
 type Checker struct {
-	Prog    *Program
-	Env     *TypeEnv
-	Globals *Scope
-	Lim     Limits
-	Err     *Diagnostic
-	funcs   map[string]bool
+	Prog            *Program
+	Env             *TypeEnv
+	Globals         *Scope
+	Lim             Limits
+	Err             *Diagnostic
+	funcs           map[string]bool
+	currentReturn   *Type
+	currentFunction *Function
 }
 
 func Check(prog *Program, lim Limits) (*Checker, *Diagnostic) {
@@ -148,6 +153,9 @@ func (c *Checker) walkStmt(s *Stmt) {
 	if s.Scrutinee != nil {
 		c.walkExpr(s.Scrutinee)
 	}
+	if s.Iter != nil {
+		c.walkExpr(s.Iter)
+	}
 	for _, x := range s.Then {
 		c.walkStmt(x)
 	}
@@ -183,6 +191,10 @@ func (c *Checker) walkExpr(e *Expr) {
 	for _, x := range e.Values {
 		c.walkExpr(x)
 	}
+	for _, x := range e.MapKeys {
+		c.walkExpr(x)
+	}
+	c.walkExpr(e.Receiver)
 }
 func calledFunctions(body []*Stmt) []string {
 	var out []string
@@ -208,6 +220,10 @@ func calledFunctions(body []*Stmt) []string {
 		for _, x := range e.Values {
 			ex(x)
 		}
+		for _, x := range e.MapKeys {
+			ex(x)
+		}
+		ex(e.Receiver)
 	}
 	st = func(s *Stmt) {
 		if s == nil {
@@ -229,6 +245,10 @@ func calledFunctions(body []*Stmt) []string {
 		for _, x := range s.Body {
 			st(x)
 		}
+		if s.Iter != nil {
+			ex(s.Iter)
+		}
+
 		for _, a := range s.Arms {
 			for _, x := range a.Body {
 				st(x)
@@ -244,6 +264,15 @@ func calledFunctions(body []*Stmt) []string {
 func (c *Checker) checkFunction(f *Function) *Diagnostic {
 	sc := NewScope(c.Globals, f.Worker)
 	sc.Module = f.Module
+	c.currentFunction = f
+	defer func() { c.currentFunction = nil; c.currentReturn = nil }()
+	if f.Receiver != nil {
+		rt, d := resolveSpec(c.Env, f.Receiver, 0)
+		if d != nil {
+			return d
+		}
+		sc.Values["self"] = Binding{Type: rt, Mutable: false}
+	}
 	for _, p := range f.Params {
 		t, d := resolveSpec(c.Env, p.Type, 0)
 		if d != nil {
@@ -267,6 +296,7 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 	if f.Public && !ensurePublicType(rt, "", 0) {
 		return Diag(CatType, f.Tok.Source, f.Tok.Line, f.Tok.Column, "public function '%s' exposes a private return type", f.Name)
 	}
+	c.currentReturn = rt
 	fl := c.checkBlock(sc, f.Body, rt, 0, true)
 	if fl.HasError {
 		return c.Err
@@ -397,6 +427,49 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 			return Flow{HasError: true}
 		}
 		return normalFlow()
+	case StFor:
+		it, d := c.checkExpr(sc, s.Iter, nil)
+		if d != nil {
+			c.Err = d
+			return Flow{HasError: true}
+		}
+		var elem *Type
+		switch it.Kind {
+		case TyArray, TySet:
+			elem = it.A
+		case TyString:
+			elem = TString
+		case TyBytes:
+			elem = TInt
+		default:
+			c.Err = Diag(CatType, s.Iter.Tok.Source, s.Iter.Tok.Line, s.Iter.Tok.Column, "for expects Array[T], Set[T], String, or Bytes")
+			return Flow{HasError: true}
+		}
+		loopScope := NewScope(sc, sc.Worker)
+		loopScope.Values[s.Name] = Binding{Type: elem, Mutable: false}
+		c.checkBlock(loopScope, s.Body, rt, loop+1, inFn)
+		if c.Err != nil {
+			return Flow{HasError: true}
+		}
+		return normalFlow()
+	case StDefer:
+		deferScope := NewScope(sc, sc.Worker)
+		c.checkBlock(deferScope, s.Body, rt, loop, inFn)
+		if c.Err != nil {
+			return Flow{HasError: true}
+		}
+		return normalFlow()
+	case StUnsafe:
+		unsafeScope := NewScope(sc, sc.Worker)
+		unsafeScope.Unsafe = true
+		if c.currentFunction != nil {
+			c.currentFunction.Unsafe = true
+		}
+		c.checkBlock(unsafeScope, s.Body, rt, loop, inFn)
+		if c.Err != nil {
+			return Flow{HasError: true}
+		}
+		return normalFlow()
 	case StReturn:
 		if !inFn {
 			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "return is only valid inside a function")
@@ -412,8 +485,10 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 			return Flow{HasError: true}
 		}
 		if !compatible(rt, t) {
-			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "function must return %s; found %s", rt, t)
-			return Flow{HasError: true}
+			if s.Return == nil || s.Return.Kind != ExPropagate || (rt.Kind != TyOption && rt.Kind != TyResult) || !compatible(rt.A, t) {
+				c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "function must return %s; found %s", rt, t)
+				return Flow{HasError: true}
+			}
 		}
 		return returnFlow()
 	case StBreak:
@@ -663,6 +738,79 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		} else {
 			t = lt
 		}
+	case ExMap:
+		if len(e.MapKeys) == 0 {
+			if expected != nil && expected.Kind == TyMap {
+				t = expected
+			} else {
+				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "empty map requires Map[K, V] context")
+			}
+			break
+		}
+		var kt, vt *Type
+		if expected != nil && expected.Kind == TyMap {
+			kt, vt = expected.A, expected.B
+		}
+		for i, key := range e.MapKeys {
+			got, dd := c.checkExpr(sc, key, kt)
+			if dd != nil {
+				d = dd
+				break
+			}
+			if kt == nil {
+				kt = got
+			} else if !compatible(kt, got) {
+				d = Diag(CatType, key.Tok.Source, key.Tok.Line, key.Tok.Column, "map keys must have one homogeneous type")
+				break
+			}
+			if kt.Kind != TyInt && kt.Kind != TyBool && kt.Kind != TyString {
+				d = Diag(CatType, key.Tok.Source, key.Tok.Line, key.Tok.Column, "map keys must be Int, Bool, or String")
+				break
+			}
+			got, dd = c.checkExpr(sc, e.Values[i], vt)
+			if dd != nil {
+				d = dd
+				break
+			}
+			if vt == nil {
+				vt = got
+			} else if !compatible(vt, got) {
+				d = Diag(CatType, e.Values[i].Tok.Source, e.Values[i].Tok.Line, e.Values[i].Tok.Column, "map values must have one homogeneous type")
+				break
+			}
+		}
+		if d == nil {
+			t = MapOf(kt, vt)
+		}
+	case ExSet:
+		if len(e.Items) == 0 {
+			if expected != nil && expected.Kind == TySet {
+				t = expected
+			} else {
+				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "empty set requires Set[T] context")
+			}
+			break
+		}
+		var et *Type
+		if expected != nil && expected.Kind == TySet {
+			et = expected.A
+		}
+		for _, x := range e.Items {
+			xt, dd := c.checkExpr(sc, x, et)
+			if dd != nil {
+				d = dd
+				break
+			}
+			if et == nil {
+				et = xt
+			} else if !compatible(et, xt) {
+				d = Diag(CatType, x.Tok.Source, x.Tok.Line, x.Tok.Column, "set elements must have one homogeneous type")
+				break
+			}
+		}
+		if d == nil {
+			t = SetOf(et)
+		}
 	case ExArray:
 		if len(e.Items) == 0 {
 			if expected != nil && expected.Kind == TyArray {
@@ -702,21 +850,32 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			d = dd
 			break
 		}
-		it, dd := c.checkExpr(sc, e.Left, TInt)
+		wantIndex := TInt
+		if bt.Kind == TyMap {
+			wantIndex = bt.A
+		}
+		it, dd := c.checkExpr(sc, e.Left, wantIndex)
 		if dd != nil {
 			d = dd
 			break
 		}
-		if !typeEqual(it, TInt) {
+		if bt.Kind != TyMap && !typeEqual(it, TInt) {
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "index must be Int")
 		} else if bt.Kind == TyArray {
+
 			t = bt.A
 		} else if typeEqual(bt, TString) {
 			t = TString
 		} else if typeEqual(bt, TBytes) {
 			t = TInt
+		} else if bt.Kind == TyMap {
+			if !compatible(bt.A, it) {
+				d = Diag(CatType, e.Left.Tok.Source, e.Left.Tok.Line, e.Left.Tok.Column, "map index has type %s; expected %s", it, bt.A)
+			} else {
+				t = bt.B
+			}
 		} else {
-			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "indexing expects String or Array[T]")
+			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "indexing expects String, Bytes, Array[T], or Map[K,V]")
 		}
 	case ExField:
 		bt, dd := c.checkExpr(sc, e.Base, nil)
@@ -775,8 +934,26 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			}
 		}
 		t = st
+	case ExPropagate:
+		inner, dd := c.checkExpr(sc, e.Operand, c.currentReturn)
+		if dd != nil {
+			d = dd
+			break
+		}
+		if c.currentReturn == nil {
+			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "'?' is only valid inside a function returning Option or Result")
+			break
+		}
+		if inner.Kind == TyOption && c.currentReturn.Kind == TyOption && compatible(inner.A, c.currentReturn.A) {
+			t = inner.A
+		} else if inner.Kind == TyResult && c.currentReturn.Kind == TyResult && compatible(inner.A, c.currentReturn.A) && compatible(inner.B, c.currentReturn.B) {
+			t = inner.A
+		} else {
+			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "'?' requires an Option or Result matching the enclosing function return type")
+		}
 	case ExCall:
 		t, d = c.checkCall(sc, e, expected)
+
 	}
 	if d == nil && t == nil {
 		t = TError
@@ -787,6 +964,30 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	return t, d
 }
 func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnostic) {
+	if e.Receiver != nil {
+		rt, d := c.checkExpr(sc, e.Receiver, nil)
+		if d != nil {
+			return TError, d
+		}
+		f := c.Env.Functions[methodKey(rt, e.Name)]
+		if f == nil {
+			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown method '%s' for %s", e.Name, rt)
+		}
+		if len(e.Args) != len(f.Params) {
+			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "method '%s' expects %d argument(s), got %d", e.Name, len(f.Params), len(e.Args))
+		}
+		for i, a := range e.Args {
+			pt, _ := resolveSpec(c.Env, f.Params[i].Type, 0)
+			at, dd := c.checkExpr(sc, a, pt)
+			if dd != nil {
+				return TError, dd
+			}
+			if !compatible(pt, at) {
+				return TError, Diag(CatType, a.Tok.Source, a.Tok.Line, a.Tok.Column, "argument %d to method '%s' expected %s, found %s", i+1, e.Name, pt, at)
+			}
+		}
+		return resolveSpec(c.Env, f.Return, 0)
+	}
 	b, ok := c.Env.Builtins[e.Name]
 	if ok {
 		if sc.Worker && (strings.HasPrefix(b.Name, "fs_") || b.Name == "env_get" || b.Name == "thread_spawn") {

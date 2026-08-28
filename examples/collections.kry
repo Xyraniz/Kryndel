@@ -1,0 +1,29 @@
+struct Counter {
+    value: Int,
+}
+
+impl Counter {
+    fn increment() -> Int {
+        return self.value + 1
+    }
+}
+
+fn safe_value() -> Result[Int, String] {
+    let value: Result[Int, String] = ok(7)
+    return value?
+}
+
+let mut total: Int = 0
+for value in [1, 2, 3] {
+    total = total + value
+}
+let answers: Map[String, Int] = {"total": total}
+let unique: Set[Int] = |{1, 2, 2, 3}|
+let counter: Counter = Counter{value: 8}
+println("total = " + str(answers["total"]))
+println("unique = " + str(set_len(unique)))
+println("method = " + str(counter.increment()))
+println("propagated = " + str(safe_value()))
+defer {
+    println("deferred cleanup")
+}

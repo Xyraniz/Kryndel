@@ -6,7 +6,7 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | --- | --- | --- |
 | `print` | `print(value: Display) -> Nil` | Writes one value without a newline; a stream failure is reported. |
 | `println` | `println(value: Display) -> Nil` | Writes one value and a newline; a stream failure is reported. |
-| `len` | `len(value: String\|Array[T]\|Bytes) -> Int` | Counts UTF-8 code points, elements, or octets; unsupported values are rejected. |
+| `len` | `len(value: String\|Array[T]\|Bytes\|Map[K,V]\|Set[T]) -> Int` | Counts UTF-8 code points, elements, octets, map entries, or unique set elements. |
 | `bytes` | `bytes(value: Array[Int]) -> Bytes` | Converts integers in `0..255`; out-of-range elements are rejected. |
 | `string_to_bytes` | `string_to_bytes(value: String) -> Bytes` | Preserves valid UTF-8 bytes; invalid UTF-8 is rejected. |
 | `bytes_to_string` | `bytes_to_string(value: Bytes) -> String` | Decodes only valid UTF-8; malformed bytes are rejected. |
@@ -37,6 +37,10 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `hex_decode`, `base64_decode` | `String -> Result[Bytes, String]` | Reject malformed encodings. |
 | `array_pop`, `array_get` | `Array[T] -> Option[T]` | Return `none` for out-of-range or empty access. |
 | `array_concat`, `array_slice`, `array_reverse`, `array_contains`, `array_join` | Collection operations. | Require homogeneous element types and checked indexes. |
+| `map_get`, `map_insert`, `map_keys` | `Map[K,V]` operations. | Maps preserve deterministic insertion order; insertion returns a new map and missing reads return `none`. |
+| `set_contains`, `set_insert`, `set_len` | `Set[T]` operations. | Sets deduplicate by recursive value equality and return new values on insertion. |
+| `json_parse` | `json_parse(value: String) -> Result[Json,String]` | Validates and canonicalizes JSON under the source-size limit. |
+| `json_stringify` | `json_stringify(value: Json) -> String` | Returns the canonical validated JSON text. |
 | `thread_channel` | `thread_channel() -> Channel[T]` | Creates an unbounded queue by default; a `Channel[T]` context is required. |
 | `thread_channel_with_capacity` | `thread_channel_with_capacity(capacity: Int) -> Channel[T]` | Creates a bounded queue with positive capacity. |
 | `thread_spawn` | `thread_spawn(name: String) -> Thread[T]` | Starts a zero-argument named worker; unknown workers and startup failures are rejected. |
@@ -51,7 +55,12 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `thread_cancel` | `thread_cancel(thread: Thread[T]) -> Nil` | Requests cooperative cancellation and wakes channel waits. |
 | `thread_close` | `thread_close(channel: Channel[T]) -> Nil` | Closes a channel and wakes blocked operations; repeated close is harmless. |
 | `fs_read_bytes`, `fs_write_bytes`, `fs_exists` | Typed byte-file and existence operations. | Reject NUL paths and return I/O failures as `Result`. |
+| `http_get`, `http_request` | Bounded HTTP/TLS operations. | Use a request timeout, cap response bytes, reject invalid UTF-8, and return non-2xx status as `Err`. |
+| `http_request_auth` | Bearer-authenticated HTTP request. | Sends the token only in the Authorization header and never includes it in diagnostics. |
+| `websocket_connect`, `websocket_send`, `websocket_receive`, `websocket_close` | RFC 6455 WebSocket lifecycle. | Require `ws`/`wss`, validate the handshake, mask client frames, bound payloads, and expose `WebSocket` as non-Copy. |
+| `process_run` | `process_run(program: String, args: Array[String]) -> Result[Int,String]` | Starts a program directly without a shell and bounds combined output. |
+| `win_registry_get`, `win_service_query`, `win_eventlog_write`, `win_raw_input`, `win_device_io_control` | Windows-only host operations. | Return an explicit unsupported-target failure on non-Windows; native adapters use Win32-compatible entry points. |
 
 String-to-number conversion rejects whitespace-dependent partial parses and inputs such as `"12xyz"`. Float values and results must be finite. Integer arithmetic and `abs(Int minimum)` are checked. `Bytes` conversion never applies an implicit text encoding to arbitrary values.
 
-The Go registry is the authoritative list. The CLI help renders its signatures and descriptions. Adding a builtin requires a registry entry, checker behavior, runtime behavior, documentation, and positive and negative tests. Directory, process, network, terminal, and FFI modules are outside the stable source API and are described as future design work in `docs/design.md`.
+The Go registry is the authoritative list. The CLI help renders its signatures and descriptions. Adding a builtin requires a registry entry, checker behavior, runtime behavior, documentation, and positive and negative tests. Package authors should use the typed wrappers in `std/env.kry`, `std/json.kry`, and `std/http.kry`; the official `packages/discord` package uses the same bounded primitives and never prints bot tokens.

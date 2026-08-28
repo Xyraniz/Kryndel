@@ -1,0 +1,11 @@
+pub fn get(url: String) -> Result[String, String] {
+    return http_get(url)
+}
+
+pub fn request(method: String, url: String, body: String) -> Result[String, String] {
+    return http_request(method, url, body)
+}
+
+pub fn request_auth(method: String, url: String, body: String, token: String) -> Result[String, String] {
+    return http_request_auth(method, url, body, token)
+}

@@ -1,0 +1,63 @@
+pub struct Bot {
+    token: String,
+    intents: Array[String],
+    gateway: String,
+}
+
+fn intent_mask(intents: Array[String]) -> Int {
+    let mut mask: Int = 0
+    for intent in intents {
+        if intent == "Guilds" {
+            mask = mask + 1
+        }
+        if intent == "GuildMessages" {
+            mask = mask + 512
+        }
+        if intent == "MessageContent" {
+            mask = mask + 32768
+        }
+        if intent == "GuildMembers" {
+            mask = mask + 2
+        }
+    }
+    return mask
+}
+
+pub fn bot(token: String, intents: Array[String]) -> Result[Bot, String] {
+    if token == "" {
+        return err("Discord token must not be empty")
+    }
+    return ok(Bot{token: token, intents: intents, gateway: "wss://gateway.discord.gg/?v=10&encoding=json"})
+}
+
+impl Bot {
+    pub fn on_message(command: String) -> Result[Nil, String] {
+        if command == "" {
+            return err("message command must not be empty")
+        }
+        return ok(nil)
+    }
+
+    pub fn run() -> Result[Nil, String] {
+        let connection: Result[WebSocket, String] = websocket_connect(self.gateway)
+        match connection {
+            ok(socket) => {
+                let identify: String = "{\"op\":2,\"d\":{\"token\":\"" + self.token + "\",\"intents\":" + str(intent_mask(self.intents)) + ",\"properties\":{\"os\":\"kryndel\",\"browser\":\"kryndel\",\"device\":\"kryndel\"}}}"
+                let sent: Result[Nil, String] = websocket_send(socket, identify)
+                let _hello: Result[String, String] = websocket_receive(socket)
+                websocket_close(socket)
+                match sent {
+                    ok(_) => {
+                        return ok(nil)
+                    }
+                    err(send_error) => {
+                        return err(send_error)
+                    }
+                }
+            }
+            err(connect_error) => {
+                return err(connect_error)
+            }
+        }
+    }
+}
