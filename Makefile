@@ -1,6 +1,6 @@
 GO ?= go
 BINARY := build/kry
-.PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs release clean
+.PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs native-smoke package-smoke release clean
 all: build
 
 build:
@@ -14,6 +14,8 @@ check: build
 	$(BINARY) check examples/control_flow.kry
 	$(BINARY) check examples/typed_data.kry
 	$(BINARY) check examples/module_demo.kry
+	$(BINARY) check examples/collections.kry
+	$(BINARY) check examples/discord_bot.kry
 
 test: build check
 	$(GO) test ./...
@@ -23,6 +25,9 @@ test: build check
 	$(BINARY) run examples/control_flow.kry
 	$(BINARY) run examples/typed_data.kry
 	$(BINARY) run examples/module_demo.kry
+	$(BINARY) run examples/collections.kry
+	$(BINARY) build examples/hello.kry --format=elf --target=linux-x64 -o build/hello.elf
+	$(BINARY) inspect build/hello.elf
 
 test-static: build
 	@test -z "$$($(GO)fmt -l cmd internal)" || (echo 'gofmt check failed' >&2; exit 1)
@@ -41,6 +46,15 @@ fuzz-smoke:
 
 check-docs:
 	$(GO) test -run='TestDocumentation' -count=1 ./...
+
+native-smoke: build
+	$(BINARY) build examples/hello.kry --format=exe --target=windows-x64 -o build/hello.exe
+	$(BINARY) inspect build/hello.exe
+	$(BINARY) build examples/hello.kry --format=elf --target=linux-x64 -o build/hello.elf
+	$(BINARY) inspect build/hello.elf
+
+package-smoke: build
+	$(BINARY) package build/kryndel-self-test.kpkg
 
 release: build
 	mkdir -p dist

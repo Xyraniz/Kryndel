@@ -19,7 +19,7 @@ func LoadProgram(path string, lim Limits, restrictedRoot string) (*Program, *Dia
 	if err != nil {
 		return nil, Diag(CatIO, nil, 1, 1, "cannot resolve source path: %v", err)
 	}
-	root := filepath.Dir(abs)
+	root := findModuleRoot(filepath.Dir(abs))
 	if restrictedRoot != "" {
 		r, _ := filepath.Abs(restrictedRoot)
 		root = filepath.Clean(r)
@@ -39,6 +39,20 @@ func LoadProgram(path string, lim Limits, restrictedRoot string) (*Program, *Dia
 	p.Source.Name = abs
 	return l.merge(p), nil
 }
+func findModuleRoot(start string) string {
+	cur, _ := filepath.Abs(start)
+	for {
+		if fileExists(filepath.Join(cur, "kry.toml")) || fileExists(filepath.Join(cur, ".git")) {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return start
+		}
+		cur = parent
+	}
+}
+
 func within(root, p string) bool {
 	r, _ := filepath.Abs(root)
 	q, _ := filepath.Abs(p)
@@ -72,11 +86,11 @@ func (l *ModuleLoader) load(path string) (*Program, *Diagnostic) {
 		if filepath.IsAbs(imp.Path) || strings.ContainsRune(imp.Path, 0) || hasParent(imp.Path) {
 			return nil, Diag(CatIO, imp.Tok.Source, imp.Tok.Line, imp.Tok.Column, "unsafe module path '%s'", imp.Path)
 		}
-		candidate := filepath.Join(filepath.Dir(path), imp.Path)
-		if filepath.Ext(candidate) == "" {
-			candidate += ".kry"
+		candidate := resolveImportPath(filepath.Dir(path), imp.Path)
+		if !fileExists(candidate) {
+			candidate = resolveImportPath(l.Root, imp.Path)
 		}
-		candidate = filepath.Clean(candidate)
+
 		if !within(l.Root, candidate) {
 			return nil, Diag(CatIO, imp.Tok.Source, imp.Tok.Line, imp.Tok.Column, "module path escapes the program root")
 		}
@@ -93,6 +107,25 @@ func (l *ModuleLoader) load(path string) (*Program, *Diagnostic) {
 	l.Programs[path] = prog
 	return prog, nil
 }
+func resolveImportPath(base, imp string) string {
+	candidate := filepath.Join(base, imp)
+	if filepath.Ext(candidate) == "" {
+		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+			candidate = filepath.Join(candidate, "main.kry")
+		} else {
+			candidate += ".kry"
+		}
+	}
+	if filepath.Ext(candidate) == ".kry" && !fileExists(candidate) {
+		packageCandidate := filepath.Join(base, "vendor", imp, "main.kry")
+		if fileExists(packageCandidate) {
+			candidate = packageCandidate
+		}
+	}
+	return filepath.Clean(candidate)
+}
+func fileExists(path string) bool { _, err := os.Stat(path); return err == nil }
+
 func hasParent(p string) bool {
 	for _, x := range strings.FieldsFunc(filepath.ToSlash(p), func(r rune) bool { return r == '/' }) {
 		if x == ".." {
@@ -134,11 +167,10 @@ func (l *ModuleLoader) merge(root *Program) *Program {
 	var add func(*Program)
 	add = func(p *Program) {
 		for _, imp := range p.Imports {
-			candidate := filepath.Join(filepath.Dir(p.Source.Name), imp.Path)
-			if filepath.Ext(candidate) == "" {
-				candidate += ".kry"
+			candidate := resolveImportPath(filepath.Dir(p.Source.Name), imp.Path)
+			if !fileExists(candidate) {
+				candidate = resolveImportPath(l.Root, imp.Path)
 			}
-			candidate = filepath.Clean(candidate)
 			if seen[candidate] {
 				continue
 			}

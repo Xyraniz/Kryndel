@@ -295,7 +295,7 @@ func TestFuzzSmoke(t *testing.T) {
 }
 
 func TestDocumentation(t *testing.T) {
-	paths := []string{"README.md", "CONTRIBUTING.md", "CHANGELOG.md", "docs/native.md", "docs/architecture.md", "docs/design.md", "docs/release.md", "docs/testing.md", "docs/concurrency.md", "docs/memory.md", "docs/modules.md", "docs/system.md"}
+	paths := []string{"README.md", "CONTRIBUTING.md", "CHANGELOG.md", "docs/native.md", "docs/stdlib.md", "docs/packages.md", "docs/discord.md", "docs/windows.md", "docs/architecture.md", "docs/design.md", "docs/release.md", "docs/testing.md", "docs/concurrency.md", "docs/memory.md", "docs/modules.md", "docs/system.md"}
 	for _, path := range paths {
 		data, err := os.ReadFile(filepath.Join("..", "..", path))
 		if err != nil {

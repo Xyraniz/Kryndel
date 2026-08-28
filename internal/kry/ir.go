@@ -61,6 +61,10 @@ func CompileIR(p *Program, lim Limits) (*ValidatedIR, *Diagnostic) {
 		for _, x := range e.Values {
 			ex(x, d+1)
 		}
+		for _, x := range e.MapKeys {
+			ex(x, d+1)
+		}
+		ex(e.Receiver, d+1)
 	}
 	st = func(s *Stmt, d int) {
 		if ir == nil || s == nil {
@@ -87,6 +91,17 @@ func CompileIR(p *Program, lim Limits) (*ValidatedIR, *Diagnostic) {
 		case StWhile:
 			op = OpWhile
 			ex(s.Cond, d+1)
+			for _, x := range s.Body {
+				st(x, d+1)
+			}
+		case StFor:
+			op = OpWhile
+			ex(s.Iter, d+1)
+			for _, x := range s.Body {
+				st(x, d+1)
+			}
+		case StDefer, StUnsafe:
+			op = OpExpr
 			for _, x := range s.Body {
 				st(x, d+1)
 			}

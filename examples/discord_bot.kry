@@ -1,0 +1,23 @@
+import "std/env"
+import "packages/discord"
+
+fn main() -> Result[Nil, String] {
+    let token: Result[String, String] = require("DISCORD_TOKEN")
+    match token {
+        ok(secret) => {
+            let intents: Array[String] = ["Guilds", "GuildMessages", "MessageContent"]
+            let client: Result[Bot, String] = bot(secret, intents)
+            match client {
+                ok(connected) => {
+                    return connected.run()
+                }
+                err(problem) => {
+                    return err(problem)
+                }
+            }
+        }
+        err(problem) => {
+            return err(problem)
+        }
+    }
+}

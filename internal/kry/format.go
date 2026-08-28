@@ -86,6 +86,10 @@ func (f *Formatter) enumDecl(e *EnumDecl) {
 	f.line("")
 }
 func (f *Formatter) function(fn *Function) {
+	if fn.Receiver != nil {
+		f.line("impl " + f.typeSpec(fn.Receiver) + " {")
+		f.indent++
+	}
 	pre := ""
 	if fn.Public {
 		pre = "pub "
@@ -105,6 +109,10 @@ func (f *Formatter) function(fn *Function) {
 	}
 	f.indent--
 	f.line("}")
+	if fn.Receiver != nil {
+		f.indent--
+		f.line("}")
+	}
 	f.line("")
 }
 func (f *Formatter) stmt(s *Stmt) {
@@ -153,6 +161,30 @@ func (f *Formatter) stmt(s *Stmt) {
 		}
 	case StWhile:
 		f.line("while " + f.expr(s.Cond) + " {")
+		f.indent++
+		for _, x := range s.Body {
+			f.stmt(x)
+		}
+		f.indent--
+		f.line("}")
+	case StFor:
+		f.line("for " + s.Name + " in " + f.expr(s.Iter) + " {")
+		f.indent++
+		for _, x := range s.Body {
+			f.stmt(x)
+		}
+		f.indent--
+		f.line("}")
+	case StDefer:
+		f.line("defer {")
+		f.indent++
+		for _, x := range s.Body {
+			f.stmt(x)
+		}
+		f.indent--
+		f.line("}")
+	case StUnsafe:
+		f.line("unsafe {")
 		f.indent++
 		for _, x := range s.Body {
 			f.stmt(x)
@@ -260,6 +292,24 @@ func (f *Formatter) expr(e *Expr) string {
 		return e.Name
 	case ExEnum:
 		return e.EnumType + "::" + e.EnumVariant
+	case ExMap:
+		x := "{"
+		for i, k := range e.MapKeys {
+			if i > 0 {
+				x += ", "
+			}
+			x += f.expr(k) + ": " + f.expr(e.Values[i])
+		}
+		return x + "}"
+	case ExSet:
+		x := "|{"
+		for i, v := range e.Items {
+			if i > 0 {
+				x += ", "
+			}
+			x += f.expr(v)
+		}
+		return x + "}|"
 	case ExArray:
 		x := "["
 		for i, v := range e.Items {
@@ -282,8 +332,14 @@ func (f *Formatter) expr(e *Expr) string {
 		return opText(e.Op) + f.expr(e.Operand)
 	case ExBinary:
 		return "(" + f.expr(e.Left) + " " + opText(e.Op) + " " + f.expr(e.Right) + ")"
+	case ExPropagate:
+		return f.expr(e.Operand) + "?"
 	case ExCall:
-		x := e.Name + "("
+		x := ""
+		if e.Receiver != nil {
+			x = f.expr(e.Receiver) + "."
+		}
+		x += e.Name + "("
 		for i, a := range e.Args {
 			if i > 0 {
 				x += ", "
@@ -329,6 +385,9 @@ func opText(k TokenKind) string {
 		return "&&"
 	case OR:
 		return "||"
+	case QUESTION:
+		return "?"
+
 	}
 	return "?"
 }

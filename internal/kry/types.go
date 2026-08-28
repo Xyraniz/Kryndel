@@ -21,6 +21,10 @@ const (
 	TyThread
 	TyStruct
 	TyEnum
+	TyMap
+	TySet
+	TyJSON
+	TyWebSocket
 )
 
 type Type struct {
@@ -41,6 +45,7 @@ var (
 	TBool    = &Type{Kind: TyBool, Name: "Bool"}
 	TString  = &Type{Kind: TyString, Name: "String"}
 	TBytes   = &Type{Kind: TyBytes, Name: "Bytes"}
+	TJSON    = &Type{Kind: TyJSON, Name: "Json"}
 )
 
 func Arr(t *Type) *Type        { return &Type{Kind: TyArray, Name: "Array", A: t} }
@@ -48,6 +53,8 @@ func Opt(t *Type) *Type        { return &Type{Kind: TyOption, Name: "Option", A:
 func Res(a, b *Type) *Type     { return &Type{Kind: TyResult, Name: "Result", A: a, B: b} }
 func Chan(t *Type) *Type       { return &Type{Kind: TyChannel, Name: "Channel", A: t} }
 func TypeThread(t *Type) *Type { return &Type{Kind: TyThread, Name: "Thread", A: t} }
+func MapOf(k, v *Type) *Type   { return &Type{Kind: TyMap, Name: "Map", A: k, B: v} }
+func SetOf(t *Type) *Type      { return &Type{Kind: TySet, Name: "Set", A: t} }
 func (t *Type) String() string {
 	if t == nil {
 		return "<unknown>"
@@ -63,6 +70,15 @@ func (t *Type) String() string {
 		return "Channel[" + t.A.String() + "]"
 	case TyThread:
 		return "Thread[" + t.A.String() + "]"
+	case TyMap:
+		return "Map[" + t.A.String() + ", " + t.B.String() + "]"
+	case TySet:
+		return "Set[" + t.A.String() + "]"
+	case TyJSON:
+		return "Json"
+	case TyWebSocket:
+		return "WebSocket"
+
 	}
 	if t.Name != "" {
 		return t.Name
@@ -94,10 +110,11 @@ func typeEqual(a, b *Type) bool {
 		}
 		seen[k] = true
 		switch x.Kind {
-		case TyArray, TyOption, TyChannel, TyThread:
+		case TyArray, TyOption, TyChannel, TyThread, TySet:
 			return eq(x.A, y.A, d+1)
-		case TyResult:
+		case TyResult, TyMap:
 			return eq(x.A, y.A, d+1) && eq(x.B, y.B, d+1)
+
 		default:
 			return true
 		}
@@ -109,10 +126,11 @@ func typeKnown(t *Type) bool {
 		return false
 	}
 	switch t.Kind {
-	case TyArray, TyOption, TyChannel, TyThread:
+	case TyArray, TyOption, TyChannel, TyThread, TySet:
 		return typeKnown(t.A)
-	case TyResult:
+	case TyResult, TyMap:
 		return typeKnown(t.A) && typeKnown(t.B)
+
 	}
 	return true
 }
@@ -144,12 +162,13 @@ func TypeCopyable(root *Type) bool {
 		states[t] = copyVisiting
 		ok := false
 		switch t.Kind {
-		case TyNil, TyInt, TyFloat, TyBool, TyString, TyBytes, TyEnum:
+		case TyNil, TyInt, TyFloat, TyBool, TyString, TyBytes, TyEnum, TyJSON:
 			ok = true
-		case TyArray, TyOption:
+		case TyArray, TyOption, TySet:
 			ok = visit(t.A, d+1)
-		case TyResult:
+		case TyResult, TyMap:
 			ok = visit(t.A, d+1) && visit(t.B, d+1)
+
 		case TyStruct:
 			ok = true
 			if t.Struct == nil {
@@ -214,6 +233,10 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 			return TString, nil
 		case "Bytes":
 			return TBytes, nil
+		case "Json":
+			return TJSON, nil
+		case "WebSocket":
+			return &Type{Kind: TyWebSocket, Name: "WebSocket"}, nil
 		case "Array":
 			return Arr(TUnknown), nil
 		}
@@ -248,6 +271,21 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 			a, d := resolveSpec(env, s.Params[0], depth+1)
 			return TypeThread(a), d
 		}
+	case "Map":
+		if len(s.Params) == 2 {
+			k, d := resolveSpec(env, s.Params[0], depth+1)
+			if d != nil {
+				return TError, d
+			}
+			v, d := resolveSpec(env, s.Params[1], depth+1)
+			return MapOf(k, v), d
+		}
+	case "Set":
+		if len(s.Params) == 1 {
+			a, d := resolveSpec(env, s.Params[0], depth+1)
+			return SetOf(a), d
+		}
+
 	}
 	if len(s.Params) == 0 {
 		if t := env.Types[name]; t != nil {
@@ -255,6 +293,13 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 		}
 	}
 	return TError, Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "unknown or malformed type '%s'", name)
+}
+
+func methodKey(t *Type, name string) string {
+	if t == nil {
+		return "<unknown>::" + name
+	}
+	return t.String() + "::" + name
 }
 
 type TypeEnv struct {
@@ -282,10 +327,14 @@ func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
 		e.Types[d.Name] = d.Type
 	}
 	for _, f := range prog.Functions {
-		if _, ok := e.Functions[f.Name]; ok {
+		key := f.Name
+		if f.Receiver != nil {
+			key = TypeSpecString(f.Receiver) + "::" + f.Name
+		}
+		if _, ok := e.Functions[key]; ok {
 			return nil, Diag(CatType, f.Tok.Source, f.Tok.Line, f.Tok.Column, "function '%s' is already defined", f.Name)
 		}
-		e.Functions[f.Name] = f
+		e.Functions[key] = f
 	}
 	for _, s := range prog.Structs {
 		seenFields := map[string]bool{}
@@ -323,10 +372,11 @@ func ensurePublicType(t *Type, local string, depth int) bool {
 		return true
 	case TyEnum:
 		return t.Enum != nil && (t.Enum.Public || t.Enum.Module == local)
-	case TyArray, TyOption, TyChannel, TyThread:
+	case TyArray, TyOption, TyChannel, TyThread, TySet:
 		return ensurePublicType(t.A, local, depth+1)
-	case TyResult:
+	case TyResult, TyMap:
 		return ensurePublicType(t.A, local, depth+1) && ensurePublicType(t.B, local, depth+1)
+
 	}
 	return true
 }

@@ -32,6 +32,11 @@ const (
 	STRUCT
 	ENUM
 	MATCH
+	FOR
+	IN
+	DEFER
+	UNSAFE
+	IMPL
 	LPAREN
 	RPAREN
 	LBRACE
@@ -60,6 +65,8 @@ const (
 	GEQ
 	AND
 	OR
+	QUESTION
+	PIPE
 )
 
 type Token struct {
@@ -69,7 +76,7 @@ type Token struct {
 	Source        *Source
 }
 
-var words = map[string]TokenKind{"fn": FN, "let": LET, "mut": MUT, "if": IF, "else": ELSE, "while": WHILE, "return": RETURN, "break": BREAK, "continue": CONTINUE, "true": TRUE, "false": FALSE, "nil": NIL, "pub": PUB, "import": IMPORT, "struct": STRUCT, "enum": ENUM, "match": MATCH}
+var words = map[string]TokenKind{"fn": FN, "let": LET, "mut": MUT, "if": IF, "else": ELSE, "while": WHILE, "return": RETURN, "break": BREAK, "continue": CONTINUE, "true": TRUE, "false": FALSE, "nil": NIL, "pub": PUB, "import": IMPORT, "struct": STRUCT, "enum": ENUM, "match": MATCH, "for": FOR, "in": IN, "defer": DEFER, "unsafe": UNSAFE, "impl": IMPL}
 
 func validUTF8(b []byte) bool { return utf8.Valid(b) }
 func isIDStart(r rune) bool   { return r == '_' || unicode.IsLetter(r) || r >= utf8.RuneSelf }
@@ -317,6 +324,11 @@ func Lex(src *Source, lim Limits) ([]Token, *Diagnostic) {
 				k = LESS
 			case '>':
 				k = GREATER
+			case '?':
+				k = QUESTION
+			case '|':
+				k = PIPE
+
 			default:
 				return nil, Diag(CatLex, src, ln, cl, "unexpected character %q", r)
 			}

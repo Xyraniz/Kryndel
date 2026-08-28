@@ -1,13 +1,18 @@
 package kry
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +36,10 @@ const (
 	VResult
 	VChannel
 	VThread
+	VMap
+	VSet
+	VJSON
+	VWebSocket
 )
 
 type Value struct {
@@ -50,7 +59,12 @@ type Value struct {
 	Inner   *Value
 	Ch      *Channel
 	Th      *Thread
+	Map     []MapEntry
+	Set     []Value
+	WS      *websocketConn
 }
+
+type MapEntry struct{ Key, Value Value }
 
 func nilVal() Value            { return Value{Kind: VNil} }
 func intVal(v int64) Value     { return Value{Kind: VInt, I: v} }
@@ -84,7 +98,7 @@ func display(v Value) string {
 			return "true"
 		}
 		return "false"
-	case VString:
+	case VString, VJSON:
 		return v.S
 	case VBytes:
 		return fmt.Sprintf("<Bytes:%d>", len(v.Bytes))
@@ -129,13 +143,44 @@ func display(v Value) string {
 		return "<Channel>"
 	case VThread:
 		return "<Thread>"
+	case VWebSocket:
+		return "<WebSocket>"
+	case VMap:
+		var b strings.Builder
+		b.WriteString("{")
+		for i, x := range v.Map {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(display(x.Key))
+			b.WriteString(": ")
+			b.WriteString(display(x.Value))
+		}
+		b.WriteString("}")
+		return b.String()
+	case VSet:
+		var b strings.Builder
+		b.WriteString("|{")
+		for i, x := range v.Set {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(display(x))
+		}
+		b.WriteString("}|")
+		return b.String()
 	}
+
 	return "<invalid>"
 }
 func cloneValue(v Value) Value {
 	switch v.Kind {
 	case VString:
 		return stringVal(v.S)
+	case VJSON:
+		return Value{Kind: VJSON, S: v.S}
+	case VWebSocket:
+		return v
 	case VBytes:
 		return bytesVal(v.Bytes)
 	case VArray:
@@ -157,7 +202,20 @@ func cloneValue(v Value) Value {
 		return optVal(true, cloneValue(*v.Inner))
 	case VResult:
 		return resVal(v.OK, cloneValue(*v.Inner))
+	case VMap:
+		m := make([]MapEntry, len(v.Map))
+		for i, x := range v.Map {
+			m[i] = MapEntry{Key: cloneValue(x.Key), Value: cloneValue(x.Value)}
+		}
+		return Value{Kind: VMap, Map: m}
+	case VSet:
+		s := make([]Value, len(v.Set))
+		for i, x := range v.Set {
+			s[i] = cloneValue(x)
+		}
+		return Value{Kind: VSet, Set: s}
 	default:
+
 		return v
 	}
 }
@@ -174,7 +232,7 @@ func equalValue(a, b Value) bool {
 		return a.F == b.F
 	case VBool:
 		return a.Bool == b.Bool
-	case VString:
+	case VString, VJSON:
 		return a.S == b.S
 	case VBytes:
 		return string(a.Bytes) == string(b.Bytes)
@@ -211,7 +269,31 @@ func equalValue(a, b Value) bool {
 		return a.Ch == b.Ch
 	case VThread:
 		return a.Th == b.Th
+	case VMap:
+		if len(a.Map) != len(b.Map) {
+			return false
+		}
+		for i := range a.Map {
+			if !equalValue(a.Map[i].Key, b.Map[i].Key) || !equalValue(a.Map[i].Value, b.Map[i].Value) {
+				return false
+			}
+		}
+		return true
+	case VWebSocket:
+		return a.WS == b.WS
+	case VSet:
+		if len(a.Set) != len(b.Set) {
+
+			return false
+		}
+		for i := range a.Set {
+			if !equalValue(a.Set[i], b.Set[i]) {
+				return false
+			}
+		}
+		return true
 	}
+
 	return false
 }
 func copyableValue(v Value, depth int) bool {
@@ -219,7 +301,7 @@ func copyableValue(v Value, depth int) bool {
 		return false
 	}
 	switch v.Kind {
-	case VNil, VInt, VFloat, VBool, VString, VBytes, VEnum:
+	case VNil, VInt, VFloat, VBool, VString, VBytes, VEnum, VJSON:
 		return true
 	case VArray:
 		for _, x := range v.Array {
@@ -239,7 +321,24 @@ func copyableValue(v Value, depth int) bool {
 		return !v.Present || copyableValue(*v.Inner, depth+1)
 	case VResult:
 		return copyableValue(*v.Inner, depth+1)
+	case VMap:
+		for _, x := range v.Map {
+			if !copyableValue(x.Key, depth+1) || !copyableValue(x.Value, depth+1) {
+				return false
+			}
+		}
+		return true
+	case VSet:
+		for _, x := range v.Set {
+			if !copyableValue(x, depth+1) {
+				return false
+			}
+		}
+		return true
+	case VWebSocket:
+		return false
 	default:
+
 		return false
 	}
 }
@@ -320,6 +419,7 @@ type Runtime struct {
 	Channels     []*Channel
 	Threads      []*Thread
 	Worker       bool
+	propagated   *Value
 	shutdownOnce sync.Once
 }
 type RunBinding struct {
@@ -327,8 +427,10 @@ type RunBinding struct {
 	Mutable bool
 }
 type RunScope struct {
-	Parent *RunScope
-	Values map[string]RunBinding
+	Parent     *RunScope
+	Values     map[string]RunBinding
+	Defers     [][]*Stmt
+	ReturnType *Type
 }
 
 func newRunScope(p *RunScope) *RunScope { return &RunScope{Parent: p, Values: map[string]RunBinding{}} }
@@ -390,9 +492,10 @@ type EvalResult struct {
 	Diag  *Diagnostic
 }
 
-func normal() EvalResult            { return EvalResult{Code: evalNormal, Value: nilVal()} }
-func returned(v Value) EvalResult   { return EvalResult{Code: evalReturn, Value: v} }
-func control(c EvalCode) EvalResult { return EvalResult{Code: c, Value: nilVal()} }
+func normal() EvalResult                  { return EvalResult{Code: evalNormal, Value: nilVal()} }
+func returned(v Value) EvalResult         { return EvalResult{Code: evalReturn, Value: v} }
+func control(c EvalCode) EvalResult       { return EvalResult{Code: c, Value: nilVal()} }
+func (r *Runtime) takePropagated() *Value { p := r.propagated; r.propagated = nil; return p }
 func (r *Runtime) run() (result *Diagnostic) {
 	defer func() { result = r.cleanup(result); r.Ctx.Cancel() }()
 	for _, s := range r.Prog.Statements {
@@ -405,6 +508,17 @@ func (r *Runtime) run() (result *Diagnostic) {
 		}
 		if x.Code != evalNormal {
 			return Diag(CatRuntime, s.Tok.Source, s.Tok.Line, s.Tok.Column, "control flow escaped top level")
+		}
+	}
+	if len(r.Prog.Statements) == 0 {
+		if f := r.Funcs["main"]; f != nil {
+			v, d := r.evalCall(r.Global, &Expr{Kind: ExCall, Name: "main", Tok: f.Tok})
+			if d != nil {
+				return d
+			}
+			if v.Kind == VResult && !v.OK {
+				return r.fail(nil, "main returned error: %s", display(*v.Inner))
+			}
 		}
 	}
 	return nil
@@ -435,22 +549,34 @@ func (r *Runtime) cleanup(prior *Diagnostic) *Diagnostic {
 	})
 	return prior
 }
-func (r *Runtime) execBlock(sc *RunScope, body []*Stmt) EvalResult {
+func (r *Runtime) execBlock(sc *RunScope, body []*Stmt) (out EvalResult) {
+	out = normal()
 	for _, s := range body {
 		if d := r.Ctx.step(s.Tok.Source, s.Tok.Line, s.Tok.Column); d != nil {
-			return EvalResult{Code: evalError, Diag: d}
+			out = EvalResult{Code: evalError, Diag: d}
+			break
 		}
 		x := r.execStmt(sc, s)
 		if x.Code != evalNormal {
-			return x
+			out = x
+			break
 		}
 	}
-	return normal()
+	for i := len(sc.Defers) - 1; i >= 0; i-- {
+		x := r.execBlock(newRunScope(sc), sc.Defers[i])
+		if x.Diag != nil && out.Diag == nil {
+			out = EvalResult{Code: evalError, Diag: x.Diag}
+		}
+	}
+	return out
 }
 func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 	switch s.Kind {
 	case StLet:
 		v, d := r.evalExpr(sc, s.Init)
+		if p := r.takePropagated(); p != nil {
+			return returned(*p)
+		}
 		if d != nil {
 			return EvalResult{Code: evalError, Diag: d}
 		}
@@ -461,6 +587,9 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 	case StExpr:
 		v, d := r.evalExpr(sc, s.Expr)
 		_ = v
+		if p := r.takePropagated(); p != nil {
+			return returned(*p)
+		}
 		if d != nil {
 			return EvalResult{Code: evalError, Diag: d}
 		}
@@ -477,9 +606,13 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 			return EvalResult{Code: evalError, Diag: r.fail(s.Target, "immutable binding '%s' cannot be assigned", s.Target.Name)}
 		}
 		v, d := r.evalExpr(sc, s.Value)
+		if p := r.takePropagated(); p != nil {
+			return returned(*p)
+		}
 		if d != nil {
 			return EvalResult{Code: evalError, Diag: d}
 		}
+
 		for q := sc; q != nil; q = q.Parent {
 			if old, ok := q.Values[s.Target.Name]; ok {
 				old.Value = v
@@ -490,6 +623,9 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 		return normal()
 	case StIf:
 		c, d := r.evalExpr(sc, s.Cond)
+		if p := r.takePropagated(); p != nil {
+			return returned(*p)
+		}
 		if d != nil {
 			return EvalResult{Code: evalError, Diag: d}
 		}
@@ -506,6 +642,9 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 				return EvalResult{Code: evalError, Diag: d}
 			}
 			c, d := r.evalExpr(sc, s.Cond)
+			if p := r.takePropagated(); p != nil {
+				return returned(*p)
+			}
 			if d != nil {
 				return EvalResult{Code: evalError, Diag: d}
 			}
@@ -530,14 +669,70 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 			}
 		}
 		return normal()
+	case StFor:
+		iter, d := r.evalExpr(sc, s.Iter)
+		if p := r.takePropagated(); p != nil {
+			return returned(*p)
+		}
+		if d != nil {
+			return EvalResult{Code: evalError, Diag: d}
+		}
+		var items []Value
+		switch iter.Kind {
+		case VArray:
+			items = iter.Array
+		case VSet:
+			items = iter.Set
+		case VString:
+			for _, rr := range iter.S {
+				items = append(items, stringVal(string(rr)))
+			}
+		case VBytes:
+			for _, bb := range iter.Bytes {
+				items = append(items, intVal(int64(bb)))
+			}
+		default:
+			return EvalResult{Code: evalError, Diag: r.fail(s.Iter, "for expects Array, Set, String, or Bytes")}
+		}
+		for _, item := range items {
+			is := newRunScope(sc)
+			if err := is.define(s.Name, cloneValue(item), false); err != nil {
+				return EvalResult{Code: evalError, Diag: r.fail(s.Iter, err.Error())}
+			}
+			x := r.execBlock(is, s.Body)
+			if x.Diag != nil || x.Code == evalReturn {
+				return x
+			}
+			if x.Code == evalBreak {
+				break
+			}
+		}
+		return normal()
+	case StDefer:
+		sc.Defers = append(sc.Defers, s.Body)
+		return normal()
+	case StUnsafe:
+		return r.execBlock(newRunScope(sc), s.Body)
 	case StReturn:
 		v := nilVal()
 		var d *Diagnostic
 		if s.Return != nil {
 			v, d = r.evalExpr(sc, s.Return)
 		}
+		if p := r.takePropagated(); p != nil {
+			return returned(*p)
+		}
 		if d != nil {
 			return EvalResult{Code: evalError, Diag: d}
+		}
+		if s.Return != nil && s.Return.Kind == ExPropagate && sc.ReturnType != nil {
+			if sc.ReturnType.Kind == TyOption {
+
+				return returned(optVal(true, v))
+			}
+			if sc.ReturnType.Kind == TyResult {
+				return returned(resVal(true, v))
+			}
 		}
 		return returned(v)
 	case StBreak:
@@ -546,6 +741,9 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 		return control(evalContinue)
 	case StMatch:
 		v, d := r.evalExpr(sc, s.Scrutinee)
+		if p := r.takePropagated(); p != nil {
+			return returned(*p)
+		}
 		if d != nil {
 			return EvalResult{Code: evalError, Diag: d}
 		}
@@ -613,6 +811,47 @@ func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 	case ExEnum:
 		t := r.Checker.Env.Types[e.EnumType]
 		return Value{Kind: VEnum, Enum: t.Enum, Variant: e.EnumVariant}, nil
+	case ExMap:
+		m := make([]MapEntry, 0, len(e.MapKeys))
+		for i, keyExpr := range e.MapKeys {
+			key, d := r.evalExpr(sc, keyExpr)
+			if d != nil {
+				return nilVal(), d
+			}
+			value, d := r.evalExpr(sc, e.Values[i])
+			if d != nil {
+				return nilVal(), d
+			}
+			for _, old := range m {
+				if equalValue(old.Key, key) {
+					return nilVal(), r.fail(e, "duplicate map key")
+				}
+			}
+			m = append(m, MapEntry{Key: cloneValue(key), Value: cloneValue(value)})
+		}
+		if int64(len(m))*48 > r.Lim.MaxMemoryBytes {
+			return nilVal(), r.fail(e, "map allocation exceeds memory budget")
+		}
+		return Value{Kind: VMap, Map: m}, nil
+	case ExSet:
+		s := make([]Value, 0, len(e.Items))
+		for _, itemExpr := range e.Items {
+			item, d := r.evalExpr(sc, itemExpr)
+			if d != nil {
+				return nilVal(), d
+			}
+			found := false
+			for _, old := range s {
+				if equalValue(old, item) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				s = append(s, cloneValue(item))
+			}
+		}
+		return Value{Kind: VSet, Set: s}, nil
 	case ExArray:
 		a := make([]Value, len(e.Items))
 		for i, x := range e.Items {
@@ -688,8 +927,16 @@ func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		if d != nil {
 			return nilVal(), d
 		}
-		if ix.Kind != VInt || ix.I < 0 {
+		if base.Kind != VMap && (ix.Kind != VInt || ix.I < 0) {
 			return nilVal(), r.fail(e, "index must be a non-negative Int")
+		}
+		if base.Kind == VMap {
+			for _, item := range base.Map {
+				if equalValue(item.Key, ix) {
+					return cloneValue(item.Value), nil
+				}
+			}
+			return nilVal(), r.fail(e, "map key not found")
 		}
 		i := ix.I
 		if base.Kind == VArray {
@@ -711,7 +958,15 @@ func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 			}
 			return intVal(int64(base.Bytes[i])), nil
 		}
-		return nilVal(), r.fail(e, "indexing expects String, Bytes, or Array")
+		if base.Kind == VMap {
+			for _, item := range base.Map {
+				if equalValue(item.Key, ix) {
+					return cloneValue(item.Value), nil
+				}
+			}
+			return nilVal(), r.fail(e, "map key not found")
+		}
+		return nilVal(), r.fail(e, "indexing expects String, Bytes, Array, or Map")
 	case ExField:
 		base, d := r.evalExpr(sc, e.Base)
 		if d != nil {
@@ -726,9 +981,32 @@ func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 			}
 		}
 		return nilVal(), r.fail(e, "unknown field '%s'", e.Field)
+	case ExPropagate:
+		v, d := r.evalExpr(sc, e.Operand)
+		if d != nil {
+			return nilVal(), d
+		}
+		if v.Kind == VOption {
+			if !v.Present {
+				x := cloneValue(v)
+				r.propagated = &x
+				return nilVal(), nil
+			}
+			return cloneValue(*v.Inner), nil
+		}
+		if v.Kind == VResult {
+			if !v.OK {
+				x := cloneValue(v)
+				r.propagated = &x
+				return nilVal(), nil
+			}
+			return cloneValue(*v.Inner), nil
+		}
+		return nilVal(), r.fail(e, "'?' requires an Option or Result")
 	case ExCall:
 		return r.evalCall(sc, e)
 	}
+
 	return nilVal(), r.fail(e, "invalid expression")
 }
 func (r *Runtime) evalBinary(sc *RunScope, e *Expr) (Value, *Diagnostic) {
@@ -887,20 +1165,41 @@ func remI(a, b int64) (int64, bool) {
 }
 
 func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
-	if b, ok := r.Checker.Env.Builtins[e.Name]; ok {
-		args := make([]Value, len(e.Args))
-		for i, a := range e.Args {
-			v, d := r.evalExpr(sc, a)
-			if d != nil {
-				return nilVal(), d
+	if e.Receiver == nil {
+		if b, ok := r.Checker.Env.Builtins[e.Name]; ok {
+			args := make([]Value, len(e.Args))
+			for i, a := range e.Args {
+				v, d := r.evalExpr(sc, a)
+				if d != nil {
+					return nilVal(), d
+				}
+				args[i] = v
 			}
-			args[i] = v
+			return r.evalBuiltin(e, b, args)
 		}
-		return r.evalBuiltin(e, b, args)
 	}
-	f := r.Funcs[e.Name]
+	var receiver *Value
+	var f *Function
+	if e.Receiver != nil {
+		v, d := r.evalExpr(sc, e.Receiver)
+		if d != nil {
+			return nilVal(), d
+		}
+		if p := r.takePropagated(); p != nil {
+			r.propagated = p
+			return nilVal(), nil
+		}
+		x := cloneValue(v)
+		receiver = &x
+		f = r.Funcs[methodKey(r.Checker.Env.Types[e.Receiver.Type.String()], e.Name)]
+		if f == nil {
+			f = r.Funcs[methodKey(e.Receiver.Type, e.Name)]
+		}
+	} else {
+		f = r.Funcs[e.Name]
+	}
 	if f == nil {
-		return nilVal(), r.fail(e, "unknown function '%s'", e.Name)
+		return nilVal(), r.fail(e, "unknown function or method '%s'", e.Name)
 	}
 	if r.Ctx.Calls >= r.Lim.MaxCallDepth {
 		return nilVal(), Diag(CatResource, e.Tok.Source, e.Tok.Line, e.Tok.Column, "call depth limit exceeded")
@@ -911,13 +1210,21 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		if d != nil {
 			return nilVal(), d
 		}
+		if p := r.takePropagated(); p != nil {
+			r.propagated = p
+			return nilVal(), nil
+		}
 		args[i] = v
 	}
 	child := newRunScope(r.Global)
+	if receiver != nil {
+		_ = child.define("self", *receiver, false)
+	}
 	for i, p := range f.Params {
 		_ = child.define(p.Name, args[i], false)
 	}
 	r.Ctx.Calls++
+	child.ReturnType = mustResolve(r.Checker.Env, f.Return)
 	x := r.execBlock(child, f.Body)
 	r.Ctx.Calls--
 	if x.Diag != nil {
@@ -943,6 +1250,10 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return intVal(int64(len(a[0].Array))), nil
 		case VBytes:
 			return intVal(int64(len(a[0].Bytes))), nil
+		case VMap:
+			return intVal(int64(len(a[0].Map))), nil
+		case VSet:
+			return intVal(int64(len(a[0].Set))), nil
 		}
 		return bad("len expects String, Array, or Bytes")
 	case "bytes":
@@ -1157,6 +1468,158 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			ss[i] = v.S
 		}
 		return stringVal(strings.Join(ss, a[1].S)), nil
+	case "map_get":
+		for _, x := range a[0].Map {
+			if equalValue(x.Key, a[1]) {
+				return optVal(true, x.Value), nil
+			}
+		}
+		return optVal(false, nilVal()), nil
+	case "map_insert":
+		m := make([]MapEntry, len(a[0].Map))
+		found := false
+		for i, x := range a[0].Map {
+			m[i] = MapEntry{Key: cloneValue(x.Key), Value: cloneValue(x.Value)}
+			if equalValue(x.Key, a[1]) {
+				m[i].Value = cloneValue(a[2])
+				found = true
+			}
+		}
+		if !found {
+			if len(m) >= r.Lim.MaxArrayElements {
+				return bad("map size limit exceeded")
+			}
+			m = append(m, MapEntry{Key: cloneValue(a[1]), Value: cloneValue(a[2])})
+		}
+		return Value{Kind: VMap, Map: m}, nil
+	case "map_keys":
+		keys := make([]Value, len(a[0].Map))
+		for i, x := range a[0].Map {
+			keys[i] = cloneValue(x.Key)
+		}
+		return arrVal(keys), nil
+	case "set_contains":
+		for _, x := range a[0].Set {
+			if equalValue(x, a[1]) {
+				return boolVal(true), nil
+			}
+		}
+		return boolVal(false), nil
+	case "set_insert":
+		for _, x := range a[0].Set {
+			if equalValue(x, a[1]) {
+				return cloneValue(a[0]), nil
+			}
+		}
+		if len(a[0].Set) >= r.Lim.MaxArrayElements {
+			return bad("set size limit exceeded")
+		}
+		s := make([]Value, len(a[0].Set), len(a[0].Set)+1)
+		for i, x := range a[0].Set {
+			s[i] = cloneValue(x)
+		}
+		s = append(s, cloneValue(a[1]))
+		return Value{Kind: VSet, Set: s}, nil
+	case "set_len":
+		return intVal(int64(len(a[0].Set))), nil
+	case "json_parse":
+		if len(a[0].S) > r.Lim.MaxStringBytes || !json.Valid([]byte(a[0].S)) {
+			return resVal(false, stringVal("invalid JSON")), nil
+		}
+		var raw any
+		if err := json.Unmarshal([]byte(a[0].S), &raw); err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		canon, err := json.Marshal(raw)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VJSON, S: string(canon)}), nil
+	case "json_stringify":
+		return stringVal(a[0].S), nil
+	case "http_get":
+		return r.httpRequest(e, "GET", a[0].S, "")
+	case "http_request":
+		return r.httpRequest(e, a[0].S, a[1].S, a[2].S)
+	case "http_request_auth":
+		return r.httpRequestAuth(e, a[0].S, a[1].S, a[2].S, a[3].S)
+	case "win_registry_get":
+		value, err := windowsRegistryGet(a[0].S, a[1].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, stringVal(value)), nil
+	case "win_service_query":
+		value, err := windowsServiceQuery(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, stringVal(value)), nil
+	case "win_eventlog_write":
+		if err := windowsEventLogWrite(a[0].S, a[1].S); err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, nilVal()), nil
+	case "win_raw_input":
+		data, err := windowsRawInputRead()
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(data)), nil
+	case "win_device_io_control":
+		data, err := windowsDeviceIoControl(a[0].S, a[1].I, a[2].Bytes)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(data)), nil
+	case "websocket_connect":
+		conn, err := connectWebSocket(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VWebSocket, WS: conn}), nil
+	case "websocket_send":
+		if a[0].WS == nil {
+			return resVal(false, stringVal("closed WebSocket")), nil
+		}
+		if err := a[0].WS.sendText(a[1].S); err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, nilVal()), nil
+	case "websocket_receive":
+		if a[0].WS == nil {
+			return resVal(false, stringVal("closed WebSocket")), nil
+		}
+		text, err := a[0].WS.receiveText(r.Lim.MaxSourceBytes)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, stringVal(text)), nil
+	case "websocket_close":
+		if a[0].WS != nil {
+			_ = a[0].WS.close()
+		}
+		return nilVal(), nil
+	case "process_run":
+		args := make([]string, len(a[1].Array))
+		for i, x := range a[1].Array {
+			if x.Kind != VString {
+				return bad("process_run arguments must be String")
+			}
+			args[i] = x.S
+		}
+		cmd := exec.CommandContext(r.Ctx.Ctx, a[0].S, args...)
+		out, err := cmd.CombinedOutput()
+		if int64(len(out)) > r.Lim.MaxOutputBytes {
+			return bad("process output exceeds configured limit")
+		}
+		if err == nil {
+			return resVal(true, intVal(0)), nil
+		}
+		if ee, ok := err.(*exec.ExitError); ok {
+			return resVal(false, stringVal(fmt.Sprintf("process exited with code %d", ee.ExitCode()))), nil
+		}
+		return resVal(false, stringVal(err.Error())), nil
 	case "thread_channel":
 		ch := newChannel(minInt(r.Lim.MaxChannelCapacity, 64))
 		r.Channels = append(r.Channels, ch)
@@ -1306,6 +1769,65 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	}
 	return bad("unknown builtin")
 }
+func (r *Runtime) httpRequestAuth(e *Expr, method, rawURL, body, token string) (Value, *Diagnostic) {
+	if token == "" {
+		return resVal(false, stringVal("empty authentication token")), nil
+	}
+	req, err := http.NewRequestWithContext(r.Ctx.Ctx, method, rawURL, bytes.NewBufferString(body))
+	if err != nil {
+		return resVal(false, stringVal(err.Error())), nil
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := (&http.Client{Timeout: time.Duration(r.Lim.MaxWallTimeMS) * time.Millisecond}).Do(req)
+	if err != nil {
+		return resVal(false, stringVal(err.Error())), nil
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(r.Lim.MaxSourceBytes)+1))
+	if err != nil {
+		return resVal(false, stringVal(err.Error())), nil
+	}
+	if len(data) > r.Lim.MaxSourceBytes {
+		return resVal(false, stringVal("response exceeds configured input limit")), nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resVal(false, stringVal(fmt.Sprintf("HTTP status %d", resp.StatusCode))), nil
+	}
+	if !validUTF8(data) {
+		return resVal(false, stringVal("response is not valid UTF-8")), nil
+	}
+	return resVal(true, stringVal(string(data))), nil
+}
+
+func (r *Runtime) httpRequest(e *Expr, method, rawURL, body string) (Value, *Diagnostic) {
+	if strings.IndexByte(rawURL, 0) >= 0 {
+		return resVal(false, stringVal("URL contains NUL")), nil
+	}
+	req, err := http.NewRequestWithContext(r.Ctx.Ctx, method, rawURL, bytes.NewBufferString(body))
+	if err != nil {
+		return resVal(false, stringVal(err.Error())), nil
+	}
+	resp, err := (&http.Client{Timeout: time.Duration(r.Lim.MaxWallTimeMS) * time.Millisecond}).Do(req)
+	if err != nil {
+		return resVal(false, stringVal(err.Error())), nil
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(r.Lim.MaxSourceBytes)+1))
+	if err != nil {
+		return resVal(false, stringVal(err.Error())), nil
+	}
+	if len(data) > r.Lim.MaxSourceBytes {
+		return resVal(false, stringVal("response exceeds configured input limit")), nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resVal(false, stringVal(fmt.Sprintf("HTTP status %d", resp.StatusCode))), nil
+	}
+	if !validUTF8(data) {
+		return resVal(false, stringVal("response is not valid UTF-8")), nil
+	}
+	return resVal(true, stringVal(string(data))), nil
+}
+
 func badDiag(e *Expr, msg string) *Diagnostic {
 	return Diag(CatRuntime, e.Tok.Source, e.Tok.Line, e.Tok.Column, msg)
 }
@@ -1433,6 +1955,7 @@ func (r *Runtime) spawn(e *Expr, name string) (Value, *Diagnostic) {
 			_ = wr.Global.define(n, v, false)
 		}
 		child := newRunScope(wr.Global)
+		child.ReturnType = mustResolve(wr.Checker.Env, f.Return)
 		wr.Ctx.Calls = 1
 		x := wr.execBlock(child, f.Body)
 		t.mu.Lock()

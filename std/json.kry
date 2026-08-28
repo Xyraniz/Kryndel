@@ -1,0 +1,7 @@
+pub fn parse(value: String) -> Result[Json, String] {
+    return json_parse(value)
+}
+
+pub fn stringify(value: Json) -> String {
+    return json_stringify(value)
+}

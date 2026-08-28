@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 — Collections, propagation, packages, native targets, and platform APIs
+
+Kryndel now supports typed `Map[K,V]` and `Set[T]` values, `for` iteration, receiver methods through `impl`, `defer` cleanup scopes, explicit `unsafe` regions, and strict `Option`/`Result` propagation with `?`. The checker and runtime share deterministic collection equality, cloning, display, bounds, and non-Copy WebSocket ownership rules.
+
+The CLI adds project lifecycle commands, an HTTP registry client/server, reproducible package archives, semver constraints, SHA-256 lockfiles, offline cache reuse, secure vendor extraction, PE/ELF inspection, checked LLVM-compatible IR emission, and native `windows-x64` and `linux-x64` output paths. The runtime adds validated JSON, bounded HTTP/TLS, bearer-authenticated requests, an RFC 6455 client, shell-free process execution, and explicit Windows registry, service, Event Log, Raw Input, and `DeviceIoControl` boundaries.
+
+The repository includes typed `std/env`, `std/json`, and `std/http` wrappers, a real `packages/discord` Gateway example that never prints tokens, new examples and integration tests, and expanded Make/CI/release verification. Unsupported platform capabilities fail explicitly instead of being represented by mock or mislabeled artifacts.
+
 ## 1.2.0 — Go toolchain, bounded runtime, and KRYNATIVE3 artifacts
 
 Kryndel now ships one coherent Go 1.22 implementation with a UTF-8 lexer, recursive-descent parser, static checker, validated intermediate representation, bounded runtime, deterministic diagnostics, and a portable CLI. The production tree contains no C, Python, Rust, Node.js, host interpreter, or external runtime dependency.
