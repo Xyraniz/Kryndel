@@ -71,7 +71,7 @@ func Check(prog *Program, lim Limits) (*Checker, *Diagnostic) {
 			if dd != nil {
 				return nil, dd
 			}
-			if a.Kind == TyChannel || s.Kind == StConst {
+			if a.Kind == TyChannel || a.Kind == TyShared || s.Kind == StConst {
 				if c.Globals.local(s.Name) {
 					return nil, Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "binding '%s' is already defined in this scope", s.Name)
 				}
@@ -418,6 +418,10 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "const initializer must be a compile-time expression")
 			return Flow{HasError: true}
 		}
+		if s.Const && !TypeConstSafe(t) {
+			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "const type %s is not deeply immutable", t)
+			return Flow{HasError: true}
+		}
 		sc.Values[s.Name] = Binding{Type: t, Mutable: s.Mutable, Const: s.Const, Global: false}
 		return normalFlow()
 	case StExpr:
@@ -705,7 +709,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown variable '%s'", e.Name)
 			}
 		} else {
-			if sc.Worker && b.Global && b.Type.Kind != TyChannel {
+			if sc.Worker && b.Global && b.Type.Kind != TyChannel && b.Type.Kind != TyShared {
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "global binding '%s' is not available in a worker-safe function", e.Name)
 			}
 			t = b.Type

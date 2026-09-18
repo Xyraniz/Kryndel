@@ -21,7 +21,7 @@ UTF-8 source
 | Parser | Expressions, bindings, functions, modules, data declarations, blocks, and patterns. | Native AST. |
 | Type checker | Type inference, annotations, overloads, constrained generics, privacy, operators, mutability, returns, conditions, exhaustiveness, and constant folding. | Native type model and source locations. |
 | Module resolver | Relative source lookup, public exports, cycle detection, and traversal rejection. | Explicit filesystem paths only. |
-| Runtime | Validated IR execution, folded primitive values, scopes, calls, recursion, collections, UTF-8, options, results, control flow, channels, actor mailboxes, workers, safepoints, and budgets. | Go standard library only. |
+| Runtime | Validated IR execution, folded primitive values, scopes, calls, recursion, collections, UTF-8, options, results, control flow, channels, synchronized `Shared[T]` cells, actor mailboxes, workers, safepoints, and budgets. | Go standard library only. |
 | Artifact reader/writer | Versioned KRYNATIVE3 metadata, deterministic source bundle, SHA-256 hashes, atomic writes, and strict replay validation. | Go binary/file APIs. |
 | CLI | `check`, `run`, `build`, `fmt`, `repl`, `doctor`, `version`, and help. | Explicit command-line and filesystem inputs. |
 
@@ -29,7 +29,7 @@ UTF-8 source
 
 All compiler and runtime allocations are tracked by a per-invocation arena. The arena is released after successful checking, runtime failure, parser failure, module failure, malformed artifact input, and every other ordinary command path. The launcher and CLI keep only file buffers that they explicitly free after the invocation.
 
-Kryndel values are immutable after construction. Bindings carry a mutability bit, and assignments are permitted only for bindings declared with `let mut`. Arrays, bytes, and strings are not mutated in place; concatenation and `array_push` create new storage, while function calls pass value representations that are safe to share because collection elements cannot be assigned. Struct fields, enum tags, option contents, and result contents are also immutable.
+Kryndel values are immutable after construction except for the explicit `Shared[T]` cell API. Bindings carry a mutability bit, and assignments are permitted only for bindings declared with `let mut`. Arrays, bytes, and strings are not mutated in place; concatenation and `array_push` create new storage, while function calls pass value representations that are safe to share because collection elements cannot be assigned. Struct fields, enum tags, option contents, and result contents are also immutable. A `const` binding additionally requires a recursively const-safe type graph, so mutable runtime handles cannot be hidden inside it.
 
 Lexical scopes are represented by parent-linked environments. A declaration is local to the current scope and may shadow a parent name. Lookup and assignment walk from the innermost scope outward; an assignment to an outer immutable binding is rejected by both checker and runtime.
 

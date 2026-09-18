@@ -8,6 +8,8 @@ The language/runtime now includes compile-time `const` initializers, enforced pr
 
 Fresh installs also normalize temporary directory names that cannot be represented as package identifiers, while preserving existing project files. Actor and async APIs are now present in the authoritative builtin registry and therefore participate in `doctor`, static checking, and runtime dispatch consistently.
 
+Shared mutable state is now explicit and synchronized through `Shared[T]`, `shared_read`, `shared_write`, and atomic `shared_swap`; only Shared and Channel handles may cross the worker boundary. Const bindings now enforce deep immutability over their entire type graph and reject synchronization, thread, actor, socket, and other runtime handles.
+
 ## 1.3.0 — Collections, propagation, packages, native targets, and platform APIs
 
 Kryndel now supports typed `Map[K,V]` and `Set[T]` values, `for` iteration, receiver methods through `impl`, `defer` cleanup scopes, explicit `unsafe` regions, and strict `Option`/`Result` propagation with `?`. The checker and runtime share deterministic collection equality, cloning, display, bounds, and non-Copy WebSocket ownership rules.

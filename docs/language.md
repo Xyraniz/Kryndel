@@ -106,6 +106,10 @@ Workers receive only global channel handles through a private runtime scope; ord
 
 `Actor[T]` is an isolated, bounded mailbox for recursively Copy messages. `actor_channel` creates one, `actor_send` blocks with cancellation, and `actor_try_receive`, `actor_receive_timeout`, and `actor_close` provide non-panicking mailbox operations. `await` and `await_timeout` are explicit effect boundaries over `Thread[T]`; `yield_now` and `sleep_ms` cooperate with the runtime context instead of busy-waiting. There is no hidden scheduler or shared mutable memory in these APIs.
 
+For intentionally shared state, `Shared[T]` is the only global mutable memory handle available to workers. `shared_new` creates a cell, `shared_read` takes a cloned snapshot under a read lock, `shared_write` replaces the value under an exclusive lock, and `shared_swap` performs an atomic replacement and returns the previous snapshot. `T` must be recursively `Copy`; callers cannot obtain a raw pointer or mutate the cell without one of these synchronized operations. This gives shared memory a controlled ownership boundary instead of exposing ordinary global bindings to workers.
+
+`const` is deeply immutable, not merely an immutable name. Its initializer must be compile-time evaluable and its complete type graph may contain only primitive values, enums, immutable collections, and structs recursively composed of those values. Channels, threads, actors, `Shared[T]`, sockets, and other runtime handles are rejected even when hidden inside a struct or collection. Runtime bindings are also non-mutable, so there is no assignment path that can alter a const value after initialization.
+
 ## Modules
 
 `import "path/to/module"` resolves a source file relative to the importing file. The `.kry` extension is optional. Absolute paths, `..` traversal, artifacts, missing files, duplicate exports, and cyclic imports are rejected. Only top-level declarations marked `pub` are exported. See [the module guide](modules.md) for the complete resolution contract.

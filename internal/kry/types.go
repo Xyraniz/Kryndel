@@ -27,6 +27,7 @@ const (
 	TyWebSocket
 	TyGeneric
 	TyActor
+	TyShared
 )
 
 type Type struct {
@@ -58,6 +59,7 @@ func TypeThread(t *Type) *Type { return &Type{Kind: TyThread, Name: "Thread", A:
 func MapOf(k, v *Type) *Type   { return &Type{Kind: TyMap, Name: "Map", A: k, B: v} }
 func SetOf(t *Type) *Type      { return &Type{Kind: TySet, Name: "Set", A: t} }
 func ActorOf(t *Type) *Type    { return &Type{Kind: TyActor, Name: "Actor", A: t} }
+func SharedOf(t *Type) *Type   { return &Type{Kind: TyShared, Name: "Shared", A: t} }
 func Generic(name, constraint string) *Type {
 	return &Type{Kind: TyGeneric, Name: name, B: &Type{Name: constraint}}
 }
@@ -82,6 +84,8 @@ func (t *Type) String() string {
 		return "Set[" + t.A.String() + "]"
 	case TyActor:
 		return "Actor[" + t.A.String() + "]"
+	case TyShared:
+		return "Shared[" + t.A.String() + "]"
 	case TyJSON:
 		return "Json"
 	case TyWebSocket:
@@ -120,7 +124,7 @@ func typeEqual(a, b *Type) bool {
 		}
 		seen[k] = true
 		switch x.Kind {
-		case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor:
+		case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor, TyShared:
 			return eq(x.A, y.A, d+1)
 		case TyResult, TyMap:
 			return eq(x.A, y.A, d+1) && eq(x.B, y.B, d+1)
@@ -136,7 +140,7 @@ func typeKnown(t *Type) bool {
 		return false
 	}
 	switch t.Kind {
-	case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor:
+	case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor, TyShared:
 		return typeKnown(t.A)
 	case TyResult, TyMap:
 		return typeKnown(t.A) && typeKnown(t.B)
@@ -176,7 +180,11 @@ func TypeCopyable(root *Type) bool {
 			ok = true
 		case TyGeneric:
 			ok = t.B != nil && t.B.Name == "Copy"
-		case TyArray, TyOption, TySet, TyActor:
+		case TyArray, TyOption, TySet, TyActor, TyShared:
+			if t.Kind == TyShared {
+				ok = true
+				break
+			}
 			ok = visit(t.A, d+1)
 		case TyResult, TyMap:
 			ok = visit(t.A, d+1) && visit(t.B, d+1)
@@ -205,6 +213,43 @@ func TypeCopyable(root *Type) bool {
 	}
 	return visit(root, 0)
 }
+
+// TypeConstSafe excludes synchronization and external-resource handles from const values.
+func TypeConstSafe(root *Type) bool {
+	seen := map[*Type]bool{}
+	var visit func(*Type, int) bool
+	visit = func(t *Type, depth int) bool {
+		if t == nil || depth > 128 {
+			return false
+		}
+		if seen[t] {
+			return true
+		}
+		seen[t] = true
+		switch t.Kind {
+		case TyNil, TyInt, TyFloat, TyBool, TyString, TyBytes, TyEnum:
+			return true
+		case TyArray, TyOption, TySet:
+			return visit(t.A, depth+1)
+		case TyResult, TyMap:
+			return visit(t.A, depth+1) && visit(t.B, depth+1)
+		case TyStruct:
+			if t.Struct == nil {
+				return false
+			}
+			for _, f := range t.Struct.Fields {
+				if !visit(f.Type, depth+1) {
+					return false
+				}
+			}
+			return true
+		default:
+			return false
+		}
+	}
+	return visit(root, 0)
+}
+
 func TypeSpecString(s *TypeSpec) string {
 	if s == nil {
 		return "Nil"
@@ -306,6 +351,11 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 		if len(s.Params) == 1 {
 			a, d := resolveSpec(env, s.Params[0], depth+1)
 			return ActorOf(a), d
+		}
+	case "Shared":
+		if len(s.Params) == 1 {
+			a, d := resolveSpec(env, s.Params[0], depth+1)
+			return SharedOf(a), d
 		}
 
 	}
@@ -413,7 +463,7 @@ func ensurePublicType(t *Type, local string, depth int) bool {
 		return true
 	case TyEnum:
 		return t.Enum != nil && (t.Enum.Public || t.Enum.Module == local)
-	case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor:
+	case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor, TyShared:
 		return ensurePublicType(t.A, local, depth+1)
 	case TyGeneric:
 		return true

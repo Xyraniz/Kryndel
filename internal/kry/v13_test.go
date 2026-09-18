@@ -276,3 +276,39 @@ func TestConstantFoldingFastPath(t *testing.T) {
 		t.Fatalf("constant expression was not folded: %#v", p.Statements[0].Init.ConstValue)
 	}
 }
+
+func TestControlledSharedMemoryAndDeepConst(t *testing.T) {
+	text := `
+let shared: Shared[Int] = shared_new(0)
+fn worker() -> Int {
+    shared_write(shared, 7)
+    return shared_read(shared)
+}
+let thread: Thread[Int] = thread_spawn("worker")
+let result: Int = await(thread)
+assert_eq(result, 7)
+assert_eq(shared_read(shared), 7)
+let old: Int = shared_swap(shared, 9)
+assert_eq(old, 7)
+assert_eq(shared_read(shared), 9)
+`
+	p, d := Parse(&Source{Name: "shared.kry", Text: text}, DefaultLimits())
+	if d != nil {
+		t.Fatalf("parse: %s", d.Message)
+	}
+	c, d := Check(p, DefaultLimits())
+	if d != nil {
+		t.Fatalf("check: %s", d.Message)
+	}
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("run: %s", d.Message)
+	}
+
+	if TypeConstSafe(SharedOf(TInt)) {
+		t.Fatal("mutable Shared handle accepted as deeply immutable")
+	}
+}

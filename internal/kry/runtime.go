@@ -46,6 +46,7 @@ const (
 	VJSON
 	VWebSocket
 	VActor
+	VShared
 )
 
 type Value struct {
@@ -69,6 +70,7 @@ type Value struct {
 	Set     []Value
 	WS      *websocketConn
 	Actor   *Actor
+	Shared  *SharedCell
 }
 
 type MapEntry struct{ Key, Value Value }
@@ -154,6 +156,8 @@ func display(v Value) string {
 		return "<WebSocket>"
 	case VActor:
 		return "<Actor>"
+	case VShared:
+		return "<Shared>"
 	case VMap:
 		var b strings.Builder
 		b.WriteString("{")
@@ -191,6 +195,8 @@ func cloneValue(v Value) Value {
 	case VWebSocket:
 		return v
 	case VActor:
+		return v
+	case VShared:
 		return v
 	case VBytes:
 		return bytesVal(v.Bytes)
@@ -294,6 +300,8 @@ func equalValue(a, b Value) bool {
 		return a.WS == b.WS
 	case VActor:
 		return a.Actor == b.Actor
+	case VShared:
+		return a.Shared == b.Shared
 	case VSet:
 		if len(a.Set) != len(b.Set) {
 
@@ -352,6 +360,8 @@ func copyableValue(v Value, depth int) bool {
 		return false
 	case VActor:
 		return false
+	case VShared:
+		return true
 	default:
 
 		return false
@@ -416,6 +426,11 @@ func (c *Channel) isClosed() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.C
 
 type Actor struct {
 	Mailbox *Channel
+}
+
+type SharedCell struct {
+	mu    sync.RWMutex
+	value Value
 }
 
 type Thread struct {
@@ -1708,6 +1723,33 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(fmt.Sprintf("process exited with code %d", ee.ExitCode()))), nil
 		}
 		return resVal(false, stringVal(err.Error())), nil
+	case "shared_new":
+		return Value{Kind: VShared, Shared: &SharedCell{value: cloneValue(a[0])}}, nil
+	case "shared_read":
+		if a[0].Shared == nil {
+			return bad("invalid shared cell")
+		}
+		a[0].Shared.mu.RLock()
+		value := cloneValue(a[0].Shared.value)
+		a[0].Shared.mu.RUnlock()
+		return value, nil
+	case "shared_write":
+		if a[0].Shared == nil {
+			return bad("invalid shared cell")
+		}
+		a[0].Shared.mu.Lock()
+		a[0].Shared.value = cloneValue(a[1])
+		a[0].Shared.mu.Unlock()
+		return nilVal(), nil
+	case "shared_swap":
+		if a[0].Shared == nil {
+			return bad("invalid shared cell")
+		}
+		a[0].Shared.mu.Lock()
+		old := cloneValue(a[0].Shared.value)
+		a[0].Shared.value = cloneValue(a[1])
+		a[0].Shared.mu.Unlock()
+		return old, nil
 	case "actor_channel", "actor_channel_with_capacity":
 		capacity := minInt(r.Lim.MaxChannelCapacity, 64)
 		if b.Name == "actor_channel_with_capacity" {
@@ -2248,7 +2290,7 @@ func (r *Runtime) spawn(e *Expr, name string) (Value, *Diagnostic) {
 	r.Threads = append(r.Threads, t)
 	channelSnapshot := make(map[string]Value)
 	for n, b := range r.Global.Values {
-		if b.Value.Kind == VChannel {
+		if b.Value.Kind == VChannel || b.Value.Kind == VShared {
 			channelSnapshot[n] = b.Value
 		}
 	}

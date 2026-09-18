@@ -37,5 +37,9 @@ func init() {
 		Builtin{"await_timeout", "await_timeout(thread: Thread[T],milliseconds: Int) -> Result[T,String]", "async", "handle", "timeout/failure", "Await with a bounded deadline.", "1.5.0", 2, "await_timeout"},
 		Builtin{"yield_now", "yield_now() -> Nil", "async", "borrow", "none", "Yield execution to another runnable task.", "1.5.0", 0, "yield_now"},
 		Builtin{"sleep_ms", "sleep_ms(milliseconds: Int) -> Result[Nil,String]", "async", "borrow", "cancellation", "Sleep without busy-waiting.", "1.5.0", 1, "sleep_ms"},
+		Builtin{"shared_new", "shared_new(value: T) -> Shared[T]", "shared", "handle", "allocation failure", "Create a synchronized shared cell.", "1.6.0", 1, "shared_new"},
+		Builtin{"shared_read", "shared_read(cell: Shared[T]) -> T", "shared", "clone", "cell failure", "Read a snapshot under a read lock.", "1.6.0", 1, "shared_read"},
+		Builtin{"shared_write", "shared_write(cell: Shared[T],value: T) -> Nil", "shared", "clone", "cell failure", "Replace a shared cell under an exclusive lock.", "1.6.0", 2, "shared_write"},
+		Builtin{"shared_swap", "shared_swap(cell: Shared[T],value: T) -> T", "shared", "clone", "cell failure", "Atomically replace a shared cell and return its old value.", "1.6.0", 2, "shared_swap"},
 	)
 }

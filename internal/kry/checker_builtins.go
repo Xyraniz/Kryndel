@@ -914,6 +914,49 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("sleep_ms expects Int")
 		}
 		return Res(TNil, TString), nil
+	case "shared_new":
+		value, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if !TypeCopyable(value) {
+			return bad("shared_new requires a recursively Copy value")
+		}
+		if expected != nil && expected.Kind == TyShared {
+			if !typeEqual(expected.A, value) {
+				return bad("shared_new value type mismatch")
+			}
+			return expected, nil
+		}
+		return bad("shared_new requires a Shared[T] type context")
+	case "shared_read":
+		cell, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if cell.Kind != TyShared || !typeKnown(cell.A) {
+			return bad("shared_read expects Shared[T]")
+		}
+		return cell.A, nil
+	case "shared_write", "shared_swap":
+		cell, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if cell.Kind != TyShared || !typeKnown(cell.A) {
+			return bad(b.Name + " expects Shared[T]")
+		}
+		value, d := arg(1, cell.A)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(value, cell.A) || !TypeCopyable(value) {
+			return bad(b.Name + " value must match a recursively Copy T")
+		}
+		if b.Name == "shared_swap" {
+			return cell.A, nil
+		}
+		return TNil, nil
 	case "fs_read_text":
 		t, d := arg(0, TString)
 		if d != nil {
