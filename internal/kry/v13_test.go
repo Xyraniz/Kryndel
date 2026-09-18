@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -215,5 +216,63 @@ func TestFreshInstallBootstrapAndPublishValidation(t *testing.T) {
 	}
 	if err := validatePublishedArchive(data, "other", "1.0.0"); err == nil {
 		t.Fatal("archive with mismatched coordinates was accepted")
+	}
+}
+
+func TestStrictLanguageExtensions(t *testing.T) {
+	text := `
+const Limit: Int = 2
+fn choose(value: Int) -> String { return "int:" + str(value) }
+fn choose(value: String) -> String { return "text:" + value }
+fn identity[T: Copy](value: T) -> T { return value }
+struct Vault { private secret: Int, visible: Int }
+fn read() -> Int { let vault: Vault = Vault{secret: Limit, visible: 9}; return vault.secret }
+fn worker() -> Int { return 7 }
+let actor: Actor[Int] = actor_channel()
+actor_send(actor, identity(5))
+let received: Int = actor_receive_timeout(actor, 100)
+let thread: Thread[Int] = thread_spawn("worker")
+let answer: Int = await(thread)
+assert_eq(received + answer, 12)
+assert_eq(read(), Limit)
+println(choose(answer))
+actor_close(actor)
+`
+	p, d := Parse(&Source{Name: "extensions.kry", Text: text}, DefaultLimits())
+	if d != nil {
+		t.Fatalf("parse: %s", d.Message)
+	}
+	c, d := Check(p, DefaultLimits())
+	if d != nil {
+		t.Fatalf("check: %s", d.Message)
+	}
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("run: %s", d.Message)
+	}
+
+	badConst := `const value: Int = int("2")`
+	p, d = Parse(&Source{Name: "bad-const.kry", Text: badConst}, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if _, d = Check(p, DefaultLimits()); d == nil || !strings.Contains(d.Message, "compile-time") {
+		t.Fatalf("non-constant initializer accepted: %#v", d)
+	}
+}
+
+func TestConstantFoldingFastPath(t *testing.T) {
+	p, d := Parse(&Source{Name: "fold.kry", Text: "let answer: Int = 2 * (3 + 4)\n"}, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if _, d = Check(p, DefaultLimits()); d != nil {
+		t.Fatal(d.Message)
+	}
+	if p.Statements[0].Init.ConstValue == nil || p.Statements[0].Init.ConstValue.Kind != VInt || p.Statements[0].Init.ConstValue.I != 14 {
+		t.Fatalf("constant expression was not folded: %#v", p.Statements[0].Init.ConstValue)
 	}
 }

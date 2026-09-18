@@ -25,6 +25,8 @@ const (
 	TySet
 	TyJSON
 	TyWebSocket
+	TyGeneric
+	TyActor
 )
 
 type Type struct {
@@ -55,6 +57,10 @@ func Chan(t *Type) *Type       { return &Type{Kind: TyChannel, Name: "Channel", 
 func TypeThread(t *Type) *Type { return &Type{Kind: TyThread, Name: "Thread", A: t} }
 func MapOf(k, v *Type) *Type   { return &Type{Kind: TyMap, Name: "Map", A: k, B: v} }
 func SetOf(t *Type) *Type      { return &Type{Kind: TySet, Name: "Set", A: t} }
+func ActorOf(t *Type) *Type    { return &Type{Kind: TyActor, Name: "Actor", A: t} }
+func Generic(name, constraint string) *Type {
+	return &Type{Kind: TyGeneric, Name: name, B: &Type{Name: constraint}}
+}
 func (t *Type) String() string {
 	if t == nil {
 		return "<unknown>"
@@ -74,10 +80,14 @@ func (t *Type) String() string {
 		return "Map[" + t.A.String() + ", " + t.B.String() + "]"
 	case TySet:
 		return "Set[" + t.A.String() + "]"
+	case TyActor:
+		return "Actor[" + t.A.String() + "]"
 	case TyJSON:
 		return "Json"
 	case TyWebSocket:
 		return "WebSocket"
+	case TyGeneric:
+		return t.Name
 
 	}
 	if t.Name != "" {
@@ -110,7 +120,7 @@ func typeEqual(a, b *Type) bool {
 		}
 		seen[k] = true
 		switch x.Kind {
-		case TyArray, TyOption, TyChannel, TyThread, TySet:
+		case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor:
 			return eq(x.A, y.A, d+1)
 		case TyResult, TyMap:
 			return eq(x.A, y.A, d+1) && eq(x.B, y.B, d+1)
@@ -126,7 +136,7 @@ func typeKnown(t *Type) bool {
 		return false
 	}
 	switch t.Kind {
-	case TyArray, TyOption, TyChannel, TyThread, TySet:
+	case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor:
 		return typeKnown(t.A)
 	case TyResult, TyMap:
 		return typeKnown(t.A) && typeKnown(t.B)
@@ -164,7 +174,9 @@ func TypeCopyable(root *Type) bool {
 		switch t.Kind {
 		case TyNil, TyInt, TyFloat, TyBool, TyString, TyBytes, TyEnum, TyJSON:
 			ok = true
-		case TyArray, TyOption, TySet:
+		case TyGeneric:
+			ok = t.B != nil && t.B.Name == "Copy"
+		case TyArray, TyOption, TySet, TyActor:
 			ok = visit(t.A, d+1)
 		case TyResult, TyMap:
 			ok = visit(t.A, d+1) && visit(t.B, d+1)
@@ -240,6 +252,11 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 		case "Array":
 			return Arr(TUnknown), nil
 		}
+		if env.TypeParams != nil {
+			if t := env.TypeParams[name]; t != nil {
+				return t, nil
+			}
+		}
 	}
 	switch name {
 	case "Array":
@@ -285,6 +302,11 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 			a, d := resolveSpec(env, s.Params[0], depth+1)
 			return SetOf(a), d
 		}
+	case "Actor":
+		if len(s.Params) == 1 {
+			a, d := resolveSpec(env, s.Params[0], depth+1)
+			return ActorOf(a), d
+		}
 
 	}
 	if len(s.Params) == 0 {
@@ -303,15 +325,17 @@ func methodKey(t *Type, name string) string {
 }
 
 type TypeEnv struct {
-	Types     map[string]*Type
-	Functions map[string]*Function
-	Builtins  map[string]Builtin
-	Lim       Limits
-	Module    string
+	Types      map[string]*Type
+	Functions  map[string]*Function
+	Overloads  map[string][]*Function
+	Builtins   map[string]Builtin
+	TypeParams map[string]*Type
+	Lim        Limits
+	Module     string
 }
 
 func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
-	e := &TypeEnv{Types: map[string]*Type{}, Functions: map[string]*Function{}, Lim: lim, Module: prog.Module}
+	e := &TypeEnv{Types: map[string]*Type{}, Functions: map[string]*Function{}, Overloads: map[string][]*Function{}, Lim: lim, Module: prog.Module}
 	for _, s := range prog.Structs {
 		if _, ok := e.Types[s.Name]; ok {
 			return nil, Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "declaration '%s' is already defined", s.Name)
@@ -331,10 +355,15 @@ func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
 		if f.Receiver != nil {
 			key = TypeSpecString(f.Receiver) + "::" + f.Name
 		}
-		if _, ok := e.Functions[key]; ok {
-			return nil, Diag(CatType, f.Tok.Source, f.Tok.Line, f.Tok.Column, "function '%s' is already defined", f.Name)
+		for _, previous := range e.Overloads[key] {
+			if sameFunctionSignature(previous, f) {
+				return nil, Diag(CatType, f.Tok.Source, f.Tok.Line, f.Tok.Column, "function '%s' with the same signature is already defined", f.Name)
+			}
 		}
-		e.Functions[key] = f
+		e.Overloads[key] = append(e.Overloads[key], f)
+		if _, ok := e.Functions[key]; !ok {
+			e.Functions[key] = f
+		}
 	}
 	for _, s := range prog.Structs {
 		seenFields := map[string]bool{}
@@ -355,6 +384,18 @@ func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
 	}
 	return e, nil
 }
+func sameFunctionSignature(a, b *Function) bool {
+	if TypeSpecString(a.Receiver) != TypeSpecString(b.Receiver) || len(a.Params) != len(b.Params) {
+		return false
+	}
+	for i := range a.Params {
+		if TypeSpecString(a.Params[i].Type) != TypeSpecString(b.Params[i].Type) {
+			return false
+		}
+	}
+	return true
+}
+
 func ensurePublicType(t *Type, local string, depth int) bool {
 	if t == nil || depth > 128 {
 		return false
@@ -372,8 +413,10 @@ func ensurePublicType(t *Type, local string, depth int) bool {
 		return true
 	case TyEnum:
 		return t.Enum != nil && (t.Enum.Public || t.Enum.Module == local)
-	case TyArray, TyOption, TyChannel, TyThread, TySet:
+	case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor:
 		return ensurePublicType(t.A, local, depth+1)
+	case TyGeneric:
+		return true
 	case TyResult, TyMap:
 		return ensurePublicType(t.A, local, depth+1) && ensurePublicType(t.B, local, depth+1)
 

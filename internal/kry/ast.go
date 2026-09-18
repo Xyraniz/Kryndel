@@ -5,6 +5,12 @@ type TypeSpec struct {
 	Params []*TypeSpec
 	Tok    Token
 }
+
+type TypeParam struct {
+	Name       string
+	Constraint string
+	Tok        Token
+}
 type ExprKind int
 
 const (
@@ -48,6 +54,8 @@ type Expr struct {
 	Values                []*Expr
 	EnumType, EnumVariant string
 	Type                  *Type
+	Function              *Function
+	ConstValue            *Value
 }
 type StmtKind int
 
@@ -64,6 +72,7 @@ const (
 	StFor
 	StDefer
 	StUnsafe
+	StConst
 )
 
 type Stmt struct {
@@ -71,6 +80,7 @@ type Stmt struct {
 	Tok           Token
 	Name          string
 	Mutable       bool
+	Const         bool
 	Annotation    *TypeSpec
 	Init          *Expr
 	Expr          *Expr
@@ -116,22 +126,24 @@ type Param struct {
 	Tok  Token
 }
 type Function struct {
-	Name     string
-	Public   bool
-	Worker   bool
-	Params   []Param
-	Return   *TypeSpec
-	Receiver *TypeSpec
-	Unsafe   bool
-	Body     []*Stmt
-	Tok      Token
-	Module   string
+	Name       string
+	Public     bool
+	Worker     bool
+	TypeParams []TypeParam
+	Params     []Param
+	Return     *TypeSpec
+	Receiver   *TypeSpec
+	Unsafe     bool
+	Body       []*Stmt
+	Tok        Token
+	Module     string
 }
 type FieldDecl struct {
-	Name string
-	Spec *TypeSpec
-	Tok  Token
-	Type *Type
+	Name   string
+	Public bool
+	Spec   *TypeSpec
+	Tok    Token
+	Type   *Type
 }
 type StructDecl struct {
 	Name   string

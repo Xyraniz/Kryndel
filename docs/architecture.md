@@ -8,7 +8,7 @@ UTF-8 source
     -> parser and AST
     -> module resolver
     -> static type checker
-    -> validated intermediate representation
+    -> validated intermediate representation and constant-folded fast paths
     -> bounded VM/runtime and synchronized worker scheduler
     -> output, diagnostics, or versioned KRYNATIVE3 bundle
 ```
@@ -19,9 +19,9 @@ UTF-8 source
 | --- | --- | --- |
 | Lexer | UTF-8 validation, comments, identifiers, literals, operators, positions, and token limits. | Go standard library only. |
 | Parser | Expressions, bindings, functions, modules, data declarations, blocks, and patterns. | Native AST. |
-| Type checker | Type inference, annotations, calls, operators, mutability, returns, conditions, and exhaustiveness. | Native type model and source locations. |
+| Type checker | Type inference, annotations, overloads, constrained generics, privacy, operators, mutability, returns, conditions, exhaustiveness, and constant folding. | Native type model and source locations. |
 | Module resolver | Relative source lookup, public exports, cycle detection, and traversal rejection. | Explicit filesystem paths only. |
-| Runtime | Validated IR execution, values, scopes, calls, recursion, collections, UTF-8, options, results, control flow, channels, workers, safepoints, and budgets. | Go standard library only. |
+| Runtime | Validated IR execution, folded primitive values, scopes, calls, recursion, collections, UTF-8, options, results, control flow, channels, actor mailboxes, workers, safepoints, and budgets. | Go standard library only. |
 | Artifact reader/writer | Versioned KRYNATIVE3 metadata, deterministic source bundle, SHA-256 hashes, atomic writes, and strict replay validation. | Go binary/file APIs. |
 | CLI | `check`, `run`, `build`, `fmt`, `repl`, `doctor`, `version`, and help. | Explicit command-line and filesystem inputs. |
 

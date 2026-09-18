@@ -8,6 +8,7 @@ import (
 type Binding struct {
 	Type    *Type
 	Mutable bool
+	Const   bool
 	Global  bool
 }
 type Scope struct {
@@ -51,6 +52,7 @@ type Checker struct {
 	funcs           map[string]bool
 	currentReturn   *Type
 	currentFunction *Function
+	typeParams      map[string]*Type
 }
 
 func Check(prog *Program, lim Limits) (*Checker, *Diagnostic) {
@@ -64,16 +66,16 @@ func Check(prog *Program, lim Limits) (*Checker, *Diagnostic) {
 	c.Globals.Module = prog.Module
 	c.markWorkers()
 	for _, s := range prog.Statements {
-		if s.Kind == StLet && s.Annotation != nil {
+		if (s.Kind == StLet || s.Kind == StConst) && s.Annotation != nil {
 			a, dd := resolveSpec(env, s.Annotation, 0)
 			if dd != nil {
 				return nil, dd
 			}
-			if a.Kind == TyChannel {
+			if a.Kind == TyChannel || s.Kind == StConst {
 				if c.Globals.local(s.Name) {
 					return nil, Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "binding '%s' is already defined in this scope", s.Name)
 				}
-				c.Globals.Values[s.Name] = Binding{Type: a, Mutable: s.Mutable, Global: true}
+				c.Globals.Values[s.Name] = Binding{Type: a, Mutable: s.Mutable, Const: s.Const, Global: true}
 			}
 		}
 	}
@@ -100,6 +102,44 @@ func compatible(a, b *Type) bool {
 	}
 	return false
 }
+
+func constantExpr(e *Expr) bool {
+	if e == nil {
+		return false
+	}
+	switch e.Kind {
+	case ExInt, ExFloat, ExBool, ExNil, ExString, ExEnum:
+		return true
+	case ExUnary:
+		return constantExpr(e.Operand)
+	case ExBinary:
+		return constantExpr(e.Left) && constantExpr(e.Right)
+	case ExArray, ExSet:
+		for _, item := range e.Items {
+			if !constantExpr(item) {
+				return false
+			}
+		}
+		return true
+	case ExMap:
+		for i := range e.MapKeys {
+			if !constantExpr(e.MapKeys[i]) || !constantExpr(e.Values[i]) {
+				return false
+			}
+		}
+		return true
+	case ExStruct:
+		for _, value := range e.Values {
+			if !constantExpr(value) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Checker) markWorkers() {
 	for _, s := range c.Prog.Statements {
 		c.walkStmt(s)
@@ -265,7 +305,20 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 	sc := NewScope(c.Globals, f.Worker)
 	sc.Module = f.Module
 	c.currentFunction = f
-	defer func() { c.currentFunction = nil; c.currentReturn = nil }()
+	previousParams := c.Env.TypeParams
+	c.Env.TypeParams = map[string]*Type{}
+	for _, param := range f.TypeParams {
+		if _, exists := c.Env.TypeParams[param.Name]; exists {
+			return Diag(CatType, param.Tok.Source, param.Tok.Line, param.Tok.Column, "type parameter '%s' is duplicated", param.Name)
+		}
+		c.Env.TypeParams[param.Name] = Generic(param.Name, param.Constraint)
+	}
+	defer func() { c.currentFunction = nil; c.currentReturn = nil; c.Env.TypeParams = previousParams }()
+	for _, param := range f.TypeParams {
+		if param.Constraint != "" && param.Constraint != "Copy" && param.Constraint != "Numeric" && param.Constraint != "Comparable" {
+			return Diag(CatType, param.Tok.Source, param.Tok.Line, param.Tok.Column, "unknown type constraint '%s'", param.Constraint)
+		}
+	}
 	if f.Receiver != nil {
 		rt, d := resolveSpec(c.Env, f.Receiver, 0)
 		if d != nil {
@@ -334,7 +387,7 @@ func (c *Checker) checkBlock(sc *Scope, body []*Stmt, rt *Type, loop int, inFn b
 }
 func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) Flow {
 	switch s.Kind {
-	case StLet:
+	case StLet, StConst:
 		var expected *Type
 		if s.Annotation != nil {
 			var dd *Diagnostic
@@ -361,7 +414,11 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "binding '%s' is already defined in this scope", s.Name)
 			return Flow{HasError: true}
 		}
-		sc.Values[s.Name] = Binding{Type: t, Mutable: s.Mutable, Global: false}
+		if s.Const && !constantExpr(s.Init) {
+			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "const initializer must be a compile-time expression")
+			return Flow{HasError: true}
+		}
+		sc.Values[s.Name] = Binding{Type: t, Mutable: s.Mutable, Const: s.Const, Global: false}
 		return normalFlow()
 	case StExpr:
 		_, d := c.checkExpr(sc, s.Expr, nil)
@@ -890,6 +947,10 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		found := false
 		for _, f := range bt.Struct.Fields {
 			if f.Name == e.Field {
+				if !f.Public && bt.Struct.Module != sc.Module {
+					d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "field '%s' is private", e.Field)
+					break
+				}
 				t = f.Type
 				found = true
 			}
@@ -923,6 +984,11 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			if ft == nil {
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown field '%s'", n)
 				break
+			}
+			for _, f := range st.Struct.Fields {
+				if f.Name == n && !f.Public && st.Struct.Module != sc.Module {
+					d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "field '%s' is private", n)
+				}
 			}
 			vt, dd := c.checkExpr(sc, e.Values[i], ft)
 			if dd != nil {
@@ -960,6 +1026,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	}
 	if d == nil {
 		e.Type = t
+		foldConstExpr(e)
 	}
 	return t, d
 }
@@ -986,6 +1053,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				return TError, Diag(CatType, a.Tok.Source, a.Tok.Line, a.Tok.Column, "argument %d to method '%s' expected %s, found %s", i+1, e.Name, pt, at)
 			}
 		}
+		e.Function = f
 		return resolveSpec(c.Env, f.Return, 0)
 	}
 	b, ok := c.Env.Builtins[e.Name]
@@ -998,23 +1066,79 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		}
 		return c.checkBuiltin(sc, e, b, expected)
 	}
-	f := c.Env.Functions[e.Name]
-	if f == nil || (!f.Public && f.Module != sc.Module) {
+	candidates := c.Env.Overloads[e.Name]
+	if len(candidates) == 0 && c.Env.Functions[e.Name] != nil {
+		candidates = []*Function{c.Env.Functions[e.Name]}
+	}
+	if len(candidates) == 0 {
 		return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown function '%s'", e.Name)
 	}
+	visible := false
+	for _, f := range candidates {
+		if f.Public || f.Module == sc.Module {
+			visible = true
+			if rt, ok := c.matchFunctionCall(sc, e, f); ok {
+				e.Function = f
+				return rt, nil
+			}
+		}
+	}
+	if !visible {
+		return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown function '%s'", e.Name)
+	}
+	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of '%s' matches the argument types", e.Name)
+}
+
+func (c *Checker) matchFunctionCall(sc *Scope, e *Expr, f *Function) (*Type, bool) {
 	if len(e.Args) != len(f.Params) {
-		return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "function '%s' expects %d argument(s), got %d", e.Name, len(f.Params), len(e.Args))
+		return nil, false
 	}
-	for i, a := range e.Args {
-		pt, _ := resolveSpec(c.Env, f.Params[i].Type, 0)
-		at, d := c.checkExpr(sc, a, pt)
-		if d != nil {
-			return TError, d
+	previous := c.Env.TypeParams
+	c.Env.TypeParams = map[string]*Type{}
+	for _, param := range f.TypeParams {
+		c.Env.TypeParams[param.Name] = Generic(param.Name, param.Constraint)
+	}
+	defer func() { c.Env.TypeParams = previous }()
+	for i, arg := range e.Args {
+		paramSpec := f.Params[i].Type
+		var expected *Type
+		if len(paramSpec.Params) == 0 {
+			if generic := c.Env.TypeParams[paramSpec.Name]; generic != nil {
+				actual, d := c.checkExpr(sc, arg, nil)
+				if d != nil || !satisfiesConstraint(actual, generic.B.Name) {
+					return nil, false
+				}
+				if previousGeneric := c.Env.TypeParams[paramSpec.Name]; previousGeneric != nil && previousGeneric.Kind != TyGeneric && !typeEqual(previousGeneric, actual) {
+					return nil, false
+				}
+				c.Env.TypeParams[paramSpec.Name] = actual
+				continue
+			}
 		}
-		if !compatible(pt, at) {
-			return TError, Diag(CatType, a.Tok.Source, a.Tok.Line, a.Tok.Column, "argument %d to '%s' expected %s, found %s", i+1, e.Name, pt, at)
+		expected, _ = resolveSpec(c.Env, paramSpec, 0)
+		actual, d := c.checkExpr(sc, arg, expected)
+		if d != nil || !compatible(expected, actual) {
+			return nil, false
 		}
 	}
-	rt, _ := resolveSpec(c.Env, f.Return, 0)
-	return rt, nil
+	rt, d := resolveSpec(c.Env, f.Return, 0)
+	if d != nil {
+		return nil, false
+	}
+	return rt, true
+}
+
+func satisfiesConstraint(t *Type, constraint string) bool {
+	switch constraint {
+	case "", "Any":
+		return t != nil && t.Kind != TyError && t.Kind != TyUnknown
+	case "Copy":
+		return TypeCopyable(t)
+	case "Numeric":
+		return numeric(t)
+	case "Comparable":
+		return t != nil && (t.Kind == TyNil || t.Kind == TyInt || t.Kind == TyFloat || t.Kind == TyBool || t.Kind == TyString || t.Kind == TyBytes || t.Kind == TyEnum)
+	default:
+		return false
+	}
 }

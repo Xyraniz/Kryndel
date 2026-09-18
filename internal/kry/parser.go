@@ -21,6 +21,10 @@ func Parse(src *Source, lim Limits) (*Program, *Diagnostic) {
 	prog := &Program{Source: src, Module: src.Name, Sources: []*Source{src}}
 	for !p.check(EOF) && p.Err == nil {
 		pub := p.match(PUB)
+		private := p.match(PRIVATE)
+		if private && pub {
+			p.fail(p.prev(), "a declaration cannot be both pub and private")
+		}
 		switch {
 		case p.check(FN):
 			f := p.function(pub)
@@ -45,8 +49,15 @@ func Parse(src *Source, lim Limits) (*Program, *Diagnostic) {
 			}
 			prog.Imports = append(prog.Imports, ImportDecl{Path: path, Tok: t})
 			p.end()
+		case p.match(CONST):
+			if pub || private {
+				p.fail(p.peek(), "const declarations cannot be public or private")
+				break
+			}
+			prog.Statements = append(prog.Statements, p.constStmt())
+			p.end()
 		default:
-			if pub {
+			if pub || private {
 				p.fail(p.peek(), "'pub' must be followed by a function, struct, or enum")
 				break
 			}
@@ -128,6 +139,23 @@ func (p *Parser) function(pub bool) *Function {
 	t := p.expect(FN, "expected 'fn'")
 	n := p.expect(ID, "expected a function name")
 	f := &Function{Name: n.Text(), Public: pub, Tok: t, Return: &TypeSpec{Name: "Nil", Tok: t}, Module: t.Source.Name}
+	if p.match(LBRACKET) {
+		if !p.check(RBRACKET) {
+			for {
+				pt := p.expect(ID, "expected a type parameter name")
+				param := TypeParam{Name: pt.Text(), Tok: pt}
+				if p.match(COLON) {
+					constraint := p.expect(ID, "expected a type constraint")
+					param.Constraint = constraint.Text()
+				}
+				f.TypeParams = append(f.TypeParams, param)
+				if !p.match(COMMA) {
+					break
+				}
+			}
+		}
+		p.expect(RBRACKET, "expected ']' after type parameters")
+	}
 	p.expect(LPAREN, "expected '(' after function name")
 	if !p.check(RPAREN) {
 		for {
@@ -152,9 +180,10 @@ func (p *Parser) structDecl(pub bool) *StructDecl {
 	d := &StructDecl{Name: n.Text(), Public: pub, Tok: t, Module: t.Source.Name}
 	p.expect(LBRACE, "expected '{' after struct name")
 	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
+		public := !p.match(PRIVATE)
 		ft := p.expect(ID, "expected a struct field name")
 		p.expect(COLON, "expected ':' after field name")
-		d.Fields = append(d.Fields, FieldDecl{Name: ft.Text(), Spec: p.typeSpec(), Tok: ft})
+		d.Fields = append(d.Fields, FieldDecl{Name: ft.Text(), Public: public, Spec: p.typeSpec(), Tok: ft})
 		if !p.match(COMMA) {
 			p.end()
 		}
@@ -220,6 +249,8 @@ func (p *Parser) statement() *Stmt {
 		p.expect(EQUAL, "expected '=' in binding declaration")
 		s.Init = p.expression()
 		return s
+	case p.match(CONST):
+		return p.constStmt()
 	case p.match(IF):
 		return p.ifStmt(t)
 	case p.match(WHILE):
@@ -265,6 +296,21 @@ func (p *Parser) statement() *Stmt {
 	}
 	return &Stmt{Kind: StExpr, Tok: t, Expr: first}
 }
+
+func (p *Parser) constStmt() *Stmt {
+	t := p.prev()
+	s := p.stmtNode(t, StConst)
+	s.Const = true
+	n := p.expect(ID, "expected a constant name after 'const'")
+	s.Name = n.Text()
+	if p.match(COLON) {
+		s.Annotation = p.typeSpec()
+	}
+	p.expect(EQUAL, "expected '=' in constant declaration")
+	s.Init = p.expression()
+	return s
+}
+
 func (p *Parser) ifStmt(t Token) *Stmt {
 	s := p.stmtNode(t, StIf)
 	s.Cond = p.expression()

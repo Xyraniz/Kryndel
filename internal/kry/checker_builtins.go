@@ -685,6 +685,67 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("process_run expects String and Array[String]")
 		}
 		return Res(TInt, TString), nil
+	case "actor_channel", "actor_channel_with_capacity":
+		if b.Name == "actor_channel_with_capacity" {
+			t, d := arg(0, TInt)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TInt) {
+				return bad("actor_channel_with_capacity expects Int")
+			}
+		}
+		if expected != nil && expected.Kind == TyActor {
+			return expected, nil
+		}
+		return bad(b.Name + " requires an Actor[T] type context")
+	case "actor_send":
+		actor, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if actor.Kind != TyActor || !typeKnown(actor.A) {
+			return bad("actor_send expects Actor[T]")
+		}
+		value, d := arg(1, actor.A)
+		if d != nil || !typeEqual(value, actor.A) {
+			return bad("actor_send value type mismatch")
+		}
+		if !TypeCopyable(value) {
+			return bad("actor_send requires a recursively Copy value")
+		}
+		return TNil, nil
+	case "actor_try_receive":
+		actor, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if actor.Kind != TyActor {
+			return bad("actor_try_receive expects Actor[T]")
+		}
+		return Res(actor.A, TString), nil
+	case "actor_receive_timeout":
+		actor, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		ms, d := arg(1, TInt)
+		if d != nil {
+			return TError, d
+		}
+		if actor.Kind != TyActor || !typeEqual(ms, TInt) {
+			return bad("actor_receive_timeout expects Actor[T] and Int")
+		}
+		return actor.A, nil
+	case "actor_close":
+		actor, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if actor.Kind != TyActor {
+			return bad("actor_close expects Actor[T]")
+		}
+		return TNil, nil
 	case "thread_channel", "thread_channel_with_capacity":
 		if b.Name == "thread_channel_with_capacity" {
 			t, d := arg(0, TInt)
@@ -789,6 +850,28 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("thread_join expects Thread[T]")
 		}
 		return th.A, nil
+	case "await":
+		th, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if th.Kind != TyThread {
+			return bad("await expects Thread[T]")
+		}
+		return th.A, nil
+	case "await_timeout":
+		th, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		ms, d := arg(1, TInt)
+		if d != nil {
+			return TError, d
+		}
+		if th.Kind != TyThread || !typeEqual(ms, TInt) {
+			return bad("await_timeout expects Thread[T] and Int")
+		}
+		return Res(th.A, TString), nil
 	case "thread_join_timeout":
 		th, d := arg(0, nil)
 		if d != nil {
@@ -820,6 +903,17 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("thread_close expects Channel[T]")
 		}
 		return TNil, nil
+	case "yield_now":
+		return TNil, nil
+	case "sleep_ms":
+		ms, d := arg(0, TInt)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(ms, TInt) {
+			return bad("sleep_ms expects Int")
+		}
+		return Res(TNil, TString), nil
 	case "fs_read_text":
 		t, d := arg(0, TString)
 		if d != nil {

@@ -45,6 +45,7 @@ const (
 	VSet
 	VJSON
 	VWebSocket
+	VActor
 )
 
 type Value struct {
@@ -67,6 +68,7 @@ type Value struct {
 	Map     []MapEntry
 	Set     []Value
 	WS      *websocketConn
+	Actor   *Actor
 }
 
 type MapEntry struct{ Key, Value Value }
@@ -150,6 +152,8 @@ func display(v Value) string {
 		return "<Thread>"
 	case VWebSocket:
 		return "<WebSocket>"
+	case VActor:
+		return "<Actor>"
 	case VMap:
 		var b strings.Builder
 		b.WriteString("{")
@@ -185,6 +189,8 @@ func cloneValue(v Value) Value {
 	case VJSON:
 		return Value{Kind: VJSON, S: v.S}
 	case VWebSocket:
+		return v
+	case VActor:
 		return v
 	case VBytes:
 		return bytesVal(v.Bytes)
@@ -286,6 +292,8 @@ func equalValue(a, b Value) bool {
 		return true
 	case VWebSocket:
 		return a.WS == b.WS
+	case VActor:
+		return a.Actor == b.Actor
 	case VSet:
 		if len(a.Set) != len(b.Set) {
 
@@ -341,6 +349,8 @@ func copyableValue(v Value, depth int) bool {
 		}
 		return true
 	case VWebSocket:
+		return false
+	case VActor:
 		return false
 	default:
 
@@ -403,6 +413,10 @@ func (c *Channel) close() {
 	c.mu.Unlock()
 }
 func (c *Channel) isClosed() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.Closed }
+
+type Actor struct {
+	Mailbox *Channel
+}
 
 type Thread struct {
 	Done   chan struct{}
@@ -582,7 +596,7 @@ func (r *Runtime) execBlock(sc *RunScope, body []*Stmt) (out EvalResult) {
 }
 func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 	switch s.Kind {
-	case StLet:
+	case StLet, StConst:
 		v, d := r.evalExpr(sc, s.Init)
 		if p := r.takePropagated(); p != nil {
 			return returned(*p)
@@ -800,6 +814,9 @@ func matchPattern(v Value, p Pattern) bool {
 func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 	if d := r.Ctx.step(e.Tok.Source, e.Tok.Line, e.Tok.Column); d != nil {
 		return nilVal(), d
+	}
+	if e.ConstValue != nil {
+		return cloneValue(*e.ConstValue), nil
 	}
 	switch e.Kind {
 	case ExInt:
@@ -1206,7 +1223,10 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 			f = r.Funcs[methodKey(e.Receiver.Type, e.Name)]
 		}
 	} else {
-		f = r.Funcs[e.Name]
+		f = e.Function
+		if f == nil {
+			f = r.Funcs[e.Name]
+		}
 	}
 	if f == nil {
 		return nilVal(), r.fail(e, "unknown function or method '%s'", e.Name)
@@ -1688,6 +1708,69 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(fmt.Sprintf("process exited with code %d", ee.ExitCode()))), nil
 		}
 		return resVal(false, stringVal(err.Error())), nil
+	case "actor_channel", "actor_channel_with_capacity":
+		capacity := minInt(r.Lim.MaxChannelCapacity, 64)
+		if b.Name == "actor_channel_with_capacity" {
+			if a[0].I < 1 || a[0].I > int64(r.Lim.MaxChannelCapacity) {
+				return bad("actor mailbox capacity is outside configured limits")
+			}
+			capacity = int(a[0].I)
+		}
+		mailbox := newChannel(capacity)
+		r.Channels = append(r.Channels, mailbox)
+		return Value{Kind: VActor, Actor: &Actor{Mailbox: mailbox}}, nil
+	case "actor_send":
+		if a[0].Actor == nil || a[0].Actor.Mailbox == nil {
+			return bad("invalid actor")
+		}
+		if !copyableValue(a[1], 0) {
+			return bad("actor send requires a recursively Copy value")
+		}
+		if a[0].Actor.Mailbox.isClosed() {
+			return bad("closed actor mailbox")
+		}
+		select {
+		case a[0].Actor.Mailbox.Data <- cloneValue(a[1]):
+			return nilVal(), nil
+		case <-a[0].Actor.Mailbox.Done:
+			return bad("closed actor mailbox")
+		case <-r.Ctx.Ctx.Done():
+			return nilVal(), Diag(CatRuntime, e.Tok.Source, e.Tok.Line, e.Tok.Column, "actor send cancelled")
+		}
+	case "actor_try_receive":
+		if a[0].Actor == nil || a[0].Actor.Mailbox == nil {
+			return bad("invalid actor")
+		}
+		select {
+		case v := <-a[0].Actor.Mailbox.Data:
+			return resVal(true, v), nil
+		case <-a[0].Actor.Mailbox.Done:
+			return resVal(false, stringVal("closed")), nil
+		default:
+			return resVal(false, stringVal("empty")), nil
+		}
+	case "actor_receive_timeout":
+		if a[1].I < 0 {
+			return bad("timeout duration cannot be negative")
+		}
+		if a[0].Actor == nil || a[0].Actor.Mailbox == nil {
+			return bad("invalid actor")
+		}
+		timer := time.NewTimer(time.Duration(a[1].I) * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case v := <-a[0].Actor.Mailbox.Data:
+			return v, nil
+		case <-a[0].Actor.Mailbox.Done:
+			return nilVal(), badDiag(e, "closed actor mailbox")
+		case <-timer.C:
+			return nilVal(), badDiag(e, "actor receive timed out")
+		}
+	case "actor_close":
+		if a[0].Actor != nil && a[0].Actor.Mailbox != nil {
+			a[0].Actor.Mailbox.close()
+		}
+		return nilVal(), nil
 	case "thread_channel":
 		ch := newChannel(minInt(r.Lim.MaxChannelCapacity, 64))
 		r.Channels = append(r.Channels, ch)
@@ -1781,10 +1864,14 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 	case "thread_join":
 		return r.join(e, a[0].Th)
+	case "await":
+		return r.join(e, a[0].Th)
 	case "thread_join_timeout":
 		if a[1].I < 0 {
 			return bad("timeout duration cannot be negative")
 		}
+		return r.joinTimeout(e, a[0].Th, a[1].I)
+	case "await_timeout":
 		return r.joinTimeout(e, a[0].Th, a[1].I)
 	case "thread_cancel":
 		a[0].Th.Cancel()
@@ -1792,6 +1879,21 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	case "thread_close":
 		a[0].Ch.close()
 		return nilVal(), nil
+	case "yield_now":
+		runtime.Gosched()
+		return nilVal(), nil
+	case "sleep_ms":
+		if a[0].I < 0 {
+			return bad("sleep duration cannot be negative")
+		}
+		timer := time.NewTimer(time.Duration(a[0].I) * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return resVal(true, nilVal()), nil
+		case <-r.Ctx.Ctx.Done():
+			return resVal(false, stringVal("sleep cancelled")), nil
+		}
 	case "fs_read_text":
 		return r.readText(a[0].S)
 	case "fs_write_text":

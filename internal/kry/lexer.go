@@ -37,6 +37,8 @@ const (
 	DEFER
 	UNSAFE
 	IMPL
+	CONST
+	PRIVATE
 	LPAREN
 	RPAREN
 	LBRACE
@@ -76,7 +78,7 @@ type Token struct {
 	Source        *Source
 }
 
-var words = map[string]TokenKind{"fn": FN, "let": LET, "mut": MUT, "if": IF, "else": ELSE, "while": WHILE, "return": RETURN, "break": BREAK, "continue": CONTINUE, "true": TRUE, "false": FALSE, "nil": NIL, "pub": PUB, "import": IMPORT, "struct": STRUCT, "enum": ENUM, "match": MATCH, "for": FOR, "in": IN, "defer": DEFER, "unsafe": UNSAFE, "impl": IMPL}
+var words = map[string]TokenKind{"fn": FN, "let": LET, "mut": MUT, "if": IF, "else": ELSE, "while": WHILE, "return": RETURN, "break": BREAK, "continue": CONTINUE, "true": TRUE, "false": FALSE, "nil": NIL, "pub": PUB, "import": IMPORT, "struct": STRUCT, "enum": ENUM, "match": MATCH, "for": FOR, "in": IN, "defer": DEFER, "unsafe": UNSAFE, "impl": IMPL, "const": CONST, "private": PRIVATE}
 
 func validUTF8(b []byte) bool { return utf8.Valid(b) }
 func isIDStart(r rune) bool   { return r == '_' || unicode.IsLetter(r) || r >= utf8.RuneSelf }

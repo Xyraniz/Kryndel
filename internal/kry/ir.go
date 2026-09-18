@@ -72,7 +72,7 @@ func CompileIR(p *Program, lim Limits) (*ValidatedIR, *Diagnostic) {
 		}
 		op := OpExpr
 		switch s.Kind {
-		case StLet:
+		case StLet, StConst:
 			op = OpLet
 			ex(s.Init, d+1)
 		case StAssign:

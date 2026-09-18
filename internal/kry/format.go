@@ -65,7 +65,11 @@ func (f *Formatter) structDecl(s *StructDecl) {
 	f.line(pre + "struct " + s.Name + " {")
 	f.indent++
 	for _, x := range s.Fields {
-		f.line(x.Name + ": " + f.typeSpec(x.Spec) + ",")
+		prefix := ""
+		if !x.Public {
+			prefix = "private "
+		}
+		f.line(prefix + x.Name + ": " + f.typeSpec(x.Spec) + ",")
 	}
 	f.indent--
 	f.line("}")
@@ -94,7 +98,21 @@ func (f *Formatter) function(fn *Function) {
 	if fn.Public {
 		pre = "pub "
 	}
-	x := pre + "fn " + fn.Name + "("
+	x := pre + "fn " + fn.Name
+	if len(fn.TypeParams) > 0 {
+		x += "["
+		for i, param := range fn.TypeParams {
+			if i > 0 {
+				x += ", "
+			}
+			x += param.Name
+			if param.Constraint != "" {
+				x += ": " + param.Constraint
+			}
+		}
+		x += "]"
+	}
+	x += "("
 	for i, p := range fn.Params {
 		if i > 0 {
 			x += ", "
@@ -117,8 +135,11 @@ func (f *Formatter) function(fn *Function) {
 }
 func (f *Formatter) stmt(s *Stmt) {
 	switch s.Kind {
-	case StLet:
+	case StLet, StConst:
 		x := "let "
+		if s.Const {
+			x = "const "
+		}
 		if s.Mutable {
 			x += "mut "
 		}

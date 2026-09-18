@@ -25,7 +25,7 @@ if sum_to(4) == 10 {
 }
 ```
 
-`let` creates an immutable binding. `let mut` is required before a binding can be assigned. A child scope may shadow a parent name, and assignment updates only the nearest binding; an outer immutable binding can never be changed through a nested scope. Branch and loop bindings are local to their block. Function calls use local lexical scopes and may be recursive.
+`let` creates an immutable binding. `let mut` is required before a binding can be assigned. `const` creates a compile-time immutable binding; its initializer must contain only literal data and checked operators, so it cannot hide I/O or scheduling effects. A child scope may shadow a parent name, and assignment updates only the nearest binding; an outer immutable binding can never be changed through a nested scope. Branch and loop bindings are local to their block. Function calls use local lexical scopes and may be recursive.
 
 Supported statements are `let`, `let mut`, expression statements, assignment, `fn`, `if`, `else`, `while`, `return`, `break`, `continue`, `import`, `struct`, `enum`, and `match`. A function parameter must have an explicit type, and a non-`Nil` function must return its declared type on every checked path.
 
@@ -71,6 +71,18 @@ fn repeat(value: String, count: Int) -> String {
 
 The checker reports unknown functions, wrong arity, wrong argument types, unresolved return types, and return mismatches before evaluating the program. Functions do not close over mutable runtime state and are called by value.
 
+Functions may be overloaded by parameter signature. Calls are resolved statically and an ambiguous or unmatched call is rejected before execution. Generic functions use readable type parameters with constraints:
+
+```kryndel
+fn identity[T: Copy](value: T) -> T { return value }
+fn choose(value: Int) -> String { return "int" }
+fn choose(value: String) -> String { return "text" }
+```
+
+The built-in constraints are `Copy`, `Numeric`, and `Comparable`. `Copy` is structural and excludes channels, threads, actors, sockets, and other owned handles.
+
+Struct fields are public by default inside a public API, but `private field: T` makes access and construction outside the declaring module a static error. This is enforced by the checker rather than by naming convention.
+
 ## Structs, enums, and matching
 
 Structs declare named, typed fields. Enums declare a finite set of variants. `match` checks enum variants and requires either every variant or a `_` wildcard. `Option[T]` requires both `some(name)` and `none` unless `_` is present; `Result[T, E]` requires both `ok(name)` and `err(name)`. Duplicate alternatives are rejected:
@@ -86,11 +98,13 @@ match color {
 
 `Option[T]` patterns use `some(name)` and `none`; `Result[T, E]` patterns use `ok(name)` and `err(name)`. Pattern bindings are immutable and local to the arm. A `nil` pattern is an alias for an empty `Option`, not a `Result` alternative.
 
-## Threads and channels
+## Threads, actors, and async effects
 
 The stable concurrency API uses seven explicit builtins: `thread_channel`, `thread_spawn`, `thread_send`, `thread_receive`, `thread_receive_timeout`, `thread_join`, and `thread_close`. A channel is a bounded single-slot synchronization object. Worker functions are named, take no arguments, and return a declared type. `thread_send` accepts only Copy values: primitives, strings, bytes, enums, and recursively Copy arrays, options, and results. Structs, channel handles, and thread handles are not transferable values.
 
 Workers receive only global channel handles through a private runtime scope; ordinary global values and mutable application data are not exposed to a worker. Channel operations are synchronized with a mutex and condition variables. Closing a channel wakes blocked senders and receivers; `thread_receive_timeout` provides a bounded millisecond deadline; the runtime closes channels and joins outstanding workers during program shutdown. Worker failures are propagated by `thread_join` and by shutdown when no earlier error exists.
+
+`Actor[T]` is an isolated, bounded mailbox for recursively Copy messages. `actor_channel` creates one, `actor_send` blocks with cancellation, and `actor_try_receive`, `actor_receive_timeout`, and `actor_close` provide non-panicking mailbox operations. `await` and `await_timeout` are explicit effect boundaries over `Thread[T]`; `yield_now` and `sleep_ms` cooperate with the runtime context instead of busy-waiting. There is no hidden scheduler or shared mutable memory in these APIs.
 
 ## Modules
 
