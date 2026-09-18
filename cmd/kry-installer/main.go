@@ -2,8 +2,6 @@
 package main
 
 import (
-	"archive/zip"
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -14,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 var version = "latest"
@@ -31,16 +30,16 @@ func main() {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		fail(err)
 	}
-	
+
 	asset := "kry-windows-amd64.exe"
 	base := "https://github.com/Xyraniz/Kryndel/releases/latest/download/"
-	
+
 	fmt.Println("Downloading Kryndel from " + base + asset)
 	data, err := download(base + asset)
 	if err != nil {
 		fail(err)
 	}
-	
+
 	expectedSHA := os.Getenv("KRY_EXPECTED_SHA")
 	if expectedSHA != "" {
 		actualSHA := sha256.Sum256(data)
@@ -49,18 +48,18 @@ func main() {
 		}
 		fmt.Println("SHA256 verified successfully")
 	}
-	
+
 	if err := os.WriteFile(filepath.Join(bin, "kry.exe"), data, 0o755); err != nil {
 		fail(err)
 	}
-	
+
 	path := os.Getenv("PATH")
-	if !strings.Contains(strings.ToLower(path), strings.ToLower(bin)) {
+	if !pathContains(path, bin) {
 		if err := runSetx(path + ";" + bin); err != nil {
 			fail(err)
 		}
 	}
-	
+
 	fmt.Println("")
 	fmt.Println("╔════════════════════════════════════════════════════════╗")
 	fmt.Println("║         Kryndel installed successfully!                ║")
@@ -85,7 +84,8 @@ func main() {
 }
 
 func download(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +103,15 @@ func download(url string) ([]byte, error) {
 	return data, nil
 }
 
+func pathContains(path, entry string) bool {
+	for _, item := range strings.Split(path, ";") {
+		if strings.EqualFold(strings.TrimSpace(item), entry) {
+			return true
+		}
+	}
+	return false
+}
+
 func runSetx(value string) error {
 	cmd := exec.Command("setx", "PATH", value)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
@@ -112,36 +121,4 @@ func runSetx(value string) error {
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "kry-installer:", err)
 	os.Exit(1)
-}
-
-// Helper for extracting zip archives (for future use)
-func extractZip(data []byte, dest string) error {
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return err
-	}
-	for _, file := range reader.File {
-		path := filepath.Join(dest, file.Name)
-		if file.FileInfo().IsDir() {
-			os.MkdirAll(path, 0o755)
-			continue
-		}
-		os.MkdirAll(filepath.Dir(path), 0o755)
-		rc, err := file.Open()
-		if err != nil {
-			return err
-		}
-		out, err := os.Create(path)
-		if err != nil {
-			rc.Close()
-			return err
-		}
-		_, err = io.Copy(out, io.LimitReader(rc, 64<<20))
-		out.Close()
-		rc.Close()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }

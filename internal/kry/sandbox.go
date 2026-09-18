@@ -52,6 +52,76 @@ func (s Sandbox) Read(name string) ([]byte, error) {
 	}
 	return os.ReadFile(p)
 }
+
+func (s Sandbox) ReadFile(name string) ([]byte, error) { return s.Read(name) }
+
+func (s Sandbox) ReadDir(name string) ([]os.DirEntry, error) {
+	p, err := s.Resolve(name, false)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadDir(p)
+}
+
+func (s Sandbox) Stat(name string) (os.FileInfo, error) {
+	p, err := s.Resolve(name, false)
+	if err != nil {
+		return nil, err
+	}
+	return os.Stat(p)
+}
+
+func (s Sandbox) Mkdir(name string, perm os.FileMode) error {
+	p, err := s.Resolve(name, true)
+	if err != nil {
+		return err
+	}
+	return os.Mkdir(p, perm)
+}
+
+func (s Sandbox) MkdirAll(name string, perm os.FileMode) error {
+	p, err := s.Resolve(name, true)
+	if err != nil {
+		return err
+	}
+	return os.MkdirAll(p, perm)
+}
+
+func (s Sandbox) Remove(name string) error {
+	p, err := s.Resolve(name, true)
+	if err != nil {
+		return err
+	}
+	return os.Remove(p)
+}
+
+func (s Sandbox) RemoveAll(name string) error {
+	p, err := s.Resolve(name, true)
+	if err != nil {
+		return err
+	}
+	if s.Restricted && filepath.Clean(p) == filepath.Clean(s.Root) {
+		return errors.New("cannot remove sandbox root")
+	}
+	return os.RemoveAll(p)
+}
+
+func (s Sandbox) WriteFile(name string, data []byte, _ os.FileMode) error {
+	return s.Write(name, data)
+}
+
+func (s Sandbox) Rename(oldName, newName string) error {
+	oldPath, err := s.Resolve(oldName, true)
+	if err != nil {
+		return err
+	}
+	newPath, err := s.Resolve(newName, true)
+	if err != nil {
+		return err
+	}
+	return os.Rename(oldPath, newPath)
+}
+
 func (s Sandbox) Exists(name string) (bool, error) {
 	p, e := s.Resolve(name, false)
 	if e != nil {

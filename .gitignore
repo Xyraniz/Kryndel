@@ -1,4 +1,3 @@
-```
 # Compiled and build artifacts
 *.pyc
 __pycache__/
@@ -9,6 +8,7 @@ __pycache__/
 *.so
 *.class
 *.out
+/kry
 
 # Dependencies
 node_modules/
@@ -19,9 +19,9 @@ venv/
 .env.*
 
 # Build directories
-dist/
-build/
-target/
+/dist/
+/build/
+/target/
 
 # Logs and temp files
 *.log
@@ -60,4 +60,3 @@ Thumbs.db
 *.Z
 *.lz
 *.lzo
-```

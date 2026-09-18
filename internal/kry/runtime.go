@@ -423,6 +423,7 @@ type Runtime struct {
 	Ctx          *ExecContext
 	Channels     []*Channel
 	Threads      []*Thread
+	nextTimerID  int64
 	Worker       bool
 	propagated   *Value
 	shutdownOnce sync.Once
@@ -1869,7 +1870,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		for i, p := range parts {
 			partStrs[i] = p.S
 		}
-		return stringVal(filepath.Join(append([]string{base}, partStrs...))), nil
+		return stringVal(filepath.Join(append([]string{base}, partStrs...)...)), nil
 	case "fs_absolute_path":
 		abs, err := filepath.Abs(a[0].S)
 		if err != nil {
@@ -1929,11 +1930,20 @@ func (r *Runtime) httpRequestAuth(e *Expr, method, rawURL, body, token string) (
 	if token == "" {
 		return resVal(false, stringVal("empty authentication token")), nil
 	}
+	return r.doHTTP(method, rawURL, body, token)
+}
+
+func (r *Runtime) doHTTP(method, rawURL, body, token string) (Value, *Diagnostic) {
+	if strings.IndexByte(rawURL, 0) >= 0 {
+		return resVal(false, stringVal("URL contains NUL")), nil
+	}
 	req, err := http.NewRequestWithContext(r.Ctx.Ctx, method, rawURL, bytes.NewBufferString(body))
 	if err != nil {
 		return resVal(false, stringVal(err.Error())), nil
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := (&http.Client{Timeout: time.Duration(r.Lim.MaxWallTimeMS) * time.Millisecond}).Do(req)
 	if err != nil {
 		return resVal(false, stringVal(err.Error())), nil
@@ -1956,32 +1966,7 @@ func (r *Runtime) httpRequestAuth(e *Expr, method, rawURL, body, token string) (
 }
 
 func (r *Runtime) httpRequest(e *Expr, method, rawURL, body string) (Value, *Diagnostic) {
-	if strings.IndexByte(rawURL, 0) >= 0 {
-		return resVal(false, stringVal("URL contains NUL")), nil
-	}
-	req, err := http.NewRequestWithContext(r.Ctx.Ctx, method, rawURL, bytes.NewBufferString(body))
-	if err != nil {
-		return resVal(false, stringVal(err.Error())), nil
-	}
-	resp, err := (&http.Client{Timeout: time.Duration(r.Lim.MaxWallTimeMS) * time.Millisecond}).Do(req)
-	if err != nil {
-		return resVal(false, stringVal(err.Error())), nil
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(r.Lim.MaxSourceBytes)+1))
-	if err != nil {
-		return resVal(false, stringVal(err.Error())), nil
-	}
-	if len(data) > r.Lim.MaxSourceBytes {
-		return resVal(false, stringVal("response exceeds configured input limit")), nil
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resVal(false, stringVal(fmt.Sprintf("HTTP status %d", resp.StatusCode))), nil
-	}
-	if !validUTF8(data) {
-		return resVal(false, stringVal("response is not valid UTF-8")), nil
-	}
-	return resVal(true, stringVal(string(data))), nil
+	return r.doHTTP(method, rawURL, body, "")
 }
 
 func badDiag(e *Expr, msg string) *Diagnostic {
