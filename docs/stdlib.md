@@ -64,3 +64,15 @@ Kryndel keeps its standard library small and explicit. The current release provi
 String-to-number conversion rejects whitespace-dependent partial parses and inputs such as `"12xyz"`. Float values and results must be finite. Integer arithmetic and `abs(Int minimum)` are checked. `Bytes` conversion never applies an implicit text encoding to arbitrary values.
 
 The Go registry is the authoritative list. The CLI help renders its signatures and descriptions. Adding a builtin requires a registry entry, checker behavior, runtime behavior, documentation, and positive and negative tests. Package authors should use the typed wrappers in `std/env.kry`, `std/json.kry`, and `std/http.kry`; the official `packages/discord` package uses the same bounded primitives and never prints bot tokens.
+
+## Source wrappers
+
+The `std/dispatch.kry` module provides named wrappers around the runtime polymorphism builtins. `register` adds a `String -> String` handler to a slot, `reorder` changes the order of two registered handlers, `call` returns the full `Result`, and `call_or` supplies a fallback string for an empty or failing slot. The module keeps application code independent from builtin names while preserving the same strict handler signature and runtime limits.
+
+```kryndel
+import "std/dispatch"
+
+let registered: Result[Nil, String] = register("render", "text_handler", 10)
+let output: String = call_or("render", "hello", "fallback")
+println(output)
+```

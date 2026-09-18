@@ -94,6 +94,17 @@ Run the complete example with:
 ./tools/kry run examples/runtime_polymorphism.kry
 ```
 
+The same API is available through `std/dispatch`, which keeps application code focused on the handler registry instead of builtin names:
+
+```kryndel
+import "std/dispatch"
+
+let registered: Result[Nil, String] = register("render", "text_handler", 10)
+println(call_or("render", "hello", "fallback"))
+```
+
+See `examples/dispatch_library.kry` for a complete module-based example.
+
 ## Modules and packages
 
 Modules are resolved relative to the importing source file. The `.kry` extension is optional, paths cannot escape the module root, and only `pub` declarations are exported. Cycles, duplicate exports, unsafe paths, and invalid public types are rejected.

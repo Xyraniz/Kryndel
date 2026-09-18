@@ -1,0 +1,17 @@
+import "std/dispatch"
+
+fn json_handler(value: String) -> String {
+    return "json:" + value
+}
+
+fn text_handler(value: String) -> String {
+    return "text:" + value
+}
+
+let registered: Result[Nil, String] = register("render", "json_handler", 10)
+let registered_text: Result[Nil, String] = register("render", "text_handler", 5)
+println(call_or("render", "hello", "no handler"))
+
+let moved: Result[Nil, String] = reorder("render", "text_handler", "json_handler")
+println(call_or("render", "hello", "no handler"))
+println(call_or("missing", "hello", "fallback"))

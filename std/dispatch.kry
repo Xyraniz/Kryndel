@@ -1,0 +1,20 @@
+// Typed helpers for runtime-polymorphic String -> String handlers.
+
+pub fn register(slot: String, handler: String, priority: Int) -> Result[Nil, String] {
+    return poly_register(slot, handler, priority)
+}
+
+pub fn reorder(slot: String, handler: String, before: String) -> Result[Nil, String] {
+    return poly_reorder(slot, handler, before)
+}
+
+pub fn call(slot: String, input: String) -> Result[String, String] {
+    return poly_dispatch(slot, input)
+}
+
+pub fn call_or(slot: String, input: String, fallback: String) -> String {
+    match poly_dispatch(slot, input) {
+        ok(value) => { return value }
+        err(_) => { return fallback }
+    }
+}
