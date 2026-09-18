@@ -315,9 +315,6 @@ func (pm *PackageManager) download(name string, v RegistryVersion) (LockedPackag
 	if v.URL == "" || v.SHA256 == "" {
 		return LockedPackage{}, fmt.Errorf("registry entry for %s@%s lacks URL or SHA-256", name, v.Version)
 	}
-	if pm.Offline {
-		return LockedPackage{}, fmt.Errorf("offline mode: package %s@%s is not cached", name, v.Version)
-	}
 	downloadURL := v.URL
 	if parsed, err := url.Parse(downloadURL); err == nil && !parsed.IsAbs() {
 		downloadURL = pm.Registry + "/" + strings.TrimLeft(downloadURL, "/")

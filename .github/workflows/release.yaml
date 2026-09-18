@@ -65,6 +65,13 @@ jobs:
           suffix=
           test "${{ matrix.goos }}" = windows && suffix=.exe
           go build -trimpath -ldflags='-s -w' -o "dist/kry-${{ matrix.goos }}-${{ matrix.goarch }}${suffix}" ./cmd/kry
+      - name: Build Windows installer
+        if: matrix.goos == 'windows' && matrix.goarch == 'amd64'
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: go build -trimpath -ldflags='-s -w' -o dist/kry-installer-windows-amd64.exe ./cmd/kry-installer
       - name: Generate checksums, SBOM, and provenance
         shell: bash
         run: |

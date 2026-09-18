@@ -1,3 +1,4 @@
+// Discord bot integration. It uses bot accounts only; user-account automation/selfbots are intentionally unsupported.
 pub struct Bot {
     token: String,
     intents: Array[String],
@@ -7,57 +8,76 @@ pub struct Bot {
 fn intent_mask(intents: Array[String]) -> Int {
     let mut mask: Int = 0
     for intent in intents {
-        if intent == "Guilds" {
-            mask = mask + 1
-        }
-        if intent == "GuildMessages" {
-            mask = mask + 512
-        }
-        if intent == "MessageContent" {
-            mask = mask + 32768
-        }
-        if intent == "GuildMembers" {
-            mask = mask + 2
-        }
+        if intent == "Guilds" { mask = mask + 1 }
+        if intent == "GuildMembers" { mask = mask + 2 }
+        if intent == "GuildMessages" { mask = mask + 512 }
+        if intent == "MessageContent" { mask = mask + 32768 }
     }
     return mask
 }
 
+fn valid_id(value: String) -> Bool {
+    if value == "" { return false }
+    return true
+}
+
 pub fn bot(token: String, intents: Array[String]) -> Result[Bot, String] {
-    if token == "" {
-        return err("Discord token must not be empty")
-    }
+    if token == "" { return err("Discord bot token must not be empty") }
     return ok(Bot{token: token, intents: intents, gateway: "wss://gateway.discord.gg/?v=10&encoding=json"})
 }
 
 impl Bot {
+    // The caller can use this as a health check before starting a worker.
     pub fn on_message(command: String) -> Result[Nil, String] {
-        if command == "" {
-            return err("message command must not be empty")
-        }
+        if command == "" { return err("message command must not be empty") }
         return ok(nil)
     }
 
+    // Discord requires HELLO before IDENTIFY. This performs a real authenticated handshake.
     pub fn run() -> Result[Nil, String] {
         let connection: Result[WebSocket, String] = websocket_connect(self.gateway)
         match connection {
             ok(socket) => {
-                let identify: String = "{\"op\":2,\"d\":{\"token\":\"" + self.token + "\",\"intents\":" + str(intent_mask(self.intents)) + ",\"properties\":{\"os\":\"kryndel\",\"browser\":\"kryndel\",\"device\":\"kryndel\"}}}"
-                let sent: Result[Nil, String] = websocket_send(socket, identify)
-                let _hello: Result[String, String] = websocket_receive(socket)
-                websocket_close(socket)
-                match sent {
+                let hello: Result[String, String] = websocket_receive(socket)
+                match hello {
+                    err(problem) => { websocket_close(socket); return err(problem) }
                     ok(_) => {
-                        return ok(nil)
-                    }
-                    err(send_error) => {
-                        return err(send_error)
+                        let identify: String = "{\"op\":2,\"d\":{\"token\":\"" + self.token + "\",\"intents\":" + str(intent_mask(self.intents)) + ",\"properties\":{\"os\":\"kryndel\",\"browser\":\"kryndel\",\"device\":\"kryndel\"}}}"
+                        let sent: Result[Nil, String] = websocket_send(socket, identify)
+                        websocket_close(socket)
+                        return sent
                     }
                 }
             }
-            err(connect_error) => {
-                return err(connect_error)
-            }
+            err(connect_error) => { return err(connect_error) }
+        }
+    }
+
+    // Moderation endpoints use Discord's bot bearer authentication and never log the token.
+    pub fn ban(guild_id: String, user_id: String) -> Result[Nil, String] {
+        if !valid_id(guild_id) || !valid_id(user_id) { return err("guild_id and user_id are required") }
+        let response: Result[String, String] = http_request_auth("PUT", "https://discord.com/api/v10/guilds/" + guild_id + "/bans/" + user_id, "{\"delete_message_seconds\":0}", self.token)
+        match response {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
+        }
+    }
+
+    pub fn unban(guild_id: String, user_id: String) -> Result[Nil, String] {
+        if !valid_id(guild_id) || !valid_id(user_id) { return err("guild_id and user_id are required") }
+        let response: Result[String, String] = http_request_auth("DELETE", "https://discord.com/api/v10/guilds/" + guild_id + "/bans/" + user_id, "", self.token)
+        match response {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
+        }
+    }
+
+    pub fn kick(guild_id: String, user_id: String) -> Result[Nil, String] {
+        if !valid_id(guild_id) || !valid_id(user_id) { return err("guild_id and user_id are required") }
+        let response: Result[String, String] = http_request_auth("DELETE", "https://discord.com/api/v10/guilds/" + guild_id + "/members/" + user_id, "", self.token)
+        match response {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
         }
     }
 }

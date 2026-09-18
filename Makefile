@@ -62,6 +62,7 @@ release: build
 	  os=$${target%/*}; arch=$${target#*/}; ext=; test "$$os" = windows && ext=.exe; \
 	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w' -o "dist/kry-$$os-$$arch$$ext" ./cmd/kry; \
 	done
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w' -o dist/kry-installer-windows-amd64.exe ./cmd/kry-installer
 	sha256sum dist/kry-* > dist/SHA256SUMS
 
 clean:
