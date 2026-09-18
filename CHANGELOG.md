@@ -14,6 +14,8 @@ Structured concurrency is now available through `TaskGroup`: child workers are o
 
 Direct self-recursive tail calls now use an iterative runtime trampoline. Tail recursion therefore avoids consuming additional logical call-depth budget while non-tail calls retain the ordinary safety limit. A regression test evaluates 10,000 tail calls under the normal depth limit.
 
+Linux x64 native builds now emit a real AOT ELF for compile-time top-level `print`/`println` programs, including constant bindings. The output contains direct x86-64 syscalls and embedded data, has no Kryndel VM or interpreter payload, and rejects unsupported source constructs explicitly.
+
 ## 1.3.0 — Collections, propagation, packages, native targets, and platform APIs
 
 Kryndel now supports typed `Map[K,V]` and `Set[T]` values, `for` iteration, receiver methods through `impl`, `defer` cleanup scopes, explicit `unsafe` regions, and strict `Option`/`Result` propagation with `?`. The checker and runtime share deterministic collection equality, cloning, display, bounds, and non-Copy WebSocket ownership rules.

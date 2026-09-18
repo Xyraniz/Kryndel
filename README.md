@@ -73,6 +73,8 @@ For concurrent workers, `TaskGroup` provides structured ownership, cancellation 
 
 Direct self-recursive calls in tail position use a runtime trampoline, allowing iterative algorithms written recursively without consuming one call-depth slot per iteration.
 
+`kry build --format=elf --target=linux-x64` emits direct AOT x86-64 machine code for checked constant-output programs. The generated ELF uses Linux syscalls directly and contains no Kryndel interpreter; unsupported constructs are rejected during the build.
+
 Functions are collected before the top-level program runs, so a function can be called before its declaration in the source file. The checker still validates the whole program before execution.
 
 ## Runtime polymorphism

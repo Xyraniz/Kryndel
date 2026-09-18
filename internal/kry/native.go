@@ -7,9 +7,9 @@ import (
 	"runtime"
 )
 
-// NativeTarget describes a machine-code output target. The backend deliberately
-// starts with a tiny, dependency-free entry point that exits successfully; the
-// VM and KRYNATIVE3 bundle remain the development path for the full language.
+// NativeTarget describes a machine-code output target. Linux x64 currently has
+// a direct AOT emitter for the side-effect-free output subset; unsupported
+// constructs are rejected instead of silently falling back to an interpreter.
 type NativeTarget struct {
 	OS   string
 	Arch string
@@ -57,7 +57,7 @@ func BuildNative(p *Program, target NativeTarget, format string) ([]byte, error)
 		if target.Arch != "amd64" {
 			return nil, fmt.Errorf("ELF backend currently supports linux-x64")
 		}
-		return buildELF(), nil
+		return buildELF(p)
 	case "macho":
 		return nil, fmt.Errorf("Mach-O backend is not yet available; use KRYNATIVE3 or a supported target")
 	default:
@@ -186,12 +186,38 @@ func buildPE(target NativeTarget) []byte {
 	return buf.Bytes()
 }
 
-func buildELF() []byte {
-	code := []byte{0xb8, 60, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05}
+func buildELF(p *Program) ([]byte, error) {
+	outputs, err := nativeOutputs(p)
+	if err != nil {
+		return nil, err
+	}
+	code := make([]byte, 0, 32+len(outputs)*27)
+	for _, output := range outputs {
+		// write(1, string, length); the RIP-relative displacement is patched
+		// after the final code size is known.
+		code = append(code, 0xb8, 1, 0, 0, 0)             // mov eax, SYS_write
+		code = append(code, 0xbf, 1, 0, 0, 0)             // mov edi, STDOUT_FILENO
+		code = append(code, 0x48, 0x8d, 0x35, 0, 0, 0, 0) // lea rsi, [rip+disp32]
+		code = append(code, 0xba, byte(len(output)), byte(len(output)>>8), byte(len(output)>>16), byte(len(output)>>24))
+		code = append(code, 0x0f, 0x05) // syscall
+	}
+	code = append(code, 0xb8, 60, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05)
 	const phoff = 64
 	const codeOff = 0x1000
-	out := make([]byte, codeOff+len(code))
+	dataOff := codeOff + len(code)
+	out := make([]byte, dataOff)
 	copy(out[codeOff:], code)
+	for i, output := range outputs {
+		lea := i*24 + 13
+		dataAddress := codeOff + len(code)
+		instructionEnd := codeOff + i*24 + 17
+		disp := dataAddress - instructionEnd
+		binary.LittleEndian.PutUint32(out[codeOff+lea:codeOff+lea+4], uint32(disp))
+		_ = output
+	}
+	for _, output := range outputs {
+		out = append(out, []byte(output)...)
+	}
 	copy(out[:4], []byte{0x7f, 'E', 'L', 'F'})
 	out[4], out[5], out[6] = 2, 1, 1
 	binary.LittleEndian.PutUint16(out[16:], 2)
@@ -216,5 +242,41 @@ func buildELF() []byte {
 	binary.LittleEndian.PutUint64(ph[32:], uint64(len(out)))
 	binary.LittleEndian.PutUint64(ph[40:], uint64(len(out)))
 	binary.LittleEndian.PutUint64(ph[48:], 0x1000)
-	return out
+	return out, nil
+}
+
+func nativeOutputs(p *Program) ([]string, error) {
+	if p == nil || len(p.Functions) != 0 {
+		return nil, fmt.Errorf("linux-x64 AOT currently supports top-level output programs without function declarations")
+	}
+	outputs := make([]string, 0)
+	values := map[string]Value{}
+	for _, stmt := range p.Statements {
+		if stmt.Kind == StLet || stmt.Kind == StConst {
+			if stmt.Init == nil || stmt.Init.ConstValue == nil {
+				return nil, fmt.Errorf("AOT bindings must have compile-time values")
+			}
+			values[stmt.Name] = *stmt.Init.ConstValue
+			continue
+		}
+		if stmt.Kind != StExpr || stmt.Expr == nil || stmt.Expr.Kind != ExCall || (stmt.Expr.Name != "print" && stmt.Expr.Name != "println") || len(stmt.Expr.Args) != 1 {
+			return nil, fmt.Errorf("linux-x64 AOT supports only print(value) and println(value) top-level statements")
+		}
+		arg := stmt.Expr.Args[0]
+		value := arg.ConstValue
+		if value == nil && arg.Kind == ExVar {
+			if stored, ok := values[arg.Name]; ok {
+				value = &stored
+			}
+		}
+		if value == nil {
+			return nil, fmt.Errorf("AOT output argument must be a compile-time value")
+		}
+		text := display(*value)
+		if stmt.Expr.Name == "println" {
+			text += "\n"
+		}
+		outputs = append(outputs, text)
+	}
+	return outputs, nil
 }

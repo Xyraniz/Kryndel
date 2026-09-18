@@ -9,7 +9,7 @@ make
 ./tools/kry run examples/fibonacci.kry
 ```
 
-The executable does not load modules from another language and does not require C, Python, Rust, Node.js, or an equivalent runtime to execute Kryndel programs. The only source-build dependency is the documented Go toolchain and standard library. The full portable execution path is the self-contained `KRYNATIVE3` bundle; native PE/ELF output currently provides a real minimal process entrypoint while the complete source semantics continue to run through the checked VM.
+The executable does not load modules from another language and does not require C, Python, Rust, Node.js, or an equivalent runtime to execute Kryndel programs. The only source-build dependency is the documented Go toolchain and standard library. The full portable execution path is the self-contained `KRYNATIVE3` bundle. Linux x64 ELF output is a direct AOT machine-code emitter for compile-time top-level output programs; unsupported source constructs are rejected instead of embedding or invoking the VM.
 
 ## Command contract
 
@@ -57,7 +57,7 @@ The former `KRYNATIVE1` single-source container is intentionally rejected as an 
 
 ## Native binary formats
 
-`internal/kry/native.go` emits a PE32+ image for Windows targets and an ELF64 image for Linux x64. The PE has a DOS header, PE signature, COFF machine field, optional header, section table, `.text`, `.idata`, and an `ExitProcess` import. The ELF has a valid 64-bit little-endian header, one executable load segment, and an x86-64 `exit(0)` entrypoint. Unsupported formats fail with a categorized error; output is never mislabeled as native merely because a file has a native-looking suffix.
+`internal/kry/native.go` emits a PE32+ image for Windows targets and an ELF64 image for Linux x64. The PE has a DOS header, PE signature, COFF machine field, optional header, section table, `.text`, `.idata`, and an `ExitProcess` import. Linux x64 AOT emits direct x86-64 `write(2)` and `exit(2)` syscalls with RIP-relative embedded string data for checked `print`/`println` programs and constant top-level bindings. Unsupported source constructs and formats fail with a categorized error; output is never mislabeled as native merely because a file has a native-looking suffix.
 
 ## Portability
 

@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -135,6 +137,29 @@ func TestNativeBackendHeaders(t *testing.T) {
 	}
 	if len(elf) < 20 || !bytes.Equal(elf[:4], []byte{0x7f, 'E', 'L', 'F'}) {
 		t.Fatal("missing ELF signature")
+	}
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		path := filepath.Join(t.TempDir(), "program")
+		if err := os.WriteFile(path, elf, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(path).Output()
+		if err != nil {
+			t.Fatalf("AOT executable failed: %v", err)
+		}
+		if string(out) != "ok\n" {
+			t.Fatalf("unexpected AOT output %q", out)
+		}
+	}
+	unsupported, d := Parse(&Source{Name: "unsupported.kry", Text: "fn value() -> Int { return 1 }\nvalue()\n"}, DefaultLimits())
+	if d != nil {
+		t.Fatal(d)
+	}
+	if _, d = Check(unsupported, DefaultLimits()); d != nil {
+		t.Fatal(d)
+	}
+	if _, err := BuildNative(unsupported, NativeTarget{OS: "linux", Arch: "amd64"}, "elf"); err == nil {
+		t.Fatal("unsupported program was silently emitted as AOT")
 	}
 }
 
