@@ -1,6 +1,5 @@
 # Kryndel
 
-[![CI](https://github.com/Xyraniz/Kryndel/actions/workflows/ci.yml/badge.svg)](https://github.com/Xyraniz/Kryndel/actions/workflows/ci.yml)
 [![Go 1.22+](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
