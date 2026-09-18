@@ -49,7 +49,11 @@ func main() {
 		fmt.Println("SHA256 verified successfully")
 	}
 
-	if err := os.WriteFile(filepath.Join(bin, "kry.exe"), data, 0o755); err != nil {
+	executable := filepath.Join(bin, "kry.exe")
+	if err := os.WriteFile(executable, data, 0o755); err != nil {
+		fail(err)
+	}
+	if err := registerFileAssociations(executable); err != nil {
 		fail(err)
 	}
 
@@ -66,6 +70,7 @@ func main() {
 	fmt.Println("╚════════════════════════════════════════════════════════╝")
 	fmt.Println("")
 	fmt.Println("Installation directory: " + bin)
+	fmt.Println("File associations: .kry and .kexe open with Kryndel")
 	fmt.Println("")
 	fmt.Println("Next steps:")
 	fmt.Println("  1. Open a new terminal window")
@@ -110,6 +115,30 @@ func pathContains(path, entry string) bool {
 		}
 	}
 	return false
+}
+
+// registerFileAssociations uses HKCU so installation never requires elevation
+// and never changes another user's file associations.
+func registerFileAssociations(executable string) error {
+	const classes = `HKCU\Software\Classes`
+	openCommand := fmt.Sprintf(`"%s" "%%1"`, executable)
+	entries := [][2]string{
+		{classes + `\.kry`, "Kryndel.Source"},
+		{classes + `\.kexe`, "Kryndel.Artifact"},
+		{classes + `\Kryndel.Source`, "Kryndel source file"},
+		{classes + `\Kryndel.Source\DefaultIcon`, executable + ",0"},
+		{classes + `\Kryndel.Source\shell\open\command`, openCommand},
+		{classes + `\Kryndel.Artifact`, "Kryndel native artifact"},
+		{classes + `\Kryndel.Artifact\DefaultIcon`, executable + ",0"},
+		{classes + `\Kryndel.Artifact\shell\open\command`, openCommand},
+	}
+	for _, entry := range entries {
+		cmd := exec.Command("reg.exe", "ADD", entry[0], "/ve", "/d", entry[1], "/f")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("register %s: %v: %s", entry[0], err, strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
 }
 
 func runSetx(value string) error {

@@ -6,11 +6,12 @@ Kryndel is a small, readable language for structured programming. This repositor
 
 ## Quick start
 
-A Go 1.22+ toolchain is required only to build from source. Released executables are self-contained and do not require Go or any external runtime. The repository launcher forwards commands to the built executable and never searches for a host-language compiler.
+A Go 1.22+ toolchain is required only to build from source. Released executables are self-contained and do not require Go or any external runtime. The repository launcher forwards commands to the built executable and never searches for a host-language compiler. A `.kry` or `.kexe` path can also be passed directly, so desktop integrations can open and execute it without a separate `run` subcommand. On Windows, the release installer registers `.kry` and `.kexe` for the current user. On Linux, run `make install-association` to install the equivalent per-user desktop association.
 
 ```bash
 make
 ./tools/kry run examples/hello.kry
+./tools/kry examples/hello.kry  # también funciona sin `run`
 ./tools/kry run examples/fibonacci.kry
 ./tools/kry check examples/control_flow.kry
 ./tools/kry build examples/hello.kry -o /tmp/hello.kexe
@@ -22,6 +23,7 @@ make
 | --- | --- | ---: |
 | `kry check file.kry` | Lex, parse, resolve modules, and statically validate without executing user code. | `0` |
 | `kry run file.kry` | Check and execute a source file. | `0` |
+| `kry file.kry` | Directly check and execute a source file; this is the form used by desktop file associations and double-click. | `0` |
 | `kry run file.kexe` | Validate and execute a deterministic native artifact. | `0` |
 | `kry build file.kry [-o output.kexe]` | Check and package the root and imported source graph into a deterministic bundle; `--format=exe|pe|elf` emits a native PE/ELF entrypoint for supported targets. | `0` |
 | `kry emit file.kry --format=llvm-ir` | Emit checked LLVM-compatible textual IR for inspection and downstream toolchains. | `0` |

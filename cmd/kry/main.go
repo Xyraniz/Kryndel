@@ -63,6 +63,16 @@ func run(args []string) int {
 	}
 	cmd := args[i]
 	rest := args[i+1:]
+	// A source/artifact path is itself a valid command. This is intentional:
+	// desktop file associations invoke `kry path/to/file.kry`, just like a
+	// Python association invokes `python path/to/file.py`.
+	if isProgramPath(cmd) {
+		if len(rest) != 0 {
+			return usage("a direct program invocation does not accept extra arguments")
+		}
+		_, d := e.RunPath(cmd)
+		return report(d, jsonMode)
+	}
 	switch cmd {
 	case "help", "--help", "-h":
 		printHelp()
@@ -130,6 +140,13 @@ func run(args []string) int {
 	default:
 		return usage("unknown command " + cmd)
 	}
+}
+func isProgramPath(path string) bool {
+	if filepath.Ext(path) != ".kry" && filepath.Ext(path) != ".kexe" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 func takeLimit(a []string, i int, name string, dst *int) int {
 	v, n := nextInt(a, i)
@@ -568,6 +585,7 @@ func registryCmd(a []string) int {
 func printHelp() {
 	fmt.Println("Kryndel " + version + " — self-contained language toolchain")
 	fmt.Println("usage: kry [global-options] command [arguments]")
+	fmt.Println("       kry [global-options] FILE.kry|FILE.kexe")
 	fmt.Println("commands: check, run, build, emit, inspect, fmt, repl, doctor, version")
 	fmt.Println("project: new, init, add, remove, install, update, search, test, package, publish, cache clean, registry serve")
 	fmt.Println("build formats: kexe, exe/pe, elf; targets: windows-x64, windows-arm64, linux-x64")

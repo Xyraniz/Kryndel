@@ -1,6 +1,6 @@
 GO ?= go
 BINARY := build/kry
-.PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs native-smoke package-smoke release clean
+.PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs native-smoke package-smoke install-association release clean
 all: build
 
 build:
@@ -52,6 +52,9 @@ native-smoke: build
 	$(BINARY) inspect build/hello.exe
 	$(BINARY) build examples/hello.kry --format=elf --target=linux-x64 -o build/hello.elf
 	$(BINARY) inspect build/hello.elf
+
+install-association: build
+	tools/install-association.sh
 
 package-smoke: build
 	$(BINARY) package build/kryndel-self-test.kpkg
