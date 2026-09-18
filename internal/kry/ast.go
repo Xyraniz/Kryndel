@@ -56,6 +56,7 @@ type Expr struct {
 	Type                  *Type
 	Function              *Function
 	ConstValue            *Value
+	Tail                  bool
 }
 type StmtKind int
 

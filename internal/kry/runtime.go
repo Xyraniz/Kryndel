@@ -48,6 +48,7 @@ const (
 	VActor
 	VShared
 	VTaskGroup
+	VTailCall
 )
 
 type Value struct {
@@ -73,6 +74,7 @@ type Value struct {
 	Actor   *Actor
 	Shared  *SharedCell
 	Group   *TaskGroup
+	Tail    *TailCall
 }
 
 type MapEntry struct{ Key, Value Value }
@@ -162,6 +164,8 @@ func display(v Value) string {
 		return "<Shared>"
 	case VTaskGroup:
 		return "<TaskGroup>"
+	case VTailCall:
+		return "<tail-call>"
 	case VMap:
 		var b strings.Builder
 		b.WriteString("{")
@@ -203,6 +207,8 @@ func cloneValue(v Value) Value {
 	case VShared:
 		return v
 	case VTaskGroup:
+		return v
+	case VTailCall:
 		return v
 	case VBytes:
 		return bytesVal(v.Bytes)
@@ -310,6 +316,8 @@ func equalValue(a, b Value) bool {
 		return a.Shared == b.Shared
 	case VTaskGroup:
 		return a.Group == b.Group
+	case VTailCall:
+		return a.Tail == b.Tail
 	case VSet:
 		if len(a.Set) != len(b.Set) {
 
@@ -447,6 +455,12 @@ type TaskGroup struct {
 	mu        sync.Mutex
 	threads   []*Thread
 	cancelled bool
+}
+
+type TailCall struct {
+	Function *Function
+	Receiver *Value
+	Args     []Value
 }
 
 type Thread struct {
@@ -1277,28 +1291,39 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		}
 		args[i] = v
 	}
+	if e.Tail {
+		return Value{Kind: VTailCall, Tail: &TailCall{Function: f, Receiver: receiver, Args: args}}, nil
+	}
 	return r.invokeFunction(e, f, receiver, args)
 }
 
 func (r *Runtime) invokeFunction(e *Expr, f *Function, receiver *Value, args []Value) (Value, *Diagnostic) {
-	child := newRunScope(r.Global)
-	if receiver != nil {
-		_ = child.define("self", *receiver, false)
+	for {
+		child := newRunScope(r.Global)
+		if receiver != nil {
+			_ = child.define("self", *receiver, false)
+		}
+		for i, p := range f.Params {
+			_ = child.define(p.Name, args[i], false)
+		}
+		r.Ctx.Calls++
+		child.ReturnType = mustResolve(r.Checker.Env, f.Return)
+		x := r.execBlock(child, f.Body)
+		r.Ctx.Calls--
+		if x.Diag != nil {
+			return nilVal(), x.Diag
+		}
+		if x.Code == evalReturn && x.Value.Kind == VTailCall && x.Value.Tail != nil {
+			f = x.Value.Tail.Function
+			receiver = x.Value.Tail.Receiver
+			args = x.Value.Tail.Args
+			continue
+		}
+		if x.Code == evalReturn {
+			return x.Value, nil
+		}
+		return nilVal(), nil
 	}
-	for i, p := range f.Params {
-		_ = child.define(p.Name, args[i], false)
-	}
-	r.Ctx.Calls++
-	child.ReturnType = mustResolve(r.Checker.Env, f.Return)
-	x := r.execBlock(child, f.Body)
-	r.Ctx.Calls--
-	if x.Diag != nil {
-		return nilVal(), x.Diag
-	}
-	if x.Code == evalReturn {
-		return x.Value, nil
-	}
-	return nilVal(), nil
 }
 func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic) {
 	bad := func(m string) (Value, *Diagnostic) { return nilVal(), r.fail(e, m) }

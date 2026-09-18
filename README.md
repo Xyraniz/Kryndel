@@ -71,6 +71,8 @@ The type system includes `Int`, `Float`, `Bool`, `String`, `Bytes`, arrays, maps
 
 For concurrent workers, `TaskGroup` provides structured ownership, cancellation propagation, sibling cleanup, and deterministic group joins. Function overloads use statically checked multiple dispatch over all argument types; ambiguous calls are rejected at compile time.
 
+Direct self-recursive calls in tail position use a runtime trampoline, allowing iterative algorithms written recursively without consuming one call-depth slot per iteration.
+
 Functions are collected before the top-level program runs, so a function can be called before its declaration in the source file. The checker still validates the whole program before execution.
 
 ## Runtime polymorphism

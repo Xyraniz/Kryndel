@@ -21,7 +21,7 @@ UTF-8 source
 | Parser | Expressions, bindings, functions, modules, data declarations, blocks, and patterns. | Native AST. |
 | Type checker | Type inference, annotations, complete-argument multiple dispatch, constrained generics, privacy, operators, mutability, returns, conditions, exhaustiveness, and constant folding. | Native type model and source locations. |
 | Module resolver | Relative source lookup, public exports, cycle detection, and traversal rejection. | Explicit filesystem paths only. |
-| Runtime | Validated IR execution, folded primitive values, scopes, calls, recursion, collections, UTF-8, options, results, control flow, channels, synchronized `Shared[T]` cells, actor mailboxes, structured `TaskGroup` workers, safepoints, and budgets. | Go standard library only. |
+| Runtime | Validated IR execution, folded primitive values, scopes, calls, tail-call trampolines, recursion, collections, UTF-8, options, results, control flow, channels, synchronized `Shared[T]` cells, actor mailboxes, structured `TaskGroup` workers, safepoints, and budgets. | Go standard library only. |
 | Artifact reader/writer | Versioned KRYNATIVE3 metadata, deterministic source bundle, SHA-256 hashes, atomic writes, and strict replay validation. | Go binary/file APIs. |
 | CLI | `check`, `run`, `build`, `fmt`, `repl`, `doctor`, `version`, and help. | Explicit command-line and filesystem inputs. |
 

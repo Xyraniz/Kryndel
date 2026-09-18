@@ -551,6 +551,9 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 				return Flow{HasError: true}
 			}
 		}
+		if s.Return != nil && s.Return.Kind == ExCall && c.currentFunction != nil && s.Return.Function == c.currentFunction {
+			s.Return.Tail = true
+		}
 		return returnFlow()
 	case StBreak:
 		if loop == 0 {

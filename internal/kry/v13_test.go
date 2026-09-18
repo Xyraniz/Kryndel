@@ -377,3 +377,29 @@ assert_eq(is_ok(cancelled), false)
 		t.Fatalf("cancel run: %s", d.Message)
 	}
 }
+
+func TestTailCallOptimization(t *testing.T) {
+	text := `
+fn count(n: Int, acc: Int) -> Int {
+    if n == 0 { return acc }
+    return count(n - 1, acc + 1)
+}
+let result: Int = count(10000, 0)
+assert_eq(result, 10000)
+`
+	p, d := Parse(&Source{Name: "tco.kry", Text: text}, DefaultLimits())
+	if d != nil {
+		t.Fatalf("parse: %s", d.Message)
+	}
+	c, d := Check(p, DefaultLimits())
+	if d != nil {
+		t.Fatalf("check: %s", d.Message)
+	}
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("tco run: %s", d.Message)
+	}
+}

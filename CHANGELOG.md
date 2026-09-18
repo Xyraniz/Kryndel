@@ -12,6 +12,8 @@ Shared mutable state is now explicit and synchronized through `Shared[T]`, `shar
 
 Structured concurrency is now available through `TaskGroup`: child workers are owned by a group, cancellation propagates to all siblings, waits join every child, and the first child failure is returned after sibling cleanup. Static overload resolution now performs complete-argument multiple dispatch and rejects ambiguous matches rather than choosing declaration order.
 
+Direct self-recursive tail calls now use an iterative runtime trampoline. Tail recursion therefore avoids consuming additional logical call-depth budget while non-tail calls retain the ordinary safety limit. A regression test evaluates 10,000 tail calls under the normal depth limit.
+
 ## 1.3.0 — Collections, propagation, packages, native targets, and platform APIs
 
 Kryndel now supports typed `Map[K,V]` and `Set[T]` values, `for` iteration, receiver methods through `impl`, `defer` cleanup scopes, explicit `unsafe` regions, and strict `Option`/`Result` propagation with `?`. The checker and runtime share deterministic collection equality, cloning, display, bounds, and non-Copy WebSocket ownership rules.
