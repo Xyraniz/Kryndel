@@ -6,6 +6,8 @@ The default GitHub-backed registry can now be used from a fresh directory with `
 
 The language/runtime now includes compile-time `const` initializers, enforced private struct fields, signature-based overloads, constrained generic functions, isolated `Actor[T]` mailboxes, explicit `await` operations, cancellable sleep/yield effects, and a checked constant-folding fast path. Primitive folding preserves instruction accounting and does not claim a general JIT; native output remains an explicit backend boundary.
 
+Fresh installs also normalize temporary directory names that cannot be represented as package identifiers, while preserving existing project files. Actor and async APIs are now present in the authoritative builtin registry and therefore participate in `doctor`, static checking, and runtime dispatch consistently.
+
 ## 1.3.0 — Collections, propagation, packages, native targets, and platform APIs
 
 Kryndel now supports typed `Map[K,V]` and `Set[T]` values, `for` iteration, receiver methods through `impl`, `defer` cleanup scopes, explicit `unsafe` regions, and strict `Option`/`Result` propagation with `?`. The checker and runtime share deterministic collection equality, cloning, display, bounds, and non-Copy WebSocket ownership rules.

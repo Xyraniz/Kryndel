@@ -27,5 +27,15 @@ func init() {
 		Builtin{"poly_register", "poly_register(slot: String,handler: String,priority: Int) -> Result[Nil,String]", "dispatch", "borrow", "unknown/incompatible handler", "Register a typed String -> String implementation in a runtime dispatch slot.", "1.4.0", 3, "poly_register"},
 		Builtin{"poly_reorder", "poly_reorder(slot: String,handler: String,before: String) -> Result[Nil,String]", "dispatch", "borrow", "unknown handler", "Move a registered implementation before another one without recompiling.", "1.4.0", 3, "poly_reorder"},
 		Builtin{"poly_dispatch", "poly_dispatch(slot: String,input: String) -> Result[String,String]", "dispatch", "borrow", "empty/failing dispatch", "Invoke the first implementation in the current runtime order.", "1.4.0", 2, "poly_dispatch"},
+		Builtin{"actor_channel", "actor_channel() -> Actor[T]", "actor", "handle", "context failure", "Create an isolated actor mailbox.", "1.5.0", 0, "actor_channel"},
+		Builtin{"actor_channel_with_capacity", "actor_channel_with_capacity(capacity: Int) -> Actor[T]", "actor", "handle", "capacity failure", "Create a bounded actor mailbox.", "1.5.0", 1, "actor_channel_with_capacity"},
+		Builtin{"actor_send", "actor_send(actor: Actor[T],value: T) -> Nil", "actor", "clone", "copy/runtime failure", "Send a recursively Copy message to an actor mailbox.", "1.5.0", 2, "actor_send"},
+		Builtin{"actor_try_receive", "actor_try_receive(actor: Actor[T]) -> Result[T,String]", "actor", "clone", "empty/closed", "Receive without blocking.", "1.5.0", 1, "actor_try_receive"},
+		Builtin{"actor_receive_timeout", "actor_receive_timeout(actor: Actor[T],milliseconds: Int) -> T", "actor", "clone", "timeout/closed", "Receive with a bounded deadline.", "1.5.0", 2, "actor_receive_timeout"},
+		Builtin{"actor_close", "actor_close(actor: Actor[T]) -> Nil", "actor", "handle", "none", "Close an actor mailbox.", "1.5.0", 1, "actor_close"},
+		Builtin{"await", "await(thread: Thread[T]) -> T", "async", "handle", "worker failure", "Explicitly await a worker result.", "1.5.0", 1, "await"},
+		Builtin{"await_timeout", "await_timeout(thread: Thread[T],milliseconds: Int) -> Result[T,String]", "async", "handle", "timeout/failure", "Await with a bounded deadline.", "1.5.0", 2, "await_timeout"},
+		Builtin{"yield_now", "yield_now() -> Nil", "async", "borrow", "none", "Yield execution to another runnable task.", "1.5.0", 0, "yield_now"},
+		Builtin{"sleep_ms", "sleep_ms(milliseconds: Int) -> Result[Nil,String]", "async", "borrow", "cancellation", "Sleep without busy-waiting.", "1.5.0", 1, "sleep_ms"},
 	)
 }

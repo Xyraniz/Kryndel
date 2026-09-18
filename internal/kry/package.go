@@ -601,7 +601,7 @@ func EnsureProject(dir, name string) error {
 		name = filepath.Base(dir)
 	}
 	if !validPackageName(name) {
-		return fmt.Errorf("invalid project name")
+		name = "kryndel-app"
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
