@@ -28,6 +28,7 @@ const (
 	TyGeneric
 	TyActor
 	TyShared
+	TyTaskGroup
 )
 
 type Type struct {
@@ -60,6 +61,9 @@ func MapOf(k, v *Type) *Type   { return &Type{Kind: TyMap, Name: "Map", A: k, B:
 func SetOf(t *Type) *Type      { return &Type{Kind: TySet, Name: "Set", A: t} }
 func ActorOf(t *Type) *Type    { return &Type{Kind: TyActor, Name: "Actor", A: t} }
 func SharedOf(t *Type) *Type   { return &Type{Kind: TyShared, Name: "Shared", A: t} }
+
+var TTaskGroup = &Type{Kind: TyTaskGroup, Name: "TaskGroup"}
+
 func Generic(name, constraint string) *Type {
 	return &Type{Kind: TyGeneric, Name: name, B: &Type{Name: constraint}}
 }
@@ -86,6 +90,8 @@ func (t *Type) String() string {
 		return "Actor[" + t.A.String() + "]"
 	case TyShared:
 		return "Shared[" + t.A.String() + "]"
+	case TyTaskGroup:
+		return "TaskGroup"
 	case TyJSON:
 		return "Json"
 	case TyWebSocket:
@@ -357,6 +363,8 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 			a, d := resolveSpec(env, s.Params[0], depth+1)
 			return SharedOf(a), d
 		}
+	case "TaskGroup":
+		return TTaskGroup, nil
 
 	}
 	if len(s.Params) == 0 {

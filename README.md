@@ -69,6 +69,8 @@ println("factorial = " + str(answer))
 
 The type system includes `Int`, `Float`, `Bool`, `String`, `Bytes`, arrays, maps, sets, structs, enums, `Option`, `Result`, channels, synchronized `Shared[T]` cells, `Actor[T]` mailboxes, threads, JSON, and WebSockets. It also supports deeply immutable compile-time `const`, private struct fields, signature-based overloads, and constrained generic functions (`Copy`, `Numeric`, and `Comparable`). Arithmetic is checked, conversions are explicit, and filesystem, network, process, and concurrency operations stay behind typed builtins with bounded resources.
 
+For concurrent workers, `TaskGroup` provides structured ownership, cancellation propagation, sibling cleanup, and deterministic group joins. Function overloads use statically checked multiple dispatch over all argument types; ambiguous calls are rejected at compile time.
+
 Functions are collected before the top-level program runs, so a function can be called before its declaration in the source file. The checker still validates the whole program before execution.
 
 ## Runtime polymorphism

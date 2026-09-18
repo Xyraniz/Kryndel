@@ -81,6 +81,8 @@ fn choose(value: String) -> String { return "text" }
 
 The built-in constraints are `Copy`, `Numeric`, and `Comparable`. `Copy` is structural and excludes channels, threads, actors, sockets, and other owned handles.
 
+Overload resolution is multiple dispatch over the complete argument tuple, not just the function name or first argument. Every visible candidate is checked against the static argument types; exactly one candidate must match. If two concrete or generic candidates match equally, compilation fails with an ambiguity diagnostic instead of depending on declaration order.
+
 Struct fields are public by default inside a public API, but `private field: T` makes access and construction outside the declaring module a static error. This is enforced by the checker rather than by naming convention.
 
 ## Structs, enums, and matching
@@ -105,6 +107,8 @@ The stable concurrency API uses seven explicit builtins: `thread_channel`, `thre
 Workers receive only global channel handles through a private runtime scope; ordinary global values and mutable application data are not exposed to a worker. Channel operations are synchronized with a mutex and condition variables. Closing a channel wakes blocked senders and receivers; `thread_receive_timeout` provides a bounded millisecond deadline; the runtime closes channels and joins outstanding workers during program shutdown. Worker failures are propagated by `thread_join` and by shutdown when no earlier error exists.
 
 `Actor[T]` is an isolated, bounded mailbox for recursively Copy messages. `actor_channel` creates one, `actor_send` blocks with cancellation, and `actor_try_receive`, `actor_receive_timeout`, and `actor_close` provide non-panicking mailbox operations. `await` and `await_timeout` are explicit effect boundaries over `Thread[T]`; `yield_now` and `sleep_ms` cooperate with the runtime context instead of busy-waiting. There is no hidden scheduler or shared mutable memory in these APIs.
+
+`TaskGroup` provides structured concurrency for named zero-argument workers. `task_spawn(group, "worker")` registers each child with its group, `task_group_wait` joins every child, and the first worker failure cancels and waits for its siblings before returning the failure. `task_group_cancel` cancels all children and makes the group wait result an error. Child handles remain joinable after group completion, but the group owns their lifetime and no child is silently detached.
 
 For intentionally shared state, `Shared[T]` is the only global mutable memory handle available to workers. `shared_new` creates a cell, `shared_read` takes a cloned snapshot under a read lock, `shared_write` replaces the value under an exclusive lock, and `shared_swap` performs an atomic replacement and returns the previous snapshot. `T` must be recursively `Copy`; callers cannot obtain a raw pointer or mutate the cell without one of these synchronized operations. This gives shared memory a controlled ownership boundary instead of exposing ordinary global bindings to workers.
 

@@ -957,6 +957,46 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return cell.A, nil
 		}
 		return TNil, nil
+	case "task_group":
+		if expected != nil && expected.Kind != TyTaskGroup {
+			return bad("task_group result must be used as TaskGroup")
+		}
+		return TTaskGroup, nil
+	case "task_spawn":
+		group, d := arg(0, TTaskGroup)
+		if d != nil {
+			return TError, d
+		}
+		name, d := arg(1, TString)
+		if d != nil {
+			return TError, d
+		}
+		if group.Kind != TyTaskGroup || !typeEqual(name, TString) || e.Args[1].Kind != ExString {
+			return bad("task_spawn expects TaskGroup and a literal worker name")
+		}
+		f := c.Env.Functions[e.Args[1].Str]
+		if f == nil || len(f.Params) != 0 {
+			return bad("task_spawn requires a zero-argument worker function")
+		}
+		return TypeThread(mustResolve(c.Env, f.Return)), nil
+	case "task_group_wait":
+		group, d := arg(0, TTaskGroup)
+		if d != nil {
+			return TError, d
+		}
+		if group.Kind != TyTaskGroup {
+			return bad("task_group_wait expects TaskGroup")
+		}
+		return Res(TNil, TString), nil
+	case "task_group_cancel":
+		group, d := arg(0, TTaskGroup)
+		if d != nil {
+			return TError, d
+		}
+		if group.Kind != TyTaskGroup {
+			return bad("task_group_cancel expects TaskGroup")
+		}
+		return TNil, nil
 	case "fs_read_text":
 		t, d := arg(0, TString)
 		if d != nil {

@@ -312,3 +312,68 @@ assert_eq(shared_read(shared), 9)
 		t.Fatal("mutable Shared handle accepted as deeply immutable")
 	}
 }
+
+func TestStructuredTaskGroupAndMultipleDispatch(t *testing.T) {
+	text := `
+fn first() -> Int { return 4 }
+fn second() -> Int { return 8 }
+let group: TaskGroup = task_group()
+let a: Thread[Int] = task_spawn(group, "first")
+let b: Thread[Int] = task_spawn(group, "second")
+let joined: Result[Nil,String] = task_group_wait(group)
+assert_eq(is_ok(joined), true)
+assert_eq(await(a) + await(b), 12)
+`
+	p, d := Parse(&Source{Name: "tasks.kry", Text: text}, DefaultLimits())
+	if d != nil {
+		t.Fatalf("parse: %s", d.Message)
+	}
+	c, d := Check(p, DefaultLimits())
+	if d != nil {
+		t.Fatalf("check: %s", d.Message)
+	}
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("run: %s", d.Message)
+	}
+
+	ambiguous := `
+fn choose(value: Int) -> String { return "int" }
+fn choose[T: Copy](value: T) -> String { return "generic" }
+let value: String = choose(1)
+`
+	p, d = Parse(&Source{Name: "ambiguous.kry", Text: ambiguous}, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if _, d = Check(p, DefaultLimits()); d == nil || !strings.Contains(d.Message, "ambiguous") {
+		t.Fatalf("ambiguous overload was accepted: %#v", d)
+	}
+
+	cancelText := `
+fn slow() -> Int { sleep_ms(500); return 1 }
+let cancellable: TaskGroup = task_group()
+let pending: Thread[Int] = task_spawn(cancellable, "slow")
+task_group_cancel(cancellable)
+let cancelled: Result[Nil,String] = task_group_wait(cancellable)
+assert_eq(is_ok(cancelled), false)
+`
+	p, d = Parse(&Source{Name: "cancel.kry", Text: cancelText}, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	c, d = Check(p, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	r, d = NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("cancel run: %s", d.Message)
+	}
+}

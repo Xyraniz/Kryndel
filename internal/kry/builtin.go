@@ -41,5 +41,9 @@ func init() {
 		Builtin{"shared_read", "shared_read(cell: Shared[T]) -> T", "shared", "clone", "cell failure", "Read a snapshot under a read lock.", "1.6.0", 1, "shared_read"},
 		Builtin{"shared_write", "shared_write(cell: Shared[T],value: T) -> Nil", "shared", "clone", "cell failure", "Replace a shared cell under an exclusive lock.", "1.6.0", 2, "shared_write"},
 		Builtin{"shared_swap", "shared_swap(cell: Shared[T],value: T) -> T", "shared", "clone", "cell failure", "Atomically replace a shared cell and return its old value.", "1.6.0", 2, "shared_swap"},
+		Builtin{"task_group", "task_group() -> TaskGroup", "concurrency", "handle", "allocation failure", "Create a structured concurrency scope.", "1.7.0", 0, "task_group"},
+		Builtin{"task_spawn", "task_spawn(group: TaskGroup,name: String) -> Thread[T]", "concurrency", "handle", "worker failure", "Spawn a worker owned by a task group.", "1.7.0", 2, "task_spawn"},
+		Builtin{"task_group_wait", "task_group_wait(group: TaskGroup) -> Result[Nil,String]", "concurrency", "handle", "first worker failure", "Wait for every child and propagate the first failure.", "1.7.0", 1, "task_group_wait"},
+		Builtin{"task_group_cancel", "task_group_cancel(group: TaskGroup) -> Nil", "concurrency", "handle", "none", "Cancel all children in a group.", "1.7.0", 1, "task_group_cancel"},
 	)
 }

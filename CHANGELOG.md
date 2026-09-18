@@ -10,6 +10,8 @@ Fresh installs also normalize temporary directory names that cannot be represent
 
 Shared mutable state is now explicit and synchronized through `Shared[T]`, `shared_read`, `shared_write`, and atomic `shared_swap`; only Shared and Channel handles may cross the worker boundary. Const bindings now enforce deep immutability over their entire type graph and reject synchronization, thread, actor, socket, and other runtime handles.
 
+Structured concurrency is now available through `TaskGroup`: child workers are owned by a group, cancellation propagates to all siblings, waits join every child, and the first child failure is returned after sibling cleanup. Static overload resolution now performs complete-argument multiple dispatch and rejects ambiguous matches rather than choosing declaration order.
+
 ## 1.3.0 — Collections, propagation, packages, native targets, and platform APIs
 
 Kryndel now supports typed `Map[K,V]` and `Set[T]` values, `for` iteration, receiver methods through `impl`, `defer` cleanup scopes, explicit `unsafe` regions, and strict `Option`/`Result` propagation with `?`. The checker and runtime share deterministic collection equality, cloning, display, bounds, and non-Copy WebSocket ownership rules.

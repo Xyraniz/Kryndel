@@ -47,6 +47,7 @@ const (
 	VWebSocket
 	VActor
 	VShared
+	VTaskGroup
 )
 
 type Value struct {
@@ -71,6 +72,7 @@ type Value struct {
 	WS      *websocketConn
 	Actor   *Actor
 	Shared  *SharedCell
+	Group   *TaskGroup
 }
 
 type MapEntry struct{ Key, Value Value }
@@ -158,6 +160,8 @@ func display(v Value) string {
 		return "<Actor>"
 	case VShared:
 		return "<Shared>"
+	case VTaskGroup:
+		return "<TaskGroup>"
 	case VMap:
 		var b strings.Builder
 		b.WriteString("{")
@@ -197,6 +201,8 @@ func cloneValue(v Value) Value {
 	case VActor:
 		return v
 	case VShared:
+		return v
+	case VTaskGroup:
 		return v
 	case VBytes:
 		return bytesVal(v.Bytes)
@@ -302,6 +308,8 @@ func equalValue(a, b Value) bool {
 		return a.Actor == b.Actor
 	case VShared:
 		return a.Shared == b.Shared
+	case VTaskGroup:
+		return a.Group == b.Group
 	case VSet:
 		if len(a.Set) != len(b.Set) {
 
@@ -362,6 +370,8 @@ func copyableValue(v Value, depth int) bool {
 		return false
 	case VShared:
 		return true
+	case VTaskGroup:
+		return false
 	default:
 
 		return false
@@ -431,6 +441,12 @@ type Actor struct {
 type SharedCell struct {
 	mu    sync.RWMutex
 	value Value
+}
+
+type TaskGroup struct {
+	mu        sync.Mutex
+	threads   []*Thread
+	cancelled bool
 }
 
 type Thread struct {
@@ -1750,6 +1766,69 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		a[0].Shared.value = cloneValue(a[1])
 		a[0].Shared.mu.Unlock()
 		return old, nil
+	case "task_group":
+		return Value{Kind: VTaskGroup, Group: &TaskGroup{}}, nil
+	case "task_spawn":
+		if a[0].Group == nil {
+			return bad("invalid task group")
+		}
+		a[0].Group.mu.Lock()
+		cancelled := a[0].Group.cancelled
+		a[0].Group.mu.Unlock()
+		if cancelled {
+			return nilVal(), r.fail(e, "task group is cancelled")
+		}
+		thread, d := r.spawn(e, a[1].S)
+		if d != nil {
+			return nilVal(), d
+		}
+		a[0].Group.mu.Lock()
+		a[0].Group.threads = append(a[0].Group.threads, thread.Th)
+		a[0].Group.mu.Unlock()
+		return thread, nil
+	case "task_group_cancel":
+		if a[0].Group == nil {
+			return bad("invalid task group")
+		}
+		a[0].Group.mu.Lock()
+		a[0].Group.cancelled = true
+		for _, thread := range a[0].Group.threads {
+			thread.Cancel()
+		}
+		a[0].Group.mu.Unlock()
+		return nilVal(), nil
+	case "task_group_wait":
+		if a[0].Group == nil {
+			return bad("invalid task group")
+		}
+		a[0].Group.mu.Lock()
+		threads := append([]*Thread(nil), a[0].Group.threads...)
+		a[0].Group.mu.Unlock()
+		for _, thread := range threads {
+			if _, d := r.join(e, thread); d != nil {
+				a[0].Group.mu.Lock()
+				a[0].Group.cancelled = true
+				for _, sibling := range threads {
+					if sibling != thread {
+						sibling.Cancel()
+					}
+				}
+				a[0].Group.mu.Unlock()
+				for _, sibling := range threads {
+					if sibling != thread {
+						<-sibling.Done
+					}
+				}
+				return resVal(false, stringVal(d.Message)), nil
+			}
+		}
+		a[0].Group.mu.Lock()
+		cancelled := a[0].Group.cancelled
+		a[0].Group.mu.Unlock()
+		if cancelled {
+			return resVal(false, stringVal("task group cancelled")), nil
+		}
+		return resVal(true, nilVal()), nil
 	case "actor_channel", "actor_channel_with_capacity":
 		capacity := minInt(r.Lim.MaxChannelCapacity, 64)
 		if b.Name == "actor_channel_with_capacity" {
@@ -2288,6 +2367,8 @@ func (r *Runtime) spawn(e *Expr, name string) (Value, *Diagnostic) {
 	ctx, cancel := context.WithCancel(r.Ctx.Ctx)
 	t := &Thread{Done: make(chan struct{}), Cancel: cancel}
 	r.Threads = append(r.Threads, t)
+	threadsSnapshot := append([]*Thread(nil), r.Threads...)
+	channelsSnapshot := append([]*Channel(nil), r.Channels...)
 	channelSnapshot := make(map[string]Value)
 	for n, b := range r.Global.Values {
 		if b.Value.Kind == VChannel || b.Value.Kind == VShared {
@@ -2296,7 +2377,7 @@ func (r *Runtime) spawn(e *Expr, name string) (Value, *Diagnostic) {
 	}
 	go func() {
 		defer close(t.Done)
-		wr := &Runtime{Prog: r.Prog, Checker: r.Checker, Funcs: r.Funcs, Global: newRunScope(nil), Lim: r.Lim, Sandbox: r.Sandbox, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: r.Lim}, Channels: r.Channels, Threads: r.Threads, Worker: true}
+		wr := &Runtime{Prog: r.Prog, Checker: r.Checker, Funcs: r.Funcs, Global: newRunScope(nil), Lim: r.Lim, Sandbox: r.Sandbox, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: r.Lim}, Channels: channelsSnapshot, Threads: threadsSnapshot, Worker: true}
 		wr.Worker = true
 		for n, v := range channelSnapshot {
 			_ = wr.Global.define(n, v, false)

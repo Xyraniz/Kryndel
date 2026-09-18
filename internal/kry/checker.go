@@ -1078,17 +1078,25 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown function '%s'", e.Name)
 	}
 	visible := false
+	var matched *Function
+	var matchedType *Type
 	for _, f := range candidates {
 		if f.Public || f.Module == sc.Module {
 			visible = true
 			if rt, ok := c.matchFunctionCall(sc, e, f); ok {
-				e.Function = f
-				return rt, nil
+				if matched != nil {
+					return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "ambiguous call to '%s': multiple overloads match", e.Name)
+				}
+				matched, matchedType = f, rt
 			}
 		}
 	}
 	if !visible {
 		return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown function '%s'", e.Name)
+	}
+	if matched != nil {
+		e.Function = matched
+		return matchedType, nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of '%s' matches the argument types", e.Name)
 }
