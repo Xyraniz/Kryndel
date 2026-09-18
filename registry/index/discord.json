@@ -1,0 +1,10 @@
+{
+  "name": "discord",
+  "versions": [
+    {
+      "version": "1.0.0",
+      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.0.0.tar.gz",
+      "sha256": "0f964883a2b3a01fd23782da3186290dd30a5c59fd8470e4fa74ff129cff7cb3"
+    }
+  ]
+}

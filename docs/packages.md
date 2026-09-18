@@ -12,7 +12,7 @@ Kryndel usa `kry.toml` como manifiesto de proyecto y `kry.lock` como resultado d
 | `kry publish` | Envía el archivo al endpoint `PUT /publish/<name>/<version>`. | El registry recalcula el SHA-256 y actualiza su índice. |
 | `kry cache clean` | Elimina la caché de índices y archivos. | No toca el proyecto ni el lockfile. |
 
-El registry local se sirve con `kry registry serve ROOT --addr 127.0.0.1:8765`. Su estructura mínima es `ROOT/index/<name>.json` y `ROOT/packages/<archive>.tar.gz`. Los índices contienen el nombre, las versiones, la URL del archivo, su SHA-256 y las dependencias transitivas. `KRY_REGISTRY` cambia el registry, `KRY_CACHE` cambia la caché y `KRY_OFFLINE=1` obliga a utilizar únicamente índices y archivos ya almacenados.
+El cliente usa por defecto el registry público estático de Kryndel en `https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry`. Su índice y sus archives son archivos versionados en el repositorio, así que `kry install discord` funciona sin configuración adicional. `KRY_REGISTRY` permite usar un mirror, un registry privado o el registry local; `kry registry serve ROOT --addr 127.0.0.1:8765` sirve la estructura mínima `ROOT/index/<name>.json` y `ROOT/packages/<archive>.tar.gz`. `KRY_CACHE` cambia la caché y `KRY_OFFLINE=1` obliga a utilizar únicamente índices y archivos ya almacenados.
 
 > El instalador rechaza rutas absolutas, separadores alternativos que escapen de la raíz, `..`, enlaces simbólicos, directorios en el archivo, entradas duplicadas y archivos mayores que el límite de archivo. La verificación criptográfica ocurre antes de la extracción.
 

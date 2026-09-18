@@ -42,6 +42,16 @@ The direct file form is useful for desktop integrations. On Windows, the release
 
 Use `kry --help` for global limits, JSON diagnostics, restricted filesystem execution, emit options, registry commands, and package commands.
 
+The default package registry is hosted in this repository, so a new project can install the published Discord package without extra setup:
+
+```bash
+kry new mydiscordbot
+cd mydiscordbot
+kry install discord
+```
+
+The command writes the dependency to `kry.toml`, downloads and verifies the archive, copies it to `vendor/discord`, and records the exact URL and SHA-256 in `kry.lock`. Set `KRY_REGISTRY` when using a private mirror or a local registry.
+
 ## Language
 
 Kryndel uses braces for blocks, explicit types at function boundaries, and immutable bindings by default.

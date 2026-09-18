@@ -58,7 +58,7 @@ type PackageManager struct {
 func NewPackageManager() *PackageManager {
 	reg := os.Getenv("KRY_REGISTRY")
 	if reg == "" {
-		reg = "http://127.0.0.1:8765"
+		reg = "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry"
 	}
 	cache := os.Getenv("KRY_CACHE")
 	if cache == "" {
