@@ -412,7 +412,10 @@ type Thread struct {
 	Diag   *Diagnostic
 	Joined bool
 }
-
+type DispatchEntry struct {
+	Handler  string
+	Priority int64
+}
 type Runtime struct {
 	Prog         *Program
 	Checker      *Checker
@@ -423,6 +426,7 @@ type Runtime struct {
 	Ctx          *ExecContext
 	Channels     []*Channel
 	Threads      []*Thread
+	Dispatch     map[string][]DispatchEntry
 	nextTimerID  int64
 	Worker       bool
 	propagated   *Value
@@ -458,7 +462,7 @@ func (s *RunScope) define(n string, v Value, m bool) error {
 }
 func NewRuntime(prog *Program, c *Checker, lim Limits, sb Sandbox) (*Runtime, *Diagnostic) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
-	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil}
+	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}}
 	return r, nil
 }
 func (r *Runtime) fail(e *Expr, format string, args ...any) *Diagnostic {
@@ -1222,6 +1226,10 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		}
 		args[i] = v
 	}
+	return r.invokeFunction(e, f, receiver, args)
+}
+
+func (r *Runtime) invokeFunction(e *Expr, f *Function, receiver *Value, args []Value) (Value, *Diagnostic) {
 	child := newRunScope(r.Global)
 	if receiver != nil {
 		_ = child.define("self", *receiver, false)
@@ -1244,6 +1252,60 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic) {
 	bad := func(m string) (Value, *Diagnostic) { return nilVal(), r.fail(e, m) }
 	switch b.Name {
+	case "poly_register":
+		slot, handler, priority := a[0].S, a[1].S, a[2].I
+		f := r.Funcs[handler]
+		if f == nil || f.Receiver != nil || len(f.Params) != 1 || mustResolve(r.Checker.Env, f.Params[0].Type).Kind != TyString || mustResolve(r.Checker.Env, f.Return).Kind != TyString {
+			return resVal(false, stringVal("handler must be a top-level fn(String) -> String")), nil
+		}
+		entries := r.Dispatch[slot]
+		for _, entry := range entries {
+			if entry.Handler == handler {
+				return resVal(false, stringVal("handler already registered in slot")), nil
+			}
+		}
+		entries = append(entries, DispatchEntry{Handler: handler, Priority: priority})
+		for i := len(entries) - 1; i > 0 && entries[i].Priority > entries[i-1].Priority; i-- {
+			entries[i], entries[i-1] = entries[i-1], entries[i]
+		}
+		r.Dispatch[slot] = entries
+		return resVal(true, nilVal()), nil
+	case "poly_reorder":
+		slot, handler, before := a[0].S, a[1].S, a[2].S
+		entries := r.Dispatch[slot]
+		from, target := -1, -1
+		for i, entry := range entries {
+			if entry.Handler == handler {
+				from = i
+			}
+			if entry.Handler == before {
+				target = i
+			}
+		}
+		if from < 0 || target < 0 || handler == before {
+			return resVal(false, stringVal("both handlers must already be registered and distinct")), nil
+		}
+		entry := entries[from]
+		entries = append(entries[:from], entries[from+1:]...)
+		if from < target {
+			target--
+		}
+		entries = append(entries, DispatchEntry{})
+		copy(entries[target+1:], entries[target:])
+		entries[target] = entry
+		r.Dispatch[slot] = entries
+		return resVal(true, nilVal()), nil
+	case "poly_dispatch":
+		entries := r.Dispatch[a[0].S]
+		if len(entries) == 0 {
+			return resVal(false, stringVal("dispatch slot has no registered handlers")), nil
+		}
+		f := r.Funcs[entries[0].Handler]
+		value, d := r.invokeFunction(e, f, nil, []Value{a[1]})
+		if d != nil {
+			return resVal(false, stringVal(d.Message)), nil
+		}
+		return resVal(true, value), nil
 	case "print":
 		return nilVal(), r.printValue(a[0], false)
 	case "println":

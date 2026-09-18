@@ -1,0 +1,21 @@
+fn add_prefix(value: String) -> String {
+    return "prefix:" + value
+}
+
+fn add_suffix(value: String) -> String {
+    return value + ":suffix"
+}
+
+fn show(slot: String) -> Nil {
+    match poly_dispatch(slot, "value") {
+        ok(value) => { println(value) }
+        err(message) => { println("error: " + message) }
+    }
+}
+
+let first: Result[Nil, String] = poly_register("format", "add_prefix", 10)
+let second: Result[Nil, String] = poly_register("format", "add_suffix", 5)
+show("format")
+
+let moved: Result[Nil, String] = poly_reorder("format", "add_suffix", "add_prefix")
+show("format")

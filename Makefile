@@ -16,6 +16,7 @@ check: build
 	$(BINARY) check examples/module_demo.kry
 	$(BINARY) check examples/collections.kry
 	$(BINARY) check examples/discord_bot.kry
+	$(BINARY) check examples/runtime_polymorphism.kry
 
 test: build check
 	$(GO) test ./...
@@ -26,6 +27,7 @@ test: build check
 	$(BINARY) run examples/typed_data.kry
 	$(BINARY) run examples/module_demo.kry
 	$(BINARY) run examples/collections.kry
+	$(BINARY) run examples/runtime_polymorphism.kry
 	$(BINARY) build examples/hello.kry --format=elf --target=linux-x64 -o build/hello.elf
 	$(BINARY) inspect build/hello.elf
 

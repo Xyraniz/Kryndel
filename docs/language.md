@@ -96,6 +96,27 @@ Workers receive only global channel handles through a private runtime scope; ord
 
 `import "path/to/module"` resolves a source file relative to the importing file. The `.kry` extension is optional. Absolute paths, `..` traversal, artifacts, missing files, duplicate exports, and cyclic imports are rejected. Only top-level declarations marked `pub` are exported. See [the module guide](modules.md) for the complete resolution contract.
 
+## Runtime polymorphism
+
+Developer applications can use a bounded runtime dispatch table when an integration needs to reorder implementations without recompiling. A handler must be a top-level function with the exact signature `fn(String) -> String`; runtime registration rejects incompatible names. `poly_register(slot, handler, priority)` inserts a handler in descending priority order, `poly_reorder(slot, handler, before)` moves an existing handler, and `poly_dispatch(slot, input)` invokes the first handler in the current order and returns a `Result[String, String]`. The table belongs to one runtime invocation, is not global mutable host state, and remains subject to call-depth, instruction, memory, and wall-clock limits.
+
+```kryndel
+fn json_handler(value: String) -> String { return "json:" + value }
+fn text_handler(value: String) -> String { return "text:" + value }
+
+let a: Result[Nil, String] = poly_register("render", "json_handler", 10)
+let b: Result[Nil, String] = poly_register("render", "text_handler", 5)
+match poly_dispatch("render", "hello") {
+    ok(value) => { println(value) }
+    err(message) => { println(message) }
+} // json:hello
+let c: Result[Nil, String] = poly_reorder("render", "text_handler", "json_handler")
+match poly_dispatch("render", "hello") {
+    ok(value) => { println(value) }
+    err(message) => { println(message) }
+} // text:hello
+```
+
 ## Static checking
 
 `kry check file.kry` lexes, parses, resolves imports, and type-checks the complete program without executing user code. `kry run` and `kry build` perform the same validation before evaluation or artifact creation. Unknown type names, invalid annotations, immutable assignments, bad conditions, unsafe operators, invalid indexing expressions, and builtin signature errors therefore fail before user output can occur.

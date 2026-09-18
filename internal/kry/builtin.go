@@ -21,3 +21,11 @@ func Builtins() map[string]Builtin {
 	}
 	return m
 }
+
+func init() {
+	builtinList = append(builtinList,
+		Builtin{"poly_register", "poly_register(slot: String,handler: String,priority: Int) -> Result[Nil,String]", "dispatch", "borrow", "unknown/incompatible handler", "Register a typed String -> String implementation in a runtime dispatch slot.", "1.4.0", 3, "poly_register"},
+		Builtin{"poly_reorder", "poly_reorder(slot: String,handler: String,before: String) -> Result[Nil,String]", "dispatch", "borrow", "unknown handler", "Move a registered implementation before another one without recompiling.", "1.4.0", 3, "poly_reorder"},
+		Builtin{"poly_dispatch", "poly_dispatch(slot: String,input: String) -> Result[String,String]", "dispatch", "borrow", "empty/failing dispatch", "Invoke the first implementation in the current runtime order.", "1.4.0", 2, "poly_dispatch"},
+	)
+}

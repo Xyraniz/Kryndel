@@ -882,6 +882,48 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("env_get expects String")
 		}
 		return Opt(TString), nil
+	case "poly_register":
+		for i := 0; i < 2; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("poly_register expects String slot and handler")
+			}
+		}
+		priority, d := arg(2, TInt)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(priority, TInt) {
+			return bad("poly_register expects an Int priority")
+		}
+		return Res(TNil, TString), nil
+	case "poly_reorder":
+		for i := 0; i < 3; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("poly_reorder expects String slot, handler, and predecessor")
+			}
+		}
+		return Res(TNil, TString), nil
+	case "poly_dispatch":
+		slot, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		input, d := arg(1, TString)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(slot, TString) || !typeEqual(input, TString) {
+			return bad("poly_dispatch expects String slot and input")
+		}
+		return Res(TString, TString), nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not implemented", b.Name)
 }
