@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -590,11 +591,43 @@ func NewProject(dir, name string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	m := PackageManifest{Name: name, Version: "0.1.0", Kryndel: ">=1.3.0", Dependencies: map[string]string{}, TargetDependencies: map[string]map[string]string{}}
-	if err := WriteManifest(dir, m); err != nil {
+	return ensureProjectFiles(dir, name, true)
+}
+
+// EnsureProject makes `kry install package` useful in a freshly created
+// directory without overwriting an existing entrypoint.
+func EnsureProject(dir, name string) error {
+	if name == "" {
+		name = filepath.Base(dir)
+	}
+	if !validPackageName(name) {
+		return fmt.Errorf("invalid project name")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "main.kry"), []byte("fn main() -> Nil {\n    println(\"Hello from Kryndel\")\n}\n"), 0o644)
+	return ensureProjectFiles(dir, name, false)
+}
+
+func ensureProjectFiles(dir, name string, replaceMain bool) error {
+	m := PackageManifest{Name: name, Version: "0.1.0", Kryndel: ">=1.3.0", Dependencies: map[string]string{}, TargetDependencies: map[string]map[string]string{}}
+	if _, err := os.Stat(filepath.Join(dir, "kry.toml")); os.IsNotExist(err) {
+		if err := WriteManifest(dir, m); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	mainPath := filepath.Join(dir, "main.kry")
+	if replaceMain {
+		return os.WriteFile(mainPath, []byte("fn main() -> Nil {\n    println(\"Hello from Kryndel\")\n}\n"), 0o644)
+	}
+	if _, err := os.Stat(mainPath); os.IsNotExist(err) {
+		return os.WriteFile(mainPath, []byte("fn main() -> Nil {\n    println(\"Hello from Kryndel\")\n}\n"), 0o644)
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 func PackageArchive(dir, out string) error {
@@ -647,6 +680,7 @@ func PackageArchive(dir, out string) error {
 }
 
 func ServeRegistry(root, addr string) error {
+	var publishMu sync.Mutex
 	mux := http.NewServeMux()
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
 		term := strings.ToLower(r.URL.Query().Get("q"))
@@ -662,6 +696,7 @@ func ServeRegistry(root, addr string) error {
 			}
 		}
 		sort.Strings(names)
+		w.Header().Set("Cache-Control", "public, max-age=300")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(names)
 	})
@@ -680,12 +715,18 @@ func ServeRegistry(root, addr string) error {
 			http.Error(w, "invalid package body", http.StatusBadRequest)
 			return
 		}
+		publishMu.Lock()
+		defer publishMu.Unlock()
+		if err := validatePublishedArchive(data, parts[0], parts[1]); err != nil {
+			http.Error(w, "invalid package archive: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := os.MkdirAll(filepath.Join(root, "packages"), 0o755); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		fileName := parts[0] + "-" + parts[1] + ".tar.gz"
-		if err := os.WriteFile(filepath.Join(root, "packages", fileName), data, 0o644); err != nil {
+		if err := atomicWrite(filepath.Join(root, "packages", fileName), data); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -707,7 +748,7 @@ func ServeRegistry(root, addr string) error {
 			idx.Versions = append(idx.Versions, RegistryVersion{Version: parts[1], URL: "/packages/" + fileName, SHA256: hex.EncodeToString(sum[:])})
 		}
 		encoded, _ := json.MarshalIndent(idx, "", "  ")
-		if err := os.WriteFile(indexPath, append(encoded, '\n'), 0o644); err != nil {
+		if err := atomicWrite(indexPath, append(encoded, '\n')); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -724,9 +765,87 @@ func ServeRegistry(root, addr string) error {
 			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Cache-Control", "public, max-age=300")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(data)
 	})
 	mux.Handle("/packages/", http.StripPrefix("/packages/", http.FileServer(http.Dir(filepath.Join(root, "packages")))))
 	return http.ListenAndServe(addr, mux)
+}
+
+func atomicWrite(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".kry-registry-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+func validatePublishedArchive(data []byte, expectedName, expectedVersion string) error {
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("gzip: %w", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	seen := map[string]bool{}
+	var manifest []byte
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if h.Typeflag != tar.TypeReg {
+			return fmt.Errorf("entry %q is not a regular file", h.Name)
+		}
+		name, err := safeArchivePath(h.Name)
+		if err != nil {
+			return err
+		}
+		if seen[name] {
+			return fmt.Errorf("duplicate entry %q", name)
+		}
+		seen[name] = true
+		if h.Size < 0 || h.Size > 64<<20 {
+			return fmt.Errorf("entry %q is too large", name)
+		}
+		content, err := io.ReadAll(io.LimitReader(tr, h.Size+1))
+		if err != nil || int64(len(content)) != h.Size {
+			return fmt.Errorf("truncated entry %q", name)
+		}
+		if name == "kry.toml" {
+			manifest = content
+		}
+	}
+	if len(manifest) == 0 {
+		return fmt.Errorf("archive must contain kry.toml")
+	}
+	m, err := ParseManifest(string(manifest))
+	if err != nil {
+		return err
+	}
+	if m.Name != expectedName || m.Version != expectedVersion {
+		return fmt.Errorf("manifest coordinates are %s@%s, expected %s@%s", m.Name, m.Version, expectedName, expectedVersion)
+	}
+	return nil
 }

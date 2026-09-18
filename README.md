@@ -45,12 +45,11 @@ Use `kry --help` for global limits, JSON diagnostics, restricted filesystem exec
 The default package registry is hosted in this repository, so a new project can install the published Discord package without extra setup:
 
 ```bash
-kry new mydiscordbot
-cd mydiscordbot
+mkdir mydiscordbot && cd mydiscordbot
 kry install discord
 ```
 
-The command writes the dependency to `kry.toml`, downloads and verifies the archive, copies it to `vendor/discord`, and records the exact URL and SHA-256 in `kry.lock`. Set `KRY_REGISTRY` when using a private mirror or a local registry.
+The command creates a minimal manifest when the directory is new, writes the dependency to `kry.toml`, downloads and verifies the archive, copies it to `vendor/discord`, and records the exact URL and SHA-256 in `kry.lock`. It never overwrites an existing `main.kry`. Set `KRY_REGISTRY` only when using a private mirror or a local registry; the public default is versioned in this repository.
 
 ## Language
 

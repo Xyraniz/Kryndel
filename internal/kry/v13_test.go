@@ -175,3 +175,45 @@ func TestPackageRejectsTraversal(t *testing.T) {
 		t.Fatal("expected traversal rejection")
 	}
 }
+
+func TestFreshInstallBootstrapAndPublishValidation(t *testing.T) {
+	project := filepath.Join(t.TempDir(), "fresh")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(project, "main.kry")
+	if err := os.WriteFile(mainPath, []byte("println(\"keep me\")\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureProject(project, "fresh"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(mainPath); err != nil || string(got) != "println(\"keep me\")\n" {
+		t.Fatalf("EnsureProject overwrote main.kry: %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(project, "kry.toml")); err != nil {
+		t.Fatalf("manifest was not bootstrapped: %v", err)
+	}
+
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "kry.toml"), []byte("[package]\nname = \"discord\"\nversion = \"1.0.0\"\nkryndel = \">=1.3.0\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "main.kry"), []byte("pub fn ok() -> Nil { return nil }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "discord.tar.gz")
+	if err := PackageArchive(source, archive); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePublishedArchive(data, "discord", "1.0.0"); err != nil {
+		t.Fatalf("valid archive rejected: %v", err)
+	}
+	if err := validatePublishedArchive(data, "other", "1.0.0"); err == nil {
+		t.Fatal("archive with mismatched coordinates was accepted")
+	}
+}

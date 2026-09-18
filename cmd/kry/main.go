@@ -487,6 +487,15 @@ func projectRemove(a []string) int {
 	return 0
 }
 func projectInstall(a []string) int {
+	if _, err := os.Stat(filepath.Join(projectDir(), "kry.toml")); os.IsNotExist(err) {
+		if err := kry.EnsureProject(projectDir(), filepath.Base(projectDir())); err != nil {
+			fmt.Fprintln(os.Stderr, "kry install:", err)
+			return 1
+		}
+	} else if err != nil {
+		fmt.Fprintln(os.Stderr, "kry install:", err)
+		return 1
+	}
 	lock, err := kry.NewPackageManager().Install(projectDir(), a)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "kry install:", err)
