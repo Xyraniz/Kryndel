@@ -1,0 +1,10 @@
+{
+  "name": "crypto",
+  "versions": [
+    {
+      "version": "1.1.0",
+      "url": "/packages/crypto-1.1.0.tar.gz",
+      "sha256": "3505f4c0ebdb5b488d2645c5951c14ce19b052b67370ac4873c538835b9bcd51"
+    }
+  ]
+}

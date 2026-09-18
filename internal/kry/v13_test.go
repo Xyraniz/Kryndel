@@ -111,6 +111,55 @@ func TestPackageInstallHTTPAndHash(t *testing.T) {
 	}
 }
 
+func TestPackageUninstallPrunesDirectAndKeepsTransitive(t *testing.T) {
+	dir := t.TempDir()
+	if err := NewProject(dir, "uninstall-test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddDependency(dir, "foo", "*"); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddDependency(dir, "bar", "*"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"foo", "bar", "shared"} {
+		if err := os.MkdirAll(filepath.Join(dir, "vendor", name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "vendor", name, "main.kry"), []byte("pub fn value() -> Int { return 1 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lockData, _ := json.Marshal(LockFile{Version: 1, Packages: []LockedPackage{
+		{Name: "foo", Version: "1.0.0", Dependencies: map[string]string{"shared": "*"}},
+		{Name: "bar", Version: "1.0.0", Dependencies: map[string]string{"shared": "*"}},
+		{Name: "shared", Version: "1.0.0", Dependencies: map[string]string{}},
+	}})
+	if err := os.WriteFile(filepath.Join(dir, "kry.lock"), append(lockData, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := NewPackageManager().Uninstall(dir, []string{"foo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lock.Packages) != 2 || lock.Packages[0].Name != "bar" || lock.Packages[1].Name != "shared" {
+		t.Fatalf("unexpected pruned lock: %#v", lock.Packages)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vendor", "foo")); !os.IsNotExist(err) {
+		t.Fatalf("direct package still installed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vendor", "shared", "main.kry")); err != nil {
+		t.Fatalf("transitive package was removed: %v", err)
+	}
+	m, err := ReadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.Dependencies["foo"]; ok {
+		t.Fatal("uninstalled dependency remains in manifest")
+	}
+}
+
 const serverURLPlaceholder = "http://invalid.local/packages/util.tar.gz"
 
 func TestNativeBackendHeaders(t *testing.T) {

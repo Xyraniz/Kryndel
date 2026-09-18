@@ -16,6 +16,8 @@ Direct self-recursive tail calls now use an iterative runtime trampoline. Tail r
 
 Linux x64 native builds now emit a real AOT ELF for compile-time top-level `print`/`println` programs, including constant bindings. The output contains direct x86-64 syscalls and embedded data, has no Kryndel VM or interpreter payload, and rejects unsupported source constructs explicitly.
 
+The package manager now provides `kry uninstall PACKAGE [PACKAGE ...]`. It removes direct manifest entries, prunes their vendored files, preserves still-reachable transitive dependencies, rewrites `kry.lock`, and leaves the shared download cache intact. The registry now publishes expanded `async`, `crypto`, and `fs` libraries at version 1.1.0 and a new `json` library at version 1.0.0.
+
 ## 1.3.0 — Collections, propagation, packages, native targets, and platform APIs
 
 Kryndel now supports typed `Map[K,V]` and `Set[T]` values, `for` iteration, receiver methods through `impl`, `defer` cleanup scopes, explicit `unsafe` regions, and strict `Option`/`Result` propagation with `?`. The checker and runtime share deterministic collection equality, cloning, display, bounds, and non-Copy WebSocket ownership rules.

@@ -1,6 +1,22 @@
 // File system utilities with safe path handling
 // Provides directory operations, file watching, and path utilities
 
+pub fn read_text(path: String) -> Result[String, String] {
+    return fs_read_text(path)
+}
+
+pub fn write_text(path: String, content: String) -> Result[Nil, String] {
+    return fs_write_text(path, content)
+}
+
+pub fn read_bytes(path: String) -> Result[Bytes, String] {
+    return fs_read_bytes(path)
+}
+
+pub fn write_bytes(path: String, content: Bytes) -> Result[Nil, String] {
+    return fs_write_bytes(path, content)
+}
+
 pub fn read_dir(path: String) -> Result[Array[String], String] {
     return fs_read_dir(path)
 }

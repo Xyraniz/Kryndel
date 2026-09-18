@@ -492,6 +492,86 @@ func (pm *PackageManager) Install(dir string, requested []string) (LockFile, err
 	return lock, nil
 }
 
+// Uninstall removes direct dependencies and prunes only packages recorded in
+// kry.lock that are no longer reachable from the remaining manifest roots.
+// It never touches the global cache, so a later install can reuse downloads.
+func (pm *PackageManager) Uninstall(dir string, requested []string) (LockFile, error) {
+	m, err := ReadManifest(dir)
+	if err != nil {
+		return LockFile{}, err
+	}
+	if len(requested) == 0 {
+		return LockFile{}, fmt.Errorf("uninstall expects at least one package")
+	}
+	for _, name := range requested {
+		if !validPackageName(name) {
+			return LockFile{}, fmt.Errorf("invalid package name %q", name)
+		}
+		if _, ok := m.Dependencies[name]; !ok {
+			return LockFile{}, fmt.Errorf("package %q is not a direct dependency", name)
+		}
+		delete(m.Dependencies, name)
+	}
+	lock := LockFile{Version: 1}
+	if data, readErr := os.ReadFile(filepath.Join(dir, "kry.lock")); readErr == nil {
+		if err := json.Unmarshal(data, &lock); err != nil {
+			return LockFile{}, fmt.Errorf("invalid kry.lock: %w", err)
+		}
+	}
+	byName := make(map[string]LockedPackage, len(lock.Packages))
+	for _, pkg := range lock.Packages {
+		byName[pkg.Name] = pkg
+	}
+	oldPackages := append([]LockedPackage(nil), lock.Packages...)
+	lock.Packages = nil
+	reachable := map[string]bool{}
+	queue := sortedKeys(m.Dependencies)
+	target := runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" && runtime.GOARCH == "amd64" {
+		target = "windows-x64"
+	} else if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
+		target = "windows-arm64"
+	}
+	for targetPackage := range m.TargetDependencies[target] {
+		queue = append(queue, targetPackage)
+	}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if reachable[name] {
+			continue
+		}
+		reachable[name] = true
+		if pkg, ok := byName[name]; ok {
+			for dep := range pkg.Dependencies {
+				queue = append(queue, dep)
+			}
+			sort.Strings(queue)
+		}
+	}
+	for _, pkg := range oldPackages {
+		if !reachable[pkg.Name] {
+			if err := os.RemoveAll(filepath.Join(dir, "vendor", pkg.Name)); err != nil {
+				return LockFile{}, err
+			}
+			continue
+		}
+		lock.Packages = append(lock.Packages, pkg)
+	}
+	if err := WriteManifest(dir, m); err != nil {
+		return LockFile{}, err
+	}
+	sort.Slice(lock.Packages, func(i, j int) bool { return lock.Packages[i].Name < lock.Packages[j].Name })
+	data, err := json.MarshalIndent(lock, "", "  ")
+	if err != nil {
+		return LockFile{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "kry.lock"), append(data, '\n'), 0o644); err != nil {
+		return LockFile{}, err
+	}
+	return lock, nil
+}
+
 func copyPackageTree(src, dest string) error {
 	if err := os.RemoveAll(dest); err != nil {
 		return err

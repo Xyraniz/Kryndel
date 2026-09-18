@@ -1,0 +1,10 @@
+{
+  "name": "json",
+  "versions": [
+    {
+      "version": "1.0.0",
+      "url": "/packages/json-1.0.0.tar.gz",
+      "sha256": "d670833bb406837694f24b8ec44839e9c06206debbfb467ec1afde3584810a8d"
+    }
+  ]
+}

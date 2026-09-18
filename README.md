@@ -75,6 +75,10 @@ Direct self-recursive calls in tail position use a runtime trampoline, allowing 
 
 `kry build --format=elf --target=linux-x64` emits direct AOT x86-64 machine code for checked constant-output programs. The generated ELF uses Linux syscalls directly and contains no Kryndel interpreter; unsupported constructs are rejected during the build.
 
+Project dependencies are managed with `kry install PACKAGE` and removed with `kry uninstall PACKAGE [PACKAGE ...]`. Uninstall updates `kry.toml`, prunes `vendor/`, and rewrites `kry.lock` while retaining transitive packages still required by another direct dependency. The global download cache is intentionally preserved.
+
+The public registry includes expanded `async`, `crypto`, and `fs` libraries plus the new `json` library. These expose cancellation-aware sleep and structured groups, SHA-256/HMAC/random bytes, sandboxed text/byte filesystem operations, and safe JSON parse/stringify helpers.
+
 Functions are collected before the top-level program runs, so a function can be called before its declaration in the source file. The checker still validates the whole program before execution.
 
 ## Runtime polymorphism

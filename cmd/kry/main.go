@@ -118,6 +118,8 @@ func run(args []string) int {
 		return projectRemove(rest)
 	case "install", "update":
 		return projectInstall(rest)
+	case "uninstall":
+		return projectUninstall(rest)
 	case "search":
 		return projectSearch(rest)
 	case "test":
@@ -504,6 +506,18 @@ func projectInstall(a []string) int {
 	fmt.Printf("installed %d package(s)\n", len(lock.Packages))
 	return 0
 }
+func projectUninstall(a []string) int {
+	if len(a) == 0 {
+		return usage("uninstall expects PACKAGE [PACKAGE ...]")
+	}
+	lock, err := kry.NewPackageManager().Uninstall(projectDir(), a)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "kry uninstall:", err)
+		return 1
+	}
+	fmt.Printf("uninstalled %d package(s); %d package(s) remain\n", len(a), len(lock.Packages))
+	return 0
+}
 func projectSearch(a []string) int {
 	if len(a) != 1 {
 		return usage("search expects a word")
@@ -596,7 +610,7 @@ func printHelp() {
 	fmt.Println("usage: kry [global-options] command [arguments]")
 	fmt.Println("       kry [global-options] FILE.kry|FILE.kexe")
 	fmt.Println("commands: check, run, build, emit, inspect, fmt, repl, doctor, version")
-	fmt.Println("project: new, init, add, remove, install, update, search, test, package, publish, cache clean, registry serve")
+	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
 	fmt.Println("build formats: kexe, exe/pe, elf; targets: windows-x64, windows-arm64, linux-x64")
 	fmt.Println("global options: --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-instructions N, --max-wall-ms N")
 }

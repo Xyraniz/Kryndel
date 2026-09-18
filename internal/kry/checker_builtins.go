@@ -997,6 +997,73 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("task_group_cancel expects TaskGroup")
 		}
 		return TNil, nil
+	case "crypto_sha256":
+		if _, d := arg(0, TBytes); d != nil {
+			return TError, d
+		}
+		return TBytes, nil
+	case "crypto_hmac_sha256":
+		if _, d := arg(0, TBytes); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TBytes); d != nil {
+			return TError, d
+		}
+		return TBytes, nil
+	case "crypto_random_bytes":
+		if _, d := arg(0, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TBytes, TString), nil
+	case "fs_read_dir":
+		_, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		return Res(Arr(TString), TString), nil
+	case "fs_create_dir", "fs_create_dir_all", "fs_remove_file", "fs_remove_dir_all":
+		_, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		return Res(TNil, TString), nil
+	case "fs_copy_file", "fs_move_file":
+		for i := 0; i < 2; i++ {
+			if _, d := arg(i, TString); d != nil {
+				return TError, d
+			}
+		}
+		return Res(TNil, TString), nil
+	case "fs_is_file", "fs_is_dir":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return TBool, nil
+	case "fs_file_size", "fs_file_modified_time":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return Res(TInt, TString), nil
+	case "fs_join_path":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, Arr(TString)); d != nil {
+			return TError, d
+		}
+		return TString, nil
+	case "fs_absolute_path":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return Res(TString, TString), nil
+	case "fs_temp_dir":
+		return TString, nil
+	case "fs_temp_file":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return Res(TString, TString), nil
 	case "fs_read_text":
 		t, d := arg(0, TString)
 		if d != nil {

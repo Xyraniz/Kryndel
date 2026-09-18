@@ -1,0 +1,18 @@
+// JSON utilities with explicit Result errors.
+// Values remain JSON handles and are never evaluated as source code.
+
+pub fn parse(text: String) -> Result[Json, String] {
+    return json_parse(text)
+}
+
+pub fn stringify(value: Json) -> String {
+    return json_stringify(value)
+}
+
+pub fn parse_or(text: String, fallback: Json) -> Json {
+    let parsed: Result[Json, String] = json_parse(text)
+    match parsed {
+        ok(value) => { return value }
+        err(_) => { return fallback }
+    }
+}

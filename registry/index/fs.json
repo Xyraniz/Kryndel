@@ -1,0 +1,10 @@
+{
+  "name": "fs",
+  "versions": [
+    {
+      "version": "1.1.0",
+      "url": "/packages/fs-1.1.0.tar.gz",
+      "sha256": "0a5dd4c0b4d65a8f50528b5f91cb07b95a3861e4ee0cdbba996bc9d1facbc6b7"
+    }
+  ]
+}
