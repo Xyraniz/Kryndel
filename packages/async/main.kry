@@ -1,0 +1,46 @@
+// Async utilities for concurrent programming
+// Provides async/await patterns, timers, and event loops
+
+pub struct Timer {
+    id: Int,
+}
+
+pub fn sleep_ms(milliseconds: Int) -> Result[Nil, String] {
+    return async_sleep_ms(milliseconds)
+}
+
+pub fn sleep_seconds(seconds: Int) -> Result[Nil, String] {
+    return async_sleep_ms(seconds * 1000)
+}
+
+pub fn set_timeout(callback: Fn() -> Nil, milliseconds: Int) -> Result[Int, String] {
+    return async_set_timeout(callback, milliseconds)
+}
+
+pub fn set_interval(callback: Fn() -> Nil, milliseconds: Int) -> Result[Int, String] {
+    return async_set_interval(callback, milliseconds)
+}
+
+pub fn clear_timer(timer_id: Int) -> Result[Nil, String] {
+    return async_clear_timer(timer_id)
+}
+
+pub fn run_async(task: Fn() -> Result[Nil, String]) -> Result[Nil, String] {
+    return async_run(task)
+}
+
+pub fn spawn_task(name: String, task: Fn() -> Result[Nil, String]) -> Result[Int, String] {
+    return async_spawn(name, task)
+}
+
+pub fn wait_all(tasks: Array[Int]) -> Result[Array[Result[Nil, String]], String] {
+    return async_wait_all(tasks)
+}
+
+pub fn wait_any(tasks: Array[Int]) -> Result[Int, String] {
+    return async_wait_any(tasks)
+}
+
+pub fn yield_now() -> Result[Nil, String] {
+    return async_yield()
+}

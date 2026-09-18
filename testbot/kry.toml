@@ -1,0 +1,6 @@
+[package]
+name = "testbot"
+version = "0.1.0"
+kryndel = ">=1.3.0"
+
+[dependencies]

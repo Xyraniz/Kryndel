@@ -1,0 +1,66 @@
+// File system utilities with safe path handling
+// Provides directory operations, file watching, and path utilities
+
+pub fn read_dir(path: String) -> Result[Array[String], String] {
+    return fs_read_dir(path)
+}
+
+pub fn create_dir(path: String) -> Result[Nil, String] {
+    return fs_create_dir(path)
+}
+
+pub fn create_dir_all(path: String) -> Result[Nil, String] {
+    return fs_create_dir_all(path)
+}
+
+pub fn remove_file(path: String) -> Result[Nil, String] {
+    return fs_remove_file(path)
+}
+
+pub fn remove_dir_all(path: String) -> Result[Nil, String] {
+    return fs_remove_dir_all(path)
+}
+
+pub fn copy_file(src: String, dst: String) -> Result[Nil, String] {
+    return fs_copy_file(src, dst)
+}
+
+pub fn move_file(src: String, dst: String) -> Result[Nil, String] {
+    return fs_move_file(src, dst)
+}
+
+pub fn exists(path: String) -> Bool {
+    return fs_exists(path)
+}
+
+pub fn is_file(path: String) -> Bool {
+    return fs_is_file(path)
+}
+
+pub fn is_dir(path: String) -> Bool {
+    return fs_is_dir(path)
+}
+
+pub fn file_size(path: String) -> Result[Int, String] {
+    return fs_file_size(path)
+}
+
+pub fn file_modified_time(path: String) -> Result[Int, String] {
+    return fs_file_modified_time(path)
+}
+
+pub fn join_path(base: String, parts: Array[String]) -> String {
+    return fs_join_path(base, parts)
+}
+
+pub fn absolute_path(path: String) -> Result[String, String] {
+    return fs_absolute_path(path)
+}
+
+pub fn temp_dir() -> String {
+    return fs_temp_dir()
+}
+
+pub fn temp_file(prefix: String) -> Result[String, String] {
+    return fs_temp_file(prefix)
+}

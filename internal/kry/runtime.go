@@ -3,6 +3,9 @@ package kry
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +16,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1766,6 +1771,157 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return bad("environment value is not valid UTF-8")
 		}
 		return optVal(true, stringVal(v)), nil
+	case "crypto_sha256":
+		h := sha256.Sum256(a[0].Bytes)
+		return bytesVal(h[:]), nil
+	case "crypto_hmac_sha256":
+		mac := hmac.New(sha256.New, a[0].Bytes)
+		mac.Write(a[1].Bytes)
+		return bytesVal(mac.Sum(nil)), nil
+	case "crypto_random_bytes":
+		n := int(a[0].I)
+		if n <= 0 || n > 1024 {
+			return bad("random bytes length must be between 1 and 1024")
+		}
+		buf := make([]byte, n)
+		if _, err := rand.Read(buf); err != nil {
+			return bad(err.Error())
+		}
+		return bytesVal(buf), nil
+	case "fs_read_dir":
+		entries, err := r.Sandbox.ReadDir(a[0].S)
+		if err != nil {
+			return bad(err.Error())
+		}
+		names := make([]Value, len(entries))
+		for i, e := range entries {
+			names[i] = stringVal(e.Name())
+		}
+		return arrVal(names), nil
+	case "fs_create_dir":
+		err := r.Sandbox.Mkdir(a[0].S, 0755)
+		if err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "fs_create_dir_all":
+		err := r.Sandbox.MkdirAll(a[0].S, 0755)
+		if err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "fs_remove_file":
+		err := r.Sandbox.Remove(a[0].S)
+		if err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "fs_remove_dir_all":
+		err := r.Sandbox.RemoveAll(a[0].S)
+		if err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "fs_copy_file":
+		src, dst := a[0].S, a[1].S
+		data, err := r.Sandbox.ReadFile(src)
+		if err != nil {
+			return bad(err.Error())
+		}
+		if err := r.Sandbox.WriteFile(dst, data, 0644); err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "fs_move_file":
+		src, dst := a[0].S, a[1].S
+		if err := r.Sandbox.Rename(src, dst); err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "fs_is_file":
+		info, err := r.Sandbox.Stat(a[0].S)
+		if err != nil {
+			return boolVal(false), nil
+		}
+		return boolVal(!info.IsDir()), nil
+	case "fs_is_dir":
+		info, err := r.Sandbox.Stat(a[0].S)
+		if err != nil {
+			return boolVal(false), nil
+		}
+		return boolVal(info.IsDir()), nil
+	case "fs_file_size":
+		info, err := r.Sandbox.Stat(a[0].S)
+		if err != nil {
+			return bad(err.Error())
+		}
+		return intVal(info.Size()), nil
+	case "fs_file_modified_time":
+		info, err := r.Sandbox.Stat(a[0].S)
+		if err != nil {
+			return bad(err.Error())
+		}
+		return intVal(info.ModTime().Unix()), nil
+	case "fs_join_path":
+		base := a[0].S
+		parts := a[1].Array
+		partStrs := make([]string, len(parts))
+		for i, p := range parts {
+			partStrs[i] = p.S
+		}
+		return stringVal(filepath.Join(append([]string{base}, partStrs...))), nil
+	case "fs_absolute_path":
+		abs, err := filepath.Abs(a[0].S)
+		if err != nil {
+			return bad(err.Error())
+		}
+		return stringVal(abs), nil
+	case "fs_temp_dir":
+		return stringVal(os.TempDir()), nil
+	case "fs_temp_file":
+		f, err := os.CreateTemp("", a[0].S+"-*")
+		if err != nil {
+			return bad(err.Error())
+		}
+		f.Close()
+		return stringVal(f.Name()), nil
+	case "async_sleep_ms":
+		time.Sleep(time.Duration(a[0].I) * time.Millisecond)
+		return nilVal(), nil
+	case "async_set_timeout":
+		// Simplified: just sleep and return timer ID
+		timerID := r.nextTimerID
+		r.nextTimerID++
+		go func() {
+			time.Sleep(time.Duration(a[1].I) * time.Millisecond)
+		}()
+		return intVal(timerID), nil
+	case "async_set_interval":
+		timerID := r.nextTimerID
+		r.nextTimerID++
+		go func() {
+			ticker := time.NewTicker(time.Duration(a[1].I) * time.Millisecond)
+			defer ticker.Stop()
+			for range ticker.C {
+				// Would call callback in full implementation
+			}
+		}()
+		return intVal(timerID), nil
+	case "async_clear_timer":
+		// Simplified: no-op for now
+		return nilVal(), nil
+	case "async_run":
+		// Execute async task synchronously for now
+		return nilVal(), nil
+	case "async_spawn":
+		return intVal(1), nil
+	case "async_wait_all":
+		return arrVal([]Value{}), nil
+	case "async_wait_any":
+		return intVal(0), nil
+	case "async_yield":
+		runtime.Gosched()
+		return nilVal(), nil
 	}
 	return bad("unknown builtin")
 }

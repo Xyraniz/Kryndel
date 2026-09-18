@@ -11,7 +11,7 @@ import (
 	"github.com/Xyraniz/Kryndel/internal/kry"
 )
 
-const version = "1.2.0"
+const version = "1.3.0"
 
 func main() { os.Exit(run(os.Args[1:])) }
 func run(args []string) int {

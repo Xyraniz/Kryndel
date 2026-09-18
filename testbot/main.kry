@@ -1,0 +1,3 @@
+fn main() -> Nil {
+    println("Hello from Kryndel")
+}
