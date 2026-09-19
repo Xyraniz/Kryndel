@@ -33,6 +33,7 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `is_some`, `is_none` | `is_some/is_none(value: Option[T]) -> Bool` | Inspect an option without unwrapping it. |
 | `is_ok`, `is_err` | `is_ok/is_err(value: Result[T, E]) -> Bool` | Inspect result status without consuming its payload. |
 | `unwrap_or` | `unwrap_or(option: Option[T], fallback: T) -> T` | Returns the value or a type-matching fallback. |
+| `result_unwrap` | `result_unwrap(value: Result[T,E]) -> T` | Explicitly extracts a successful Result; an error Result becomes a runtime diagnostic with its error payload. |
 | `substring` | `substring(text: String, start: Int, length: Int) -> Result[String, String]` | Uses UTF-8 code-point indexes and reports range errors. |
 | `contains`, `starts_with`, `ends_with`, `trim`, `split`, `replace`, `codepoints` | Text operations with explicit String signatures. | Preserve UTF-8 validation and deterministic output. |
 | `byte_at` | `byte_at(text: String, index: Int) -> Result[Int, String]` | Reads a byte with a checked index. |
@@ -79,6 +80,7 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `http_request_auth` | Bearer-authenticated HTTP request. | Sends the token only in the Authorization header and never includes it in diagnostics. |
 | `websocket_connect`, `websocket_send`, `websocket_receive`, `websocket_close` | RFC 6455 WebSocket lifecycle. | Require `ws`/`wss`, validate the handshake, mask client frames, bound payloads, and expose `WebSocket` as non-Copy. |
 | `process_run` | `process_run(program: String, args: Array[String]) -> Result[Int,String]` | Starts a program directly without a shell and bounds combined output. |
+| `process_args` | `process_args() -> Array[String]` | Returns only the arguments passed after the source path to `kry run`; it does not expose the host process command line. |
 | `win_registry_get`, `win_service_query`, `win_eventlog_write`, `win_raw_input`, `win_device_io_control` | Windows-only host operations. | Return an explicit unsupported-target failure on non-Windows; native adapters use Win32-compatible entry points. |
 | `uuid_v4`, `uuid_v5`, `uuid_is_valid` | UUID generation and validation. | v4 uses the OS CSPRNG; v5 follows the RFC name-based SHA-1 format; malformed namespaces return `err`. |
 | `platform_os`, `platform_arch`, `platform_runtime`, `platform_os_version`, `platform_hostname` | Host identity and runtime metadata. | The OS, architecture, and runtime are read locally; OS version and hostname access are fallible and return `Result`. Windows uses `RtlGetVersion`; Unix-like targets use `uname`. |

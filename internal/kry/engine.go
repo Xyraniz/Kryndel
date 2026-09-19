@@ -53,12 +53,15 @@ func (e *Engine) CheckPath(path string) (*Program, *Checker, *Diagnostic) {
 	return p, c, nil
 }
 func (e *Engine) RunPath(path string) (string, *Diagnostic) {
+	return e.RunPathWithArgs(path, nil)
+}
+func (e *Engine) RunPathWithArgs(path string, args []string) (string, *Diagnostic) {
 	p, c, d := e.CheckPath(path)
 	if d != nil {
 		return "", d
 	}
 	sb := Sandbox{Root: e.RestrictedRoot, Restricted: e.RestrictedRoot != ""}
-	r, d := NewRuntime(p, c, e.Limits, sb)
+	r, d := NewRuntimeWithArgs(p, c, e.Limits, sb, args)
 	if d != nil {
 		return "", d
 	}
@@ -89,33 +92,34 @@ func (e *Engine) BuildPath(path, out string) *Diagnostic {
 	}
 	return nil
 }
+
 // BuildSealedPath builds a .kexe artifact and wraps it in an authenticated,
 // passphrase-protected container. The plaintext artifact never touches disk.
 func (e *Engine) BuildSealedPath(path, out, passphrase string, iterations int) *Diagnostic {
-        p, _, d := e.CheckPath(path)
-        if d != nil {
-                return d
-        }
-        if filepath.Ext(path) == ".kexe" {
-                return Diag(CatCLI, nil, 1, 1, "build expects a source .kry file")
-        }
-        data, d := BuildArtifact(p, path)
-        if d != nil {
-                return d
-        }
-        sealed, err := EncryptArtifact(data, passphrase, iterations)
-        if err != nil {
-                return Diag(CatArtifact, nil, 1, 1, "cannot encrypt artifact: %v", err)
-        }
-        if e.RestrictedRoot != "" {
-                sb := Sandbox{Root: e.RestrictedRoot, Restricted: true}
-                if err := sb.Write(out, sealed); err != nil {
-                        return Diag(CatIO, nil, 1, 1, "cannot write artifact: %v", err)
-                }
-        } else if err := WriteArtifact(out, sealed); err != nil {
-                return Diag(CatIO, nil, 1, 1, "cannot write artifact: %v", err)
-        }
-        return nil
+	p, _, d := e.CheckPath(path)
+	if d != nil {
+		return d
+	}
+	if filepath.Ext(path) == ".kexe" {
+		return Diag(CatCLI, nil, 1, 1, "build expects a source .kry file")
+	}
+	data, d := BuildArtifact(p, path)
+	if d != nil {
+		return d
+	}
+	sealed, err := EncryptArtifact(data, passphrase, iterations)
+	if err != nil {
+		return Diag(CatArtifact, nil, 1, 1, "cannot encrypt artifact: %v", err)
+	}
+	if e.RestrictedRoot != "" {
+		sb := Sandbox{Root: e.RestrictedRoot, Restricted: true}
+		if err := sb.Write(out, sealed); err != nil {
+			return Diag(CatIO, nil, 1, 1, "cannot write artifact: %v", err)
+		}
+	} else if err := WriteArtifact(out, sealed); err != nil {
+		return Diag(CatIO, nil, 1, 1, "cannot write artifact: %v", err)
+	}
+	return nil
 }
 
 func (e *Engine) FormatPath(path string, write, check bool) (string, *Diagnostic, int) {

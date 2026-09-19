@@ -249,6 +249,15 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("unwrap_or fallback must match Option[T]")
 		}
 		return t.A, nil
+	case "result_unwrap":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyResult || !typeKnown(t.A) || !typeKnown(t.B) {
+			return bad("result_unwrap expects Result[T, E]")
+		}
+		return t.A, nil
 	case "some":
 		t, d := arg(0, nil)
 		if d != nil {
@@ -793,6 +802,8 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("process_run expects String and Array[String]")
 		}
 		return Res(TInt, TString), nil
+	case "process_args":
+		return Arr(TString), nil
 	case "actor_channel", "actor_channel_with_capacity":
 		if b.Name == "actor_channel_with_capacity" {
 			t, d := arg(0, TInt)

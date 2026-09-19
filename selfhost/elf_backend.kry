@@ -1,0 +1,139 @@
+// Stage 1 self-hosted backend.
+//
+// This program consumes KIR v1 and emits a real Linux x86-64 ELF executable
+// for static print/println calls. It deliberately rejects dynamic constructs;
+// the rejection is part of the bootstrap contract and will shrink as the
+// frontend and lowering stages are ported to Kryndel.
+
+fn u16_bytes(value: UInt16) -> Array[UInt8] {
+    return [
+        u8(value & u16(255)),
+        u8(value >> 8)
+    ]
+}
+
+fn u32_bytes(value: UInt32) -> Array[UInt8] {
+    return [
+        u8(value & u32(255)),
+        u8((value >> 8) & u32(255)),
+        u8((value >> 16) & u32(255)),
+        u8(value >> 24)
+    ]
+}
+
+fn u64_bytes(value: UInt64) -> Array[UInt8] {
+    return [
+        u8(value & u64(255)),
+        u8((value >> 8) & u64(255)),
+        u8((value >> 16) & u64(255)),
+        u8((value >> 24) & u64(255)),
+        u8((value >> 32) & u64(255)),
+        u8((value >> 40) & u64(255)),
+        u8((value >> 48) & u64(255)),
+        u8(value >> 56)
+    ]
+}
+
+fn append_u8(left: Array[UInt8], value: UInt8) -> Array[UInt8] {
+    return array_push(left, value)
+}
+
+fn append_bytes(left: Array[UInt8], right: Array[UInt8]) -> Array[UInt8] {
+    return array_concat(left, right)
+}
+
+fn json_field(value: Json, key: String) -> Json {
+    return result_unwrap(json_object_get(value, key))
+}
+
+fn json_text(value: Json) -> String {
+    return result_unwrap(json_string(value))
+}
+
+fn emit_elf(payload: Array[UInt8]) -> Bytes {
+    // ELF header (64 bytes), program header (56 bytes), code (33 bytes), data.
+    let file_size: Int = 153 + len(payload)
+    let mut file: Array[UInt8] = []
+
+    file = append_bytes(file, [u8(127), u8(69), u8(76), u8(70), u8(2), u8(1), u8(1), u8(0), u8(0), u8(0), u8(0), u8(0), u8(0), u8(0), u8(0), u8(0)])
+    file = append_bytes(file, u16_bytes(u16(2)))
+    file = append_bytes(file, u16_bytes(u16(62)))
+    file = append_bytes(file, u32_bytes(u32(1)))
+    file = append_bytes(file, u64_bytes(u64(4194424)))
+    file = append_bytes(file, u64_bytes(u64(64)))
+    file = append_bytes(file, u64_bytes(u64(0)))
+    file = append_bytes(file, u32_bytes(u32(0)))
+    file = append_bytes(file, u16_bytes(u16(64)))
+    file = append_bytes(file, u16_bytes(u16(56)))
+    file = append_bytes(file, u16_bytes(u16(1)))
+    file = append_bytes(file, u16_bytes(u16(0)))
+    file = append_bytes(file, u16_bytes(u16(0)))
+    file = append_bytes(file, u16_bytes(u16(0)))
+
+    // One readable/executable PT_LOAD segment containing headers, code, data.
+    file = append_bytes(file, u32_bytes(u32(1)))
+    file = append_bytes(file, u32_bytes(u32(5)))
+    file = append_bytes(file, u64_bytes(u64(0)))
+    file = append_bytes(file, u64_bytes(u64(4194304)))
+    file = append_bytes(file, u64_bytes(u64(4194304)))
+    file = append_bytes(file, u64_bytes(u64(file_size)))
+    file = append_bytes(file, u64_bytes(u64(file_size)))
+    file = append_bytes(file, u64_bytes(u64(4096)))
+
+    // _start: write(1, payload, len), then exit(0). The data address is
+    // sixteen bytes after the RIP following the lea instruction.
+    file = append_bytes(file, [u8(184), u8(1), u8(0), u8(0), u8(0)])
+    file = append_bytes(file, [u8(191), u8(1), u8(0), u8(0), u8(0)])
+    file = append_bytes(file, [u8(72), u8(141), u8(53), u8(16), u8(0), u8(0), u8(0)])
+    file = append_bytes(file, [u8(186)])
+    file = append_bytes(file, u32_bytes(u32(len(payload))))
+    file = append_bytes(file, [u8(15), u8(5), u8(184), u8(60), u8(0), u8(0), u8(0), u8(49), u8(255), u8(15), u8(5)])
+    file = append_bytes(file, payload)
+    return bytes_from_u8(file)
+}
+
+fn compile_kir(document: Json) -> Result[Bytes, String] {
+    let statements: Json = json_field(document, "statements")
+    let mut payload: Array[UInt8] = []
+    // The first implementation uses a bounded index loop. KIR v1 always
+    // exposes a JSON array length, and the empty case is handled explicitly.
+    let count: Int = result_unwrap(json_array_len(statements))
+    let mut index: Int = 0
+    while index < count {
+        let statement: Json = result_unwrap(json_array_get(statements, index))
+        let kind: String = json_text(json_field(statement, "kind"))
+        if kind != "expr" {
+            return err("stage1 ELF backend accepts only expression statements")
+        }
+        let expression: Json = json_field(statement, "expr")
+        let target: String = json_text(json_field(expression, "call_target"))
+        if target != "builtin:print" && target != "builtin:println" {
+            return err("stage1 ELF backend accepts only print and println")
+        }
+        let arguments: Json = json_field(expression, "args")
+        let argument: Json = result_unwrap(json_array_get(arguments, 0))
+        let argument_kind: String = json_text(json_field(argument, "kind"))
+        if argument_kind != "string" {
+            return err("stage1 ELF backend accepts only string literals")
+        }
+        let value: String = json_text(json_field(argument, "string"))
+        payload = append_bytes(payload, u8_array(string_to_bytes(value)))
+        if target == "builtin:println" {
+            payload = append_u8(payload, u8(10))
+        }
+        index = index + 1
+    }
+    return ok(emit_elf(payload))
+}
+
+fn main() -> Nil {
+    let args: Array[String] = process_args()
+    assert_eq(len(args), 2)
+    let input: String = args[0]
+    let output: String = args[1]
+    let source: String = result_unwrap(fs_read_text(input))
+    let document: Json = result_unwrap(json_parse(source))
+    let executable: Bytes = result_unwrap(compile_kir(document))
+    result_unwrap(fs_write_bytes(output, executable))
+    return nil
+}

@@ -636,6 +636,7 @@ type Runtime struct {
 	Prog         *Program
 	Checker      *Checker
 	Funcs        map[string]*Function
+	Args         []string
 	Global       *RunScope
 	Lim          Limits
 	Sandbox      Sandbox
@@ -677,8 +678,12 @@ func (s *RunScope) define(n string, v Value, m bool) error {
 	return nil
 }
 func NewRuntime(prog *Program, c *Checker, lim Limits, sb Sandbox) (*Runtime, *Diagnostic) {
+	return NewRuntimeWithArgs(prog, c, lim, sb, nil)
+}
+
+func NewRuntimeWithArgs(prog *Program, c *Checker, lim Limits, sb Sandbox, args []string) (*Runtime, *Diagnostic) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
-	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}}
+	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Args: append([]string(nil), args...), Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}}
 	return r, nil
 }
 func (r *Runtime) fail(e *Expr, format string, args ...any) *Diagnostic {
@@ -1786,6 +1791,11 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return cloneValue(*a[0].Inner), nil
 		}
 		return a[1], nil
+	case "result_unwrap":
+		if !a[0].OK {
+			return nilVal(), r.fail(e, "cannot unwrap error Result: %s", display(*a[0].Inner))
+		}
+		return cloneValue(*a[0].Inner), nil
 	case "some":
 		return optVal(true, a[0]), nil
 	case "none":
@@ -2135,6 +2145,12 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(fmt.Sprintf("process exited with code %d", ee.ExitCode()))), nil
 		}
 		return resVal(false, stringVal(err.Error())), nil
+	case "process_args":
+		values := make([]Value, len(r.Args))
+		for i, value := range r.Args {
+			values[i] = stringVal(value)
+		}
+		return arrVal(values), nil
 	case "uuid_v4":
 		value, err := uuidV4()
 		if err != nil {

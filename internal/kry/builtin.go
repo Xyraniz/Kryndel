@@ -40,6 +40,8 @@ func init() {
 		Builtin{"json_float", "json_float(value: Json) -> Result[Float,String]", "json", "copy", "type/range failure", "Decode a finite JSON number as Float.", "2.9.0", 1, "json_float"},
 		Builtin{"json_bool", "json_bool(value: Json) -> Result[Bool,String]", "json", "copy", "type failure", "Decode a JSON boolean node.", "2.9.0", 1, "json_bool"},
 		Builtin{"json_is_null", "json_is_null(value: Json) -> Bool", "json", "copy", "none", "Test whether a JSON node is null.", "2.9.0", 1, "json_is_null"},
+		Builtin{"result_unwrap", "result_unwrap(value: Result[T,E]) -> T", "diagnostic", "copy", "error result", "Extract a successful Result or fail explicitly with its error.", "2.9.0", 1, "result_unwrap"},
+		Builtin{"process_args", "process_args() -> Array[String]", "process", "copy", "none", "Return the arguments explicitly passed to the Kryndel program.", "2.9.0", 0, "process_args"},
 		Builtin{"poly_register", "poly_register(slot: String,handler: String,priority: Int) -> Result[Nil,String]", "dispatch", "borrow", "unknown/incompatible handler", "Register a typed String -> String implementation in a runtime dispatch slot.", "1.4.0", 3, "poly_register"},
 		Builtin{"poly_reorder", "poly_reorder(slot: String,handler: String,before: String) -> Result[Nil,String]", "dispatch", "borrow", "unknown handler", "Move a registered implementation before another one without recompiling.", "1.4.0", 3, "poly_reorder"},
 		Builtin{"poly_dispatch", "poly_dispatch(slot: String,input: String) -> Result[String,String]", "dispatch", "borrow", "empty/failing dispatch", "Invoke the first implementation in the current runtime order.", "1.4.0", 2, "poly_dispatch"},

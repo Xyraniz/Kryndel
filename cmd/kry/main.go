@@ -118,14 +118,14 @@ func run(args []string) int {
 		_, _, d := e.CheckPath(rest[0])
 		return report(d, jsonMode)
 	case "run":
-		if len(rest) != 1 {
+		if len(rest) < 1 {
 			return usage("run expects one source or artifact path")
 		}
 		if err := maybePromptPassphrase(e, rest[0]); err != nil {
 			fmt.Fprintln(os.Stderr, "kry:", err)
 			return 2
 		}
-		_, d := e.RunPath(rest[0])
+		_, d := e.RunPathWithArgs(rest[0], rest[1:])
 		return report(d, jsonMode)
 	case "build":
 		return buildCmd(e, rest, jsonMode)
@@ -355,7 +355,7 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	}
 	// Native executables must be runnable even when the output path has no
 	// extension (the default for ELF targets).
-	if format == "exe" || format == "pe" || format == "elf" {
+	if format == "exe" || format == "pe" || format == "elf" || format == "elf-direct" {
 		_ = os.Chmod(out, 0o755)
 	}
 	fmt.Println("built " + out)
