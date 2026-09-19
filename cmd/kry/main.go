@@ -495,13 +495,18 @@ func emitCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	if len(a) < 1 {
 		return usage("emit expects FILE")
 	}
-	src, format, out := a[0], "kry-ir", ""
+	src, format, out, targetName := a[0], "kry-ir", "", "host"
 	for i := 1; i < len(a); i++ {
 		switch {
 		case strings.HasPrefix(a[i], "--format="):
 			format = strings.TrimPrefix(a[i], "--format=")
 		case a[i] == "-o" && i+1 < len(a):
 			out = a[i+1]
+			i++
+		case strings.HasPrefix(a[i], "--target="):
+			targetName = strings.TrimPrefix(a[i], "--target=")
+		case a[i] == "--target" && i+1 < len(a):
+			targetName = a[i+1]
 			i++
 		default:
 			return usage("unknown emit option")
@@ -517,7 +522,10 @@ func emitCmd(e *kry.Engine, a []string, jsonMode bool) int {
 		}
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "unsupported emit format %s", format), jsonMode)
 	}
-	t, _ := kry.ParseNativeTarget("host")
+	t, err := kry.ParseNativeTarget(targetName)
+	if err != nil {
+		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "invalid target %s: %v", targetName, err), jsonMode)
+	}
 	c, d := kry.Check(p, e.Limits)
 	if d != nil {
 		return report(d, jsonMode)

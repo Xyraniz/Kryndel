@@ -50,7 +50,7 @@ fn json_text(value: Json) -> String {
     return result_unwrap(json_string(value))
 }
 
-fn eval_int(expression: Json, bindings: Map[String, String]) -> Result[Int, String] {
+pub fn eval_int(expression: Json, bindings: Map[String, String]) -> Result[Int, String] {
     let kind: String = json_text(json_field(expression, "kind"))
     if kind == "int" {
         return ok(result_unwrap(json_int(json_field(expression, "int"))))
@@ -86,7 +86,7 @@ fn eval_int(expression: Json, bindings: Map[String, String]) -> Result[Int, Stri
     return err("expression is not a static Int")
 }
 
-fn eval_display(expression: Json, bindings: Map[String, String]) -> Result[String, String] {
+pub fn eval_display(expression: Json, bindings: Map[String, String]) -> Result[String, String] {
     let kind: String = json_text(json_field(expression, "kind"))
     if kind == "string" {
         return ok(json_text(json_field(expression, "string")))
