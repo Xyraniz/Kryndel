@@ -522,13 +522,13 @@ fn allocate_slot(state: EmitState, name: String) -> Result[EmitState, String] {
 fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, String] {
     let kind: String = text(field(statement, "kind"))
     if kind == "let" || kind == "const" {
-        if state.env.in_function { return err("dynamic backend: function locals are not supported yet") }
         let name: String = text(field(statement, "name"))
         let allocated: Result[EmitState, String] = allocate_slot(state, name)
         if is_err(allocated) { return err(compile_error(allocated)) }
         let updated: EmitState = result_unwrap(allocated)
         let init: Json = field(statement, "init")
         let type_name: String = expr_type(init)
+        if state.env.in_function && !is_scalar_type(type_name) { return err("dynamic backend: function local has unsupported type '" + type_name + "'") }
         let mut generated: Result[EmitState, String] = err("dynamic backend: initializer was not lowered")
         if type_name == "String" {
             generated = ok(emit_int(updated, 0))
@@ -548,7 +548,6 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         return ok(stored)
     }
     if kind == "assign" {
-        if state.env.in_function { return err("dynamic backend: function assignment is not supported yet") }
         let target: Json = field(statement, "target")
         let name: String = text(field(target, "name"))
         let slot: Option[Int] = map_get(state.env.slots, name)
@@ -766,6 +765,36 @@ fn count_slots(statements: Json) -> Int {
     return total
 }
 
+fn count_function_slots(statements: Json) -> Result[Int, String] {
+    let count: Int = result_unwrap(json_array_len(statements))
+    let mut index: Int = 0
+    let mut total: Int = 0
+    while index < count {
+        let statement: Json = result_unwrap(json_array_get(statements, index))
+        let kind: String = text(field(statement, "kind"))
+        if kind == "let" || kind == "const" {
+            let type_name: String = expr_type(field(statement, "init"))
+            if !is_scalar_type(type_name) { return err("dynamic backend: function local has unsupported type '" + type_name + "'") }
+            total = total + 1
+        }
+        if kind == "if" {
+            let then_count: Result[Int, String] = count_function_slots(field(statement, "then"))
+            if is_err(then_count) { return err(unwrap_or(result_error(then_count), "dynamic backend: function local scan failed")) }
+            total = total + result_unwrap(then_count)
+            let else_count: Result[Int, String] = count_function_slots(field(statement, "else"))
+            if is_err(else_count) { return err(unwrap_or(result_error(else_count), "dynamic backend: function local scan failed")) }
+            total = total + result_unwrap(else_count)
+        }
+        if kind == "while" {
+            let body_count: Result[Int, String] = count_function_slots(field(statement, "body"))
+            if is_err(body_count) { return err(unwrap_or(result_error(body_count), "dynamic backend: function local scan failed")) }
+            total = total + result_unwrap(body_count)
+        }
+        index = index + 1
+    }
+    return ok(total)
+}
+
 fn entry_statements(document: Json) -> Json {
     let statements: Json = field(document, "statements")
     if result_unwrap(json_array_len(statements)) > 0 {
@@ -830,7 +859,10 @@ fn emit_function_bodies(state: EmitState, functions: Json, index: Int, base_env:
     if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind function label")) }
     let parameters: Json = field(function, "params")
     let parameter_count: Int = result_unwrap(json_array_len(parameters))
-    let buffer_offset: Int = parameter_count * 8 + 1
+    let locals: Result[Int, String] = count_function_slots(field(function, "body"))
+    if is_err(locals) { return err(unwrap_or(result_error(locals), "dynamic backend: function local scan failed")) }
+    let next_slot: Int = parameter_count * 8 + result_unwrap(locals) * 8
+    let buffer_offset: Int = next_slot + 1
     let function_env: CompileEnv = CompileEnv{ slots: parameter_slots(parameters), static_values: {}, function_labels: base_env.function_labels, function_returns: base_env.function_returns, next_slot: parameter_count * 8, breaks: [], continues: [], end_label: base_env.end_label, trap_label: base_env.trap_label, buffer_offset: buffer_offset, in_function: true, current_function: name }
     let framed: EmitState = emit_function_frame(state_with_env(result_unwrap(bound), function_env), align_frame(buffer_offset + 63))
     let mut stored: Result[EmitState, String] = ok(framed)

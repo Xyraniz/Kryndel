@@ -12,24 +12,25 @@ import (
 // Unsupported values fail during compilation instead of silently changing
 // Kryndel semantics.
 type directMachine struct {
-	code            []byte
-	data            []byte
-	dataByText      map[string]int
-	dataRefs        []machineDataRef
-	labels          []machineLabel
-	slots           map[string]machineSlot
-	nextSlot        int32
-	loops           []machineLoop
-	endLabel        int
-	trapLabel       int
-	staticEnv       map[string]Value
-	bufferOffset    int32
-	functionLabels  map[string]int
-	functionOrder   []*Function
-	functionSlots   map[string]map[string]machineSlot
-	functionReturns map[string]*Type
-	inFunction      bool
-	currentFunction string
+	code             []byte
+	data             []byte
+	dataByText       map[string]int
+	dataRefs         []machineDataRef
+	labels           []machineLabel
+	slots            map[string]machineSlot
+	nextSlot         int32
+	loops            []machineLoop
+	endLabel         int
+	trapLabel        int
+	staticEnv        map[string]Value
+	bufferOffset     int32
+	functionLabels   map[string]int
+	functionOrder    []*Function
+	functionSlots    map[string]map[string]machineSlot
+	functionNextSlot map[string]int32
+	functionReturns  map[string]*Type
+	inFunction       bool
+	currentFunction  string
 }
 
 type machineSlot struct {
@@ -55,12 +56,13 @@ type machineDataRef struct {
 
 func newDirectMachine() *directMachine {
 	m := &directMachine{
-		dataByText:      map[string]int{},
-		slots:           map[string]machineSlot{},
-		staticEnv:       map[string]Value{},
-		functionLabels:  map[string]int{},
-		functionSlots:   map[string]map[string]machineSlot{},
-		functionReturns: map[string]*Type{},
+		dataByText:       map[string]int{},
+		slots:            map[string]machineSlot{},
+		staticEnv:        map[string]Value{},
+		functionLabels:   map[string]int{},
+		functionSlots:    map[string]map[string]machineSlot{},
+		functionNextSlot: map[string]int32{},
+		functionReturns:  map[string]*Type{},
 	}
 	m.endLabel = m.newLabel()
 	m.trapLabel = m.newLabel()
@@ -632,23 +634,41 @@ func (m *directMachine) collect(stmts []*Stmt) error {
 	return nil
 }
 
-func (m *directMachine) collectFunction(stmts []*Stmt) error {
+func (m *directMachine) collectFunction(stmts []*Stmt, slots map[string]machineSlot, nextSlot *int32) error {
 	for _, s := range stmts {
 		if s == nil {
 			continue
 		}
 		switch s.Kind {
-		case StLet, StConst, StAssign:
-			return fmt.Errorf("direct ELF backend function locals and assignment are not supported yet")
+		case StLet, StConst:
+			if s.Init == nil {
+				return fmt.Errorf("direct ELF backend requires an initializer for '%s'", s.Name)
+			}
+			if _, exists := slots[s.Name]; exists {
+				return fmt.Errorf("direct ELF backend does not support shadowed binding '%s'", s.Name)
+			}
+			localType, ok := machineScalarType(s.Init.Type.String())
+			if !ok || localType.Kind == TyNil {
+				return fmt.Errorf("direct ELF backend function local '%s' has unsupported type %s", s.Name, s.Init.Type.String())
+			}
+			*nextSlot += 8
+			slots[s.Name] = machineSlot{offset: *nextSlot, typ: localType}
+		case StAssign:
+			if s.Target == nil || s.Target.Kind != ExVar {
+				return fmt.Errorf("direct ELF backend function assignment target must be a binding")
+			}
+			if _, exists := slots[s.Target.Name]; !exists {
+				return fmt.Errorf("direct ELF backend function assignment uses unknown binding '%s'", s.Target.Name)
+			}
 		case StIf:
-			if err := m.collectFunction(s.Then); err != nil {
+			if err := m.collectFunction(s.Then, slots, nextSlot); err != nil {
 				return err
 			}
-			if err := m.collectFunction(s.Else); err != nil {
+			if err := m.collectFunction(s.Else, slots, nextSlot); err != nil {
 				return err
 			}
 		case StWhile:
-			if err := m.collectFunction(s.Body); err != nil {
+			if err := m.collectFunction(s.Body, slots, nextSlot); err != nil {
 				return err
 			}
 		case StExpr, StReturn, StBreak, StContinue:
@@ -689,12 +709,12 @@ func (m *directMachine) prepareFunctions(p *Program) error {
 			}
 			slots[param.Name] = machineSlot{offset: int32((index + 1) * 8), typ: paramType}
 		}
-		m.functionSlots[f.Name] = slots
-	}
-	for _, f := range m.functionOrder {
-		if err := m.collectFunction(f.Body); err != nil {
+		nextSlot := int32(len(f.Params) * 8)
+		if err := m.collectFunction(f.Body, slots, &nextSlot); err != nil {
 			return fmt.Errorf("function '%s': %w", f.Name, err)
 		}
+		m.functionSlots[f.Name] = slots
+		m.functionNextSlot[f.Name] = nextSlot
 	}
 	return nil
 }
@@ -908,7 +928,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			m.slots = m.functionSlots[f.Name]
 			m.staticEnv = map[string]Value{}
 			m.loops = nil
-			m.bufferOffset = int32(len(f.Params)*8 + 1)
+			m.bufferOffset = m.functionNextSlot[f.Name] + 1
 			functionFrame := (int(m.bufferOffset) + 63 + 15) &^ 15
 			m.code = append(m.code, 0x55, 0x48, 0x89, 0xe5)
 			m.code = append(m.code, 0x48, 0x81, 0xec)

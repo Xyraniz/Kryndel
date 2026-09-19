@@ -11,7 +11,9 @@ fn increment(value: UInt64) -> UInt64 {
 }
 
 fn mask(value: UInt8) -> UInt8 {
-    return ((((value & u8(15)) << 1) >> 1) | u8(1)) ^ u8(2)
+    let mut masked: UInt8 = value & u8(15)
+    masked = ((((masked << 1) >> 1) | u8(1)) ^ u8(2))
+    return masked
 }
 
 fn main() -> Nil {
