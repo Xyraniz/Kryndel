@@ -159,5 +159,9 @@ func init() {
 		Builtin{"process_list", "process_list() -> Result[Json,String]", "process", "copy", "enumeration/limit failure", "Enumerate running processes as bounded JSON metadata.", "2.3.0", 0, "process_list"},
 		Builtin{"process_info", "process_info(pid: Int) -> Result[Json,String]", "process", "copy", "lookup failure", "Read metadata for one running process as JSON.", "2.3.0", 1, "process_info"},
 		Builtin{"geocode_ip", "geocode_ip(ip: String) -> Result[Json,String]", "network", "copy", "validation/HTTP/JSON failure", "Look up an IP address through the configured geocoder and return validated JSON.", "2.4.0", 1, "geocode_ip"},
+		Builtin{"screen_display_count", "screen_display_count() -> Result[Int,String]", "graphics", "copy", "display/API failure", "Return the number of active displays.", "2.5.0", 0, "screen_display_count"},
+		Builtin{"screen_display_bounds", "screen_display_bounds(display: Int) -> Result[Json,String]", "graphics", "copy", "display/API failure", "Return one display's desktop coordinates and dimensions as JSON.", "2.5.0", 1, "screen_display_bounds"},
+		Builtin{"screen_capture", "screen_capture(x: Int,y: Int,width: Int,height: Int) -> Result[Bytes,String]", "graphics", "copy", "capture/encoding/limit failure", "Capture a desktop region as bounded PNG bytes.", "2.5.0", 4, "screen_capture"},
+		Builtin{"screen_capture_display", "screen_capture_display(display: Int) -> Result[Bytes,String]", "graphics", "copy", "capture/encoding/limit failure", "Capture one active display as bounded PNG bytes.", "2.5.0", 1, "screen_capture_display"},
 	)
 }

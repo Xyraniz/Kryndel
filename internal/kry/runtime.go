@@ -2305,6 +2305,30 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, Value{Kind: VJSON, S: value}), nil
+	case "screen_display_count":
+		value, err := screenDisplayCount()
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, intVal(int64(value))), nil
+	case "screen_display_bounds":
+		value, err := screenDisplayBoundsJSON(a[0].I)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VJSON, S: value}), nil
+	case "screen_capture":
+		value, err := screenCapturePNG(a[0].I, a[1].I, a[2].I, a[3].I, r.Lim.MaxOutputBytes)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(value)), nil
+	case "screen_capture_display":
+		value, err := screenCaptureDisplayPNG(a[0].I, r.Lim.MaxOutputBytes)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(value)), nil
 	case "shared_new":
 		return Value{Kind: VShared, Shared: &SharedCell{value: cloneValue(a[0])}}, nil
 	case "shared_read":

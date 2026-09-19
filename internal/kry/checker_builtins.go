@@ -1871,6 +1871,25 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return TError, d
 		}
 		return Res(TJSON, TString), nil
+	case "screen_display_count":
+		return Res(TInt, TString), nil
+	case "screen_display_bounds":
+		if _, d := arg(0, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TJSON, TString), nil
+	case "screen_capture":
+		for i := 0; i < 4; i++ {
+			if _, d := arg(i, TInt); d != nil {
+				return TError, d
+			}
+		}
+		return Res(TBytes, TString), nil
+	case "screen_capture_display":
+		if _, d := arg(0, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TBytes, TString), nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not implemented", b.Name)
 }
