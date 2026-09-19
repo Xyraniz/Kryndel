@@ -24,7 +24,7 @@ On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` when it is on `
 | `build source.kry --format=exe --target=windows-x64` | Check and write a real PE32+ entrypoint for the selected target. | `0` |
 | `build source.kry --format=elf --target=linux-x64` | Check and write a real ELF64 entrypoint for the selected target. | `0` |
 | `build source.kry --format=c` | Check and emit the generated C source without compiling. | `0` |
-| `emit source.kry --format=llvm-ir` | Emit checked textual IR without executing source. | `0` |
+| `emit source.kry --format=kry-ir` | Emit deterministic, versioned checked KIR JSON without executing source. | `0` |
 | `inspect binary` | Inspect PE/ELF headers and reject unknown binary formats. | `0` |
 | `fmt [--check\|-w] source.kry` | Check and format valid source deterministically. | `0` |
 | `repl` | Run the interactive read-evaluate-print loop. | `0` |
@@ -35,6 +35,8 @@ On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` when it is on `
 | Missing built executable | Print an actionable build message. | `69` |
 
 Diagnostics use the stable form `error[category]: file:line:column`, followed by a short message, source excerpt, and caret when source is available. `--json` emits one machine-readable object with a stable `KRY001`–`KRY008` code, category, severity, source, line, column, and message.
+
+`--format=llvm-ir` is rejected explicitly until Kryndel has a real lowering to LLVM's typed SSA model. It never emits placeholder IR.
 
 ## KRYNATIVE3 format
 

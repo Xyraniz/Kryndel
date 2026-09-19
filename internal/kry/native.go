@@ -210,9 +210,12 @@ func wslPath(path string) string {
 	return filepath.ToSlash(abs)
 }
 
-func EmitLLVMIR(p *Program, target NativeTarget) []byte {
-	name := "kryndel_main"
-	return []byte(fmt.Sprintf("; Kryndel checked IR emission for %s/%s\nsource_filename = \"kryndel\"\n\ndefine i32 @%s() {\nentry:\n  ret i32 0\n}\n", target.OS, target.Arch, name))
+// EmitLLVMIR is intentionally unavailable until Kryndel has a real lowering
+// to LLVM's typed SSA model. The old implementation emitted a valid-looking
+// function that always returned zero, which was not an IR representation of
+// the checked program and could hide compiler bugs.
+func EmitLLVMIR(p *Program, target NativeTarget) ([]byte, error) {
+	return nil, fmt.Errorf("LLVM IR emission is not implemented; use --format=kry-ir")
 }
 
 func InspectNative(data []byte) (string, error) {

@@ -216,6 +216,7 @@ func usage(msg string) int {
 	fmt.Fprintln(os.Stderr, "try 'kry --help'")
 	return 2
 }
+
 // readPassphraseFile reads a passphrase from a file, trimming a single trailing
 // newline so files created by editors or `echo` work as expected.
 func readPassphraseFile(path string) (string, error) {
@@ -494,7 +495,7 @@ func emitCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	if len(a) < 1 {
 		return usage("emit expects FILE")
 	}
-	src, format, out := a[0], "llvm-ir", ""
+	src, format, out := a[0], "kry-ir", ""
 	for i := 1; i < len(a); i++ {
 		switch {
 		case strings.HasPrefix(a[i], "--format="):
@@ -510,11 +511,21 @@ func emitCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	if d != nil {
 		return report(d, jsonMode)
 	}
-	if format != "llvm-ir" {
+	if format != "kry-ir" {
+		if format == "llvm-ir" {
+			return report(kry.Diag(kry.CatCLI, nil, 1, 1, "LLVM IR emission is not implemented; use --format=kry-ir"), jsonMode)
+		}
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "unsupported emit format %s", format), jsonMode)
 	}
 	t, _ := kry.ParseNativeTarget("host")
-	data := kry.EmitLLVMIR(p, t)
+	c, d := kry.Check(p, e.Limits)
+	if d != nil {
+		return report(d, jsonMode)
+	}
+	data, err := kry.EmitKIR(p, c, t)
+	if err != nil {
+		return report(kry.Diag(kry.CatArtifact, nil, 1, 1, "cannot emit KIR: %v", err), jsonMode)
+	}
 	if out != "" {
 		if err := kry.WriteTextAtomic(out, data); err != nil {
 			return report(kry.Diag(kry.CatIO, nil, 1, 1, "cannot write emitted IR: %v", err), jsonMode)
