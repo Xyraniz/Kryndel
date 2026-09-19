@@ -1152,7 +1152,7 @@ func (g *cgen) builtinCall(e *Expr, b Builtin) string {
 	case "poly_dispatch":
 		return fmt.Sprintf("k_poly_dispatch(%s, %s)", arg(0), arg(1))
 	}
-	g.fail("builtin '%s' is not supported by the native backend", b.Name)
+	g.fail("builtin '%s' is not supported by the C AOT backend; use the interpreter for this host integration", b.Name)
 	return "kv_nil()"
 }
 

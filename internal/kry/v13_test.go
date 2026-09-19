@@ -472,6 +472,8 @@ func TestNativeBackendRejectsUnsupported(t *testing.T) {
 	}
 	if _, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf"); err == nil {
 		t.Fatal("unsupported program was silently emitted as AOT")
+	} else if !strings.Contains(err.Error(), "websocket_connect") || !strings.Contains(err.Error(), "interpreter") {
+		t.Fatalf("unsupported builtin diagnostic lost its boundary details: %v", err)
 	}
 }
 

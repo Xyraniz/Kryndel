@@ -9,7 +9,9 @@ make
 ./tools/kry run examples/fibonacci.kry
 ```
 
-The executable does not load modules from another language and does not require C, Python, Rust, Node.js, or an equivalent runtime to execute Kryndel programs. The only source-build dependency is the documented Go toolchain and standard library. The full portable execution path is the self-contained `KRYNATIVE3` bundle. Native `--format=elf`/`--format=exe` output is produced by a C-based ahead-of-time backend that lowers the checked program to C and compiles it with the host C toolchain; unsupported source constructs are rejected instead of embedding or invoking the VM.
+The executable does not load modules from another language and does not require C, Python, Rust, Node.js, or an equivalent runtime to execute interpreted Kryndel programs. The only source-build dependency for that path is the documented Go toolchain and standard library, plus the external `ffmpeg` executable when Windows webcam capture is requested. The full portable execution path is the self-contained `KRYNATIVE3` bundle. Native `--format=elf`/`--format=exe` output is produced by a C-based ahead-of-time backend that lowers the checked program to C and compiles it with the host C toolchain; host integrations that need Go libraries or platform frameworks are rejected with their builtin name instead of embedding or invoking the VM.
+
+On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` when it is on `PATH`. If it is missing and WSL2 has the `Ubuntu` distribution with that compiler, the builder automatically invokes it and translates temporary paths into `/mnt/<drive>/...`; `KRY_WSL_DISTRO` selects another distribution. Windows PE builds continue to use the configured MinGW-capable `gcc` on Windows. The test suite executes the ELF AOT parity tests on Linux/amd64 and validates PE/ELF headers on Windows.
 
 ## Command contract
 

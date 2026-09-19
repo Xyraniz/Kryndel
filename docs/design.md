@@ -8,9 +8,9 @@ The development and reference backend is the modular Go toolchain in `cmd/kry` a
 
 ## Values and ownership
 
-`Int`, `Float`, `Bool`, `Nil`, enum tags, and immutable handles are represented as values. `String`, `Bytes`, arrays, structs, options, and results are immutable logical values whose storage is allocated within one invocation arena. The evaluator copies value descriptors when binding or passing arguments; collection payloads are immutable and are copied when an operation creates a new collection. The arena releases all allocations when a source or REPL evaluation ends. File handles, sockets, child processes, raw pointers, and shared mutable objects are outside the stable value set and have no implicit lifecycle.
+`Int`, `Float`, `Bool`, `Nil`, enum tags, and immutable handles are represented as values. `String`, `Bytes`, arrays, structs, options, and results are immutable logical values whose storage is allocated within one invocation arena. The evaluator copies value descriptors when binding or passing arguments; collection payloads are immutable and are copied when an operation creates a new collection. The arena releases all allocations when a source or REPL evaluation ends. SQLite databases, TCP/UDP sockets, regular expressions, seeded random generators, and FFI libraries/symbols/buffers are explicit non-Copy handles with dedicated close operations where the host resource requires one. Child processes and native pointers never become implicit source values.
 
-This model makes ordinary source evaluation deterministic and prevents accidental in-place mutation of collection payloads. It does not claim general ownership checking for external resources. Such resources require a separately specified standard-library design before they become stable language values.
+This model makes ordinary source evaluation deterministic and prevents accidental in-place mutation of collection payloads. It does not claim general ownership checking for external resources; each host handle has a bounded API and returns a typed error when the platform or resource rejects an operation.
 
 ## Mutability
 
@@ -24,9 +24,9 @@ Channel operations use Go synchronization primitives and predicate-based waits. 
 
 ## Errors and unsafe boundaries
 
-Lexical, parse, type, artifact, runtime, I/O, CLI, and resource failures are represented by deterministic diagnostics and non-zero process status. User-visible operations that can fail are reported rather than silently coerced. Checked integer arithmetic rejects overflow, division by zero, minimum-integer negation, and invalid absolute value. Floating-point literals and computed results must remain finite. `Option[T]` and `Result[T, E]` are explicit tagged values in the current expression and pattern surface. OS resource wrappers that return them are outside the stable source API.
+Lexical, parse, type, artifact, runtime, I/O, CLI, and resource failures are represented by deterministic diagnostics and non-zero process status. User-visible operations that can fail are reported rather than silently coerced. Checked integer arithmetic rejects overflow, division by zero, minimum-integer negation, and invalid absolute value. Floating-point literals and computed results must remain finite. `Option[T]` and `Result[T, E]` are explicit tagged values in the current expression and pattern surface. OS resource wrappers return these tagged values instead of hiding permission, capability, or transport failures.
 
-The stable language has no `unsafe` block and no FFI or raw-pointer operation. The implementation exposes only explicit, checked standard-library capabilities to source programs. A future unsafe boundary must be syntactically explicit, checker-visible, and isolated from safe standard-library wrappers.
+The stable language has no general `unsafe` block or raw-pointer dereference. FFI is an explicit, checker-visible boundary: callers load a library, resolve a symbol, declare a restricted integer/pointer ABI signature, and pass opaque buffer address tokens. Invalid signatures, closed handles, and unsupported platforms return errors; a semantically incorrect C declaration remains the caller's responsibility and is documented as an unsafe native contract.
 
 ## Modules and packaging
 
@@ -34,7 +34,7 @@ Imports are quoted relative paths resolved relative to the importing source file
 
 ## System access
 
-The stable source standard library consists of the authoritative global builtin registry documented in `docs/stdlib.md`. It provides pure value operations, output, assertions, conversions, collection/text/byte primitives, the bounded thread/channel API, UTF-8 file reads and writes, and environment lookup. Process control, networking, terminal operations, signals, and FFI are not exposed to Kryndel source. This keeps the safe system boundary small and typed.
+The stable source standard library consists of the authoritative global builtin registry documented in `docs/stdlib.md`. It provides pure value operations, output, assertions, conversions, collection/text/byte primitives, regex and seeded random handles, UUID/time/platform/dotenv helpers, bounded thread/channel APIs, UTF-8 file operations, environment lookup, process metadata, HTTP/WebSocket requests, SQLite, raw TCP/UDP, FFI, screen/camera capture, IP geolocation, and Windows input/host APIs. Every host-facing operation is typed, bounded where data can grow, and reports its capability or permission failure rather than fabricating a result.
 
 ## Compatibility
 
