@@ -1168,6 +1168,190 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("poly_dispatch expects String slot and input")
 		}
 		return Res(TString, TString), nil
+	case "string_repeat":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TString, TString), nil
+	case "string_index_of":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TString); d != nil {
+			return TError, d
+		}
+		return Opt(TInt), nil
+	case "string_pad_start", "string_pad_end":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		if _, d := arg(2, TString); d != nil {
+			return TError, d
+		}
+		return Res(TString, TString), nil
+	case "string_lines", "string_chars":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return Arr(TString), nil
+	case "string_to_upper", "string_to_lower":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return TString, nil
+	case "array_sort":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray || (t.A.Kind != TyInt && t.A.Kind != TyFloat && t.A.Kind != TyString) {
+			return bad("array_sort expects Array[Int], Array[Float], or Array[String]")
+		}
+		return t, nil
+	case "array_index_of":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray {
+			return bad("array_index_of expects Array[T]")
+		}
+		if _, d := arg(1, t.A); d != nil {
+			return TError, d
+		}
+		return Opt(TInt), nil
+	case "array_sum":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray || !typeEqual(t.A, TInt) {
+			return bad("array_sum expects Array[Int]")
+		}
+		return TInt, nil
+	case "array_min", "array_max":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray || !typeEqual(t.A, TInt) {
+			return bad("array_min/array_max expect Array[Int]")
+		}
+		return Opt(TInt), nil
+	case "array_take", "array_drop":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray {
+			return bad("array_take/array_drop expect Array[T]")
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		return t, nil
+	case "map_contains_key":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyMap {
+			return bad("map_contains_key expects Map[K,V]")
+		}
+		if _, d := arg(1, t.A); d != nil {
+			return TError, d
+		}
+		return TBool, nil
+	case "map_values":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyMap {
+			return bad("map_values expects Map[K,V]")
+		}
+		return Arr(t.B), nil
+	case "map_remove":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyMap {
+			return bad("map_remove expects Map[K,V]")
+		}
+		if _, d := arg(1, t.A); d != nil {
+			return TError, d
+		}
+		return t, nil
+	case "set_remove":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TySet {
+			return bad("set_remove expects Set[T]")
+		}
+		if _, d := arg(1, t.A); d != nil {
+			return TError, d
+		}
+		return t, nil
+	case "set_to_array":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TySet {
+			return bad("set_to_array expects Set[T]")
+		}
+		return Arr(t.A), nil
+	case "tan", "atan", "exp", "log10", "log2":
+		if _, d := arg(0, TFloat); d != nil {
+			return TError, d
+		}
+		return TFloat, nil
+	case "atan2":
+		if _, d := arg(0, TFloat); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TFloat); d != nil {
+			return TError, d
+		}
+		return TFloat, nil
+	case "trunc":
+		if _, d := arg(0, TFloat); d != nil {
+			return TError, d
+		}
+		return TInt, nil
+	case "sign":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyInt && t.Kind != TyFloat {
+			return bad("sign expects Int or Float")
+		}
+		return TInt, nil
+	case "clamp":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyInt && t.Kind != TyFloat {
+			return bad("clamp expects Int or Float")
+		}
+		if _, d := arg(1, t); d != nil {
+			return TError, d
+		}
+		if _, d := arg(2, t); d != nil {
+			return TError, d
+		}
+		return t, nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not implemented", b.Name)
 }

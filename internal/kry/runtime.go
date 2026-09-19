@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -248,6 +249,25 @@ func cloneValue(v Value) Value {
 		return v
 	}
 }
+// lessValue orders Int, Float, and String values for array_sort. Values of
+// other kinds compare by their display form so sorting never panics.
+func lessValue(a, b Value) bool {
+	switch {
+	case a.Kind == VInt && b.Kind == VInt:
+		return a.I < b.I
+	case a.Kind == VFloat && b.Kind == VFloat:
+		return a.F < b.F
+	case a.Kind == VInt && b.Kind == VFloat:
+		return float64(a.I) < b.F
+	case a.Kind == VFloat && b.Kind == VInt:
+		return a.F < float64(b.I)
+	case a.Kind == VString && b.Kind == VString:
+		return a.S < b.S
+	default:
+		return display(a) < display(b)
+	}
+}
+
 func equalValue(a, b Value) bool {
 	if a.Kind != b.Kind {
 		return false
@@ -2246,6 +2266,215 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	case "async_yield":
 		runtime.Gosched()
 		return nilVal(), nil
+	case "string_repeat":
+		n := a[1].I
+		if n < 0 || n > 1_000_000 {
+			return resVal(false, stringVal("repeat count out of range")), nil
+		}
+		if int64(len(a[0].S))*n > int64(r.Lim.MaxStringBytes) {
+			return resVal(false, stringVal("repeated string exceeds limit")), nil
+		}
+		return resVal(true, stringVal(strings.Repeat(a[0].S, int(n)))), nil
+	case "string_index_of":
+		idx := strings.Index(a[0].S, a[1].S)
+		if idx < 0 {
+			return optVal(false, nilVal()), nil
+		}
+		return optVal(true, intVal(int64(utf8.RuneCountInString(a[0].S[:idx])))), nil
+	case "string_pad_start", "string_pad_end":
+		width := a[1].I
+		fill := a[2].S
+		if width < 0 || width > 1_000_000 {
+			return resVal(false, stringVal("pad width out of range")), nil
+		}
+		if fill == "" {
+			return resVal(false, stringVal("pad fill must not be empty")), nil
+		}
+		cur := int64(utf8.RuneCountInString(a[0].S))
+		if cur >= width {
+			return resVal(true, stringVal(a[0].S)), nil
+		}
+		need := int(width - cur)
+		fillRunes := []rune(fill)
+		pad := make([]rune, 0, need)
+		for len(pad) < need {
+			pad = append(pad, fillRunes...)
+		}
+		pad = pad[:need]
+		if b.Name == "string_pad_start" {
+			return resVal(true, stringVal(string(pad)+a[0].S)), nil
+		}
+		return resVal(true, stringVal(a[0].S+string(pad))), nil
+	case "string_lines":
+		parts := strings.Split(a[0].S, "\n")
+		vs := make([]Value, len(parts))
+		for i, x := range parts {
+			vs[i] = stringVal(x)
+		}
+		return arrVal(vs), nil
+	case "string_chars":
+		runes := []rune(a[0].S)
+		vs := make([]Value, len(runes))
+		for i, x := range runes {
+			vs[i] = stringVal(string(x))
+		}
+		return arrVal(vs), nil
+	case "string_to_upper":
+		return stringVal(strings.ToUpper(a[0].S)), nil
+	case "string_to_lower":
+		return stringVal(strings.ToLower(a[0].S)), nil
+	case "array_sort":
+		v := append([]Value{}, a[0].Array...)
+		sort.SliceStable(v, func(i, j int) bool { return lessValue(v[i], v[j]) })
+		return arrVal(v), nil
+	case "array_index_of":
+		for i, x := range a[0].Array {
+			if equalValue(x, a[1]) {
+				return optVal(true, intVal(int64(i))), nil
+			}
+		}
+		return optVal(false, nilVal()), nil
+	case "array_sum":
+		var total int64
+		for _, x := range a[0].Array {
+			sum, ok := addI(total, x.I)
+			if !ok {
+				return bad("array_sum overflow")
+			}
+			total = sum
+		}
+		return intVal(total), nil
+	case "array_min", "array_max":
+		if len(a[0].Array) == 0 {
+			return optVal(false, nilVal()), nil
+		}
+		best := a[0].Array[0].I
+		for _, x := range a[0].Array[1:] {
+			if (b.Name == "array_min" && x.I < best) || (b.Name == "array_max" && x.I > best) {
+				best = x.I
+			}
+		}
+		return optVal(true, intVal(best)), nil
+	case "array_take", "array_drop":
+		n := a[1].I
+		if n < 0 || n > int64(len(a[0].Array)) {
+			return bad("array_take/array_drop count out of range")
+		}
+		if b.Name == "array_take" {
+			return arrVal(append([]Value{}, a[0].Array[:n]...)), nil
+		}
+		return arrVal(append([]Value{}, a[0].Array[n:]...)), nil
+	case "map_contains_key":
+		for _, x := range a[0].Map {
+			if equalValue(x.Key, a[1]) {
+				return boolVal(true), nil
+			}
+		}
+		return boolVal(false), nil
+	case "map_values":
+		vs := make([]Value, len(a[0].Map))
+		for i, x := range a[0].Map {
+			vs[i] = x.Value
+		}
+		return arrVal(vs), nil
+	case "map_remove":
+		out := make([]MapEntry, 0, len(a[0].Map))
+		for _, x := range a[0].Map {
+			if !equalValue(x.Key, a[1]) {
+				out = append(out, x)
+			}
+		}
+		return Value{Kind: VMap, Map: out}, nil
+	case "set_remove":
+		out := make([]Value, 0, len(a[0].Set))
+		for _, x := range a[0].Set {
+			if !equalValue(x, a[1]) {
+				out = append(out, x)
+			}
+		}
+		return Value{Kind: VSet, Set: out}, nil
+	case "set_to_array":
+		return arrVal(append([]Value{}, a[0].Set...)), nil
+	case "tan":
+		z := numericFloat(a[0])
+		q := math.Tan(z)
+		if !isFinite(q) {
+			return bad("tan result must be finite")
+		}
+		return floatVal(q), nil
+	case "atan":
+		return floatVal(math.Atan(numericFloat(a[0]))), nil
+	case "atan2":
+		return floatVal(math.Atan2(numericFloat(a[0]), numericFloat(a[1]))), nil
+	case "exp":
+		q := math.Exp(numericFloat(a[0]))
+		if !isFinite(q) {
+			return bad("exp result must be finite")
+		}
+		return floatVal(q), nil
+	case "log10":
+		z := numericFloat(a[0])
+		if z <= 0 {
+			return bad("log10 domain error")
+		}
+		return floatVal(math.Log10(z)), nil
+	case "log2":
+		z := numericFloat(a[0])
+		if z <= 0 {
+			return bad("log2 domain error")
+		}
+		return floatVal(math.Log2(z)), nil
+	case "trunc":
+		z := numericFloat(a[0])
+		if !isFinite(z) {
+			return bad("trunc requires a finite value")
+		}
+		return intVal(int64(math.Trunc(z))), nil
+	case "sign":
+		if a[0].Kind == VInt {
+			if a[0].I > 0 {
+				return intVal(1), nil
+			}
+			if a[0].I < 0 {
+				return intVal(-1), nil
+			}
+			return intVal(0), nil
+		}
+		z := numericFloat(a[0])
+		if z > 0 {
+			return intVal(1), nil
+		}
+		if z < 0 {
+			return intVal(-1), nil
+		}
+		return intVal(0), nil
+	case "clamp":
+		if a[0].Kind == VInt {
+			lo, hi := a[1].I, a[2].I
+			if lo > hi {
+				return bad("clamp lower bound exceeds upper bound")
+			}
+			v := a[0].I
+			if v < lo {
+				v = lo
+			}
+			if v > hi {
+				v = hi
+			}
+			return intVal(v), nil
+		}
+		lo, hi := numericFloat(a[1]), numericFloat(a[2])
+		if lo > hi {
+			return bad("clamp lower bound exceeds upper bound")
+		}
+		v := numericFloat(a[0])
+		if v < lo {
+			v = lo
+		}
+		if v > hi {
+			v = hi
+		}
+		return floatVal(v), nil
 	}
 	return bad("unknown builtin")
 }

@@ -863,6 +863,64 @@ func (g *cgen) builtinCall(e *Expr, b Builtin) string {
 		return "k_yield_now()"
 	case "process_run":
 		return fmt.Sprintf("k_process_run(%s, %s)", arg(0), arg(1))
+	case "string_repeat":
+		return fmt.Sprintf("k_string_repeat(%s, %s)", arg(0), arg(1))
+	case "string_index_of":
+		return fmt.Sprintf("k_string_index_of(%s, %s)", arg(0), arg(1))
+	case "string_pad_start":
+		return fmt.Sprintf("k_string_pad(%s, %s, %s, 1)", arg(0), arg(1), arg(2))
+	case "string_pad_end":
+		return fmt.Sprintf("k_string_pad(%s, %s, %s, 0)", arg(0), arg(1), arg(2))
+	case "string_lines":
+		return fmt.Sprintf("k_string_lines(%s)", arg(0))
+	case "string_chars":
+		return fmt.Sprintf("k_string_chars(%s)", arg(0))
+	case "string_to_upper":
+		return fmt.Sprintf("k_string_case(%s, 1)", arg(0))
+	case "string_to_lower":
+		return fmt.Sprintf("k_string_case(%s, 0)", arg(0))
+	case "array_sort":
+		return fmt.Sprintf("k_array_sort(%s)", arg(0))
+	case "array_index_of":
+		return fmt.Sprintf("k_array_index_of(%s, %s)", arg(0), arg(1))
+	case "array_sum":
+		return fmt.Sprintf("k_array_sum(%s)", arg(0))
+	case "array_min":
+		return fmt.Sprintf("k_array_minmax(%s, 0)", arg(0))
+	case "array_max":
+		return fmt.Sprintf("k_array_minmax(%s, 1)", arg(0))
+	case "array_take":
+		return fmt.Sprintf("k_array_take_drop(%s, %s, 1)", arg(0), arg(1))
+	case "array_drop":
+		return fmt.Sprintf("k_array_take_drop(%s, %s, 0)", arg(0), arg(1))
+	case "map_contains_key":
+		return fmt.Sprintf("k_map_contains_key(%s, %s)", arg(0), arg(1))
+	case "map_values":
+		return fmt.Sprintf("k_map_values(%s)", arg(0))
+	case "map_remove":
+		return fmt.Sprintf("k_map_remove(%s, %s)", arg(0), arg(1))
+	case "set_remove":
+		return fmt.Sprintf("k_set_remove(%s, %s)", arg(0), arg(1))
+	case "set_to_array":
+		return fmt.Sprintf("k_set_to_array(%s)", arg(0))
+	case "tan":
+		return fmt.Sprintf("k_tan(%s)", arg(0))
+	case "atan":
+		return fmt.Sprintf("k_atan(%s)", arg(0))
+	case "atan2":
+		return fmt.Sprintf("k_atan2(%s, %s)", arg(0), arg(1))
+	case "exp":
+		return fmt.Sprintf("k_exp(%s)", arg(0))
+	case "log10":
+		return fmt.Sprintf("k_log10(%s)", arg(0))
+	case "log2":
+		return fmt.Sprintf("k_log2(%s)", arg(0))
+	case "trunc":
+		return fmt.Sprintf("k_trunc(%s)", arg(0))
+	case "sign":
+		return fmt.Sprintf("k_sign(%s)", arg(0))
+	case "clamp":
+		return fmt.Sprintf("k_clamp(%s, %s, %s)", arg(0), arg(1), arg(2))
 	}
 	g.fail("builtin '%s' is not supported by the native backend", b.Name)
 	return "kv_nil()"
