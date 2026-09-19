@@ -4,7 +4,7 @@
 
 `source_compiler.kry` is the next bootstrap stage. It contains a bounded but real source lexer and recursive-descent expression parser written in Kryndel itself. It handles comments, line separators, escaped strings, static `let`/`const` bindings, `print`/`println`, `str(...)`, parentheses, and the arithmetic precedence levels `* / %` above `+ -`. It evaluates that static subset and sends the resulting bytes through the same Kryndel ELF emitter.
 
-`source_kir_compiler.kry` is the following frontend slice. It lexes and parses typed scalar functions, parameters, `return`, mutable bindings, assignment, Boolean conditions, `if`/`else`, `while`, `break`/`continue`, arithmetic and bitwise precedence, comparisons, logical operators, array literals and indexing, array concatenation, `len`, `array_push`, `array_get`, `array_concat`, scalar conversion calls, generic `Option[...]`/`Result[...]` annotations (including nested array payloads), their constructors/predicates/unwrapping operations, and output calls. It serializes the typed subset to KIR JSON in Kryndel, validates it with `json_parse`, and invokes `dynamic_backend.kry`. It is tested against the Go direct backend as a byte-level oracle.
+`source_kir_compiler.kry` is the following frontend slice. It lexes and parses typed scalar functions (including `pub fn`), parameters, `return`, mutable bindings, assignment, Boolean conditions, `if`/`else`, `while`, `break`/`continue`, multiline array literals and indexing, array concatenation, `len`, `array_push`, `array_get`, `array_concat`, scalar conversion calls, generic `Option[...]`/`Result[...]` annotations (including nested array payloads), opaque `Json`/`Map[...]` ABI values, their constructors/predicates/unwrapping operations, and output calls. It serializes the typed subset to KIR JSON in Kryndel, validates it with `json_parse`, and invokes `dynamic_backend.kry`. It is tested against the Go direct backend as a byte-level oracle.
 
 The KIR stage accepts:
 
@@ -35,6 +35,8 @@ kry run selfhost/source_kir_compiler.kry selfhost/fixtures/source_option_result_
 kry run selfhost/source_kir_compiler.kry selfhost/fixtures/array_runtime_stage6.kry stage9
 kry run selfhost/source_kir_compiler.kry selfhost/fixtures/source_nested_generics_stage10.kry stage10
 kry run selfhost/source_kir_compiler.kry selfhost/fixtures/source_loop_control_stage11.kry stage11
+kry run selfhost/source_kir_compiler.kry selfhost/fixtures/source_public_function_stage12.kry stage12
+kry run selfhost/source_kir_compiler.kry selfhost/fixtures/source_opaque_abi_stage13.kry stage13
 kry emit selfhost/fixtures/option_result_runtime_stage7.kry --target=linux-x64 --format=kry-ir -o option-result.kir
 kry run selfhost/kir_backend.kry option-result.kir option-result-stage7
 ```

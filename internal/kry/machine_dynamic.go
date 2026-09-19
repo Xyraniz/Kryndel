@@ -757,6 +757,8 @@ func machineScalarType(name string) (*Type, bool) {
 		return TUInt64, true
 	case "String":
 		return TString, true
+	case "Json":
+		return TJSON, true
 	case "Nil":
 		return TNil, true
 	default:
@@ -768,6 +770,9 @@ func machineScalarType(name string) (*Type, bool) {
 		}
 		if strings.HasPrefix(name, "Result[") && strings.HasSuffix(name, "]") {
 			return Res(TUnknown, TUnknown), true
+		}
+		if strings.HasPrefix(name, "Map[") && strings.HasSuffix(name, "]") {
+			return MapOf(TUnknown, TUnknown), true
 		}
 		return nil, false
 	}

@@ -284,7 +284,7 @@ fn bool_text(value: Bool) -> String {
 }
 
 fn source_is_scalar_type(type_name: String) -> Bool {
-    return type_name == "Int" || type_name == "Bool" || type_name == "String" || starts_with(type_name, "UInt") || starts_with(type_name, "Array[") || starts_with(type_name, "Option[") || starts_with(type_name, "Result[")
+    return type_name == "Int" || type_name == "Bool" || type_name == "String" || type_name == "Json" || starts_with(type_name, "UInt") || starts_with(type_name, "Array[") || starts_with(type_name, "Option[") || starts_with(type_name, "Result[") || starts_with(type_name, "Map[")
 }
 
 fn generic_inner(type_name: String, prefix: String) -> String {
@@ -534,13 +534,14 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             let mut expected: Array[String] = []
             let mut call_target: String = ""
             let mut builtin_generic: Bool = false
+            let mut builtin_unsigned_conversion: Bool = false
             if token.text == "u8" || token.text == "u16" || token.text == "u32" || token.text == "u64" {
                 if token.text == "u8" { return_type = "UInt8" }
                 else if token.text == "u16" { return_type = "UInt16" }
                 else if token.text == "u32" { return_type = "UInt32" }
                 else { return_type = "UInt64" }
-                expected = ["Int"]
                 call_target = "builtin:" + token.text
+                builtin_unsigned_conversion = true
             } else if token.text == "some" || token.text == "none" || token.text == "ok" || token.text == "err" || token.text == "is_some" || token.text == "is_none" || token.text == "is_ok" || token.text == "is_err" || token.text == "unwrap_or" || token.text == "result_unwrap" || token.text == "result_error" || token.text == "len" || token.text == "array_push" || token.text == "array_get" || token.text == "array_concat" {
                 call_target = "builtin:" + token.text
                 builtin_generic = true
@@ -561,7 +562,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                 let argument: Result[ParsedExpr, String] = parse_expression(current)
                 if is_err(argument) { return err(expression_error(argument)) }
                 let parsed_argument: ParsedExpr = result_unwrap(argument)
-                if !builtin_generic {
+                if !builtin_generic && !builtin_unsigned_conversion {
                     if argument_index >= len(expected) { return err("parser: too many function arguments") }
                     if parsed_argument.expression.type_name != unwrap_or(array_get(expected, argument_index), "") {
                         return err("parser: function argument type does not match parameter")
@@ -579,7 +580,12 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                     return err("parser: expected ',' or ')' after function argument")
                 }
             }
-            if !builtin_generic && argument_index != len(expected) { return err("parser: wrong number of function arguments") }
+            if builtin_unsigned_conversion {
+                if argument_index != 1 { return err("parser: unsigned conversion expects one argument") }
+                let argument_type: String = unwrap_or(array_get(argument_types, 0), "")
+                if argument_type != "Int" && !starts_with(argument_type, "UInt") { return err("parser: unsigned conversion expects Int or UInt") }
+            }
+            if !builtin_generic && !builtin_unsigned_conversion && argument_index != len(expected) { return err("parser: wrong number of function arguments") }
             if builtin_generic {
                 if token.text == "none" {
                     if argument_index != 0 { return err("parser: none expects no arguments") }
@@ -634,7 +640,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
         return ok(ParsedExpr{ parser: after_name, expression: variable_expr(token.text, unwrap_or(binding, SourceBinding{ type_name: "", mutable: false, known: false, display: "" })) })
     }
     if token.text == "[" {
-        let mut current: SourceParser = advance(parser)
+        let mut current: SourceParser = skip_separators(advance(parser))
         let mut items: String = "["
         let mut first: Bool = true
         let mut element_type: String = ""
@@ -650,13 +656,14 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             if !first { items = items + "," }
             items = items + parsed_item.expression.json
             first = false
-            current = parsed_item.parser
+            current = skip_separators(parsed_item.parser)
             if current_token(current).text == "," {
-                current = advance(current)
+                current = skip_separators(advance(current))
             } else if current_token(current).text != "]" {
-                return err("parser: expected ',' or ']' after array element")
+                return err("parser: expected ',' or ']' after array element, found '" + current_token(current).text + "' at position " + str(current.position))
             }
         }
+        current = skip_separators(current)
         let closed: Result[SourceParser, String] = expect(current, "]")
         if is_err(closed) { return err(parser_error(closed)) }
         if element_type == "" { element_type = "Int" }
@@ -983,7 +990,7 @@ fn parse_block(parser: SourceParser) -> Result[ParsedStatements, String] {
     while current_token(current).text != "}" {
         if current_token(current).kind == "eof" { return err("parser: unterminated block") }
         let statement: Result[ParsedStatements, String] = parse_statement(current)
-        if is_err(statement) { return err(statements_error(statement)) }
+        if is_err(statement) { return err("at block token '" + current_token(current).text + "' (position " + str(current.position) + "): " + statements_error(statement)) }
         let parsed: ParsedStatements = result_unwrap(statement)
         if !first { body = body + "," }
         body = body + parsed.json
@@ -995,7 +1002,7 @@ fn parse_block(parser: SourceParser) -> Result[ParsedStatements, String] {
     return ok(ParsedStatements{ parser: result_unwrap(closed), json: body + "]" })
 }
 
-fn parse_function(parser: SourceParser) -> Result[ParsedFunction, String] {
+fn parse_function(parser: SourceParser, public: Bool) -> Result[ParsedFunction, String] {
     let opened: Result[SourceParser, String] = expect(parser, "fn")
     if is_err(opened) { return err(parser_error(opened)) }
     let named: SourceParser = result_unwrap(opened)
@@ -1043,7 +1050,7 @@ fn parse_function(parser: SourceParser) -> Result[ParsedFunction, String] {
     if is_err(body) { return err(statements_error(body)) }
     let parsed_body: ParsedStatements = result_unwrap(body)
     let outer_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: parsed_body.parser.position, bindings: parser.bindings, functions: map_insert(parser.functions, name.text, signature) }
-    let function_json: String = "{\"name\":" + json_quote(name.text) + ",\"params\":" + parameters_json + "] ,\"return\":" + json_quote(return_type) + ",\"body\":" + parsed_body.json + "}"
+    let function_json: String = "{\"name\":" + json_quote(name.text) + ",\"public\":" + bool_text(public) + ",\"params\":" + parameters_json + "] ,\"return\":" + json_quote(return_type) + ",\"body\":" + parsed_body.json + "}"
     return ok(ParsedFunction{ parser: outer_parser, json: function_json })
 }
 
@@ -1107,8 +1114,14 @@ fn parse_program(parser: SourceParser) -> Result[ParsedProgram, String] {
     let mut first_statement: Bool = true
     let mut first_function: Bool = true
     while current_token(current).kind != "eof" {
-        if current_token(current).text == "fn" {
-            let function: Result[ParsedFunction, String] = parse_function(current)
+        let mut function_parser: SourceParser = current
+        let mut public: Bool = false
+        if current_token(current).text == "pub" {
+            public = true
+            function_parser = advance(current)
+        }
+        if current_token(function_parser).text == "fn" {
+            let function: Result[ParsedFunction, String] = parse_function(function_parser, public)
             if is_err(function) { return err(unwrap_or(result_error(function), "function parser error")) }
             let parsed_function: ParsedFunction = result_unwrap(function)
             if !first_function { functions = functions + "," }
@@ -1118,7 +1131,7 @@ fn parse_program(parser: SourceParser) -> Result[ParsedProgram, String] {
             continue
         }
         let statement: Result[ParsedStatements, String] = parse_statement(current)
-        if is_err(statement) { return err(statements_error(statement)) }
+        if is_err(statement) { return err("at source token '" + current_token(current).text + "' (position " + str(current.position) + "): " + statements_error(statement)) }
         let parsed: ParsedStatements = result_unwrap(statement)
         if !first_statement { statements = statements + "," }
         statements = statements + parsed.json

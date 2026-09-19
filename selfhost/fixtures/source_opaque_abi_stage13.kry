@@ -1,0 +1,11 @@
+fn json_identity(value: Json) -> Json {
+    return value
+}
+
+fn map_identity(value: Map[String, String]) -> Map[String, String] {
+    return value
+}
+
+fn main() -> Nil {
+    return nil
+}
