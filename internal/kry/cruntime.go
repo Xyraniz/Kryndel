@@ -15,6 +15,24 @@ const cRuntimePrelude = `
 #include <math.h>
 #include <setjmp.h>
 #include <limits.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <unistd.h>
+
+/* ---- portability shims ------------------------------------------------- */
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#define k_mkdir(p) _mkdir(p)
+#define k_k_rmdir(p) _k_rmdir(p)
+static char *k_realpath(const char *p, char *buf) { return _fullpath(buf, p, 4096); }
+#else
+#define k_mkdir(p) mkdir((p), 0755)
+#define k_k_rmdir(p) k_rmdir(p)
+static char *k_realpath(const char *p, char *buf) { return realpath(p, buf); }
+#endif
 
 /* ---- error handling ---------------------------------------------------- */
 static jmp_buf k_jmp;
@@ -831,7 +849,443 @@ static KValue k_fs_exists(KValue path) {
 static KValue k_env_get(KValue name) {
     char *p=(char*)kalloc(name.u.s.len+1); memcpy(p,name.u.s.data,name.u.s.len); p[name.u.s.len]=0;
     const char *v=getenv(p);
+
     if (!v) return kv_opt(0,kv_nil());
     return kv_opt(1,kv_cstr(v));
+}
+
+/* ---- SHA-256 ----------------------------------------------------------- */
+typedef struct { uint32_t h[8]; uint64_t len; unsigned char buf[64]; size_t n; } KSha256;
+static const uint32_t k_sha_k[64] = {
+ 0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+ 0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+ 0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+ 0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+ 0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+ 0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+ 0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+ 0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
+#define K_ROTR(x,n) (((x)>>(n))|((x)<<(32-(n))))
+static void k_sha_block(KSha256 *s, const unsigned char *p) {
+    uint32_t w[64];
+    for (int i=0;i<16;i++) w[i]=((uint32_t)p[i*4]<<24)|((uint32_t)p[i*4+1]<<16)|((uint32_t)p[i*4+2]<<8)|((uint32_t)p[i*4+3]);
+    for (int i=16;i<64;i++) {
+        uint32_t s0=K_ROTR(w[i-15],7)^K_ROTR(w[i-15],18)^(w[i-15]>>3);
+        uint32_t s1=K_ROTR(w[i-2],17)^K_ROTR(w[i-2],19)^(w[i-2]>>10);
+        w[i]=w[i-16]+s0+w[i-7]+s1;
+    }
+    uint32_t a=s->h[0],b=s->h[1],c=s->h[2],d=s->h[3],e=s->h[4],f=s->h[5],g=s->h[6],h=s->h[7];
+    for (int i=0;i<64;i++) {
+        uint32_t S1=K_ROTR(e,6)^K_ROTR(e,11)^K_ROTR(e,25);
+        uint32_t ch=(e&f)^((~e)&g);
+        uint32_t t1=h+S1+ch+k_sha_k[i]+w[i];
+        uint32_t S0=K_ROTR(a,2)^K_ROTR(a,13)^K_ROTR(a,22);
+        uint32_t maj=(a&b)^(a&c)^(b&c);
+        uint32_t t2=S0+maj;
+        h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+    }
+    s->h[0]+=a; s->h[1]+=b; s->h[2]+=c; s->h[3]+=d; s->h[4]+=e; s->h[5]+=f; s->h[6]+=g; s->h[7]+=h;
+}
+static void k_sha_init(KSha256 *s) {
+    s->h[0]=0x6a09e667; s->h[1]=0xbb67ae85; s->h[2]=0x3c6ef372; s->h[3]=0xa54ff53a;
+    s->h[4]=0x510e527f; s->h[5]=0x9b05688c; s->h[6]=0x1f83d9ab; s->h[7]=0x5be0cd19;
+    s->len=0; s->n=0;
+}
+static void k_sha_update(KSha256 *s, const unsigned char *p, size_t n) {
+    s->len += n;
+    while (n) {
+        size_t take = 64 - s->n; if (take > n) take = n;
+        memcpy(s->buf + s->n, p, take); s->n += take; p += take; n -= take;
+        if (s->n == 64) { k_sha_block(s, s->buf); s->n = 0; }
+    }
+}
+static void k_sha_final(KSha256 *s, unsigned char out[32]) {
+    uint64_t bits = s->len * 8;
+    unsigned char pad = 0x80; k_sha_update(s, &pad, 1);
+    unsigned char z = 0;
+    while (s->n != 56) k_sha_update(s, &z, 1);
+    unsigned char lb[8];
+    for (int i=0;i<8;i++) lb[i]=(unsigned char)(bits >> (56 - i*8));
+    k_sha_update(s, lb, 8);
+    for (int i=0;i<8;i++) {
+        out[i*4]=(unsigned char)(s->h[i]>>24); out[i*4+1]=(unsigned char)(s->h[i]>>16);
+        out[i*4+2]=(unsigned char)(s->h[i]>>8); out[i*4+3]=(unsigned char)(s->h[i]);
+    }
+}
+static KValue k_crypto_sha256(KValue data) {
+    KSha256 s; k_sha_init(&s);
+    k_sha_update(&s, (const unsigned char*)data.u.s.data, data.u.s.len);
+    unsigned char out[32]; k_sha_final(&s, out);
+    return kv_bytesn((const char*)out, 32);
+}
+static KValue k_crypto_hmac_sha256(KValue key, KValue msg) {
+    unsigned char k[64]; memset(k,0,64);
+    if (key.u.s.len > 64) { KSha256 s; k_sha_init(&s); k_sha_update(&s,(const unsigned char*)key.u.s.data,key.u.s.len); k_sha_final(&s,k); }
+    else memcpy(k, key.u.s.data, key.u.s.len);
+    unsigned char ipad[64], opad[64];
+    for (int i=0;i<64;i++) { ipad[i]=k[i]^0x36; opad[i]=k[i]^0x5c; }
+    KSha256 s; k_sha_init(&s);
+    k_sha_update(&s, ipad, 64);
+    k_sha_update(&s, (const unsigned char*)msg.u.s.data, msg.u.s.len);
+    unsigned char inner[32]; k_sha_final(&s, inner);
+    k_sha_init(&s);
+    k_sha_update(&s, opad, 64);
+    k_sha_update(&s, inner, 32);
+    unsigned char out[32]; k_sha_final(&s, out);
+    return kv_bytesn((const char*)out, 32);
+}
+static KValue k_crypto_random_bytes(KValue nv) {
+    long long n = nv.u.i;
+    if (n <= 0 || n > 1024) return kv_res(0, kv_cstr("random bytes length must be between 1 and 1024"));
+    unsigned char *buf = (unsigned char*)kalloc((size_t)n);
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f) { size_t got = fread(buf, 1, (size_t)n, f); fclose(f); if (got != (size_t)n) return kv_res(0, kv_cstr("cannot read random bytes")); }
+    else { for (long long i=0;i<n;i++) buf[i]=(unsigned char)(rand() & 0xff); }
+    return kv_res(1, kv_bytesn((const char*)buf, (size_t)n));
+}
+
+/* ---- JSON -------------------------------------------------------------- */
+static void k_json_escape(KBuf *b, const char *s, size_t n) {
+    kb_putc(b, '"');
+    for (size_t i=0;i<n;i++) {
+        unsigned char c = (unsigned char)s[i];
+        switch (c) {
+            case '"': kb_puts(b,"\\\""); break;
+            case '\\': kb_puts(b,"\\\\"); break;
+            case '\n': kb_puts(b,"\\n"); break;
+            case '\r': kb_puts(b,"\\r"); break;
+            case '\t': kb_puts(b,"\\t"); break;
+            case '<': kb_puts(b,"\\u003c"); break;
+            case '>': kb_puts(b,"\\u003e"); break;
+            case '&': kb_puts(b,"\\u0026"); break;
+            default:
+                if (c < 0x20) { char t[8]; snprintf(t,sizeof(t),"\\u%04x",c); kb_puts(b,t); }
+                else kb_putc(b, (char)c);
+        }
+    }
+    kb_putc(b, '"');
+}
+static void k_json_float(KBuf *b, double v) {
+    if (isnan(v) || isinf(v)) { kb_puts(b,"null"); return; }
+    if (v==0) { kb_putc(b,'0'); return; }
+    char tmp[64]; int prec;
+    for (prec=1; prec<=17; prec++) { snprintf(tmp,sizeof(tmp),"%.*g",prec,v); if (strtod(tmp,NULL)==v) break; }
+    if (prec>17) prec=17;
+    char ebuf[64]; snprintf(ebuf,sizeof(ebuf),"%.*e",prec-1,v);
+    const char *p=ebuf; int neg=0; if (*p=='-'){neg=1;p++;}
+    char digits[32]; int nd=0;
+    while (*p && *p!='e' && *p!='E') { if (*p>='0'&&*p<='9') digits[nd++]=*p; p++; }
+    digits[nd]=0;
+    int exp10=0; if (*p=='e'||*p=='E') exp10=atoi(p+1);
+    while (nd>1 && digits[nd-1]=='0') { nd--; digits[nd]=0; }
+    double av = v<0?-v:v;
+    if (neg) kb_putc(b,'-');
+    if (av < 1e-6 || av >= 1e21) {
+        kb_putc(b,digits[0]);
+        if (nd>1) { kb_putc(b,'.'); for (int i=1;i<nd;i++) kb_putc(b,digits[i]); }
+        kb_putc(b,'e');
+        int e=exp10; kb_putc(b, e<0?'-':'+'); if (e<0) e=-e;
+        char eb[8]; int en=0;
+        if (e==0) eb[en++]='0';
+        while (e>0) { eb[en++]='0'+(e%10); e/=10; }
+        if (en<2) eb[en++]='0';
+        /* Go trims a single leading zero on negative exponents (e-09 -> e-9). */
+        if (exp10<0 && en==2 && eb[1]=='0') en=1;
+        while (en>0) kb_putc(b, eb[--en]);
+    } else {
+        int dp=exp10+1;
+        if (dp<=0) { kb_putc(b,'0'); kb_putc(b,'.'); for (int i=0;i<-dp;i++) kb_putc(b,'0'); for (int i=0;i<nd;i++) kb_putc(b,digits[i]); }
+        else if (dp>=nd) { for (int i=0;i<nd;i++) kb_putc(b,digits[i]); for (int i=nd;i<dp;i++) kb_putc(b,'0'); }
+        else { for (int i=0;i<dp;i++) kb_putc(b,digits[i]); kb_putc(b,'.'); for (int i=dp;i<nd;i++) kb_putc(b,digits[i]); }
+    }
+}
+static void k_json_write(KBuf *b, KValue v) {
+    switch (v.tag) {
+        case K_NIL: kb_puts(b,"null"); break;
+        case K_BOOL: kb_puts(b, v.u.b?"true":"false"); break;
+        case K_INT: { char t[32]; snprintf(t,sizeof(t),"%lld",v.u.i); kb_puts(b,t); break; }
+        case K_FLOAT: k_json_float(b, v.u.f); break;
+        case K_STRING: case K_JSON: k_json_escape(b, v.u.s.data, v.u.s.len); break;
+        case K_BYTES: k_json_escape(b, v.u.s.data, v.u.s.len); break;
+        case K_ARRAY: case K_SET: {
+            kb_putc(b,'[');
+            for (size_t i=0;i<v.u.a.len;i++) { if (i) kb_putc(b,','); k_json_write(b, v.u.a.items[i]); }
+            kb_putc(b,']'); break;
+        }
+        case K_MAP: {
+            /* Go's json.Marshal sorts object keys; sort by rendered key string. */
+            size_t n=v.u.m.len;
+            size_t *idx=(size_t*)kalloc(sizeof(size_t)*(n?n:1));
+            for (size_t i=0;i<n;i++) idx[i]=i;
+            for (size_t i=0;i<n;i++) for (size_t j=i+1;j<n;j++) {
+                KBuf ka,kb; kb_init(&ka); kb_init(&kb);
+                k_json_write(&ka, v.u.m.keys[idx[i]]); k_json_write(&kb, v.u.m.keys[idx[j]]);
+                if (strcmp(ka.buf,kb.buf)>0) { size_t t=idx[i]; idx[i]=idx[j]; idx[j]=t; }
+            }
+            kb_putc(b,'{');
+            for (size_t i=0;i<n;i++) {
+                if (i) kb_putc(b,',');
+                k_json_write(b, v.u.m.keys[idx[i]]);
+                kb_putc(b,':');
+                k_json_write(b, v.u.m.vals[idx[i]]);
+            }
+            kb_putc(b,'}'); break;
+        }
+        case K_OPTION: if (v.u.opt.present) k_json_write(b,*v.u.opt.inner); else kb_puts(b,"null"); break;
+        case K_RESULT: k_json_write(b,*v.u.res.inner); break;
+        default: kb_puts(b,"null");
+    }
+}
+static KValue k_json_stringify(KValue v) {
+    KBuf b; kb_init(&b); k_json_write(&b, v);
+    return kv_strn(b.buf, b.len);
+}
+
+typedef struct { const char *p; size_t n; size_t i; } KJson;
+static void k_json_ws(KJson *j) { while (j->i<j->n) { char c=j->p[j->i]; if (c==' '||c=='\t'||c=='\n'||c=='\r') j->i++; else break; } }
+static KValue k_json_value(KJson *j);
+static KValue k_json_string(KJson *j) {
+    j->i++; /* opening quote */
+    KBuf b; kb_init(&b);
+    while (j->i<j->n) {
+        char c=j->p[j->i++];
+        if (c=='"') return kv_strn(b.buf,b.len);
+        if (c=='\\') {
+            if (j->i>=j->n) break;
+            char e=j->p[j->i++];
+            switch (e) {
+                case '"': kb_putc(&b,'"'); break;
+                case '\\': kb_putc(&b,'\\'); break;
+                case '/': kb_putc(&b,'/'); break;
+                case 'b': kb_putc(&b,'\b'); break;
+                case 'f': kb_putc(&b,'\f'); break;
+                case 'n': kb_putc(&b,'\n'); break;
+                case 'r': kb_putc(&b,'\r'); break;
+                case 't': kb_putc(&b,'\t'); break;
+                case 'u': {
+                    if (j->i+4>j->n) kfail("invalid JSON string escape");
+                    char h[5]; memcpy(h,j->p+j->i,4); h[4]=0; j->i+=4;
+                    unsigned cp=(unsigned)strtoul(h,NULL,16);
+                    if (cp>=0xD800 && cp<=0xDBFF && j->i+6<=j->n && j->p[j->i]=='\\' && j->p[j->i+1]=='u') {
+                        char h2[5]; memcpy(h2,j->p+j->i+2,4); h2[4]=0;
+                        unsigned lo=(unsigned)strtoul(h2,NULL,16);
+                        if (lo>=0xDC00 && lo<=0xDFFF) { cp=0x10000+((cp-0xD800)<<10)+(lo-0xDC00); j->i+=6; }
+                    }
+                    if (cp<0x80) kb_putc(&b,(char)cp);
+                    else if (cp<0x800) { kb_putc(&b,(char)(0xC0|(cp>>6))); kb_putc(&b,(char)(0x80|(cp&0x3F))); }
+                    else if (cp<0x10000) { kb_putc(&b,(char)(0xE0|(cp>>12))); kb_putc(&b,(char)(0x80|((cp>>6)&0x3F))); kb_putc(&b,(char)(0x80|(cp&0x3F))); }
+                    else { kb_putc(&b,(char)(0xF0|(cp>>18))); kb_putc(&b,(char)(0x80|((cp>>12)&0x3F))); kb_putc(&b,(char)(0x80|((cp>>6)&0x3F))); kb_putc(&b,(char)(0x80|(cp&0x3F))); }
+                    break;
+                }
+                default: kfail("invalid JSON string escape");
+            }
+        } else kb_putc(&b,c);
+    }
+    kfail("unterminated JSON string");
+    return kv_nil();
+}
+static KValue k_json_number(KJson *j) {
+    size_t start=j->i; int isf=0;
+    if (j->i<j->n && (j->p[j->i]=='-'||j->p[j->i]=='+')) j->i++;
+    while (j->i<j->n) {
+        char c=j->p[j->i];
+        if (c>='0'&&c<='9') j->i++;
+        else if (c=='.'||c=='e'||c=='E'||c=='+'||c=='-') { isf=1; j->i++; }
+        else break;
+    }
+    char tmp[64]; size_t len=j->i-start; if (len>=sizeof(tmp)) len=sizeof(tmp)-1;
+    memcpy(tmp,j->p+start,len); tmp[len]=0;
+    if (isf) return kv_float(strtod(tmp,NULL));
+    return kv_int(strtoll(tmp,NULL,10));
+}
+static KValue k_json_value(KJson *j) {
+    k_json_ws(j);
+    if (j->i>=j->n) kfail("unexpected end of JSON");
+    char c=j->p[j->i];
+    if (c=='{') {
+        j->i++; k_json_ws(j);
+        KValue *keys=(KValue*)kalloc(sizeof(KValue)*8); KValue *vals=(KValue*)kalloc(sizeof(KValue)*8);
+        size_t cap=8,n=0;
+        if (j->i<j->n && j->p[j->i]=='}') { j->i++; return kv_map(keys,vals,0); }
+        for (;;) {
+            k_json_ws(j);
+            if (j->i>=j->n || j->p[j->i]!='"') kfail("invalid JSON object key");
+            KValue key=k_json_string(j);
+            k_json_ws(j);
+            if (j->i>=j->n || j->p[j->i]!=':') kfail("invalid JSON object");
+            j->i++;
+            KValue val=k_json_value(j);
+            if (n==cap) { size_t nc=cap*2; KValue *nk=(KValue*)kalloc(sizeof(KValue)*nc); KValue *nv=(KValue*)kalloc(sizeof(KValue)*nc); memcpy(nk,keys,sizeof(KValue)*n); memcpy(nv,vals,sizeof(KValue)*n); keys=nk; vals=nv; cap=nc; }
+            keys[n]=key; vals[n]=val; n++;
+            k_json_ws(j);
+            if (j->i<j->n && j->p[j->i]==',') { j->i++; continue; }
+            if (j->i<j->n && j->p[j->i]=='}') { j->i++; break; }
+            kfail("invalid JSON object");
+        }
+        return kv_map(keys,vals,n);
+    }
+    if (c=='[') {
+        j->i++; k_json_ws(j);
+        KValue *items=(KValue*)kalloc(sizeof(KValue)*8); size_t cap=8,n=0;
+        if (j->i<j->n && j->p[j->i]==']') { j->i++; return kv_arr(items,0); }
+        for (;;) {
+            KValue val=k_json_value(j);
+            if (n==cap) { size_t nc=cap*2; KValue *ni=(KValue*)kalloc(sizeof(KValue)*nc); memcpy(ni,items,sizeof(KValue)*n); items=ni; cap=nc; }
+            items[n++]=val;
+            k_json_ws(j);
+            if (j->i<j->n && j->p[j->i]==',') { j->i++; continue; }
+            if (j->i<j->n && j->p[j->i]==']') { j->i++; break; }
+            kfail("invalid JSON array");
+        }
+        return kv_arr(items,n);
+    }
+    if (c=='"') return k_json_string(j);
+    if (c=='t') { if (j->i+4<=j->n && !memcmp(j->p+j->i,"true",4)) { j->i+=4; return kv_bool(1); } kfail("invalid JSON literal"); }
+    if (c=='f') { if (j->i+5<=j->n && !memcmp(j->p+j->i,"false",5)) { j->i+=5; return kv_bool(0); } kfail("invalid JSON literal"); }
+    if (c=='n') { if (j->i+4<=j->n && !memcmp(j->p+j->i,"null",4)) { j->i+=4; return kv_nil(); } kfail("invalid JSON literal"); }
+    return k_json_number(j);
+}
+static KValue k_json_parse(KValue text) {
+    KJson j; j.p=text.u.s.data; j.n=text.u.s.len; j.i=0;
+    KValue v;
+    /* Parse under a nested error guard so malformed input yields err(...). */
+    jmp_buf saved; memcpy(&saved,&k_jmp,sizeof(jmp_buf));
+    if (setjmp(k_jmp)) { memcpy(&k_jmp,&saved,sizeof(jmp_buf)); return kv_res(0,kv_cstr("invalid JSON")); }
+    v = k_json_value(&j);
+    k_json_ws(&j);
+    if (j.i != j.n) { memcpy(&k_jmp,&saved,sizeof(jmp_buf)); return kv_res(0,kv_cstr("invalid JSON")); }
+    memcpy(&k_jmp,&saved,sizeof(jmp_buf));
+    return kv_res(1,v);
+}
+
+/* ---- extended filesystem ----------------------------------------------- */
+static char *k_cpath(KValue path) {
+    char *p=(char*)kalloc(path.u.s.len+1); memcpy(p,path.u.s.data,path.u.s.len); p[path.u.s.len]=0; return p;
+}
+static KValue k_fs_read_dir(KValue path) {
+    char *p=k_cpath(path);
+    DIR *d=opendir(p);
+    if (!d) return kv_res(0, kv_cstr("cannot read directory"));
+    KValue *items=(KValue*)kalloc(sizeof(KValue)*8); size_t cap=8,n=0;
+    struct dirent *e;
+    while ((e=readdir(d))) {
+        if (!strcmp(e->d_name,".")||!strcmp(e->d_name,"..")) continue;
+        if (n==cap) { size_t nc=cap*2; KValue *ni=(KValue*)kalloc(sizeof(KValue)*nc); memcpy(ni,items,sizeof(KValue)*n); items=ni; cap=nc; }
+        items[n++]=kv_cstr(e->d_name);
+    }
+    closedir(d);
+    return kv_res(1, kv_arr(items,n));
+}
+static KValue k_fs_create_dir(KValue path) {
+    char *p=k_cpath(path);
+    if (k_mkdir(p)!=0) return kv_res(0, kv_cstr("cannot create directory"));
+    return kv_res(1, kv_nil());
+}
+static KValue k_fs_create_dir_all(KValue path) {
+    char *p=k_cpath(path);
+    for (char *q=p+1; *q; q++) {
+        if (*q=='/') { *q=0; k_mkdir(p); *q='/'; }
+    }
+    if (k_mkdir(p)!=0) { struct stat st; if (stat(p,&st)!=0) return kv_res(0, kv_cstr("cannot create directory")); }
+    return kv_res(1, kv_nil());
+}
+static KValue k_fs_remove_file(KValue path) {
+    char *p=k_cpath(path);
+    if (remove(p)!=0) return kv_res(0, kv_cstr("cannot remove file"));
+    return kv_res(1, kv_nil());
+}
+static KValue k_fs_remove_dir_all(KValue path) {
+    char *p=k_cpath(path);
+    DIR *d=opendir(p);
+    if (d) {
+        struct dirent *e;
+        while ((e=readdir(d))) {
+            if (!strcmp(e->d_name,".")||!strcmp(e->d_name,"..")) continue;
+            size_t pl=strlen(p), nl=strlen(e->d_name);
+            char *child=(char*)kalloc(pl+nl+2); memcpy(child,p,pl); child[pl]='/'; memcpy(child+pl+1,e->d_name,nl+1);
+            struct stat st;
+            if (stat(child,&st)==0 && S_ISDIR(st.st_mode)) k_fs_remove_dir_all(kv_cstr(child));
+            else remove(child);
+        }
+        closedir(d);
+    }
+    if (k_rmdir(p)!=0) return kv_res(0, kv_cstr("cannot remove directory"));
+    return kv_res(1, kv_nil());
+}
+static KValue k_fs_copy_file(KValue src, KValue dst) {
+    char *s=k_cpath(src), *d=k_cpath(dst);
+    FILE *in=fopen(s,"rb"); if (!in) return kv_res(0, kv_cstr("cannot open source file"));
+    FILE *out=fopen(d,"wb"); if (!out) { fclose(in); return kv_res(0, kv_cstr("cannot open destination file")); }
+    char buf[8192]; size_t got;
+    while ((got=fread(buf,1,sizeof(buf),in))>0) fwrite(buf,1,got,out);
+    fclose(in); fclose(out);
+    return kv_res(1, kv_nil());
+}
+static KValue k_fs_move_file(KValue src, KValue dst) {
+    char *s=k_cpath(src), *d=k_cpath(dst);
+    if (rename(s,d)!=0) return kv_res(0, kv_cstr("cannot move file"));
+    return kv_res(1, kv_nil());
+}
+static KValue k_fs_is_file(KValue path) {
+    char *p=k_cpath(path); struct stat st;
+    if (stat(p,&st)!=0) return kv_bool(0);
+    return kv_bool(S_ISREG(st.st_mode));
+}
+static KValue k_fs_is_dir(KValue path) {
+    char *p=k_cpath(path); struct stat st;
+    if (stat(p,&st)!=0) return kv_bool(0);
+    return kv_bool(S_ISDIR(st.st_mode));
+}
+static KValue k_fs_file_size(KValue path) {
+    char *p=k_cpath(path); struct stat st;
+    if (stat(p,&st)!=0) return kv_res(0, kv_cstr("cannot stat file"));
+    return kv_res(1, kv_int((long long)st.st_size));
+}
+static KValue k_fs_file_modified_time(KValue path) {
+    char *p=k_cpath(path); struct stat st;
+    if (stat(p,&st)!=0) return kv_res(0, kv_cstr("cannot stat file"));
+    return kv_res(1, kv_int((long long)st.st_mtime));
+}
+static KValue k_fs_join_path(KValue base, KValue parts) {
+    KBuf b; kb_init(&b);
+    kb_putn(&b, base.u.s.data, base.u.s.len);
+    for (size_t i=0;i<parts.u.a.len;i++) {
+        KValue p=parts.u.a.items[i];
+        if (b.len>0 && b.buf[b.len-1]!='/') kb_putc(&b,'/');
+        kb_putn(&b, p.u.s.data, p.u.s.len);
+    }
+    return kv_strn(b.buf,b.len);
+}
+static KValue k_fs_absolute_path(KValue path) {
+    char *p=k_cpath(path);
+    char buf[4096];
+    if (k_realpath(p,buf)) return kv_res(1, kv_cstr(buf));
+    if (p[0]=='/') return kv_res(1, kv_cstr(p));
+    char cwd[4096];
+    if (!getcwd(cwd,sizeof(cwd))) return kv_res(0, kv_cstr("cannot resolve path"));
+    KBuf b; kb_init(&b); kb_puts(&b,cwd); kb_putc(&b,'/'); kb_puts(&b,p);
+    return kv_res(1, kv_strn(b.buf,b.len));
+}
+static KValue k_fs_temp_dir(KValue unused) {
+    (void)unused;
+    const char *t=getenv("TMPDIR"); if (!t||!*t) t="/tmp";
+    return kv_cstr(t);
+}
+static KValue k_fs_temp_file(KValue prefix) {
+    char *p=k_cpath(prefix);
+    const char *t=getenv("TMPDIR"); if (!t||!*t) t="/tmp";
+    char tmpl[4096];
+    snprintf(tmpl,sizeof(tmpl),"%s/%s-XXXXXX",t,p);
+#ifdef _WIN32
+    if (_mktemp_s(tmpl, sizeof(tmpl)) != 0) return kv_res(0, kv_cstr("cannot create temp file"));
+    FILE *tf = fopen(tmpl, "wb");
+    if (!tf) return kv_res(0, kv_cstr("cannot create temp file"));
+    fclose(tf);
+#else
+    int fd=mkstemp(tmpl);
+    if (fd<0) return kv_res(0, kv_cstr("cannot create temp file"));
+    close(fd);
+#endif
+    return kv_res(1, kv_cstr(tmpl));
 }
 `

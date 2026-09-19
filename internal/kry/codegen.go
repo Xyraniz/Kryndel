@@ -817,6 +817,46 @@ func (g *cgen) builtinCall(e *Expr, b Builtin) string {
 		return fmt.Sprintf("k_fs_exists(%s)", arg(0))
 	case "env_get":
 		return fmt.Sprintf("k_env_get(%s)", arg(0))
+	case "json_parse":
+		return fmt.Sprintf("k_json_parse(%s)", arg(0))
+	case "json_stringify":
+		return fmt.Sprintf("k_json_stringify(%s)", arg(0))
+	case "crypto_sha256":
+		return fmt.Sprintf("k_crypto_sha256(%s)", arg(0))
+	case "crypto_hmac_sha256":
+		return fmt.Sprintf("k_crypto_hmac_sha256(%s, %s)", arg(0), arg(1))
+	case "crypto_random_bytes":
+		return fmt.Sprintf("k_crypto_random_bytes(%s)", arg(0))
+	case "fs_read_dir":
+		return fmt.Sprintf("k_fs_read_dir(%s)", arg(0))
+	case "fs_create_dir":
+		return fmt.Sprintf("k_fs_create_dir(%s)", arg(0))
+	case "fs_create_dir_all":
+		return fmt.Sprintf("k_fs_create_dir_all(%s)", arg(0))
+	case "fs_remove_file":
+		return fmt.Sprintf("k_fs_remove_file(%s)", arg(0))
+	case "fs_remove_dir_all":
+		return fmt.Sprintf("k_fs_remove_dir_all(%s)", arg(0))
+	case "fs_copy_file":
+		return fmt.Sprintf("k_fs_copy_file(%s, %s)", arg(0), arg(1))
+	case "fs_move_file":
+		return fmt.Sprintf("k_fs_move_file(%s, %s)", arg(0), arg(1))
+	case "fs_is_file":
+		return fmt.Sprintf("k_fs_is_file(%s)", arg(0))
+	case "fs_is_dir":
+		return fmt.Sprintf("k_fs_is_dir(%s)", arg(0))
+	case "fs_file_size":
+		return fmt.Sprintf("k_fs_file_size(%s)", arg(0))
+	case "fs_file_modified_time":
+		return fmt.Sprintf("k_fs_file_modified_time(%s)", arg(0))
+	case "fs_join_path":
+		return fmt.Sprintf("k_fs_join_path(%s, %s)", arg(0), arg(1))
+	case "fs_absolute_path":
+		return fmt.Sprintf("k_fs_absolute_path(%s)", arg(0))
+	case "fs_temp_dir":
+		return "k_fs_temp_dir(kv_nil())"
+	case "fs_temp_file":
+		return fmt.Sprintf("k_fs_temp_file(%s)", arg(0))
 	}
 	g.fail("builtin '%s' is not supported by the native backend", b.Name)
 	return "kv_nil()"
