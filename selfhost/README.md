@@ -4,7 +4,7 @@
 
 `source_compiler.kry` is the next bootstrap stage. It contains a bounded but real source lexer and recursive-descent expression parser written in Kryndel itself. It handles comments, line separators, escaped strings, static `let`/`const` bindings, `print`/`println`, `str(...)`, parentheses, and the arithmetic precedence levels `* / %` above `+ -`. It evaluates that static subset and sends the resulting bytes through the same Kryndel ELF emitter.
 
-`source_kir_compiler.kry` is the following frontend slice. It lexes and parses typed scalar functions, parameters, `return`, mutable bindings, assignment, Boolean conditions, `if`/`else`, `while`, comparisons, logical operators, scalar conversion calls, and output calls, serializes the typed subset to KIR JSON in Kryndel, validates it with `json_parse`, and invokes `dynamic_backend.kry`. It is tested against the Go direct backend as a byte-level oracle.
+`source_kir_compiler.kry` is the following frontend slice. It lexes and parses typed scalar functions, parameters, `return`, mutable bindings, assignment, Boolean conditions, `if`/`else`, `while`, arithmetic and bitwise precedence, comparisons, logical operators, scalar conversion calls, and output calls, serializes the typed subset to KIR JSON in Kryndel, validates it with `json_parse`, and invokes `dynamic_backend.kry`. It is tested against the Go direct backend as a byte-level oracle.
 
 The KIR stage accepts:
 

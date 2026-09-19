@@ -322,6 +322,17 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr) -> Resu
             display: display,
         })
     }
+    if operator == "<<" || operator == ">>" {
+        if !starts_with(left.type_name, "UInt") || right.type_name != "Int" {
+            return err("parser: shifts require a UInt value and an Int count")
+        }
+        return ok(SourceExpr{
+            json: "{\"kind\":\"binary\",\"type\":" + json_quote(left.type_name) + ",\"const\":null,\"operator\":" + json_quote(operator) + ",\"left\":" + left.json + ",\"right\":" + right.json + "}",
+            type_name: left.type_name,
+            known: false,
+            display: "",
+        })
+    }
     if left.type_name != right.type_name {
         return err("parser: binary operands must have the same type")
     }
@@ -334,12 +345,15 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr) -> Resu
     if left.type_name == "Bool" && operator != "==" && operator != "!=" && operator != "&&" && operator != "||" {
         return err("parser: Bool supports only equality and logical operators")
     }
+    if (operator == "&" || operator == "|" || operator == "^") && !starts_with(left.type_name, "UInt") {
+        return err("parser: bitwise operands must be UInt values")
+    }
     if (left.type_name == "Int" || starts_with(left.type_name, "UInt")) && (operator == "&&" || operator == "||") {
         return err("parser: logical operators require Bool operands")
     }
     let mut known: Bool = left.known && right.known
     if starts_with(left.type_name, "UInt") { known = false }
-    let mut result_type: String = "Int"
+    let mut result_type: String = left.type_name
     let mut display: String = ""
     if operator == "==" || operator == "!=" || operator == "<" || operator == "<=" || operator == ">" || operator == ">=" || operator == "&&" || operator == "||" {
         result_type = "Bool"
@@ -521,13 +535,74 @@ fn parse_addition(parser: SourceParser) -> Result[ParsedExpr, String] {
     return ok(parsed)
 }
 
-fn parse_comparison(parser: SourceParser) -> Result[ParsedExpr, String] {
+fn parse_shift(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_addition(parser)
+    if is_err(first) { return err(expression_error(first)) }
+    let mut parsed: ParsedExpr = result_unwrap(first)
+    while current_token(parsed.parser).text == "<<" || current_token(parsed.parser).text == ">>" {
+        let operator: String = current_token(parsed.parser).text
+        let right_result: Result[ParsedExpr, String] = parse_addition(advance(parsed.parser))
+        if is_err(right_result) { return err(expression_error(right_result)) }
+        let right: ParsedExpr = result_unwrap(right_result)
+        let combined: Result[SourceExpr, String] = combine_values(parsed.expression, operator, right.expression)
+        if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: comparison failed")) }
+        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+    }
+    return ok(parsed)
+}
+
+fn parse_bitand(parser: SourceParser) -> Result[ParsedExpr, String] {
+    let first: Result[ParsedExpr, String] = parse_shift(parser)
+    if is_err(first) { return err(expression_error(first)) }
+    let mut parsed: ParsedExpr = result_unwrap(first)
+    while current_token(parsed.parser).text == "&" {
+        let right_result: Result[ParsedExpr, String] = parse_shift(advance(parsed.parser))
+        if is_err(right_result) { return err(expression_error(right_result)) }
+        let right: ParsedExpr = result_unwrap(right_result)
+        let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "&", right.expression)
+        if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: bitwise expression failed")) }
+        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+    }
+    return ok(parsed)
+}
+
+fn parse_bitxor(parser: SourceParser) -> Result[ParsedExpr, String] {
+    let first: Result[ParsedExpr, String] = parse_bitand(parser)
+    if is_err(first) { return err(expression_error(first)) }
+    let mut parsed: ParsedExpr = result_unwrap(first)
+    while current_token(parsed.parser).text == "^" {
+        let right_result: Result[ParsedExpr, String] = parse_bitand(advance(parsed.parser))
+        if is_err(right_result) { return err(expression_error(right_result)) }
+        let right: ParsedExpr = result_unwrap(right_result)
+        let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "^", right.expression)
+        if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: bitwise expression failed")) }
+        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+    }
+    return ok(parsed)
+}
+
+fn parse_bitor(parser: SourceParser) -> Result[ParsedExpr, String] {
+    let first: Result[ParsedExpr, String] = parse_bitxor(parser)
+    if is_err(first) { return err(expression_error(first)) }
+    let mut parsed: ParsedExpr = result_unwrap(first)
+    while current_token(parsed.parser).text == "|" {
+        let right_result: Result[ParsedExpr, String] = parse_bitxor(advance(parsed.parser))
+        if is_err(right_result) { return err(expression_error(right_result)) }
+        let right: ParsedExpr = result_unwrap(right_result)
+        let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "|", right.expression)
+        if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: bitwise expression failed")) }
+        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+    }
+    return ok(parsed)
+}
+
+fn parse_comparison(parser: SourceParser) -> Result[ParsedExpr, String] {
+    let first: Result[ParsedExpr, String] = parse_bitor(parser)
     if is_err(first) { return err(expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "==" || current_token(parsed.parser).text == "!=" || current_token(parsed.parser).text == "<" || current_token(parsed.parser).text == "<=" || current_token(parsed.parser).text == ">" || current_token(parsed.parser).text == ">=" {
         let operator: String = current_token(parsed.parser).text
-        let right_result: Result[ParsedExpr, String] = parse_addition(advance(parsed.parser))
+        let right_result: Result[ParsedExpr, String] = parse_bitor(advance(parsed.parser))
         if is_err(right_result) { return err(expression_error(right_result)) }
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, operator, right.expression)

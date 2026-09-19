@@ -260,7 +260,9 @@ fn emit_uint_mask(state: EmitState, bits: Int) -> EmitState {
         return state
     }
     let mask: UInt64 = (u64(1) << bits) - u64(1)
-    return append_code(state, array_concat([u8(72), u8(37)], dyn_u32_bytes(u32(mask))))
+    // AND EAX, imm32 also clears the high half of RAX. Keep this byte form
+    // identical to the Go direct backend so self-hosted output stays exact.
+    return append_code(state, array_concat([u8(37)], dyn_u32_bytes(u32(mask))))
 }
 
 fn emit_uint(state: EmitState, value: UInt64, bits: Int) -> EmitState {
@@ -355,6 +357,14 @@ fn expr_type(expression: Json) -> String {
 
 fn is_unsigned(type_name: String) -> Bool {
     return starts_with(type_name, "UInt")
+}
+
+fn uint_bits(type_name: String) -> Int {
+    if type_name == "UInt8" { return 8 }
+    if type_name == "UInt16" { return 16 }
+    if type_name == "UInt32" { return 32 }
+    if type_name == "UInt64" { return 64 }
+    return 0
 }
 
 fn setcc(operator: String, unsigned: Bool) -> UInt8 {
@@ -460,34 +470,36 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
     if is_err(right) { return err(expression_error(right)) }
     let combined: EmitState = append_code(result_unwrap(right), [u8(72), u8(137), u8(193), u8(88)])
     let operator: String = text(field(expression, "operator"))
-    let unsigned: Bool = is_unsigned(expr_type(field(expression, "left")))
+    let expression_type: String = expr_type(expression)
+    let unsigned: Bool = is_unsigned(expression_type)
+    let bits: Int = uint_bits(expression_type)
     if operator == "+" {
         let added: EmitState = append_code(combined, [u8(72), u8(1), u8(200)])
         if !unsigned { return ok(emit_jump(added, state.env.trap_label, true, u8(128))) }
-        return ok(added)
+        return ok(emit_uint_mask(added, bits))
     }
     if operator == "-" {
         let subtracted: EmitState = append_code(combined, [u8(72), u8(41), u8(200)])
         if !unsigned { return ok(emit_jump(subtracted, state.env.trap_label, true, u8(128))) }
-        return ok(subtracted)
+        return ok(emit_uint_mask(subtracted, bits))
     }
     if operator == "*" {
         let multiplied: EmitState = append_code(combined, [u8(72), u8(15), u8(175), u8(193)])
         if !unsigned { return ok(emit_jump(multiplied, state.env.trap_label, true, u8(128))) }
-        return ok(multiplied)
+        return ok(emit_uint_mask(multiplied, bits))
     }
     if operator == "/" || operator == "%" {
         let checked: EmitState = append_code(combined, [u8(72), u8(133), u8(201)])
         let guarded: EmitState = emit_jump(checked, state.env.trap_label, true, u8(132))
         let divided: EmitState = append_code(guarded, [u8(72), u8(153), u8(72), u8(247), u8(249)])
-        if operator == "%" { return ok(append_code(divided, [u8(72), u8(137), u8(208)])) }
-        return ok(divided)
+        if operator == "%" { return ok(emit_uint_mask(append_code(divided, [u8(72), u8(137), u8(208)]), bits)) }
+        return ok(emit_uint_mask(divided, bits))
     }
-    if operator == "&" { return ok(append_code(combined, [u8(72), u8(33), u8(200)])) }
-    if operator == "^" { return ok(append_code(combined, [u8(72), u8(49), u8(200)])) }
-    if operator == "|" { return ok(append_code(combined, [u8(72), u8(9), u8(200)])) }
-    if operator == "<<" { return ok(append_code(combined, [u8(72), u8(211), u8(224)])) }
-    if operator == ">>" { return ok(append_code(combined, [u8(72), u8(211), u8(232)])) }
+    if operator == "&" { return ok(emit_uint_mask(append_code(combined, [u8(72), u8(33), u8(200)]), bits)) }
+    if operator == "^" { return ok(emit_uint_mask(append_code(combined, [u8(72), u8(49), u8(200)]), bits)) }
+    if operator == "|" { return ok(emit_uint_mask(append_code(combined, [u8(72), u8(9), u8(200)]), bits)) }
+    if operator == "<<" { return ok(emit_uint_mask(append_code(combined, [u8(72), u8(211), u8(224)]), bits)) }
+    if operator == ">>" { return ok(emit_uint_mask(append_code(combined, [u8(72), u8(211), u8(232)]), bits)) }
     if operator == "&&" { return ok(append_code(combined, [u8(72), u8(33), u8(200)])) }
     if operator == "||" { return ok(append_code(combined, [u8(72), u8(9), u8(200)])) }
     if operator == "==" || operator == "!=" || operator == "<" || operator == "<=" || operator == ">" || operator == ">=" {

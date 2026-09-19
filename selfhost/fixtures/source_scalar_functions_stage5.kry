@@ -10,6 +10,10 @@ fn increment(value: UInt64) -> UInt64 {
     return value + u64(1)
 }
 
+fn mask(value: UInt8) -> UInt8 {
+    return ((((value & u8(15)) << 1) >> 1) | u8(1)) ^ u8(2)
+}
+
 fn main() -> Nil {
     println(double(21))
     if positive(1) {
@@ -18,4 +22,5 @@ fn main() -> Nil {
         println("wrong")
     }
     println(increment(u64(0)))
+    println(mask(u8(16)))
 }
