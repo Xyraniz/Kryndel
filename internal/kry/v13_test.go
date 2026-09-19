@@ -292,6 +292,96 @@ func TestNativeBackendBuiltinsParity(t *testing.T) {
 	}
 }
 
+// TestNativeBackendExtendedBuiltins builds a program that exercises the
+// extended string, array, collection and math builtins natively and checks the
+// output matches the interpreter byte-for-byte.
+func TestNativeBackendExtendedBuiltins(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("native parity test requires linux/amd64")
+	}
+	src := `fn main() -> Nil {
+    match string_repeat("ab", 3) {
+        ok(s) => { println(s) }
+        err(e) => { println(e) }
+    }
+    match string_index_of("hello world", "world") {
+        some(i) => { println(i) }
+        none => { println(-1) }
+    }
+    match string_pad_start("7", 3, "0") {
+        ok(s) => { println(s) }
+        err(e) => { println(e) }
+    }
+    match string_pad_end("7", 3, ".") {
+        ok(s) => { println(s) }
+        err(e) => { println(e) }
+    }
+    println(len(string_lines("a\nb\nc")))
+    println(len(string_chars("héllo")))
+    println(string_to_upper("abc"))
+    println(string_to_lower("ABC"))
+    println(array_sort([3, 1, 2]))
+    match array_index_of([10, 20, 30], 20) {
+        some(i) => { println(i) }
+        none => { println(-1) }
+    }
+    println(array_sum([1, 2, 3, 4]))
+    match array_min([5, 2, 9]) {
+        some(v) => { println(v) }
+        none => { println(0) }
+    }
+    match array_max([5, 2, 9]) {
+        some(v) => { println(v) }
+        none => { println(0) }
+    }
+    println(array_take([1, 2, 3, 4], 2))
+    println(array_drop([1, 2, 3, 4], 2))
+    let m = {"a": 1, "b": 2}
+    println(map_contains_key(m, "a"))
+    println(map_values(m))
+    println(map_contains_key(map_remove(m, "a"), "a"))
+    let s: Set[Int] = |{1, 2, 3}|
+    println(set_to_array(set_remove(s, 2)))
+    println(tan(0.0))
+    println(atan(1.0))
+    println(atan2(1.0, 1.0))
+    println(exp(0.0))
+    println(log10(100.0))
+    println(log2(8.0))
+    println(trunc(3.9))
+    println(sign(-5))
+    println(sign(0))
+    println(clamp(15, 0, 10))
+    println(clamp(-3, 0, 10))
+    return nil
+}
+`
+	p, d := Parse(&Source{Name: "main.kry", Text: src}, DefaultLimits())
+	if d != nil {
+		t.Fatal(d)
+	}
+	c, d := Check(p, DefaultLimits())
+	if d != nil {
+		t.Fatal(d)
+	}
+	elf, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf")
+	if err != nil {
+		t.Fatalf("extended builtins must be supported by the native backend: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "program")
+	if err := os.WriteFile(path, elf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(path).Output()
+	if err != nil {
+		t.Fatalf("AOT executable failed: %v", err)
+	}
+	want := "ababab\n6\n007\n7..\n3\n5\nABC\nabc\n[1, 2, 3]\n1\n10\n2\n9\n[1, 2]\n[3, 4]\ntrue\n[1, 2]\nfalse\n[1, 3]\n0\n0.7853981633974483\n0.7853981633974483\n1\n2\n3\n3\n-1\n0\n10\n0\n"
+	if string(out) != want {
+		t.Fatalf("native extended builtin output mismatch:\n got %q\nwant %q", out, want)
+	}
+}
+
 // TestNativeBackendRejectsUnsupported ensures unsupported builtins fail loudly
 // instead of silently degrading to a stub.
 func TestNativeBackendRejectsUnsupported(t *testing.T) {

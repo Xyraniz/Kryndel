@@ -251,6 +251,11 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	if err := kry.WriteTextAtomic(out, data); err != nil {
 		return report(kry.Diag(kry.CatIO, nil, 1, 1, "cannot write native output: %v", err), jsonMode)
 	}
+	// Native executables must be runnable even when the output path has no
+	// extension (the default for ELF targets).
+	if format == "exe" || format == "pe" || format == "elf" {
+		_ = os.Chmod(out, 0o755)
+	}
 	fmt.Println("built " + out)
 	return 0
 }

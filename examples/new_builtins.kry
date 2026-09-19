@@ -1,0 +1,60 @@
+fn main() -> Nil {
+    match string_repeat("ab", 3) {
+        ok(s) => { println(s) }
+        err(e) => { println(e) }
+    }
+    match string_index_of("hello world", "world") {
+        some(i) => { println(i) }
+        none => { println(-1) }
+    }
+    match string_pad_start("7", 3, "0") {
+        ok(s) => { println(s) }
+        err(e) => { println(e) }
+    }
+    match string_pad_end("7", 3, ".") {
+        ok(s) => { println(s) }
+        err(e) => { println(e) }
+    }
+    let lines = string_lines("a\nb\nc")
+    println(len(lines))
+    let chars = string_chars("héllo")
+    println(len(chars))
+    println(string_to_upper("abc"))
+    println(string_to_lower("ABC"))
+    let sorted = array_sort([3, 1, 2])
+    println(sorted)
+    match array_index_of([10, 20, 30], 20) {
+        some(i) => { println(i) }
+        none => { println(-1) }
+    }
+    println(array_sum([1, 2, 3, 4]))
+    match array_min([5, 2, 9]) {
+        some(v) => { println(v) }
+        none => { println(0) }
+    }
+    match array_max([5, 2, 9]) {
+        some(v) => { println(v) }
+        none => { println(0) }
+    }
+    println(array_take([1, 2, 3, 4], 2))
+    println(array_drop([1, 2, 3, 4], 2))
+    let m = {"a": 1, "b": 2}
+    println(map_contains_key(m, "a"))
+    println(map_values(m))
+    let m2 = map_remove(m, "a")
+    println(map_contains_key(m2, "a"))
+    let s: Set[Int] = |{1, 2, 3}|
+    let s2 = set_remove(s, 2)
+    println(set_to_array(s2))
+    println(tan(0.0))
+    println(atan(1.0))
+    println(atan2(1.0, 1.0))
+    println(exp(0.0))
+    println(log10(100.0))
+    println(log2(8.0))
+    println(trunc(3.9))
+    println(sign(-5))
+    println(sign(0))
+    println(clamp(15, 0, 10))
+    println(clamp(-3, 0, 10))
+}
