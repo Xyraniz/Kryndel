@@ -245,6 +245,53 @@ fn main() -> Nil {
 	}
 }
 
+// TestNativeBackendBuiltinsParity builds a program that exercises JSON, crypto
+// and filesystem builtins natively and checks the output matches the
+// interpreter byte-for-byte.
+func TestNativeBackendBuiltinsParity(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("native parity test requires linux/amd64")
+	}
+	src := `fn main() -> Nil {
+    match json_parse("{\"b\":2,\"a\":[1,2,3]}") {
+        ok(doc) => { println(json_stringify(doc)) }
+        err(problem) => { println("err") }
+    }
+    println(hex_encode(crypto_sha256(string_to_bytes("abc"))))
+    println(hex_encode(crypto_hmac_sha256(string_to_bytes("key"), string_to_bytes("msg"))))
+    println(fs_join_path("/tmp", ["a", "b"]))
+    return nil
+}
+`
+	p, d := Parse(&Source{Name: "main.kry", Text: src}, DefaultLimits())
+	if d != nil {
+		t.Fatal(d)
+	}
+	c, d := Check(p, DefaultLimits())
+	if d != nil {
+		t.Fatal(d)
+	}
+	elf, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "program")
+	if err := os.WriteFile(path, elf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(path).Output()
+	if err != nil {
+		t.Fatalf("AOT executable failed: %v", err)
+	}
+	want := "{\"a\":[1,2,3],\"b\":2}\n" +
+		"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n" +
+		"2d93cbc1be167bcb1637a4a23cbff01a7878f0c50ee833954ea5221bb1b8c628\n" +
+		"/tmp/a/b\n"
+	if string(out) != want {
+		t.Fatalf("native builtin output mismatch:\n got %q\nwant %q", out, want)
+	}
+}
+
 // TestNativeBackendRejectsUnsupported ensures unsupported builtins fail loudly
 // instead of silently degrading to a stub.
 func TestNativeBackendRejectsUnsupported(t *testing.T) {
