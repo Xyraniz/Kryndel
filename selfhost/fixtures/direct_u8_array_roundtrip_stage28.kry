@@ -1,0 +1,9 @@
+fn main() -> Nil {
+    let raw: Bytes = bytes_from_u8([u8(65), u8(66), u8(67)])
+    let values: Array[UInt8] = u8_array(raw)
+    println(str(len(values)))
+    println(str(unwrap_or(array_get(values, 0), u8(99))))
+    println(str(unwrap_or(array_get(values, 1), u8(99))))
+    println(str(unwrap_or(array_get(values, 2), u8(99))))
+    return nil
+}

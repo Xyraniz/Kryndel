@@ -1,0 +1,5 @@
+fn main() -> Nil {
+    let result: Result[String, String] = fs_read_text("selfhost/fixtures/bootstrap_hello_stage27.kry")
+    println(is_ok(result))
+    return nil
+}

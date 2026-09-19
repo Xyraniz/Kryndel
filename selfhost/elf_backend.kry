@@ -95,7 +95,11 @@ pub fn eval_display(expression: Json, bindings: Map[String, String]) -> Result[S
         return ok(str(result_unwrap(eval_int(expression, bindings))))
     }
     if kind == "float" {
-        return ok(str(result_unwrap(json_float(json_field(expression, "float")))))
+        // The KIR float field is already a validated JSON number. Keeping its
+        // textual representation avoids requiring the bootstrap ELF backend
+        // to implement a platform-dependent binary64 formatter just to print
+        // a compile-time display value.
+        return ok(json_stringify(json_field(expression, "float")))
     }
     if kind == "bool" {
         if result_unwrap(json_bool(json_field(expression, "bool"))) {

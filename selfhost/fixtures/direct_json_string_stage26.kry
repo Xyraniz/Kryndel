@@ -1,0 +1,21 @@
+fn decode(value: String) -> String {
+    let parsed: Json = result_unwrap(json_parse(value))
+    return result_unwrap(json_string(parsed))
+}
+
+fn decodes(value: String) -> Bool {
+    let parsed: Result[Json, String] = json_parse(value)
+    if is_err(parsed) { return false }
+    return is_ok(json_string(result_unwrap(parsed)))
+}
+
+fn main() -> Nil {
+    println(decode("\"hello\""))
+    println("[" + decode("\"a\\tb\"") + "]")
+    println("[" + decode("\"a\\\\b\"") + "]")
+    println("[" + decode("\"a\\/b\"") + "]")
+    println(decodes("42"))
+    println(decodes("\"unterminated"))
+    println(decodes("\"bad\\u0041\""))
+    return nil
+}

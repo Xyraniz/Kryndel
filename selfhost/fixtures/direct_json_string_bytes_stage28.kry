@@ -1,0 +1,11 @@
+fn main() -> Nil {
+    let parsed: Result[Json, String] = json_parse("\"hello\"")
+    let value: Json = result_unwrap(parsed)
+    let text: String = result_unwrap(json_string(value))
+    let bytes: Array[UInt8] = u8_array(string_to_bytes(text))
+    println(str(len(bytes)))
+    println(str(unwrap_or(array_get(bytes, 0), u8(99))))
+    println(str(unwrap_or(array_get(bytes, 1), u8(99))))
+    println(str(unwrap_or(array_get(bytes, 4), u8(99))))
+    return nil
+}

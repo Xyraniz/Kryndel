@@ -1,0 +1,5 @@
+fn main() -> Nil {
+    let args: Array[String] = process_args()
+    println(str(len(args)))
+    return nil
+}

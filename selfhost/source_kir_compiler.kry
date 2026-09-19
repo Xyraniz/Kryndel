@@ -1346,14 +1346,32 @@ fn compile_source(source: String) -> Result[Bytes, String] {
     let document_text: String = "{\"format\":\"kry-ir\",\"version\":1,\"module\":\"\",\"source\":\"\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":" + parsed.structs + ",\"enums\":[],\"functions\":" + parsed.functions + ",\"statements\":" + parsed.statements + "}"
     let document: Result[Json, String] = json_parse(document_text)
     if is_err(document) { return err(unwrap_or(result_error(document), "source frontend produced invalid KIR")) }
-    return compile_document(result_unwrap(document))
+    let lowered: Result[Bytes, String] = compile_document(result_unwrap(document))
+    return lowered
+}
+
+fn fail_compilation(message: String) -> Nil {
+    let failure: Result[Nil, String] = err(message)
+    result_unwrap(failure)
+    return nil
 }
 
 fn main() -> Nil {
     let args: Array[String] = process_args()
-    assert_eq(len(args), 2)
-    let source: String = result_unwrap(fs_read_text(args[0]))
-    let executable: Bytes = result_unwrap(compile_source(source))
-    result_unwrap(fs_write_bytes(args[1], executable))
+    if len(args) != 2 {
+        return fail_compilation("source compiler expects 2 arguments, got " + str(len(args)))
+    }
+    let source_result: Result[String, String] = fs_read_text(args[0])
+    if is_err(source_result) {
+        return fail_compilation("source compiler read failed: " + unwrap_or(result_error(source_result), "unknown error"))
+    }
+    let compiled: Result[Bytes, String] = compile_source(result_unwrap(source_result))
+    if is_err(compiled) {
+        return fail_compilation("source compiler compile failed: " + unwrap_or(result_error(compiled), "unknown error"))
+    }
+    let written: Result[Nil, String] = fs_write_bytes(args[1], result_unwrap(compiled))
+    if is_err(written) {
+        return fail_compilation("source compiler write failed: " + unwrap_or(result_error(written), "unknown error"))
+    }
     return nil
 }

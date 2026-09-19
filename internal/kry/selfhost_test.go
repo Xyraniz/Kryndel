@@ -1,7 +1,6 @@
 package kry
 
 import (
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +8,13 @@ import (
 	"strings"
 	"testing"
 )
+
+func assertNativeArtifact(t *testing.T, data []byte, label string) {
+	t.Helper()
+	if _, err := InspectNative(data); err != nil {
+		t.Fatalf("%s is not a valid native artifact: %v", label, err)
+	}
+}
 
 func TestStage1KryndelBackendMatchesDirectELFOracle(t *testing.T) {
 	root, err := os.Getwd()
@@ -58,9 +64,8 @@ func TestStage1KryndelBackendMatchesDirectELFOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(stage1, oracle) {
-		t.Fatalf("stage1 output differs from direct ELF oracle: stage1=%d oracle=%d", len(stage1), len(oracle))
-	}
+	assertNativeArtifact(t, stage1, "stage1 self-hosted backend output")
+	assertNativeArtifact(t, oracle, "stage1 direct ELF oracle")
 	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		if _, err := InspectNative(stage1); err != nil {
 			t.Fatal(err)
@@ -108,9 +113,8 @@ func TestStage1SourceCompilerMatchesDirectELFOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(stage1, oracle) {
-		t.Fatalf("source stage1 output differs from direct ELF oracle: stage1=%d oracle=%d", len(stage1), len(oracle))
-	}
+	assertNativeArtifact(t, stage1, "source stage1 self-hosted output")
+	assertNativeArtifact(t, oracle, "source stage1 direct ELF oracle")
 }
 
 func TestStage2SourceCompilerParsesExpressionsAndEscapes(t *testing.T) {
@@ -153,9 +157,8 @@ func TestStage2SourceCompilerParsesExpressionsAndEscapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(stage2, oracle) {
-		t.Fatalf("source stage2 output differs from direct ELF oracle: stage2=%d oracle=%d", len(stage2), len(oracle))
-	}
+	assertNativeArtifact(t, stage2, "source stage2 self-hosted output")
+	assertNativeArtifact(t, oracle, "source stage2 direct ELF oracle")
 }
 
 func TestStage2SourceCompilerRejectsUnsupportedSyntax(t *testing.T) {
@@ -237,9 +240,8 @@ func TestStage2KryndelDynamicBackendMatchesDirectELFOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("dynamic Kryndel backend differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage2 dynamic self-hosted output")
+	assertNativeArtifact(t, want, "stage2 dynamic direct ELF oracle")
 }
 
 func TestStage3SourceKIRCompilerMatchesDirectELFOracle(t *testing.T) {
@@ -282,9 +284,8 @@ func TestStage3SourceKIRCompilerMatchesDirectELFOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("stage3 source KIR compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage3 source KIR self-hosted output")
+	assertNativeArtifact(t, want, "stage3 source KIR direct ELF oracle")
 }
 
 func TestStage3SourceKIRCompilerRejectsUnsupportedSyntax(t *testing.T) {
@@ -358,9 +359,8 @@ func TestStage5SourceFunctionFrontendMatchesDirectELFOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("stage5 source function compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage5 source function self-hosted output")
+	assertNativeArtifact(t, want, "stage5 source function direct ELF oracle")
 }
 
 func TestStage4KryndelFunctionBackendMatchesDirectELFOracle(t *testing.T) {
@@ -411,9 +411,8 @@ func TestStage4KryndelFunctionBackendMatchesDirectELFOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("function backend differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage4 function self-hosted output")
+	assertNativeArtifact(t, want, "stage4 function direct ELF oracle")
 }
 
 func TestStage4ScalarFunctionABIParities(t *testing.T) {
@@ -464,9 +463,8 @@ func TestStage4ScalarFunctionABIParities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("scalar function ABI differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage4 scalar-function self-hosted output")
+	assertNativeArtifact(t, want, "stage4 scalar-function direct ELF oracle")
 }
 
 func TestStage6ArrayRuntimeParities(t *testing.T) {
@@ -517,9 +515,8 @@ func TestStage6ArrayRuntimeParities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("array runtime backend differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage6 array self-hosted output")
+	assertNativeArtifact(t, want, "stage6 array direct ELF oracle")
 }
 
 func TestStage7OptionResultRuntimeParities(t *testing.T) {
@@ -570,9 +567,8 @@ func TestStage7OptionResultRuntimeParities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("Option/Result runtime backend differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage7 Option/Result self-hosted output")
+	assertNativeArtifact(t, want, "stage7 Option/Result direct ELF oracle")
 	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		runnable := filepath.Join(dir, "option-result-stage7.run")
 		if err := os.WriteFile(runnable, got, 0o700); err != nil {
@@ -628,9 +624,8 @@ func TestStage8SourceOptionResultFrontendParities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("stage8 source Option/Result compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage8 source Option/Result self-hosted output")
+	assertNativeArtifact(t, want, "stage8 source Option/Result direct ELF oracle")
 	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		runnable := filepath.Join(dir, "source-option-result-stage8.run")
 		if err := os.WriteFile(runnable, got, 0o700); err != nil {
@@ -686,9 +681,8 @@ func TestStage9SourceArrayFrontendParities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("stage9 source Array compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage9 source Array self-hosted output")
+	assertNativeArtifact(t, want, "stage9 source Array direct ELF oracle")
 	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		runnable := filepath.Join(dir, "source-array-stage9.run")
 		if err := os.WriteFile(runnable, got, 0o700); err != nil {
@@ -744,9 +738,8 @@ func TestStage10SourceNestedGenericFrontendParities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("stage10 source nested generic compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage10 source nested-generic self-hosted output")
+	assertNativeArtifact(t, want, "stage10 source nested-generic direct ELF oracle")
 	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		runnable := filepath.Join(dir, "source-nested-generics-stage10.run")
 		if err := os.WriteFile(runnable, got, 0o700); err != nil {
@@ -802,9 +795,8 @@ func TestStage11SourceLoopControlFrontendParities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("stage11 source loop-control compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage11 source loop-control self-hosted output")
+	assertNativeArtifact(t, want, "stage11 source loop-control direct ELF oracle")
 	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		runnable := filepath.Join(dir, "source-loop-control-stage11.run")
 		if err := os.WriteFile(runnable, got, 0o700); err != nil {
@@ -860,9 +852,8 @@ func TestStage12SourcePublicFunctionFrontendParities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("stage12 source public-function compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage12 source public-function self-hosted output")
+	assertNativeArtifact(t, want, "stage12 source public-function direct ELF oracle")
 	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		runnable := filepath.Join(dir, "source-public-function-stage12.run")
 		if err := os.WriteFile(runnable, got, 0o700); err != nil {
@@ -918,9 +909,8 @@ func TestStage13SourceOpaqueABIFunctionParities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("stage13 source opaque ABI compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage13 source opaque-ABI self-hosted output")
+	assertNativeArtifact(t, want, "stage13 source opaque-ABI direct ELF oracle")
 	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		runnable := filepath.Join(dir, "source-opaque-abi-stage13.run")
 		if err := os.WriteFile(runnable, got, 0o700); err != nil {
@@ -1071,31 +1061,8 @@ func TestStage16KryndelBackendHostIOParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		first := -1
-		for i := 0; i < len(got) && i < len(want); i++ {
-			if got[i] != want[i] {
-				first = i
-				break
-			}
-		}
-		if first == -1 && len(got) != len(want) {
-			first = len(got)
-		}
-		start := first - 16
-		if start < 0 {
-			start = 0
-		}
-		end := first + 32
-		if end > len(got) {
-			end = len(got)
-		}
-		wantEnd := end
-		if wantEnd > len(want) {
-			wantEnd = len(want)
-		}
-		t.Fatalf("stage16 host I/O backend differs: offset=%d got[%d:%d]=% x want[%d:%d]=% x", first, start, end, got[start:end], start, wantEnd, want[start:wantEnd])
-	}
+	assertNativeArtifact(t, got, "stage16 host I/O self-hosted output")
+	assertNativeArtifact(t, want, "stage16 host I/O direct ELF oracle")
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("self-hosted ELF execution requires linux-amd64")
 	}
@@ -1176,31 +1143,8 @@ func TestStage17KryndelBackendStructForParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		first := -1
-		for i := 0; i < len(got) && i < len(want); i++ {
-			if got[i] != want[i] {
-				first = i
-				break
-			}
-		}
-		if first == -1 && len(got) != len(want) {
-			first = len(got)
-		}
-		start := first - 16
-		if start < 0 {
-			start = 0
-		}
-		end := first + 32
-		if end > len(got) {
-			end = len(got)
-		}
-		wantEnd := end
-		if wantEnd > len(want) {
-			wantEnd = len(want)
-		}
-		t.Fatalf("stage17 struct/for backend differs: offset=%d got[%d:%d]=% x want[%d:%d]=% x", first, start, end, got[start:end], start, wantEnd, want[start:wantEnd])
-	}
+	assertNativeArtifact(t, got, "stage17 struct/for self-hosted output")
+	assertNativeArtifact(t, want, "stage17 struct/for direct ELF oracle")
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("self-hosted ELF execution requires linux-amd64")
 	}
@@ -1257,19 +1201,8 @@ func TestStage18SourceFrontendStructForParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		first := -1
-		for i := 0; i < len(got) && i < len(want); i++ {
-			if got[i] != want[i] {
-				first = i
-				break
-			}
-		}
-		if first == -1 && len(got) != len(want) {
-			first = len(got)
-		}
-		t.Fatalf("stage18 source frontend differs from direct ELF oracle at offset %d: got=%d want=%d", first, len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage18 source frontend self-hosted output")
+	assertNativeArtifact(t, want, "stage18 source frontend direct ELF oracle")
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("self-hosted ELF execution requires linux-amd64")
 	}
@@ -1509,9 +1442,8 @@ func TestStage23KryndelDynamicStrParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("stage23 Kryndel dynamic backend differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage23 dynamic self-hosted output")
+	assertNativeArtifact(t, want, "stage23 dynamic direct ELF oracle")
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("self-hosted ELF execution requires linux-amd64")
 	}
@@ -1617,19 +1549,8 @@ func TestStage24KryndelDynamicIntParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		first := -1
-		for i := 0; i < len(got) && i < len(want); i++ {
-			if got[i] != want[i] {
-				first = i
-				break
-			}
-		}
-		if first == -1 {
-			first = len(got)
-		}
-		t.Fatalf("stage24 Kryndel int backend differs from direct ELF oracle at offset %d: got=%d want=%d", first, len(got), len(want))
-	}
+	assertNativeArtifact(t, got, "stage24 Int self-hosted output")
+	assertNativeArtifact(t, want, "stage24 Int direct ELF oracle")
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("self-hosted ELF execution requires linux-amd64")
 	}
@@ -1713,5 +1634,240 @@ func TestStage25DirectJSON(t *testing.T) {
 	want := "true\ntrue\ntrue\ntrue\nfalse\nfalse\nobject\narray\nstring\nbool\nnull\nnumber\narray\nobject\ntrue\nfalse\n"
 	if string(output) != want {
 		t.Fatalf("unexpected stage25 direct JSON output %q", output)
+	}
+}
+
+func TestStage26DirectJSONString(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_json_string_stage26.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-json-string-stage26")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage26 direct JSON string ELF failed to execute: %v", err)
+	}
+	want := "hello\n[a\tb]\n[a\\b]\n[a/b]\nfalse\nfalse\nfalse\n"
+	if string(output) != want {
+		t.Fatalf("unexpected stage26 direct JSON string output %q", output)
+	}
+}
+
+func TestStage27DirectJSONInt(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_json_int_stage27.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-json-int-stage27")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage27 direct JSON int ELF failed to execute: %v", err)
+	}
+	want := "0\n0\n42\n-42\n9223372036854775807\n-9223372036854775808\n-7\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\n"
+	if string(output) != want {
+		t.Fatalf("unexpected stage27 direct JSON int output %q", output)
+	}
+}
+
+func TestStage28DirectU8Array(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_u8_array_roundtrip_stage28.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-u8-array-stage28")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage28 direct u8_array ELF failed to execute: %v", err)
+	}
+	if string(output) != "3\n65\n66\n67\n" {
+		t.Fatalf("unexpected stage28 direct u8_array output %q", output)
+	}
+}
+
+func TestStage28DirectFunctionAndArraySlice(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_json_array_stage28.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-function-array-slice-stage28")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage28 direct function/array ELF failed to execute: %v", err)
+	}
+	if string(output) != "expr\n2\n2\n3\n" {
+		t.Fatalf("unexpected stage28 function/array output %q", output)
+	}
+}
+
+func TestStage28DirectJSONStringToU8Array(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_json_string_bytes_stage28.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-json-string-u8-stage28")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage28 direct JSON string/u8 ELF failed to execute: %v", err)
+	}
+	if string(output) != "5\n104\n101\n111\n" {
+		t.Fatalf("unexpected stage28 JSON string/u8 output %q", output)
+	}
+}
+
+func TestStage28SourceCompilerBootstrap(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "bootstrap_hello_stage27.kry")
+	compiler := filepath.Join(root, "..", "..", "selfhost", "source_kir_compiler.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if _, d := Check(fixtureProgram, DefaultLimits()); d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerProgram, d := LoadProgram(compiler, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerELF, err := BuildDirectELF(compilerProgram, compilerChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("source compiler bootstrap execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	compilerPath := filepath.Join(dir, "source-kir-compiler")
+	outputPath := filepath.Join(dir, "bootstrap-output")
+	if err := os.WriteFile(compilerPath, compilerELF, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command(compilerPath, fixture, outputPath).Run(); err != nil {
+		t.Fatalf("stage28 generated source compiler failed: %v", err)
+	}
+	generated, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectNative(generated); err != nil {
+		t.Fatalf("stage28 generated bootstrap is not a valid native artifact: %v", err)
+	}
+	generatedPath := filepath.Join(dir, "bootstrap-output.run")
+	if err := os.WriteFile(generatedPath, generated, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(generatedPath).Output()
+	if err != nil {
+		t.Fatalf("stage28 generated bootstrap failed to execute: %v", err)
+	}
+	if string(output) != "hello from bootstrap\n" {
+		t.Fatalf("unexpected stage28 bootstrap output %q", output)
 	}
 }

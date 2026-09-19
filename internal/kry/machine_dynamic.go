@@ -57,7 +57,18 @@ type directMachine struct {
 	jsonSkipLabel       int
 	jsonKindLabel       int
 	jsonObjectGetLabel  int
+	jsonStringLabel     int
+	jsonIntLabel        int
+	jsonUIntLabel       int
+	jsonBoolLabel       int
+	jsonArrayLenLabel   int
+	jsonArrayGetLabel   int
+	u8ArrayLabel        int
+	arraySetLabel       int
+	arraySliceLabel     int
+	mapRemoveLabel      int
 	mapRuntimeUsed      bool
+	stringEqualUsed     bool
 	stringCharsUsed     bool
 	substringUsed       bool
 	intToStringUsed     bool
@@ -127,6 +138,16 @@ func newDirectMachine() *directMachine {
 	m.jsonSkipLabel = m.newLabel()
 	m.jsonKindLabel = m.newLabel()
 	m.jsonObjectGetLabel = m.newLabel()
+	m.jsonStringLabel = m.newLabel()
+	m.jsonIntLabel = m.newLabel()
+	m.jsonUIntLabel = m.newLabel()
+	m.jsonBoolLabel = m.newLabel()
+	m.jsonArrayLenLabel = m.newLabel()
+	m.jsonArrayGetLabel = m.newLabel()
+	m.u8ArrayLabel = m.newLabel()
+	m.arraySetLabel = m.newLabel()
+	m.arraySliceLabel = m.newLabel()
+	m.mapRemoveLabel = m.newLabel()
 	m.bytesFromArrayLabel = m.newLabel()
 	m.processArgsLabel = m.newLabel()
 	m.fsReadTextLabel = m.newLabel()
@@ -644,6 +665,7 @@ func (m *directMachine) emitArrayIndices(e *Expr) error {
 	m.code = append(m.code, 0x48, 0x31, 0xc9) // xor rcx, rcx
 	loop := m.newLabel()
 	done := m.newLabel()
+
 	if err := m.bind(loop); err != nil {
 		return err
 	}
@@ -1212,6 +1234,115 @@ func (m *directMachine) emitMapInsertRuntime() error {
 		return err
 	}
 	m.code = append(m.code, 0x48, 0x89, 0xe8, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitMapRemoveRuntime() error {
+	if err := m.bind(m.mapRemoveLabel); err != nil {
+		return err
+	}
+	// rdi=map, rsi=key, rdx=key kind. Map storage is an immutable array of
+	// alternating key/value qwords; remove the matching pair and preserve the
+	// original map when the key is absent.
+	notFound := m.newLabel()
+	found := m.newLabel()
+	copyLoop := m.newLabel()
+	copyDone := m.newLabel()
+	skipPair := m.newLabel()
+	copyPair := m.newLabel()
+	done := m.newLabel()
+
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=map
+		0x49, 0x89, 0xf5, // r13=key
+		0x49, 0x89, 0xd6, // r14=key kind
+		0x4c, 0x89, 0xe7, 0x4c, 0x89, 0xee, 0x4c, 0x89, 0xf2,
+	)
+	m.mapRuntimeUsed = true
+	if err := m.emitLabelCall(m.mapFindLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x84, notFound); err != nil {
+		return err
+	}
+	if err := m.bind(found); err != nil {
+		return err
+	}
+	// r15 points at the key qword that precedes map_find's value pointer.
+	m.code = append(m.code, 0x48, 0x89, 0xc7, 0x48, 0x83, 0xef, 0x08)
+	m.code = append(m.code, 0x49, 0x8b, 0x2c, 0x24, 0x48, 0x83, 0xed, 0x02, 0x48, 0x89, 0xef)
+	m.arrayRuntimeUsed = true
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x89, 0xc6, // r14=new map
+		0x49, 0x8d, 0x5c, 0x24, 0x08, // rbx=source key pointer
+		0x4d, 0x8d, 0x46, 0x08, // r8=destination key pointer
+		0x48, 0x8b, 0x2c, 0x24, 0x48, 0xd1, 0xed, // rbp=pair count
+	)
+	if err := m.emitJump(copyLoop); err != nil {
+		return err
+	}
+	if err := m.bind(copyLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xed)
+	if err := m.emitConditionalJump(0x84, copyDone); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x39, 0xfb)
+	if err := m.emitConditionalJump(0x84, skipPair); err != nil {
+		return err
+	}
+	if err := m.emitJump(copyPair); err != nil {
+		return err
+	}
+	if err := m.bind(skipPair); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xc3, 0x10, 0x48, 0xff, 0xcd)
+	if err := m.emitJump(copyLoop); err != nil {
+		return err
+	}
+	if err := m.bind(copyPair); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x8b, 0x03, 0x49, 0x89, 0x00,
+		0x48, 0x8b, 0x43, 0x08, 0x49, 0x89, 0x40, 0x08,
+		0x48, 0x83, 0xc3, 0x10, 0x49, 0x83, 0xc0, 0x10,
+		0x48, 0xff, 0xcd,
+	)
+	if err := m.emitJump(copyLoop); err != nil {
+		return err
+	}
+	if err := m.bind(copyDone); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf0)
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(notFound); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xe0)
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
 	return nil
 }
 
@@ -2416,6 +2547,1334 @@ func (m *directMachine) emitJSONObjectGetRuntime() error {
 	return nil
 }
 
+func (m *directMachine) emitJSONStringRuntime() error {
+	if err := m.bind(m.jsonStringLabel); err != nil {
+		return err
+	}
+	// rdi=Json text. Decode one JSON string into a fresh Kryndel String. The
+	// first pass validates bounds and computes the decoded byte count; the
+	// second pass copies ordinary UTF-8 bytes and the six JSON single-byte
+	// escapes. Unicode escapes are rejected explicitly until the native UTF-8
+	// encoder is added, rather than being returned as silently wrong text.
+	skip := m.newLabel()
+	scan := m.newLabel()
+	scanEscape := m.newLabel()
+	scanClose := m.newLabel()
+	trailing := m.newLabel()
+	trailingNext := m.newLabel()
+	leadingNext := m.newLabel()
+	allocate := m.newLabel()
+	fill := m.newLabel()
+	fillEscape := m.newLabel()
+	escapeBackspace := m.newLabel()
+	escapeFormfeed := m.newLabel()
+	escapeNewline := m.newLabel()
+	escapeReturn := m.newLabel()
+	escapeTab := m.newLabel()
+	scanEscapeDone := m.newLabel()
+	writeByte := m.newLabel()
+	success := m.newLabel()
+	failure := m.newLabel()
+
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=Json/String text
+		0x4d, 0x8b, 0x2c, 0x24, // r13=length
+		0x4d, 0x31, 0xf6, // r14=cursor
+	)
+	if err := m.emitJump(skip); err != nil {
+		return err
+	}
+	if err := m.bind(skip); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee) // cursor versus length
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, leadingNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, '"')
+	if err := m.emitConditionalJump(0x85, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6, 0x4c, 0x89, 0xf5, 0x4d, 0x31, 0xff) // open quote, rbp=start, r15=decoded length
+	if err := m.emitJump(scan); err != nil {
+		return err
+	}
+	if err := m.bind(trailingNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(trailing); err != nil {
+		return err
+	}
+
+	if err := m.bind(scan); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	m.code = append(m.code, 0x3c, '\\')
+	if err := m.emitConditionalJump(0x84, scanEscape); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '"')
+	if err := m.emitConditionalJump(0x84, scanClose); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0x20)
+	if err := m.emitConditionalJump(0x82, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(scan); err != nil {
+		return err
+	}
+
+	if err := m.bind(scanEscape); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{'"', '\\', '/', 'b', 'f', 'n', 'r', 't'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, scanEscapeDone); err != nil {
+			return err
+		}
+	}
+	// Do not let an unsupported escape fall through into the success path. In
+	// particular, this keeps \uXXXX from being accepted as if it were decoded.
+	if err := m.emitJump(failure); err != nil {
+		return err
+	}
+	if err := m.bind(scanEscapeDone); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(scan); err != nil {
+		return err
+	}
+	if err := m.emitJump(failure); err != nil {
+		return err
+	}
+
+	if err := m.bind(scanClose); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(trailing); err != nil {
+		return err
+	}
+	if err := m.bind(trailing); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, allocate); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, trailingNext); err != nil {
+			return err
+		}
+	}
+	if err := m.emitJump(failure); err != nil {
+		return err
+	}
+
+	if err := m.bind(allocate); err != nil {
+		return err
+	}
+	// Allocate using the source slice as a harmless initial copy, then replace
+	// it with decoded bytes during the second pass.
+	m.code = append(m.code, 0x4c, 0x89, 0xe2, 0x48, 0x01, 0xea, 0x48, 0x8d, 0x7a, 0x08, 0x4c, 0x89, 0xfe)
+	if err := m.emitLabelCall(m.stringAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc3, 0x49, 0x89, 0xee, 0x4d, 0x31, 0xff)
+	if err := m.emitJump(fill); err != nil {
+		return err
+	}
+	if err := m.bind(fill); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	m.code = append(m.code, 0x3c, '"')
+	if err := m.emitConditionalJump(0x84, success); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '\\')
+	if err := m.emitConditionalJump(0x84, fillEscape); err != nil {
+		return err
+	}
+	if err := m.emitJump(writeByte); err != nil {
+		return err
+	}
+
+	if err := m.bind(fillEscape); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	escapeLabels := map[byte]int{
+		'b': escapeBackspace,
+		'f': escapeFormfeed,
+		'n': escapeNewline,
+		'r': escapeReturn,
+		't': escapeTab,
+	}
+	for _, encoded := range []byte{'"', '\\', '/', 'b', 'f', 'n', 'r', 't'} {
+		m.code = append(m.code, 0x3c, encoded)
+		target := writeByte
+		if mapped, ok := escapeLabels[encoded]; ok {
+			target = mapped
+		}
+		if err := m.emitConditionalJump(0x84, target); err != nil {
+			return err
+		}
+	}
+	if err := m.emitJump(failure); err != nil {
+		return err
+	}
+
+	for _, item := range []struct {
+		label   int
+		decoded byte
+	}{
+		{escapeBackspace, '\b'},
+		{escapeFormfeed, '\f'},
+		{escapeNewline, '\n'},
+		{escapeReturn, '\r'},
+		{escapeTab, '\t'},
+	} {
+		if err := m.bind(item.label); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0xb0, item.decoded)
+		if err := m.emitJump(writeByte); err != nil {
+			return err
+		}
+	}
+	if err := m.bind(writeByte); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4a, 0x8d, 0x54, 0x3b, 0x08, 0x88, 0x02, 0x49, 0xff, 0xc7, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(fill); err != nil {
+		return err
+	}
+	if err := m.bind(success); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xd8)
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+
+	if err := m.bind(failure); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON value is not a string")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	if err := m.bind(leadingNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(skip); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *directMachine) emitJSONIntRuntime() error {
+	if err := m.bind(m.jsonIntLabel); err != nil {
+		return err
+	}
+	// rdi=Json text. Parse one complete JSON integer without floating-point
+	// conversion. The accumulator stays negative, which gives the signed
+	// Int64 minimum one extra representable value and makes overflow explicit.
+	start := m.newLabel()
+	leadingNext := m.newLabel()
+	negativeSign := m.newLabel()
+	requireDigit := m.newLabel()
+	zero := m.newLabel()
+	digitLoop := m.newLabel()
+	numericEnd := m.newLabel()
+	trailing := m.newLabel()
+	trailingNext := m.newLabel()
+	finish := m.newLabel()
+	negativeResult := m.newLabel()
+	result := m.newLabel()
+	notNumber := m.newLabel()
+	notInteger := m.newLabel()
+	overflow := m.newLabel()
+
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=Json/String text
+		0x4d, 0x8b, 0x2c, 0x24, // r13=length
+		0x4d, 0x31, 0xf6, // r14=cursor
+		0x45, 0x31, 0xff, // r15=negative flag
+		0x48, 0x31, 0xdb, // rbx=negative accumulator
+	)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+	if err := m.bind(start); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, notNumber); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, leadingNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, '-')
+	if err := m.emitConditionalJump(0x84, negativeSign); err != nil {
+		return err
+	}
+	if err := m.emitJump(requireDigit); err != nil {
+		return err
+	}
+	if err := m.bind(leadingNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+	if err := m.bind(negativeSign); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x45, 0xb7, 0x01, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(requireDigit); err != nil {
+		return err
+	}
+
+	if err := m.bind(requireDigit); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, notNumber); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	m.code = append(m.code, 0x3c, '0')
+	if err := m.emitConditionalJump(0x84, zero); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '1')
+	if err := m.emitConditionalJump(0x82, notNumber); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '9')
+	if err := m.emitConditionalJump(0x87, notNumber); err != nil {
+		return err
+	}
+	if err := m.emitJump(digitLoop); err != nil {
+		return err
+	}
+
+	if err := m.bind(zero); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(numericEnd); err != nil {
+		return err
+	}
+
+	if err := m.bind(digitLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x83, 0xe8, 0x30, // eax -= '0'
+		0x48, 0x6b, 0xdb, 0x0a, // rbx *= 10
+	)
+	if err := m.emitConditionalJump(0x80, overflow); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x29, 0xc3) // rbx -= digit
+	if err := m.emitConditionalJump(0x80, overflow); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, finish); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	m.code = append(m.code, 0x3c, '0')
+	if err := m.emitConditionalJump(0x82, numericEnd); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '9')
+	if err := m.emitConditionalJump(0x87, numericEnd); err != nil {
+		return err
+	}
+	if err := m.emitJump(digitLoop); err != nil {
+		return err
+	}
+
+	if err := m.bind(numericEnd); err != nil {
+		return err
+	}
+	if err := m.emitJump(trailing); err != nil {
+		return err
+	}
+	if err := m.bind(trailing); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, finish); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, trailingNext); err != nil {
+			return err
+		}
+	}
+	if err := m.emitJump(notInteger); err != nil {
+		return err
+	}
+	if err := m.bind(trailingNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(trailing); err != nil {
+		return err
+	}
+
+	if err := m.bind(finish); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x85, 0xff)
+	if err := m.emitConditionalJump(0x85, negativeResult); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xd8, 0x48, 0xf7, 0xd8)
+	if err := m.emitConditionalJump(0x80, overflow); err != nil {
+		return err
+	}
+	if err := m.emitJump(result); err != nil {
+		return err
+	}
+	if err := m.bind(negativeResult); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xd8)
+	if err := m.bind(result); err != nil {
+		return err
+	}
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+
+	if err := m.bind(notNumber); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON value is not a number")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+
+	if err := m.bind(notInteger); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON number is not a signed Int")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+
+	if err := m.bind(overflow); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON number is not a signed Int")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitJSONUIntRuntime() error {
+	if err := m.bind(m.jsonUIntLabel); err != nil {
+		return err
+	}
+	// rdi=Json text. Parse a complete non-negative JSON integer with unsigned
+	// 64-bit multiplication. MUL exposes the high half, and ADD exposes the
+	// final carry, so the full UInt64 range is handled without signed aliases.
+	start := m.newLabel()
+	leadingNext := m.newLabel()
+	requireDigit := m.newLabel()
+	zero := m.newLabel()
+	digitLoop := m.newLabel()
+	numericEnd := m.newLabel()
+	trailing := m.newLabel()
+	trailingNext := m.newLabel()
+	finish := m.newLabel()
+	notUInt := m.newLabel()
+	overflow := m.newLabel()
+
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=Json/String text
+		0x4d, 0x8b, 0x2c, 0x24, // r13=length
+		0x4d, 0x31, 0xf6, // r14=cursor
+		0x48, 0x31, 0xdb, // rbx=unsigned accumulator
+	)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+	if err := m.bind(start); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, notUInt); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, leadingNext); err != nil {
+			return err
+		}
+	}
+	if err := m.emitJump(requireDigit); err != nil {
+		return err
+	}
+	if err := m.bind(leadingNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+
+	if err := m.bind(requireDigit); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, notUInt); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	m.code = append(m.code, 0x3c, '0')
+	if err := m.emitConditionalJump(0x84, zero); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '1')
+	if err := m.emitConditionalJump(0x82, notUInt); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '9')
+	if err := m.emitConditionalJump(0x87, notUInt); err != nil {
+		return err
+	}
+	if err := m.emitJump(digitLoop); err != nil {
+		return err
+	}
+	if err := m.bind(zero); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(numericEnd); err != nil {
+		return err
+	}
+
+	if err := m.bind(digitLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x83, 0xe8, 0x30, // eax -= '0'
+		0x49, 0x89, 0xc0, // r8=digit
+		0x48, 0x89, 0xd8, // rax=accumulator
+		0x48, 0xc7, 0xc1, 0x0a, 0x00, 0x00, 0x00, // rcx=10
+		0x48, 0xf7, 0xe1, // unsigned rax*rcx -> rdx:rax
+		0x48, 0x85, 0xd2,
+	)
+	if err := m.emitConditionalJump(0x85, overflow); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x01, 0xc0) // rax+=digit
+	if err := m.emitConditionalJump(0x82, overflow); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc3, 0x49, 0xff, 0xc6)
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, finish); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	m.code = append(m.code, 0x3c, '0')
+	if err := m.emitConditionalJump(0x82, numericEnd); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '9')
+	if err := m.emitConditionalJump(0x87, numericEnd); err != nil {
+		return err
+	}
+	if err := m.emitJump(digitLoop); err != nil {
+		return err
+	}
+
+	if err := m.bind(numericEnd); err != nil {
+		return err
+	}
+	if err := m.emitJump(trailing); err != nil {
+		return err
+	}
+	if err := m.bind(trailing); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, finish); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, trailingNext); err != nil {
+			return err
+		}
+	}
+	if err := m.emitJump(notUInt); err != nil {
+		return err
+	}
+	if err := m.bind(trailingNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(trailing); err != nil {
+		return err
+	}
+
+	if err := m.bind(finish); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xd8)
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	if err := m.bind(notUInt); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON number is not a UInt64")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	if err := m.bind(overflow); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON number is not a UInt64")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitJSONBoolRuntime() error {
+	if err := m.bind(m.jsonBoolLabel); err != nil {
+		return err
+	}
+	// rdi=Json text. Accept exactly one JSON boolean with surrounding
+	// whitespace, and return a boxed Result[Bool,String].
+	start := m.newLabel()
+	leadingNext := m.newLabel()
+	trueValue := m.newLabel()
+	falseValue := m.newLabel()
+	trailing := m.newLabel()
+	trailingNext := m.newLabel()
+	success := m.newLabel()
+	failure := m.newLabel()
+
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=Json/String text
+		0x4d, 0x8b, 0x2c, 0x24, // r13=length
+		0x4d, 0x31, 0xf6, // r14=cursor
+	)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+	if err := m.bind(start); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, leadingNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, 't')
+	if err := m.emitConditionalJump(0x84, trueValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 'f')
+	if err := m.emitConditionalJump(0x84, falseValue); err != nil {
+		return err
+	}
+	if err := m.emitJump(failure); err != nil {
+		return err
+	}
+	if err := m.bind(leadingNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+
+	emitCheckByte := func(value byte) error {
+		m.code = append(m.code, 0x4d, 0x39, 0xee)
+		if err := m.emitConditionalJump(0x83, failure); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08, 0x3c, value)
+		if err := m.emitConditionalJump(0x85, failure); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x49, 0xff, 0xc6)
+		return nil
+	}
+	if err := m.bind(trueValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc3, 0x01, 0x00, 0x00, 0x00, 0x49, 0xff, 0xc6)
+	for _, value := range []byte{'r', 'u', 'e'} {
+		if err := emitCheckByte(value); err != nil {
+			return err
+		}
+	}
+	if err := m.emitJump(trailing); err != nil {
+		return err
+	}
+	if err := m.bind(falseValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x31, 0xdb, 0x49, 0xff, 0xc6)
+	for _, value := range []byte{'a', 'l', 's', 'e'} {
+		if err := emitCheckByte(value); err != nil {
+			return err
+		}
+	}
+	if err := m.emitJump(trailing); err != nil {
+		return err
+	}
+
+	if err := m.bind(trailing); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, success); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, trailingNext); err != nil {
+			return err
+		}
+	}
+	if err := m.emitJump(failure); err != nil {
+		return err
+	}
+	if err := m.bind(trailingNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(trailing); err != nil {
+		return err
+	}
+
+	if err := m.bind(success); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xd8)
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+
+	if err := m.bind(failure); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON value is not a Bool")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitJSONArrayLenRuntime() error {
+	if err := m.bind(m.jsonArrayLenLabel); err != nil {
+		return err
+	}
+	// rdi=Json text. Walk one array with json_skip and return its element count
+	// as Result[Int,String]. A comma always requires another value, so trailing
+	// commas cannot be accepted accidentally.
+	start := m.newLabel()
+	leadingNext := m.newLabel()
+	valueStart := m.newLabel()
+	valueStartNext := m.newLabel()
+	afterComma := m.newLabel()
+	commaConsumed := m.newLabel()
+	afterCommaNext := m.newLabel()
+	scanValue := m.newLabel()
+	postValue := m.newLabel()
+	postValueNext := m.newLabel()
+	success := m.newLabel()
+	failure := m.newLabel()
+
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=Json/String text
+		0x4d, 0x8b, 0x2c, 0x24, // r13=length
+		0x4d, 0x31, 0xf6, // r14=cursor
+		0x4d, 0x31, 0xff, // r15=count
+	)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+	if err := m.bind(start); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, leadingNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, '[')
+	if err := m.emitConditionalJump(0x85, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(valueStart); err != nil {
+		return err
+	}
+	if err := m.bind(leadingNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+
+	if err := m.bind(valueStart); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, valueStartNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, ']')
+	if err := m.emitConditionalJump(0x84, success); err != nil {
+		return err
+	}
+	if err := m.emitJump(scanValue); err != nil {
+		return err
+	}
+	if err := m.bind(valueStartNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(valueStart); err != nil {
+		return err
+	}
+
+	if err := m.bind(afterComma); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, afterCommaNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, ']')
+	if err := m.emitConditionalJump(0x84, failure); err != nil {
+		return err
+	}
+	if err := m.emitJump(scanValue); err != nil {
+		return err
+	}
+	if err := m.bind(afterCommaNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(afterComma); err != nil {
+		return err
+	}
+
+	if err := m.bind(scanValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xe7, 0x4c, 0x89, 0xf6)
+	if err := m.emitLabelCall(m.jsonSkipLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xf8, 0xff)
+	if err := m.emitConditionalJump(0x84, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0xc6, 0x49, 0xff, 0xc7)
+	if err := m.emitJump(postValue); err != nil {
+		return err
+	}
+
+	if err := m.bind(postValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, postValueNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, ',')
+	if err := m.emitConditionalJump(0x84, commaConsumed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, ']')
+	if err := m.emitConditionalJump(0x84, success); err != nil {
+		return err
+	}
+	if err := m.emitJump(failure); err != nil {
+		return err
+	}
+	if err := m.bind(commaConsumed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6) // consume comma before scanning next value
+	if err := m.emitJump(afterComma); err != nil {
+		return err
+	}
+	if err := m.bind(postValueNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(postValue); err != nil {
+		return err
+	}
+
+	if err := m.bind(success); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf8)
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	if err := m.bind(failure); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON value is not an array")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitJSONArrayGetRuntime() error {
+	if err := m.bind(m.jsonArrayGetLabel); err != nil {
+		return err
+	}
+	// rdi=Json text, rsi=zero-based Int index. The selected slice is copied
+	// into a fresh Json/String object so callers can safely retain it.
+	start := m.newLabel()
+	leadingNext := m.newLabel()
+	valueStart := m.newLabel()
+	valueStartNext := m.newLabel()
+	afterComma := m.newLabel()
+	commaConsumed := m.newLabel()
+	afterCommaNext := m.newLabel()
+	scanValue := m.newLabel()
+	postValue := m.newLabel()
+	postValueNext := m.newLabel()
+	found := m.newLabel()
+	failure := m.newLabel()
+
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=Json/String text
+		0x4d, 0x8b, 0x2c, 0x24, // r13=length
+		0x49, 0x89, 0xf7, // r15=target index
+		0x4d, 0x85, 0xff, // reject negative indexes
+	)
+	if err := m.emitConditionalJump(0x88, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x31, 0xf6) // r14=cursor
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+	if err := m.bind(start); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, leadingNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, '[')
+	if err := m.emitConditionalJump(0x85, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(valueStart); err != nil {
+		return err
+	}
+	if err := m.bind(leadingNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+
+	if err := m.bind(valueStart); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, valueStartNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, ']')
+	if err := m.emitConditionalJump(0x84, failure); err != nil {
+		return err
+	}
+	if err := m.emitJump(scanValue); err != nil {
+		return err
+	}
+	if err := m.bind(valueStartNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(valueStart); err != nil {
+		return err
+	}
+
+	if err := m.bind(afterComma); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, afterCommaNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, ']')
+	if err := m.emitConditionalJump(0x84, failure); err != nil {
+		return err
+	}
+	if err := m.emitJump(scanValue); err != nil {
+		return err
+	}
+	if err := m.bind(afterCommaNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(afterComma); err != nil {
+		return err
+	}
+
+	if err := m.bind(scanValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xe7, 0x4c, 0x89, 0xf6)
+	if err := m.emitLabelCall(m.jsonSkipLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xf8, 0xff)
+	if err := m.emitConditionalJump(0x84, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x85, 0xff)
+	if err := m.emitConditionalJump(0x84, found); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xcf, 0x49, 0x89, 0xc6)
+	if err := m.emitJump(postValue); err != nil {
+		return err
+	}
+	if err := m.bind(found); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc5, 0x48, 0x29, 0xf5, 0x48, 0x89, 0xee, 0x4c, 0x89, 0xe7, 0x48, 0x83, 0xc7, 0x08, 0x4c, 0x01, 0xf7)
+	if err := m.emitLabelCall(m.stringAllocLabel); err != nil {
+		return err
+	}
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+
+	if err := m.bind(postValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, postValueNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, ',')
+	if err := m.emitConditionalJump(0x84, commaConsumed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, ']')
+	if err := m.emitConditionalJump(0x84, failure); err != nil {
+		return err
+	}
+	if err := m.emitJump(failure); err != nil {
+		return err
+	}
+	if err := m.bind(commaConsumed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6) // consume comma before scanning next value
+	if err := m.emitJump(afterComma); err != nil {
+		return err
+	}
+	if err := m.bind(postValueNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(postValue); err != nil {
+		return err
+	}
+
+	if err := m.bind(failure); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON array access failed")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitArraySetRuntime() error {
+	if err := m.bind(m.arraySetLabel); err != nil {
+		return err
+	}
+	// rdi=array, rsi=index, rdx=replacement. Clone the immutable qword array
+	// and return a boxed Result with one changed element.
+	failure := m.newLabel()
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=source array
+		0x49, 0x89, 0xf5, // r13=index
+		0x49, 0x89, 0xd6, // r14=replacement
+		0x49, 0x8b, 0x2c, 0x24, // rbp=length
+		0x4d, 0x85, 0xed, // reject negative index
+	)
+	if err := m.emitConditionalJump(0x88, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x39, 0xed) // cmp index, length
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xef) // rdi=length
+	m.arrayRuntimeUsed = true
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	arrayValue := m.newLabel()
+	copyDone := m.newLabel()
+	if err := m.bind(arrayValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0xc7) // r15=new array
+	m.code = append(m.code,
+		0x4c, 0x89, 0xe6, // rsi=source
+		0x4c, 0x89, 0xff, // rdi=destination
+		0x48, 0x89, 0xe9, 0x48, 0xff, 0xc1, // rcx=length+1
+		0xf3, 0x48, 0xa5, // copy header and qword elements
+		0x4c, 0x89, 0xe8, // rax=index
+		0x48, 0xc1, 0xe0, 0x03,
+		0x4c, 0x01, 0xf8, // rax+=new array
+		0x48, 0x83, 0xc0, 0x08,
+		0x4c, 0x89, 0x30, // store replacement
+	)
+	if err := m.emitJump(copyDone); err != nil {
+		return err
+	}
+	if err := m.bind(copyDone); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf8)
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	if err := m.bind(failure); err != nil {
+		return err
+	}
+	m.emitStringAddress("array index out of range")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitArraySliceRuntime() error {
+	if err := m.bind(m.arraySliceLabel); err != nil {
+		return err
+	}
+	// rdi=array, rsi=start, rdx=length. Validate the half-open range, copy
+	// the selected qwords into a fresh immutable array, and box the Result.
+	failure := m.newLabel()
+	copyDone := m.newLabel()
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=source array
+		0x49, 0x89, 0xf5, // r13=start
+		0x49, 0x89, 0xd6, // r14=length
+		0x49, 0x8b, 0x2c, 0x24, // rbp=array length
+		0x4d, 0x85, 0xed, // start >= 0
+	)
+	if err := m.emitConditionalJump(0x88, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x85, 0xf6) // length >= 0
+	if err := m.emitConditionalJump(0x88, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x39, 0xed)
+	if err := m.emitConditionalJump(0x87, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xe8, 0x4c, 0x29, 0xe8, 0x49, 0x39, 0xc6)
+	if err := m.emitConditionalJump(0x87, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf7)
+	m.arrayRuntimeUsed = true
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0xc7)
+	m.code = append(m.code,
+		0x4c, 0x89, 0xe6, // rsi=source
+		0x4c, 0x89, 0xe8, // rax=start
+		0x48, 0xc1, 0xe0, 0x03,
+		0x48, 0x01, 0xc6, // rsi+=start*8
+		0x48, 0x83, 0xc6, 0x08,
+		0x4c, 0x89, 0xff, // rdi=destination
+		0x48, 0x83, 0xc7, 0x08,
+		0x4c, 0x89, 0xf1, // rcx=length
+		0xf3, 0x48, 0xa5,
+	)
+	if err := m.emitJump(copyDone); err != nil {
+		return err
+	}
+	if err := m.bind(copyDone); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf8, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	if err := m.bind(failure); err != nil {
+		return err
+	}
+	if err := m.emitJump(m.trapLabel); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (m *directMachine) emitBytesFromArrayRuntime() error {
 	if err := m.bind(m.bytesFromArrayLabel); err != nil {
 		return err
@@ -2497,6 +3956,54 @@ func (m *directMachine) emitBytesFromArrayRuntime() error {
 		0x4c, 0x89, 0xf0,
 		0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3,
 	)
+	return nil
+}
+
+func (m *directMachine) emitU8ArrayRuntime() error {
+	if err := m.bind(m.u8ArrayLabel); err != nil {
+		return err
+	}
+	// rdi=Bytes. Convert the immutable {length, bytes[]} object into a fresh
+	// Array[UInt8] whose elements use the normal qword array ABI.
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=Bytes
+		0x49, 0x8b, 0x2c, 0x24, // rbp=length
+		0x48, 0x89, 0xef, // rdi=element count
+	)
+	m.arrayRuntimeUsed = true
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0xc6, 0x45, 0x31, 0xff) // r14=array, r15=index
+	loop := m.newLabel()
+	done := m.newLabel()
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	// The element count lives in RBP. R13 is callee-saved but is not
+	// initialized by this runtime, so comparing against it could skip the copy
+	// loop and leave every UInt8 at the allocator's zero value.
+	m.code = append(m.code, 0x4c, 0x89, 0xf8, 0x48, 0x39, 0xe8)
+	if err := m.emitConditionalJump(0x83, done); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xfa, // rdx=index
+		0x48, 0xc1, 0xe2, 0x03,
+		0x4c, 0x01, 0xf2, // rdx+=array
+		0x48, 0x83, 0xc2, 0x08,
+		0x4b, 0x0f, 0xb6, 0x44, 0x3c, 0x08, // rax=Bytes byte
+		0x48, 0x89, 0x02, // store qword element
+		0x49, 0xff, 0xc7,
+	)
+	if err := m.emitJump(loop); err != nil {
+		return err
+	}
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf0, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
 	return nil
 }
 
@@ -3127,13 +4634,28 @@ func (m *directMachine) emitFunctionCall(e *Expr) error {
 	if len(e.Args) > 6 {
 		return fmt.Errorf("direct ELF backend function '%s' has too many arguments", e.Function.Name)
 	}
-	for index, argument := range e.Args {
+	// Keep already-evaluated arguments on the machine stack while evaluating
+	// later arguments. Runtime calls and string/array lowering freely use the
+	// caller-saved argument registers, so moving argument 0 to RDI before
+	// evaluating argument 1 would silently overwrite it. Pop in reverse order
+	// after every argument has been evaluated to preserve source order and the
+	// normal SysV register ABI.
+	for _, argument := range e.Args {
 		if err := m.emitExpr(argument); err != nil {
 			return err
 		}
-		if err := m.emitMoveArg(index); err != nil {
-			return err
-		}
+		m.code = append(m.code, 0x50)
+	}
+	registerPops := [6][]byte{
+		{0x5f},       // pop rdi
+		{0x5e},       // pop rsi
+		{0x5a},       // pop rdx
+		{0x59},       // pop rcx
+		{0x41, 0x58}, // pop r8
+		{0x41, 0x59}, // pop r9
+	}
+	for index := len(e.Args) - 1; index >= 0; index-- {
+		m.code = append(m.code, registerPops[index]...)
 	}
 	return m.emitCall(functionKey(e.Function))
 }
@@ -3625,6 +5147,14 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			m.hostRuntimeUsed = true
 			m.jsonRuntimeUsed = true
 			return m.emitLabelCall(m.jsonParseLabel)
+		case "json_stringify":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyJSON {
+				return fmt.Errorf("direct ELF json_stringify expects one Json argument")
+			}
+			// Json is an immutable String pointer in the direct ABI. Parsing
+			// retains the original validated bytes, and object accessors return
+			// fresh validated slices, so stringify is the identity operation.
+			return m.emitExpr(e.Args[0])
 		case "json_kind":
 			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyJSON {
 				return fmt.Errorf("direct ELF json_kind expects one Json argument")
@@ -3651,6 +5181,76 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			m.hostRuntimeUsed = true
 			m.jsonRuntimeUsed = true
 			return m.emitLabelCall(m.jsonObjectGetLabel)
+		case "json_string":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyJSON {
+				return fmt.Errorf("direct ELF json_string expects one Json argument")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // rdi=Json text
+			m.hostRuntimeUsed = true
+			m.jsonRuntimeUsed = true
+			return m.emitLabelCall(m.jsonStringLabel)
+		case "json_int":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyJSON {
+				return fmt.Errorf("direct ELF json_int expects one Json argument")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // rdi=Json text
+			m.hostRuntimeUsed = true
+			m.jsonRuntimeUsed = true
+			return m.emitLabelCall(m.jsonIntLabel)
+		case "json_uint":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyJSON {
+				return fmt.Errorf("direct ELF json_uint expects one Json argument")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // rdi=Json text
+			m.hostRuntimeUsed = true
+			m.jsonRuntimeUsed = true
+			return m.emitLabelCall(m.jsonUIntLabel)
+		case "json_bool":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyJSON {
+				return fmt.Errorf("direct ELF json_bool expects one Json argument")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // rdi=Json text
+			m.hostRuntimeUsed = true
+			m.jsonRuntimeUsed = true
+			return m.emitLabelCall(m.jsonBoolLabel)
+		case "json_array_len":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyJSON {
+				return fmt.Errorf("direct ELF json_array_len expects one Json argument")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // rdi=Json text
+			m.hostRuntimeUsed = true
+			m.jsonRuntimeUsed = true
+			return m.emitLabelCall(m.jsonArrayLenLabel)
+		case "json_array_get":
+			if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyJSON || e.Args[1].Type == nil || e.Args[1].Type.Kind != TyInt {
+				return fmt.Errorf("direct ELF json_array_get expects (Json, Int)")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if err := m.emitExpr(e.Args[1]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc6, 0x58, 0x48, 0x89, 0xc7) // rsi=index, rdi=Json
+			m.hostRuntimeUsed = true
+			m.jsonRuntimeUsed = true
+			return m.emitLabelCall(m.jsonArrayGetLabel)
 		case "len":
 			if len(e.Args) != 1 || e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyArray && e.Args[0].Type.Kind != TyBytes) {
 				return fmt.Errorf("direct ELF backend supports len(Array[T]) and len(Bytes)")
@@ -3670,14 +5270,99 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			m.code = append(m.code, 0x48, 0x89, 0xc7) // mov rdi, rax
 			m.hostRuntimeUsed = true
 			return m.emitLabelCall(m.bytesFromArrayLabel)
+		case "bytes_from_u8":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray || e.Args[0].Type.A == nil || e.Args[0].Type.A.Kind != TyUInt || e.Args[0].Type.A.Bits != 8 {
+				return fmt.Errorf("direct ELF backend bytes_from_u8 expects Array[UInt8]")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // mov rdi, rax
+			m.hostRuntimeUsed = true
+			return m.emitLabelCall(m.bytesFromArrayLabel)
+		case "u8_array":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyBytes {
+				return fmt.Errorf("direct ELF backend u8_array expects Bytes")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // rdi=Bytes
+			m.hostRuntimeUsed = true
+			m.arrayRuntimeUsed = true
+			return m.emitLabelCall(m.u8ArrayLabel)
+		case "string_to_bytes":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyString {
+				return fmt.Errorf("direct ELF backend string_to_bytes expects String")
+			}
+			// String and Bytes use the same immutable length-plus-octets layout;
+			// every String is already valid UTF-8, so no copy or validation pass
+			// is needed for this direction.
+			return m.emitExpr(e.Args[0])
 		case "map_get":
 			return m.emitMapGet(e)
 		case "map_contains_key":
 			return m.emitMapContains(e)
 		case "map_insert":
 			return m.emitMapInsert(e)
+		case "map_remove":
+			if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyMap {
+				return fmt.Errorf("direct ELF backend map_remove expects Map[K,V] and K")
+			}
+			kind, err := directMapKeyKind(e.Args[0].Type.A)
+			if err != nil {
+				return err
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if err := m.emitExpr(e.Args[1]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc6, 0x5f) // rsi=key, rdi=map
+			m.emitMapKeyImmediate(kind)
+			m.arrayRuntimeUsed = true
+			m.mapRuntimeUsed = true
+			return m.emitLabelCall(m.mapRemoveLabel)
 		case "array_push":
 			return m.emitArrayPushCall(e)
+		case "array_set":
+			if len(e.Args) != 3 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray || e.Args[1].Type == nil || e.Args[1].Type.Kind != TyInt || e.Args[2].Type == nil || !typeEqual(e.Args[0].Type.A, e.Args[2].Type) {
+				return fmt.Errorf("direct ELF backend array_set expects Array[T], Int, and T")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if err := m.emitExpr(e.Args[1]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if err := m.emitExpr(e.Args[2]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc2, 0x5e, 0x5f) // rdx=value, rsi=index, rdi=array
+			m.arrayRuntimeUsed = true
+			return m.emitLabelCall(m.arraySetLabel)
+		case "array_slice":
+			if len(e.Args) != 3 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray || e.Args[1].Type == nil || e.Args[1].Type.Kind != TyInt || e.Args[2].Type == nil || e.Args[2].Type.Kind != TyInt {
+				return fmt.Errorf("direct ELF backend array_slice expects Array[T], Int, and Int")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if err := m.emitExpr(e.Args[1]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if err := m.emitExpr(e.Args[2]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc2, 0x5e, 0x5f) // rdx=length, rsi=start, rdi=array
+			m.arrayRuntimeUsed = true
+			return m.emitLabelCall(m.arraySliceLabel)
 		case "array_concat":
 			if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray || e.Args[1].Type == nil || e.Args[1].Type.Kind != TyArray {
 				return fmt.Errorf("direct ELF backend expects array_concat(Array[T], Array[T])")
@@ -3800,6 +5485,9 @@ func (m *directMachine) emitExpr(e *Expr) error {
 }
 
 func (m *directMachine) emitBinary(e *Expr) error {
+	if e.Op == AND || e.Op == OR {
+		return m.emitLogical(e)
+	}
 	if err := m.emitExpr(e.Left); err != nil {
 		return err
 	}
@@ -3810,11 +5498,22 @@ func (m *directMachine) emitBinary(e *Expr) error {
 	m.code = append(m.code, 0x48, 0x89, 0xc1, 0x58) // mov rcx, rax; pop rax
 	leftType := e.Left.Type
 	unsigned := leftType != nil && leftType.Kind == TyUInt
-	if e.Type != nil && e.Type.Kind == TyString {
-		if e.Op != PLUS {
+	if leftType != nil && leftType.Kind == TyString {
+		if e.Op == PLUS {
+			return m.emitStringConcatCall()
+		}
+		if e.Op != EQEQ && e.Op != NEQ {
 			return fmt.Errorf("direct ELF backend does not support String operator %s", opText(e.Op))
 		}
-		return m.emitStringConcatCall()
+		m.code = append(m.code, 0x48, 0x89, 0xc7, 0x48, 0x89, 0xce) // rdi=left, rsi=right
+		m.stringEqualUsed = true
+		if err := m.emitLabelCall(m.stringEqualLabel); err != nil {
+			return err
+		}
+		if e.Op == NEQ {
+			m.code = append(m.code, 0x48, 0x83, 0xf0, 0x01) // invert Boolean result
+		}
+		return nil
 	}
 	if e.Type != nil && e.Type.Kind == TyArray {
 		if e.Op != PLUS {
@@ -3893,6 +5592,38 @@ func (m *directMachine) emitBinary(e *Expr) error {
 		return fmt.Errorf("direct ELF backend does not support binary operator %s", opText(e.Op))
 	}
 	return nil
+}
+
+func (m *directMachine) emitLogical(e *Expr) error {
+	if err := m.emitExpr(e.Left); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xc0) // test left, left
+	shortCircuit := m.newLabel()
+	done := m.newLabel()
+	condition := byte(0x84) // &&: false left short-circuits
+	if e.Op == OR {
+		condition = 0x85 // ||: true left short-circuits
+	}
+	if err := m.emitConditionalJump(condition, shortCircuit); err != nil {
+		return err
+	}
+	if err := m.emitExpr(e.Right); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x48, 0x0f, 0xb6, 0xc0)
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(shortCircuit); err != nil {
+		return err
+	}
+	if e.Op == AND {
+		m.emitMoveImmediate(0)
+	} else {
+		m.emitMoveImmediate(1)
+	}
+	return m.bind(done)
 }
 
 func machineSetcc(op TokenKind, unsigned bool) byte {
@@ -4546,6 +6277,9 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 		if err := m.emitBytesFromArrayRuntime(); err != nil {
 			return nil, err
 		}
+		if err := m.emitU8ArrayRuntime(); err != nil {
+			return nil, err
+		}
 		if err := m.emitProcessArgsRuntime(); err != nil {
 			return nil, err
 		}
@@ -4569,6 +6303,24 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 		if err := m.emitJSONObjectGetRuntime(); err != nil {
 			return nil, err
 		}
+		if err := m.emitJSONStringRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitJSONIntRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitJSONUIntRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitJSONBoolRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitJSONArrayLenRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitJSONArrayGetRuntime(); err != nil {
+			return nil, err
+		}
 	}
 	if m.stringConcatUsed {
 		if err := m.emitStringConcatRuntime(); err != nil {
@@ -4585,6 +6337,17 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 		if err := m.emitArrayConcatRuntime(); err != nil {
 			return nil, err
 		}
+		if err := m.emitArraySetRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitArraySliceRuntime(); err != nil {
+			return nil, err
+		}
+	}
+	if m.stringEqualUsed && !m.mapRuntimeUsed {
+		if err := m.emitStringEqualRuntime(); err != nil {
+			return nil, err
+		}
 	}
 	if m.mapRuntimeUsed {
 		if err := m.emitStringEqualRuntime(); err != nil {
@@ -4594,6 +6357,9 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			return nil, err
 		}
 		if err := m.emitMapInsertRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitMapRemoveRuntime(); err != nil {
 			return nil, err
 		}
 	}

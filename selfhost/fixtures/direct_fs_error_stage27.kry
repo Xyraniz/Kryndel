@@ -1,0 +1,7 @@
+fn main() -> Nil {
+    let result: Result[String, String] = fs_read_text("does-not-exist-stage27")
+    if is_err(result) {
+        println("error: " + unwrap_or(result_error(result), "unknown"))
+    }
+    return nil
+}

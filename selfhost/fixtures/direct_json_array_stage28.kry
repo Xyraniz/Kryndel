@@ -1,0 +1,13 @@
+fn echo(value: String, unused: String) -> String {
+    return value
+}
+
+fn main() -> Nil {
+    println(echo("expr", "bo" + "dy"))
+    let values: Array[Int] = [1, 2, 3]
+    let updated: Array[Int] = array_slice(values, 1, 2)
+    println(str(len(updated)))
+    println(str(unwrap_or(array_get(updated, 0), 0)))
+    println(str(unwrap_or(array_get(updated, 1), 0)))
+    return nil
+}
