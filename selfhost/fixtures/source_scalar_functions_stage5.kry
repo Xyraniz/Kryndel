@@ -18,6 +18,10 @@ fn label(value: Int) -> String {
     }
 }
 
+fn mark(value: String) -> String {
+    return value + "!"
+}
+
 fn mask(value: UInt8) -> UInt8 {
     let mut masked: UInt8 = value & u8(15)
     masked = ((((masked << 1) >> 1) | u8(1)) ^ u8(2))
@@ -33,5 +37,5 @@ fn main() -> Nil {
     }
     println(increment(u64(0)))
     println(mask(u8(16)))
-    println(label(1))
+    println(mark(label(1)))
 }

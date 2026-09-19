@@ -26,6 +26,8 @@ struct Assembler {
     jumps: Array[JumpPatch],
     data_patches: Array[DataPatch],
     frame_patch: Int,
+    string_concat_label: Int,
+    string_concat_used: Bool,
 }
 
 struct CompileEnv {
@@ -111,56 +113,70 @@ fn dyn_u64_bytes(value: UInt64) -> Array[UInt8] {
 
 fn state_with_code(state: EmitState, code: Array[UInt8]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used },
         env: state.env,
     }
 }
 
 fn state_with_data(state: EmitState, data: Array[UInt8]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used },
         env: state.env,
     }
 }
 
 fn state_with_data_index(state: EmitState, data: Array[UInt8], data_by_text: Map[String, Int]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used },
         env: state.env,
     }
 }
 
 fn state_with_string_data_index(state: EmitState, data: Array[UInt8], string_data_by_text: Map[String, Int]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: state.assembler.data_by_text, string_data_by_text: string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: state.assembler.data_by_text, string_data_by_text: string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used },
         env: state.env,
     }
 }
 
 fn state_with_labels(state: EmitState, labels: Array[Int]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used },
         env: state.env,
     }
 }
 
 fn state_with_jumps(state: EmitState, jumps: Array[JumpPatch]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used },
         env: state.env,
     }
 }
 
 fn state_with_data_patches(state: EmitState, patches: Array[DataPatch]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used },
         env: state.env,
     }
 }
 
 fn state_with_frame_patch(state: EmitState, position: Int) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: position },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: position, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used },
+        env: state.env,
+    }
+}
+
+fn state_with_string_concat_label(state: EmitState, label: Int) -> EmitState {
+    return EmitState{
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: label, string_concat_used: state.assembler.string_concat_used },
+        env: state.env,
+    }
+}
+
+fn state_with_string_concat_used(state: EmitState) -> EmitState {
+    return EmitState{
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: true },
         env: state.env,
     }
 }
@@ -210,6 +226,12 @@ fn emit_call(state: EmitState, name: String) -> Result[EmitState, String] {
     let position: Int = len(state.assembler.code) + 1
     let updated: EmitState = append_code(state, [u8(232), u8(0), u8(0), u8(0), u8(0)])
     return ok(state_with_jumps(updated, array_push(updated.assembler.jumps, JumpPatch{ label: unwrap_or(label, -1), position: position })))
+}
+
+fn emit_label_call(state: EmitState, label: Int) -> EmitState {
+    let position: Int = len(state.assembler.code) + 1
+    let updated: EmitState = append_code(state, [u8(232), u8(0), u8(0), u8(0), u8(0)])
+    return state_with_jumps(updated, array_push(updated.assembler.jumps, JumpPatch{ label: label, position: position }))
 }
 
 fn emit_move_arg(state: EmitState, index: Int) -> Result[EmitState, String] {
@@ -340,6 +362,43 @@ fn emit_string(state: EmitState, value: String) -> EmitState {
 
 fn emit_string_write(state: EmitState) -> EmitState {
     return append_code(state, [u8(72), u8(139), u8(16), u8(72), u8(141), u8(112), u8(8), u8(184), u8(1), u8(0), u8(0), u8(0), u8(191), u8(1), u8(0), u8(0), u8(0), u8(15), u8(5)])
+}
+
+fn emit_string_concat_call(state: EmitState) -> EmitState {
+    let moved: EmitState = append_code(state, [u8(72), u8(137), u8(199), u8(72), u8(137), u8(206)])
+    return emit_label_call(state_with_string_concat_used(moved), moved.assembler.string_concat_label)
+}
+
+fn emit_string_concat_runtime(state: EmitState) -> Result[EmitState, String] {
+    let bound: Result[EmitState, String] = bind_label(state, state.assembler.string_concat_label)
+    if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind String runtime")) }
+    let mut current: EmitState = append_code(result_unwrap(bound), [
+        u8(83), u8(85), u8(65), u8(84), u8(65), u8(85), u8(65), u8(86), u8(65), u8(87),
+        u8(73), u8(137), u8(252), u8(73), u8(137), u8(245),
+        u8(73), u8(139), u8(4), u8(36), u8(73), u8(137), u8(198),
+        u8(73), u8(139), u8(69), u8(0), u8(73), u8(137), u8(199),
+        u8(76), u8(137), u8(245), u8(77), u8(1), u8(254)
+    ])
+    current = emit_jump(current, current.env.trap_label, true, u8(128))
+    current = append_code(current, [
+        u8(76), u8(137), u8(247), u8(72), u8(131), u8(199), u8(8),
+        u8(72), u8(137), u8(254), u8(72), u8(49), u8(255),
+        u8(184), u8(9), u8(0), u8(0), u8(0),
+        u8(186), u8(3), u8(0), u8(0), u8(0),
+        u8(65), u8(186), u8(34), u8(0), u8(0), u8(0),
+        u8(65), u8(184), u8(255), u8(255), u8(255), u8(255),
+        u8(69), u8(49), u8(201), u8(15), u8(5), u8(72), u8(133), u8(192)
+    ])
+    current = emit_jump(current, current.env.trap_label, true, u8(136))
+    current = append_code(current, [
+        u8(72), u8(137), u8(195), u8(76), u8(137), u8(51),
+        u8(77), u8(141), u8(100), u8(36), u8(8), u8(76), u8(137), u8(230), u8(72), u8(141), u8(123), u8(8),
+        u8(72), u8(137), u8(233), u8(243), u8(164),
+        u8(77), u8(141), u8(109), u8(8), u8(76), u8(137), u8(238), u8(72), u8(141), u8(123), u8(8), u8(72), u8(1), u8(239),
+        u8(76), u8(137), u8(249), u8(243), u8(164),
+        u8(72), u8(137), u8(216), u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)
+    ])
+    return ok(current)
 }
 
 fn emit_integer(state: EmitState, unsigned: Bool) -> Result[EmitState, String] {
@@ -509,7 +568,10 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
     let combined: EmitState = append_code(result_unwrap(right), [u8(72), u8(137), u8(193), u8(88)])
     let operator: String = text(field(expression, "operator"))
     let expression_type: String = expr_type(expression)
-    if expression_type == "String" { return err("dynamic backend: dynamic String concatenation is not supported yet") }
+    if expression_type == "String" {
+        if operator != "+" { return err("dynamic backend: unsupported String operator '" + operator + "'") }
+        return ok(emit_string_concat_call(combined))
+    }
     let unsigned: Bool = is_unsigned(expression_type)
     let bits: Int = uint_bits(expression_type)
     if operator == "+" {
@@ -780,7 +842,7 @@ fn emit_dynamic_elf(code: Array[UInt8], data: Array[UInt8]) -> Bytes {
 }
 
 fn new_dynamic_state() -> EmitState {
-    let assembler: Assembler = Assembler{ code: [], data: [], data_by_text: {}, string_data_by_text: {}, labels: [], jumps: [], data_patches: [], frame_patch: -1 }
+    let assembler: Assembler = Assembler{ code: [], data: [], data_by_text: {}, string_data_by_text: {}, labels: [], jumps: [], data_patches: [], frame_patch: -1, string_concat_label: -1, string_concat_used: false }
     let env: CompileEnv = CompileEnv{ slots: {}, static_values: {}, function_labels: {}, function_returns: {}, next_slot: 0, breaks: [], continues: [], end_label: -1, trap_label: -1, buffer_offset: 1, in_function: false, current_function: "" }
     return EmitState{ assembler: assembler, env: env }
 }
@@ -931,8 +993,10 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     let mut state: EmitState = emit_prologue(new_dynamic_state())
     let end_label: LabelState = new_label(state)
     let trap_label: LabelState = new_label(end_label.state)
+    let string_concat_label: LabelState = new_label(trap_label.state)
     let slot_count: Int = count_slots(statements)
-    state = state_with_env(trap_label.state, CompileEnv{ slots: {}, static_values: {}, function_labels: {}, function_returns: {}, next_slot: 0, breaks: [], continues: [], end_label: end_label.label, trap_label: trap_label.label, buffer_offset: slot_count * 8 + 1, in_function: false, current_function: "" })
+    state = state_with_string_concat_label(string_concat_label.state, string_concat_label.label)
+    state = state_with_env(state, CompileEnv{ slots: {}, static_values: {}, function_labels: {}, function_returns: {}, next_slot: 0, breaks: [], continues: [], end_label: end_label.label, trap_label: trap_label.label, buffer_offset: slot_count * 8 + 1, in_function: false, current_function: "" })
     let prepared: Result[EmitState, String] = prepare_function_labels(state, functions)
     if is_err(prepared) { return err(unwrap_or(result_error(prepared), "dynamic backend: function preparation failed")) }
     state = result_unwrap(prepared)
@@ -941,11 +1005,16 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     let main_state: EmitState = result_unwrap(compiled)
     let mut lowered: EmitState = main_state
     let function_count: Int = result_unwrap(json_array_len(functions))
-    if function_count > 0 {
+    if function_count > 0 || main_state.assembler.string_concat_used {
         lowered = emit_jump(lowered, end_label.label, false, u8(0))
         let emitted: Result[EmitState, String] = emit_function_bodies(lowered, functions, 0, main_state.env)
         if is_err(emitted) { return err(unwrap_or(result_error(emitted), "dynamic backend: function lowering failed")) }
         lowered = result_unwrap(emitted)
+    }
+    if lowered.assembler.string_concat_used {
+        let runtime: Result[EmitState, String] = emit_string_concat_runtime(lowered)
+        if is_err(runtime) { return err(unwrap_or(result_error(runtime), "dynamic backend: String runtime lowering failed")) }
+        lowered = result_unwrap(runtime)
     }
     let ended: Result[EmitState, String] = bind_label(lowered, end_label.label)
     if is_err(ended) { return err(unwrap_or(result_error(ended), "dynamic backend: cannot bind end")) }

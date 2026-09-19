@@ -473,12 +473,12 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
         if is_none(binding) { return err("parser: unknown identifier '" + token.text + "'") }
         return ok(ParsedExpr{ parser: after_name, expression: variable_expr(token.text, unwrap_or(binding, SourceBinding{ type_name: "", mutable: false, known: false, display: "" })) })
     }
-    return err("parser: expected a literal, identifier, or parenthesized expression")
+    return err("parser: expected a literal, identifier, or parenthesized expression; found " + token.kind + " '" + token.text + "'")
 }
 
 fn parse_unary(parser: SourceParser) -> Result[ParsedExpr, String] {
     let token: SourceToken = current_token(parser)
-    if token.text != "-" && token.text != "!" {
+    if token.kind != "symbol" || (token.text != "-" && token.text != "!") {
         return parse_primary(parser)
     }
     let nested: Result[ParsedExpr, String] = parse_unary(advance(parser))

@@ -12,26 +12,28 @@ import (
 // Unsupported values fail during compilation instead of silently changing
 // Kryndel semantics.
 type directMachine struct {
-	code             []byte
-	data             []byte
-	dataByText       map[string]int
-	stringObjects    map[string]int
-	dataRefs         []machineDataRef
-	labels           []machineLabel
-	slots            map[string]machineSlot
-	nextSlot         int32
-	loops            []machineLoop
-	endLabel         int
-	trapLabel        int
-	staticEnv        map[string]Value
-	bufferOffset     int32
-	functionLabels   map[string]int
-	functionOrder    []*Function
-	functionSlots    map[string]map[string]machineSlot
-	functionNextSlot map[string]int32
-	functionReturns  map[string]*Type
-	inFunction       bool
-	currentFunction  string
+	code              []byte
+	data              []byte
+	dataByText        map[string]int
+	stringObjects     map[string]int
+	dataRefs          []machineDataRef
+	labels            []machineLabel
+	slots             map[string]machineSlot
+	nextSlot          int32
+	loops             []machineLoop
+	endLabel          int
+	trapLabel         int
+	staticEnv         map[string]Value
+	bufferOffset      int32
+	functionLabels    map[string]int
+	functionOrder     []*Function
+	functionSlots     map[string]map[string]machineSlot
+	functionNextSlot  map[string]int32
+	functionReturns   map[string]*Type
+	stringConcatLabel int
+	stringConcatUsed  bool
+	inFunction        bool
+	currentFunction   string
 }
 
 type machineSlot struct {
@@ -68,6 +70,7 @@ func newDirectMachine() *directMachine {
 	}
 	m.endLabel = m.newLabel()
 	m.trapLabel = m.newLabel()
+	m.stringConcatLabel = m.newLabel()
 	return m
 }
 
@@ -101,6 +104,11 @@ func (m *directMachine) emitCall(name string) error {
 	if !ok {
 		return fmt.Errorf("direct ELF backend has no function '%s'", name)
 	}
+	m.code = append(m.code, 0xe8)
+	return m.emitLabelDisplacement(label)
+}
+
+func (m *directMachine) emitLabelCall(label int) error {
 	m.code = append(m.code, 0xe8)
 	return m.emitLabelDisplacement(label)
 }
@@ -160,6 +168,58 @@ func (m *directMachine) emitStringWrite() {
 	m.code = append(m.code, 0x48, 0x8b, 0x10) // mov rdx, [rax]
 	m.code = append(m.code, 0x48, 0x8d, 0x70, 0x08)
 	m.code = append(m.code, 0xb8, 0x01, 0, 0, 0, 0xbf, 0x01, 0, 0, 0, 0x0f, 0x05)
+}
+
+func (m *directMachine) emitStringConcatCall() error {
+	// emitBinary leaves the left pointer in RAX and the right pointer in RCX.
+	m.code = append(m.code, 0x48, 0x89, 0xc7, 0x48, 0x89, 0xce) // mov rdi, rax; mov rsi, rcx
+	m.stringConcatUsed = true
+	return m.emitLabelCall(m.stringConcatLabel)
+}
+
+func (m *directMachine) emitStringConcatRuntime() error {
+	if err := m.bind(m.stringConcatLabel); err != nil {
+		return err
+	}
+	// Preserve the callee-saved registers used as the two source pointers and
+	// lengths. The allocator uses the Linux mmap syscall directly; no libc or
+	// C runtime is involved.
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, 0x49, 0x89, 0xf5,
+		0x49, 0x8b, 0x04, 0x24, 0x49, 0x89, 0xc6,
+		0x49, 0x8b, 0x45, 0x00, 0x49, 0x89, 0xc7,
+		0x4c, 0x89, 0xf5, 0x4d, 0x01, 0xfe,
+	)
+	m.emitTrapOnOverflow()
+	m.code = append(m.code,
+		0x4c, 0x89, 0xf7, // mov rdi, r14
+		0x48, 0x83, 0xc7, 0x08,
+		0x48, 0x89, 0xfe, 0x48, 0x31, 0xff,
+		0xb8, 0x09, 0x00, 0x00, 0x00,
+		0xba, 0x03, 0x00, 0x00, 0x00,
+		0x41, 0xba, 0x22, 0x00, 0x00, 0x00,
+		0x41, 0xb8, 0xff, 0xff, 0xff, 0xff,
+		0x45, 0x31, 0xc9,
+		0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil { // js on mmap error
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x89, 0xc3,
+		0x4c, 0x89, 0x33,
+		0x4d, 0x8d, 0x64, 0x24, 0x08,
+		0x4c, 0x89, 0xe6, 0x48, 0x8d, 0x7b, 0x08,
+		0x48, 0x89, 0xe9, 0xf3, 0xa4,
+		0x4d, 0x8d, 0x6d, 0x08, 0x4c, 0x89, 0xee,
+		0x48, 0x8d, 0x7b, 0x08, 0x48, 0x01, 0xef,
+		0x4c, 0x89, 0xf9, 0xf3, 0xa4,
+		0x48, 0x89, 0xd8,
+		0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3,
+	)
+	return nil
 }
 
 func (m *directMachine) emitWrite(text string) {
@@ -473,9 +533,6 @@ func (m *directMachine) emitExpr(e *Expr) error {
 }
 
 func (m *directMachine) emitBinary(e *Expr) error {
-	if e.Type != nil && e.Type.Kind == TyString {
-		return fmt.Errorf("direct ELF backend does not support dynamic String concatenation yet")
-	}
 	if err := m.emitExpr(e.Left); err != nil {
 		return err
 	}
@@ -486,6 +543,12 @@ func (m *directMachine) emitBinary(e *Expr) error {
 	m.code = append(m.code, 0x48, 0x89, 0xc1, 0x58) // mov rcx, rax; pop rax
 	leftType := e.Left.Type
 	unsigned := leftType != nil && leftType.Kind == TyUInt
+	if e.Type != nil && e.Type.Kind == TyString {
+		if e.Op != PLUS {
+			return fmt.Errorf("direct ELF backend does not support String operator %s", opText(e.Op))
+		}
+		return m.emitStringConcatCall()
+	}
 	switch e.Op {
 	case PLUS:
 		m.code = append(m.code, 0x48, 0x01, 0xc8)
@@ -955,7 +1018,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
-	if len(m.functionOrder) > 0 {
+	if len(m.functionOrder) > 0 || m.stringConcatUsed {
 		if err := m.emitJump(m.endLabel); err != nil {
 			return nil, err
 		}
@@ -992,6 +1055,11 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			m.staticEnv = mainStatic
 			m.loops = mainLoops
 			m.code = append(m.code, 0xc9, 0xc3)
+		}
+	}
+	if m.stringConcatUsed {
+		if err := m.emitStringConcatRuntime(); err != nil {
+			return nil, err
 		}
 	}
 	if err := m.bind(m.endLabel); err != nil {
