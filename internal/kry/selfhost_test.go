@@ -317,6 +317,51 @@ func TestStage3SourceKIRCompilerRejectsUnsupportedSyntax(t *testing.T) {
 	}
 }
 
+func TestStage5SourceFunctionFrontendMatchesDirectELFOracle(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "source_scalar_functions_stage5.kry")
+	compiler := filepath.Join(root, "..", "..", "selfhost", "source_kir_compiler.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerProgram, d := LoadProgram(compiler, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "source-stage5")
+	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, DefaultLimits(), Sandbox{}, []string{fixture, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage5 source function compiler failed: %s", d.Message)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := BuildDirectELF(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("stage5 source function compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
+	}
+}
+
 func TestStage4KryndelFunctionBackendMatchesDirectELFOracle(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {

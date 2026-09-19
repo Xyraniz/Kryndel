@@ -1,0 +1,21 @@
+fn double(value: Int) -> Int {
+    return value + value
+}
+
+fn positive(value: Int) -> Bool {
+    return value > 0
+}
+
+fn increment(value: UInt64) -> UInt64 {
+    return value + u64(1)
+}
+
+fn main() -> Nil {
+    println(double(21))
+    if positive(1) {
+        println("positive")
+    } else {
+        println("wrong")
+    }
+    println(increment(u64(0)))
+}
