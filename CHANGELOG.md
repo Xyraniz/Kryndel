@@ -10,13 +10,32 @@ emitters that only handled constant top-level output. The backend supports
 functions, recursion, `if`/`else`, `while`, `for`, `match`, structs, enums,
 arrays, maps, sets, strings, bytes, `Option`, `Result`, the `?` operator and
 `defer`, with byte-for-byte identical output to the interpreter. `--format=c`
-emits the generated C source. Unsupported constructs (threads, actors, HTTP,
-WebSockets, Windows APIs, polymorphic dispatch) are rejected with a clear
-diagnostic instead of silently degrading.
+emits the generated C source. Top-level bindings become file-scope globals so
+programs that mix top-level statements with functions compile correctly.
+
+The backend also lowers the concurrency surface: `Shared[T]` cells
+(`shared_new`/`shared_read`/`shared_write`/`shared_swap`), isolated `Actor[T]`
+mailboxes (`actor_channel`, `actor_with_capacity`, `actor_send`,
+`actor_try_receive`, `actor_receive_timeout`, `actor_close`), structured
+`TaskGroup` ownership (`task_group`, `task_spawn`, `task_group_cancel`,
+`task_group_wait`), `thread_spawn`, `await`/`await_timeout`, and runtime
+polymorphic dispatch (`poly_register`, `poly_reorder`, `poly_dispatch`). Handler
+names are resolved at runtime through a generated name table, so wrappers that
+forward a handler name dynamically still dispatch correctly. Constructs that
+remain genuinely unsupported (HTTP, WebSockets, Windows APIs) are rejected with
+a clear diagnostic instead of silently degrading.
 
 The native runtime now includes JSON parsing and Go-compatible serialization,
 SHA-256 and HMAC-SHA-256, cryptographically secure random bytes, the full
 filesystem surface, environment lookup, process execution, sleep and yield.
+
+Thirty additional builtins are now available in both the interpreter and the
+native backend with verified parity: `string_repeat`, `string_index_of`,
+`string_pad_start`/`string_pad_end`, `string_lines`, `string_chars`,
+`string_to_upper`/`string_to_lower`, `array_sort`, `array_index_of`,
+`array_sum`, `array_min`/`array_max`, `array_take`/`array_drop`,
+`map_contains_key`, `map_values`, `map_remove`, `set_remove`, `set_to_array`,
+`tan`, `atan`, `atan2`, `exp`, `log10`, `log2`, `trunc`, `sign` and `clamp`.
 
 Several interpreter builtins that were declared to return `Result` but returned
 raw values (`crypto_random_bytes`, `fs_read_dir`, `fs_create_dir`,
