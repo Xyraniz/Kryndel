@@ -148,5 +148,13 @@ func init() {
 		Builtin{"udp_receive", "udp_receive(socket: UdpSocket,max: Int) -> Result[Bytes,String]", "network", "borrow", "I/O/limit failure", "Receive one UDP datagram.", "2.1.0", 2, "udp_receive"},
 		Builtin{"udp_receive_from", "udp_receive_from(socket: UdpSocket,max: Int) -> Result[Json,String]", "network", "borrow", "I/O/limit failure", "Receive one UDP datagram with sender and base64 data metadata.", "2.1.0", 2, "udp_receive_from"},
 		Builtin{"udp_close", "udp_close(socket: UdpSocket) -> Nil", "network", "handle", "close failure", "Close a UDP socket.", "2.1.0", 1, "udp_close"},
+		Builtin{"ffi_library_open", "ffi_library_open(path: String) -> Result[FFILibrary,String]", "ffi", "handle", "load failure", "Load a native dynamic library.", "2.2.0", 1, "ffi_library_open"},
+		Builtin{"ffi_symbol", "ffi_symbol(library: FFILibrary,name: String) -> Result[FFISymbol,String]", "ffi", "handle", "symbol failure", "Resolve one exported native symbol.", "2.2.0", 2, "ffi_symbol"},
+		Builtin{"ffi_call", "ffi_call(symbol: FFISymbol,signature: String,args: Array[Int]) -> Result[Int,String]", "ffi", "borrow", "ABI/call failure", "Call an integer/pointer C ABI with an explicit checked signature.", "2.2.0", 3, "ffi_call"},
+		Builtin{"ffi_buffer_new", "ffi_buffer_new(data: Bytes) -> FFIBuffer", "ffi", "handle", "allocation failure", "Allocate a NUL-terminated native-call buffer.", "2.2.0", 1, "ffi_buffer_new"},
+		Builtin{"ffi_buffer_address", "ffi_buffer_address(buffer: FFIBuffer) -> Result[Int,String]", "ffi", "borrow", "handle failure", "Return a temporary native address for an FFI call.", "2.2.0", 1, "ffi_buffer_address"},
+		Builtin{"ffi_buffer_read", "ffi_buffer_read(buffer: FFIBuffer) -> Result[Bytes,String]", "ffi", "copy", "handle failure", "Copy bytes back from a native-call buffer.", "2.2.0", 1, "ffi_buffer_read"},
+		Builtin{"ffi_buffer_close", "ffi_buffer_close(buffer: FFIBuffer) -> Nil", "ffi", "handle", "close failure", "Invalidate a native-call buffer.", "2.2.0", 1, "ffi_buffer_close"},
+		Builtin{"ffi_library_close", "ffi_library_close(library: FFILibrary) -> Nil", "ffi", "handle", "close failure", "Unload a native library when no symbols are in use.", "2.2.0", 1, "ffi_library_close"},
 	)
 }

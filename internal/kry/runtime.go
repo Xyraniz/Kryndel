@@ -59,6 +59,9 @@ const (
 	VTCP
 	VTCPListener
 	VUDP
+	VFFILibrary
+	VFFISymbol
+	VFFIBuffer
 	VTailCall
 )
 
@@ -93,6 +96,30 @@ type udpSocketHandle struct {
 	closed bool
 }
 
+type ffiLibraryHandle struct {
+	mu     sync.Mutex
+	handle uintptr
+	closed bool
+}
+
+type ffiSymbolHandle struct {
+	library *ffiLibraryHandle
+	address uintptr
+	name    string
+}
+
+type ffiBufferHandle struct {
+	data   []byte
+	length int
+	closed bool
+}
+
+var ffiBuffers = struct {
+	sync.RWMutex
+	next int64
+	byID map[int64]*ffiBufferHandle
+}{next: -1, byID: make(map[int64]*ffiBufferHandle)}
+
 type Value struct {
 	Kind    ValueKind
 	I       int64
@@ -122,6 +149,9 @@ type Value struct {
 	TCP     *tcpSocketHandle
 	TCPList *tcpListenerHandle
 	UDP     *udpSocketHandle
+	FFILib  *ffiLibraryHandle
+	FFISym  *ffiSymbolHandle
+	FFIBuf  *ffiBufferHandle
 	Tail    *TailCall
 }
 
@@ -224,6 +254,12 @@ func display(v Value) string {
 		return "<TcpListener>"
 	case VUDP:
 		return "<UdpSocket>"
+	case VFFILibrary:
+		return "<FFILibrary>"
+	case VFFISymbol:
+		return "<FFISymbol>"
+	case VFFIBuffer:
+		return "<FFIBuffer>"
 	case VTailCall:
 		return "<tail-call>"
 	case VMap:
@@ -273,6 +309,8 @@ func cloneValue(v Value) Value {
 	case VRandom:
 		return v
 	case VSQLite, VTCP, VTCPListener, VUDP:
+		return v
+	case VFFILibrary, VFFISymbol, VFFIBuffer:
 		return v
 	case VTailCall:
 		return v
@@ -414,6 +452,12 @@ func equalValue(a, b Value) bool {
 		return a.TCPList == b.TCPList
 	case VUDP:
 		return a.UDP == b.UDP
+	case VFFILibrary:
+		return a.FFILib == b.FFILib
+	case VFFISymbol:
+		return a.FFISym == b.FFISym
+	case VFFIBuffer:
+		return a.FFIBuf == b.FFIBuf
 	case VTailCall:
 		return a.Tail == b.Tail
 	case VSet:
@@ -2198,6 +2242,48 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return resVal(true, Value{Kind: VJSON, S: value}), nil
 	case "udp_close":
 		if err := udpClose(a[0].UDP); err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "ffi_library_open":
+		library, err := ffiLibraryOpen(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VFFILibrary, FFILib: library}), nil
+	case "ffi_symbol":
+		symbol, err := ffiSymbol(a[0].FFILib, a[1].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VFFISymbol, FFISym: symbol}), nil
+	case "ffi_call":
+		result, err := ffiCall(a[0].FFISym, a[1].S, a[2].Array)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, intVal(result)), nil
+	case "ffi_buffer_new":
+		return Value{Kind: VFFIBuffer, FFIBuf: ffiBufferNew(a[0].Bytes)}, nil
+	case "ffi_buffer_address":
+		address, err := ffiBufferAddress(a[0].FFIBuf)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, intVal(address)), nil
+	case "ffi_buffer_read":
+		data, err := ffiBufferRead(a[0].FFIBuf)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(data)), nil
+	case "ffi_buffer_close":
+		if err := ffiBufferClose(a[0].FFIBuf); err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "ffi_library_close":
+		if err := ffiLibraryClose(a[0].FFILib); err != nil {
 			return bad(err.Error())
 		}
 		return nilVal(), nil

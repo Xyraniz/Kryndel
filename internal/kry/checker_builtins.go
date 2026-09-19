@@ -1788,6 +1788,77 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("udp_close expects UdpSocket")
 		}
 		return TNil, nil
+	case "ffi_library_open":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return Res(&Type{Kind: TyFFILibrary, Name: "FFILibrary"}, TString), nil
+	case "ffi_symbol":
+		if library, d := arg(0, &Type{Kind: TyFFILibrary, Name: "FFILibrary"}); d != nil || library.Kind != TyFFILibrary {
+			if d != nil {
+				return TError, d
+			}
+			return bad("ffi_symbol expects FFILibrary")
+		}
+		if _, d := arg(1, TString); d != nil {
+			return TError, d
+		}
+		return Res(&Type{Kind: TyFFISymbol, Name: "FFISymbol"}, TString), nil
+	case "ffi_call":
+		if symbol, d := arg(0, &Type{Kind: TyFFISymbol, Name: "FFISymbol"}); d != nil || symbol.Kind != TyFFISymbol {
+			if d != nil {
+				return TError, d
+			}
+			return bad("ffi_call expects FFISymbol")
+		}
+		if _, d := arg(1, TString); d != nil {
+			return TError, d
+		}
+		args, d := arg(2, Arr(TInt))
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(args, Arr(TInt)) {
+			return bad("ffi_call expects Array[Int] arguments")
+		}
+		return Res(TInt, TString), nil
+	case "ffi_buffer_new":
+		if _, d := arg(0, TBytes); d != nil {
+			return TError, d
+		}
+		return &Type{Kind: TyFFIBuffer, Name: "FFIBuffer"}, nil
+	case "ffi_buffer_address":
+		if buffer, d := arg(0, &Type{Kind: TyFFIBuffer, Name: "FFIBuffer"}); d != nil || buffer.Kind != TyFFIBuffer {
+			if d != nil {
+				return TError, d
+			}
+			return bad("ffi_buffer_address expects FFIBuffer")
+		}
+		return Res(TInt, TString), nil
+	case "ffi_buffer_read":
+		if buffer, d := arg(0, &Type{Kind: TyFFIBuffer, Name: "FFIBuffer"}); d != nil || buffer.Kind != TyFFIBuffer {
+			if d != nil {
+				return TError, d
+			}
+			return bad("ffi_buffer_read expects FFIBuffer")
+		}
+		return Res(TBytes, TString), nil
+	case "ffi_buffer_close":
+		if buffer, d := arg(0, &Type{Kind: TyFFIBuffer, Name: "FFIBuffer"}); d != nil || buffer.Kind != TyFFIBuffer {
+			if d != nil {
+				return TError, d
+			}
+			return bad("ffi_buffer_close expects FFIBuffer")
+		}
+		return TNil, nil
+	case "ffi_library_close":
+		if library, d := arg(0, &Type{Kind: TyFFILibrary, Name: "FFILibrary"}); d != nil || library.Kind != TyFFILibrary {
+			if d != nil {
+				return TError, d
+			}
+			return bad("ffi_library_close expects FFILibrary")
+		}
+		return TNil, nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not implemented", b.Name)
 }
