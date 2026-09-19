@@ -1,4 +1,9 @@
 // Cryptographic utilities backed by the standard-library implementation.
+//
+// Every wrapper is a thin, typed facade over a builtin so application code
+// depends on stable names rather than raw builtin identifiers. The underlying
+// primitives are implemented in both the interpreter and the native backend
+// with byte-for-byte parity.
 
 pub fn sha256(data: Bytes) -> Bytes {
     return crypto_sha256(data)
@@ -6,6 +11,22 @@ pub fn sha256(data: Bytes) -> Bytes {
 
 pub fn sha256_hex(data: Bytes) -> String {
     return hex_encode(crypto_sha256(data))
+}
+
+pub fn sha512(data: Bytes) -> Bytes {
+    return crypto_sha512(data)
+}
+
+pub fn sha512_hex(data: Bytes) -> String {
+    return hex_encode(crypto_sha512(data))
+}
+
+pub fn sha384(data: Bytes) -> Bytes {
+    return crypto_sha384(data)
+}
+
+pub fn sha384_hex(data: Bytes) -> String {
+    return hex_encode(crypto_sha384(data))
 }
 
 pub fn hmac_sha256(key: Bytes, data: Bytes) -> Bytes {
@@ -26,4 +47,44 @@ pub fn random_hex(length: Int) -> Result[String, String] {
         ok(value) => { return ok(hex_encode(value)) }
         err(problem) => { return err(problem) }
     }
+}
+
+// encrypt seals plaintext with AES-256-GCM. The key must be 32 bytes and the
+// nonce 12 bytes; the returned bytes are ciphertext followed by the GCM tag.
+pub fn encrypt(key: Bytes, nonce: Bytes, plaintext: Bytes) -> Result[Bytes, String] {
+    return crypto_aes_gcm_encrypt(key, nonce, plaintext)
+}
+
+// decrypt opens an AES-256-GCM ciphertext and fails if the tag does not verify.
+pub fn decrypt(key: Bytes, nonce: Bytes, ciphertext: Bytes) -> Result[Bytes, String] {
+    return crypto_aes_gcm_decrypt(key, nonce, ciphertext)
+}
+
+// derive_key stretches a password into a key with PBKDF2-HMAC-SHA-256.
+pub fn derive_key(password: Bytes, salt: Bytes, iterations: Int, length: Int) -> Result[Bytes, String] {
+    return crypto_pbkdf2_sha256(password, salt, iterations, length)
+}
+
+// expand_key derives key material with HKDF-SHA-256 (RFC 5869).
+pub fn expand_key(ikm: Bytes, salt: Bytes, info: Bytes, length: Int) -> Result[Bytes, String] {
+    return crypto_hkdf_sha256(ikm, salt, info, length)
+}
+
+// equal compares two byte sequences in constant time; use it for MACs and
+// tokens so comparison does not leak timing information.
+pub fn equal(left: Bytes, right: Bytes) -> Bool {
+    return crypto_constant_time_equal(left, right)
+}
+
+// xor combines two equal-length byte sequences.
+pub fn xor(left: Bytes, right: Bytes) -> Result[Bytes, String] {
+    return crypto_xor(left, right)
+}
+
+pub fn to_base64url(value: Bytes) -> String {
+    return base64url_encode(value)
+}
+
+pub fn from_base64url(value: String) -> Result[Bytes, String] {
+    return base64url_decode(value)
 }

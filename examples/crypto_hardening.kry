@@ -1,0 +1,68 @@
+// Demonstrates the expanded cryptography library and the Python-style
+// ergonomics helpers. Run with `kry run examples/crypto_hardening.kry`, or
+// build a protected native executable with:
+//
+//   kry build examples/crypto_hardening.kry --format=elf \
+//       --encrypt --passphrase-file secret.txt --obfuscate
+
+fn greet(name: String, greeting: String = "Hello") -> String {
+    return greeting + ", " + name
+}
+
+fn main() -> Nil {
+    // Hashing: SHA-256, SHA-512, SHA-384.
+    println("sha256(abc) = " + hex_encode(crypto_sha256(string_to_bytes("abc"))))
+    println("sha512(abc) = " + hex_encode(crypto_sha512(string_to_bytes("abc"))))
+    println("sha384(abc) = " + hex_encode(crypto_sha384(string_to_bytes("abc"))))
+
+    // Message authentication.
+    println("hmac = " + hex_encode(crypto_hmac_sha256(string_to_bytes("key"), string_to_bytes("msg"))))
+
+    // Password-based key derivation, then authenticated encryption.
+    match crypto_pbkdf2_sha256(string_to_bytes("password"), string_to_bytes("salt"), 4096, 32) {
+        ok(key) => {
+            match crypto_random_bytes(12) {
+                ok(nonce) => {
+                    match crypto_aes_gcm_encrypt(key, nonce, string_to_bytes("top secret")) {
+                        ok(sealed) => {
+                            match crypto_aes_gcm_decrypt(key, nonce, sealed) {
+                                ok(opened) => { println("decrypted = " + bytes_to_string(opened)) }
+                                err(problem) => { println("decrypt failed: " + problem) }
+                            }
+                        }
+                        err(problem) => { println("encrypt failed: " + problem) }
+                    }
+                }
+                err(problem) => { println("random failed: " + problem) }
+            }
+        }
+        err(problem) => { println("kdf failed: " + problem) }
+    }
+
+    // Constant-time comparison for secrets.
+    println("equal = " + str(crypto_constant_time_equal(string_to_bytes("token"), string_to_bytes("token"))))
+
+    // URL-safe base64 for tokens and filenames.
+    let token: String = base64url_encode(string_to_bytes("user:42"))
+    println("token = " + token)
+    match base64url_decode(token) {
+        ok(raw) => { println("decoded = " + bytes_to_string(raw)) }
+        err(problem) => { println("decode failed: " + problem) }
+    }
+
+    // Python-style slicing, formatting, enumeration and zipping.
+    match string_slice("hello world", -5, -1) {
+        ok(part) => { println("slice = " + part) }
+        err(problem) => { println("slice failed: " + problem) }
+    }
+    let nums: Array[Int] = [10, 20, 30, 40, 50]
+    println("range = " + str(array_slice_range(nums, 1, 3)))
+    println("format = " + string_format("{} + {} = {}", ["1", "2", "3"]))
+    println("indices = " + str(array_indices(nums)))
+    println("zip = " + str(array_zip([1, 2, 3], [4, 5])))
+
+    // Default parameters.
+    println(greet("Ada"))
+    println(greet("Ada", "Hi"))
+    return nil
+}
