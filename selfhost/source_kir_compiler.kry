@@ -30,11 +30,17 @@ struct SourceFunction {
     parameters: Array[String],
 }
 
+struct SourceStruct {
+    fields: Map[String, String],
+    names: Array[String],
+}
+
 struct SourceParser {
     tokens: Array[SourceToken],
     position: Int,
     bindings: Map[String, SourceBinding],
     functions: Map[String, SourceFunction],
+    structs: Map[String, SourceStruct],
 }
 
 struct ParsedExpr {
@@ -56,9 +62,15 @@ struct ParsedProgram {
     parser: SourceParser,
     statements: String,
     functions: String,
+    structs: String,
 }
 
 struct ParsedFunction {
+    parser: SourceParser,
+    json: String,
+}
+
+struct ParsedStruct {
     parser: SourceParser,
     json: String,
 }
@@ -180,7 +192,7 @@ fn lex(source: String) -> Result[Array[SourceToken], String] {
             index = index + 2
             continue
         }
-        if current == "(" || current == ")" || current == "{" || current == "}" || current == "[" || current == "]" || current == ":" || current == "=" || current == "+" || current == "-" || current == "*" || current == "/" || current == "%" || current == "<" || current == ">" || current == "!" || current == "&" || current == "|" || current == "^" || current == "," || current == ";" {
+        if current == "(" || current == ")" || current == "{" || current == "}" || current == "[" || current == "]" || current == ":" || current == "=" || current == "+" || current == "-" || current == "*" || current == "/" || current == "%" || current == "<" || current == ">" || current == "!" || current == "&" || current == "|" || current == "^" || current == "," || current == ";" || current == "." {
             tokens = push_token(tokens, "symbol", current)
             index = index + 1
             continue
@@ -196,7 +208,7 @@ fn current_token(parser: SourceParser) -> SourceToken {
 }
 
 fn advance(parser: SourceParser) -> SourceParser {
-    return SourceParser{ tokens: parser.tokens, position: parser.position + 1, bindings: parser.bindings, functions: parser.functions }
+    return SourceParser{ tokens: parser.tokens, position: parser.position + 1, bindings: parser.bindings, functions: parser.functions, structs: parser.structs }
 }
 
 fn parser_error(value: Result[SourceParser, String]) -> String {
@@ -254,6 +266,54 @@ fn parse_type(parser: SourceParser) -> Result[ParsedType, String] {
     return ok(ParsedType{ parser: current, name: name })
 }
 
+fn parse_struct(parser: SourceParser, public: Bool) -> Result[ParsedStruct, String] {
+    let opened: Result[SourceParser, String] = expect(parser, "struct")
+    if is_err(opened) { return err(parser_error(opened)) }
+    let named: SourceParser = result_unwrap(opened)
+    let name: SourceToken = current_token(named)
+    if name.kind != "identifier" { return err("parser: expected a struct name") }
+    let brace: Result[SourceParser, String] = expect(advance(named), "{")
+    if is_err(brace) { return err(parser_error(brace)) }
+    let mut current: SourceParser = skip_separators(result_unwrap(brace))
+    let mut fields: Map[String, String] = {}
+    let mut names: Array[String] = []
+    let mut fields_json: String = "["
+    let mut first: Bool = true
+    while current_token(current).text != "}" {
+        let mut field_public: Bool = false
+        if current_token(current).text == "pub" {
+            field_public = true
+            current = advance(current)
+        }
+        let field_name: SourceToken = current_token(current)
+        if field_name.kind != "identifier" { return err("parser: expected a struct field name") }
+        if map_contains_key(fields, field_name.text) { return err("parser: duplicate struct field '" + field_name.text + "'") }
+        let colon: Result[SourceParser, String] = expect(advance(current), ":")
+        if is_err(colon) { return err(parser_error(colon)) }
+        let parsed_type: Result[ParsedType, String] = parse_type(result_unwrap(colon))
+        if is_err(parsed_type) { return err(unwrap_or(result_error(parsed_type), "parser: expected a struct field type")) }
+        let field_type: String = result_unwrap(parsed_type).name
+        if !source_type_supported(parser, field_type) && field_type != name.text { return err("parser: unsupported struct field type '" + field_type + "'") }
+        fields = map_insert(fields, field_name.text, field_type)
+        names = array_push(names, field_name.text)
+        if !first { fields_json = fields_json + "," }
+        fields_json = fields_json + "{\"name\":" + json_quote(field_name.text) + ",\"public\":" + bool_text(field_public) + ",\"type\":" + json_quote(field_type) + "}"
+        first = false
+        current = skip_separators(result_unwrap(parsed_type).parser)
+        if current_token(current).text == "," {
+            current = skip_separators(advance(current))
+        } else if current_token(current).text != "}" {
+            return err("parser: expected ',' or '}' after struct field")
+        }
+    }
+    let closed: Result[SourceParser, String] = expect(current, "}")
+    if is_err(closed) { return err(parser_error(closed)) }
+    let definition: SourceStruct = SourceStruct{ fields: fields, names: names }
+    let after: SourceParser = result_unwrap(closed)
+    let updated: SourceParser = SourceParser{ tokens: after.tokens, position: after.position, bindings: after.bindings, functions: after.functions, structs: map_insert(after.structs, name.text, definition) }
+    return ok(ParsedStruct{ parser: updated, json: "{\"name\":" + json_quote(name.text) + ",\"public\":" + bool_text(public) + ",\"module\":\"\",\"fields\":" + fields_json + "]}" })
+}
+
 fn json_quote(value: String) -> String {
     let chars: Array[String] = string_chars(value)
     let mut result: String = "\""
@@ -285,6 +345,17 @@ fn bool_text(value: Bool) -> String {
 
 fn source_is_scalar_type(type_name: String) -> Bool {
     return type_name == "Int" || type_name == "Bool" || type_name == "String" || type_name == "Json" || starts_with(type_name, "UInt") || starts_with(type_name, "Array[") || starts_with(type_name, "Option[") || starts_with(type_name, "Result[") || starts_with(type_name, "Map[")
+}
+
+fn source_type_supported(parser: SourceParser, type_name: String) -> Bool {
+    return source_is_scalar_type(type_name) || map_contains_key(parser.structs, type_name)
+}
+
+fn source_struct_field_type(parser: SourceParser, type_name: String, field_name: String) -> String {
+    let definition: Option[SourceStruct] = map_get(parser.structs, type_name)
+    if is_none(definition) { return "" }
+    let fields: Map[String, String] = unwrap_or(definition, SourceStruct{ fields: {}, names: [] }).fields
+    return unwrap_or(map_get(fields, field_name), "")
 }
 
 fn generic_inner(type_name: String, prefix: String) -> String {
@@ -505,6 +576,59 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr) -> Resu
     })
 }
 
+fn parse_struct_literal(parser: SourceParser, type_name: String) -> Result[ParsedExpr, String] {
+    let definition: Option[SourceStruct] = map_get(parser.structs, type_name)
+    if is_none(definition) { return err("parser: unknown struct '" + type_name + "'") }
+    let shape: SourceStruct = unwrap_or(definition, SourceStruct{ fields: {}, names: [] })
+    let opened: Result[SourceParser, String] = expect(parser, "{")
+    if is_err(opened) { return err(parser_error(opened)) }
+    let mut current: SourceParser = skip_separators(result_unwrap(opened))
+    let mut names: String = "["
+    let mut values: String = "["
+    let mut seen: Map[String, Bool] = {}
+    let mut first: Bool = true
+    let mut count: Int = 0
+    while current_token(current).text != "}" {
+        let field_name: SourceToken = current_token(current)
+        if field_name.kind != "identifier" { return err("parser: expected a struct field name in literal") }
+        if !map_contains_key(shape.fields, field_name.text) { return err("parser: unknown field '" + field_name.text + "' in struct '" + type_name + "'") }
+        if map_contains_key(seen, field_name.text) { return err("parser: duplicate field '" + field_name.text + "' in struct literal") }
+        let colon: Result[SourceParser, String] = expect(advance(current), ":")
+        if is_err(colon) { return err(parser_error(colon)) }
+        let parsed_value: Result[ParsedExpr, String] = parse_expression(result_unwrap(colon))
+        if is_err(parsed_value) { return err(expression_error(parsed_value)) }
+        let value: ParsedExpr = result_unwrap(parsed_value)
+        let expected: String = unwrap_or(map_get(shape.fields, field_name.text), "")
+        if value.expression.type_name != expected { return err("parser: struct field '" + field_name.text + "' expects " + expected) }
+        if !first {
+            names = names + ","
+            values = values + ","
+        }
+        names = names + json_quote(field_name.text)
+        values = values + value.expression.json
+        first = false
+        count = count + 1
+        seen = map_insert(seen, field_name.text, true)
+        current = skip_separators(value.parser)
+        if current_token(current).text == "," {
+            current = skip_separators(advance(current))
+        } else if current_token(current).text != "}" {
+            return err("parser: expected ',' or '}' after struct literal field")
+        }
+    }
+    if count != len(shape.names) { return err("parser: struct literal for '" + type_name + "' is missing a field") }
+    let mut index: Int = 0
+    while index < len(shape.names) {
+        let expected_name: String = unwrap_or(array_get(shape.names, index), "")
+        if !map_contains_key(seen, expected_name) { return err("parser: struct literal for '" + type_name + "' is missing field '" + expected_name + "'") }
+        index = index + 1
+    }
+    let closed: Result[SourceParser, String] = expect(current, "}")
+    if is_err(closed) { return err(parser_error(closed)) }
+    let json: String = "{\"kind\":\"struct\",\"type\":" + json_quote(type_name) + ",\"const\":null,\"struct_name\":" + json_quote(type_name) + ",\"fields\":" + names + "],\"values\":" + values + "]}"
+    return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: type_name, known: false, display: "" } })
+}
+
 fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
     let token: SourceToken = current_token(parser)
     if token.kind == "string" {
@@ -542,7 +666,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                 else { return_type = "UInt64" }
                 call_target = "builtin:" + token.text
                 builtin_unsigned_conversion = true
-            } else if token.text == "some" || token.text == "none" || token.text == "ok" || token.text == "err" || token.text == "is_some" || token.text == "is_none" || token.text == "is_ok" || token.text == "is_err" || token.text == "unwrap_or" || token.text == "result_unwrap" || token.text == "result_error" || token.text == "len" || token.text == "array_push" || token.text == "array_get" || token.text == "array_concat" {
+            } else if token.text == "some" || token.text == "none" || token.text == "ok" || token.text == "err" || token.text == "is_some" || token.text == "is_none" || token.text == "is_ok" || token.text == "is_err" || token.text == "unwrap_or" || token.text == "result_unwrap" || token.text == "result_error" || token.text == "len" || token.text == "array_push" || token.text == "array_get" || token.text == "array_concat" || token.text == "array_indices" {
                 call_target = "builtin:" + token.text
                 builtin_generic = true
             } else {
@@ -628,12 +752,18 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                 } else if token.text == "array_concat" {
                     if argument_index != 2 || !is_array_type(unwrap_or(array_get(argument_types, 0), "")) || unwrap_or(array_get(argument_types, 0), "") != unwrap_or(array_get(argument_types, 1), "") { return err("parser: array_concat expects matching Arrays") }
                     return_type = unwrap_or(array_get(argument_types, 0), "")
+                } else if token.text == "array_indices" {
+                    if argument_index != 1 || !is_array_type(unwrap_or(array_get(argument_types, 0), "")) { return err("parser: array_indices expects one Array") }
+                    return_type = "Array[Int]"
                 }
             }
             let closed: Result[SourceParser, String] = expect(current, ")")
             if is_err(closed) { return err(parser_error(closed)) }
             let json: String = "{\"kind\":\"call\",\"type\":" + json_quote(return_type) + ",\"const\":null,\"name\":" + json_quote(token.text) + ",\"call_target\":" + json_quote(call_target) + ",\"args\":" + args + "]}"
             return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: return_type, known: false, display: "" } })
+        }
+        if current_token(after_name).text == "{" && map_contains_key(parser.structs, token.text) {
+            return parse_struct_literal(after_name, token.text)
         }
         let binding: Option[SourceBinding] = map_get(parser.bindings, token.text)
         if is_none(binding) { return err("parser: unknown identifier '" + token.text + "'") }
@@ -678,7 +808,16 @@ fn parse_postfix(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_primary(parser)
     if is_err(first) { return err(expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
-    while current_token(parsed.parser).text == "[" {
+    while current_token(parsed.parser).text == "[" || current_token(parsed.parser).text == "." {
+        if current_token(parsed.parser).text == "." {
+            let field_token: SourceToken = current_token(advance(parsed.parser))
+            if field_token.kind != "identifier" { return err("parser: expected a struct field name after '.'") }
+            let field_type: String = source_struct_field_type(parsed.parser, parsed.expression.type_name, field_token.text)
+            if field_type == "" { return err("parser: unknown field '" + field_token.text + "' in struct '" + parsed.expression.type_name + "'") }
+            let json: String = "{\"kind\":\"field\",\"type\":" + json_quote(field_type) + ",\"const\":null,\"base\":" + parsed.expression.json + ",\"field\":" + json_quote(field_token.text) + "}"
+            parsed = ParsedExpr{ parser: advance(advance(parsed.parser)), expression: SourceExpr{ json: json, type_name: field_type, known: false, display: "" } }
+            continue
+        }
         let index: Result[ParsedExpr, String] = parse_expression(advance(parsed.parser))
         if is_err(index) { return err(expression_error(index)) }
         let parsed_index: ParsedExpr = result_unwrap(index)
@@ -930,7 +1069,7 @@ fn parse_binding(parser: SourceParser) -> Result[ParsedStatements, String] {
     if is_err(separated) { return err(parser_error(separated)) }
     let binding: SourceBinding = SourceBinding{ type_name: parsed.expression.type_name, mutable: mutable, known: !mutable && parsed.expression.known, display: parsed.expression.display }
     let mut updated_parser: SourceParser = result_unwrap(separated)
-    updated_parser = SourceParser{ tokens: updated_parser.tokens, position: updated_parser.position, bindings: map_insert(updated_parser.bindings, name.text, binding), functions: updated_parser.functions }
+    updated_parser = SourceParser{ tokens: updated_parser.tokens, position: updated_parser.position, bindings: map_insert(updated_parser.bindings, name.text, binding), functions: updated_parser.functions, structs: updated_parser.structs }
     let body: String = "\"name\":" + json_quote(name.text) + ",\"mutable\":" + bool_text(mutable) + ",\"const\":" + bool_text(keyword == "const") + ",\"annotation\":" + json_quote(parsed.expression.type_name) + ",\"init\":" + parsed.expression.json
     return ok(ParsedStatements{ parser: updated_parser, json: statement_json("let", body) })
 }
@@ -951,7 +1090,7 @@ fn parse_assignment(parser: SourceParser) -> Result[ParsedStatements, String] {
     if is_err(separated) { return err(parser_error(separated)) }
     let updated: SourceParser = result_unwrap(separated)
     let replacement: SourceBinding = SourceBinding{ type_name: info.type_name, mutable: true, known: false, display: "" }
-    let next: SourceParser = SourceParser{ tokens: updated.tokens, position: updated.position, bindings: map_insert(updated.bindings, target.text, replacement), functions: updated.functions }
+    let next: SourceParser = SourceParser{ tokens: updated.tokens, position: updated.position, bindings: map_insert(updated.bindings, target.text, replacement), functions: updated.functions, structs: updated.structs }
     let target_json: String = "{\"kind\":\"var\",\"type\":" + json_quote(info.type_name) + ",\"const\":null,\"name\":" + json_quote(target.text) + "}"
     return ok(ParsedStatements{ parser: next, json: statement_json("assign", "\"target\":" + target_json + ",\"value\":" + parsed.expression.json) })
 }
@@ -1023,7 +1162,7 @@ fn parse_function(parser: SourceParser, public: Bool) -> Result[ParsedFunction, 
         let parsed_type: Result[ParsedType, String] = parse_type(result_unwrap(colon))
         if is_err(parsed_type) { return err(unwrap_or(result_error(parsed_type), "parser: expected a parameter type")) }
         let parameter_type: String = result_unwrap(parsed_type).name
-        if !source_is_scalar_type(parameter_type) { return err("parser: only scalar function parameters are supported") }
+        if !source_type_supported(parser, parameter_type) { return err("parser: unsupported function parameter type '" + parameter_type + "'") }
         if !first { parameters_json = parameters_json + "," }
         parameters_json = parameters_json + "{\"name\":" + json_quote(parameter_name.text) + ",\"type\":" + json_quote(parameter_type) + ",\"default\":null}"
         parameter_types = array_push(parameter_types, parameter_type)
@@ -1043,13 +1182,13 @@ fn parse_function(parser: SourceParser, public: Bool) -> Result[ParsedFunction, 
     let parsed_return: Result[ParsedType, String] = parse_type(result_unwrap(arrow))
     if is_err(parsed_return) { return err(unwrap_or(result_error(parsed_return), "parser: expected a function return type")) }
     let return_type: String = result_unwrap(parsed_return).name
-    if return_type != "Nil" && !source_is_scalar_type(return_type) { return err("parser: unsupported function return type") }
+    if return_type != "Nil" && !source_type_supported(parser, return_type) { return err("parser: unsupported function return type '" + return_type + "'") }
     let signature: SourceFunction = SourceFunction{ return_type: return_type, parameters: parameter_types }
-    let local_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: result_unwrap(parsed_return).parser.position, bindings: local_bindings, functions: map_insert(parser.functions, name.text, signature) }
+    let local_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: result_unwrap(parsed_return).parser.position, bindings: local_bindings, functions: map_insert(parser.functions, name.text, signature), structs: parser.structs }
     let body: Result[ParsedStatements, String] = parse_block(local_parser)
     if is_err(body) { return err(statements_error(body)) }
     let parsed_body: ParsedStatements = result_unwrap(body)
-    let outer_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: parsed_body.parser.position, bindings: parser.bindings, functions: map_insert(parser.functions, name.text, signature) }
+    let outer_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: parsed_body.parser.position, bindings: parser.bindings, functions: map_insert(parser.functions, name.text, signature), structs: parser.structs }
     let function_json: String = "{\"name\":" + json_quote(name.text) + ",\"public\":" + bool_text(public) + ",\"params\":" + parameters_json + "] ,\"return\":" + json_quote(return_type) + ",\"body\":" + parsed_body.json + "}"
     return ok(ParsedFunction{ parser: outer_parser, json: function_json })
 }
@@ -1086,6 +1225,25 @@ fn parse_while(parser: SourceParser) -> Result[ParsedStatements, String] {
     return ok(ParsedStatements{ parser: parsed_body.parser, json: statement_json("while", "\"cond\":" + parsed_condition.expression.json + ",\"body\":" + parsed_body.json) })
 }
 
+fn parse_for(parser: SourceParser) -> Result[ParsedStatements, String] {
+    let binding_token: SourceToken = current_token(advance(parser))
+    if binding_token.kind != "identifier" { return err("parser: expected a for binding name") }
+    let in_token: Result[SourceParser, String] = expect(advance(advance(parser)), "in")
+    if is_err(in_token) { return err(parser_error(in_token)) }
+    let iterator: Result[ParsedExpr, String] = parse_expression(result_unwrap(in_token))
+    if is_err(iterator) { return err(expression_error(iterator)) }
+    let parsed_iterator: ParsedExpr = result_unwrap(iterator)
+    if !is_array_type(parsed_iterator.expression.type_name) { return err("parser: for iterator must be Array[T]") }
+    let item_type: String = array_inner(parsed_iterator.expression.type_name)
+    let loop_parser: SourceParser = SourceParser{ tokens: parsed_iterator.parser.tokens, position: parsed_iterator.parser.position, bindings: map_insert(parsed_iterator.parser.bindings, binding_token.text, SourceBinding{ type_name: item_type, mutable: false, known: false, display: "" }), functions: parsed_iterator.parser.functions, structs: parsed_iterator.parser.structs }
+    let body: Result[ParsedStatements, String] = parse_block(loop_parser)
+    if is_err(body) { return err(statements_error(body)) }
+    let parsed_body: ParsedStatements = result_unwrap(body)
+    let outer: SourceParser = SourceParser{ tokens: parsed_body.parser.tokens, position: parsed_body.parser.position, bindings: parser.bindings, functions: parsed_body.parser.functions, structs: parsed_body.parser.structs }
+    let json: String = statement_json("for", "\"name\":" + json_quote(binding_token.text) + ",\"iter\":" + parsed_iterator.expression.json + ",\"body\":" + parsed_body.json)
+    return ok(ParsedStatements{ parser: outer, json: json })
+}
+
 fn parse_statement(parser: SourceParser) -> Result[ParsedStatements, String] {
     let current: SourceParser = skip_separators(parser)
     let token: SourceToken = current_token(current)
@@ -1096,6 +1254,7 @@ fn parse_statement(parser: SourceParser) -> Result[ParsedStatements, String] {
     if token.text == "print" || token.text == "println" { return parse_output(current) }
     if token.text == "if" { return parse_if(current) }
     if token.text == "while" { return parse_while(current) }
+    if token.text == "for" { return parse_for(current) }
     if token.text == "break" || token.text == "continue" {
         let separated: Result[SourceParser, String] = finish_statement(advance(current))
         if is_err(separated) { return err(parser_error(separated)) }
@@ -1111,14 +1270,26 @@ fn parse_program(parser: SourceParser) -> Result[ParsedProgram, String] {
     let mut current: SourceParser = skip_separators(parser)
     let mut statements: String = "["
     let mut functions: String = "["
+    let mut structs: String = "["
     let mut first_statement: Bool = true
     let mut first_function: Bool = true
+    let mut first_struct: Bool = true
     while current_token(current).kind != "eof" {
         let mut function_parser: SourceParser = current
         let mut public: Bool = false
         if current_token(current).text == "pub" {
             public = true
             function_parser = advance(current)
+        }
+        if current_token(function_parser).text == "struct" {
+            let definition: Result[ParsedStruct, String] = parse_struct(function_parser, public)
+            if is_err(definition) { return err(unwrap_or(result_error(definition), "struct parser error")) }
+            let parsed_struct: ParsedStruct = result_unwrap(definition)
+            if !first_struct { structs = structs + "," }
+            structs = structs + parsed_struct.json
+            first_struct = false
+            current = skip_separators(parsed_struct.parser)
+            continue
         }
         if current_token(function_parser).text == "fn" {
             let function: Result[ParsedFunction, String] = parse_function(function_parser, public)
@@ -1139,17 +1310,17 @@ fn parse_program(parser: SourceParser) -> Result[ParsedProgram, String] {
         if parsed.parser.position == current.position { return err("parser: made no progress") }
         current = skip_separators(parsed.parser)
     }
-    return ok(ParsedProgram{ parser: current, statements: statements + "]", functions: functions + "]" })
+    return ok(ParsedProgram{ parser: current, statements: statements + "]", functions: functions + "]", structs: structs + "]" })
 }
 
 fn compile_source(source: String) -> Result[Bytes, String] {
     let tokens: Result[Array[SourceToken], String] = lex(source)
     if is_err(tokens) { return err(unwrap_or(result_error(tokens), "lexer error")) }
-    let parser: SourceParser = SourceParser{ tokens: result_unwrap(tokens), position: 0, bindings: {}, functions: {} }
+    let parser: SourceParser = SourceParser{ tokens: result_unwrap(tokens), position: 0, bindings: {}, functions: {}, structs: {} }
     let program: Result[ParsedProgram, String] = parse_program(parser)
     if is_err(program) { return err(program_error(program)) }
     let parsed: ParsedProgram = result_unwrap(program)
-    let document_text: String = "{\"format\":\"kry-ir\",\"version\":1,\"module\":\"\",\"source\":\"\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[],\"functions\":" + parsed.functions + ",\"statements\":" + parsed.statements + "}"
+    let document_text: String = "{\"format\":\"kry-ir\",\"version\":1,\"module\":\"\",\"source\":\"\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":" + parsed.structs + ",\"enums\":[],\"functions\":" + parsed.functions + ",\"statements\":" + parsed.statements + "}"
     let document: Result[Json, String] = json_parse(document_text)
     if is_err(document) { return err(unwrap_or(result_error(document), "source frontend produced invalid KIR")) }
     return compile_document(result_unwrap(document))

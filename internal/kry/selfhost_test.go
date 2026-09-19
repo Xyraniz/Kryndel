@@ -1216,3 +1216,72 @@ func TestStage17KryndelBackendStructForParity(t *testing.T) {
 		t.Fatalf("unexpected stage17 self-hosted ELF output %q", output)
 	}
 }
+
+func TestStage18SourceFrontendStructForParity(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_struct_loop_stage14.kry")
+	compiler := filepath.Join(root, "..", "..", "selfhost", "source_kir_compiler.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerProgram, d := LoadProgram(compiler, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "source-frontend-stage18")
+	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, DefaultLimits(), Sandbox{}, []string{fixture, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage18 source frontend failed: %s", d.Message)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := BuildDirectELF(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		first := -1
+		for i := 0; i < len(got) && i < len(want); i++ {
+			if got[i] != want[i] {
+				first = i
+				break
+			}
+		}
+		if first == -1 && len(got) != len(want) {
+			first = len(got)
+		}
+		t.Fatalf("stage18 source frontend differs from direct ELF oracle at offset %d: got=%d want=%d", first, len(got), len(want))
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("self-hosted ELF execution requires linux-amd64")
+	}
+	runnable := filepath.Join(dir, "source-frontend-stage18.run")
+	if err := os.WriteFile(runnable, got, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage18 source frontend ELF failed to execute: %v", err)
+	}
+	if string(output) != "48\n" {
+		t.Fatalf("unexpected stage18 source frontend output %q", output)
+	}
+}
