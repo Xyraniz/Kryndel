@@ -1,6 +1,31 @@
 # Changelog
 
-## Unreleased — Public registry hardening
+## Unreleased — Real native executables
+
+`kry build --format=elf` and `--format=exe` now produce genuine, runnable
+executables through a C-based ahead-of-time backend. The checked program is
+lowered to C and compiled with the host toolchain (`cc`/`gcc`/`clang` for Linux,
+`x86_64-w64-mingw32-gcc` for Windows), replacing the previous stub PE/ELF
+emitters that only handled constant top-level output. The backend supports
+functions, recursion, `if`/`else`, `while`, `for`, `match`, structs, enums,
+arrays, maps, sets, strings, bytes, `Option`, `Result`, the `?` operator and
+`defer`, with byte-for-byte identical output to the interpreter. `--format=c`
+emits the generated C source. Unsupported constructs (threads, actors, HTTP,
+WebSockets, Windows APIs, polymorphic dispatch) are rejected with a clear
+diagnostic instead of silently degrading.
+
+The native runtime now includes JSON parsing and Go-compatible serialization,
+SHA-256 and HMAC-SHA-256, cryptographically secure random bytes, the full
+filesystem surface, environment lookup, process execution, sleep and yield.
+
+Several interpreter builtins that were declared to return `Result` but returned
+raw values (`crypto_random_bytes`, `fs_read_dir`, `fs_create_dir`,
+`fs_create_dir_all`, `fs_remove_file`, `fs_remove_dir_all`, `fs_copy_file`,
+`fs_move_file`, `fs_file_size`, `fs_file_modified_time`, `fs_absolute_path`,
+`fs_temp_file`) now return proper `ok`/`err` results, and `json_parse`
+preserves integer precision. Top-level `defer` blocks now run at program exit.
+
+## Public registry hardening
 
 The default GitHub-backed registry can now be used from a fresh directory with `kry install discord`, without a local manifest bootstrap or registry configuration. The development registry validates package coordinates and manifests before publication, serializes concurrent writes, uses atomic replacement for archives and indices, and advertises cache-safe static metadata. The checked-in Discord archive and its index remain reproducible and SHA-256 pinned.
 

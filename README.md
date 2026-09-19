@@ -73,7 +73,7 @@ For concurrent workers, `TaskGroup` provides structured ownership, cancellation 
 
 Direct self-recursive calls in tail position use a runtime trampoline, allowing iterative algorithms written recursively without consuming one call-depth slot per iteration.
 
-`kry build --format=elf --target=linux-x64` emits direct AOT x86-64 machine code for checked constant-output programs. The generated ELF uses Linux syscalls directly and contains no Kryndel interpreter; unsupported constructs are rejected during the build.
+`kry build --format=elf --target=linux-x64` and `kry build --format=exe --target=windows-x64` produce real, runnable executables through a C-based ahead-of-time backend. The checked program is lowered to C and compiled with the host toolchain (`cc`/`gcc`/`clang` for Linux, `x86_64-w64-mingw32-gcc` for Windows), so the output runs the full checked language with byte-for-byte identical output to the interpreter. `--format=c` emits the generated C source. Unsupported constructs are rejected during the build instead of being silently degraded.
 
 Project dependencies are managed with `kry install PACKAGE` and removed with `kry uninstall PACKAGE [PACKAGE ...]`. Uninstall updates `kry.toml`, prunes `vendor/`, and rewrites `kry.lock` while retaining transitive packages still required by another direct dependency. The global download cache is intentionally preserved.
 

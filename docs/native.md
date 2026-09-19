@@ -9,7 +9,7 @@ make
 ./tools/kry run examples/fibonacci.kry
 ```
 
-The executable does not load modules from another language and does not require C, Python, Rust, Node.js, or an equivalent runtime to execute Kryndel programs. The only source-build dependency is the documented Go toolchain and standard library. The full portable execution path is the self-contained `KRYNATIVE3` bundle. Linux x64 ELF output is a direct AOT machine-code emitter for compile-time top-level output programs; unsupported source constructs are rejected instead of embedding or invoking the VM.
+The executable does not load modules from another language and does not require C, Python, Rust, Node.js, or an equivalent runtime to execute Kryndel programs. The only source-build dependency is the documented Go toolchain and standard library. The full portable execution path is the self-contained `KRYNATIVE3` bundle. Native `--format=elf`/`--format=exe` output is produced by a C-based ahead-of-time backend that lowers the checked program to C and compiles it with the host C toolchain; unsupported source constructs are rejected instead of embedding or invoking the VM.
 
 ## Command contract
 
@@ -21,6 +21,7 @@ The executable does not load modules from another language and does not require 
 | `build source.kry` | Check and write a deterministic `KRYNATIVE3` bundle. | `0` |
 | `build source.kry --format=exe --target=windows-x64` | Check and write a real PE32+ entrypoint for the selected target. | `0` |
 | `build source.kry --format=elf --target=linux-x64` | Check and write a real ELF64 entrypoint for the selected target. | `0` |
+| `build source.kry --format=c` | Check and emit the generated C source without compiling. | `0` |
 | `emit source.kry --format=llvm-ir` | Emit checked textual IR without executing source. | `0` |
 | `inspect binary` | Inspect PE/ELF headers and reject unknown binary formats. | `0` |
 | `fmt [--check\|-w] source.kry` | Check and format valid source deterministically. | `0` |
@@ -57,7 +58,30 @@ The former `KRYNATIVE1` single-source container is intentionally rejected as an 
 
 ## Native binary formats
 
-`internal/kry/native.go` emits a PE32+ image for Windows targets and an ELF64 image for Linux x64. The PE has a DOS header, PE signature, COFF machine field, optional header, section table, `.text`, `.idata`, and an `ExitProcess` import. Linux x64 AOT emits direct x86-64 `write(2)` and `exit(2)` syscalls with RIP-relative embedded string data for checked `print`/`println` programs and constant top-level bindings. Unsupported source constructs and formats fail with a categorized error; output is never mislabeled as native merely because a file has a native-looking suffix.
+`internal/kry/native.go` produces real, runnable executables through a C-based
+ahead-of-time backend. The checked program is lowered to C by
+`internal/kry/codegen.go`, linked against the embedded runtime in
+`internal/kry/cruntime.go`, and compiled by the host C toolchain:
+
+| Target | Compiler | Output |
+| --- | --- | --- |
+| `linux-x64` | `cc`/`gcc`/`clang` | ELF64 executable |
+| `windows-x64` | `x86_64-w64-mingw32-gcc` | PE32+ executable |
+
+The `KRY_CC` environment variable overrides the compiler. `--format=c` emits the
+generated C source instead of a binary, which is useful for inspection and for
+building with a custom toolchain.
+
+The generated code mirrors the interpreter's semantics exactly: values are
+immutable and arena-allocated with a memory budget, arithmetic is checked,
+display and float formatting are byte-for-byte identical, and `defer` unwinds
+per block. The backend supports functions, recursion, `if`/`else`, `while`,
+`for`, `match`, structs, enums, arrays, maps, sets, strings, bytes, `Option`,
+`Result`, the `?` operator, and the pure, filesystem, environment, JSON, crypto,
+process and timing builtins. Constructs that are not yet supported (threads,
+actors, HTTP, WebSockets, Windows APIs, polymorphic dispatch) are rejected with
+a categorized diagnostic instead of silently degrading; output is never
+mislabeled as native merely because a file has a native-looking suffix.
 
 ## Portability
 
