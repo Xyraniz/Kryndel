@@ -34,6 +34,7 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `is_ok`, `is_err` | `is_ok/is_err(value: Result[T, E]) -> Bool` | Inspect result status without consuming its payload. |
 | `unwrap_or` | `unwrap_or(option: Option[T], fallback: T) -> T` | Returns the value or a type-matching fallback. |
 | `result_unwrap` | `result_unwrap(value: Result[T,E]) -> T` | Explicitly extracts a successful Result; an error Result becomes a runtime diagnostic with its error payload. |
+| `result_error` | `result_error(value: Result[T,E]) -> Option[E]` | Reads a failed result's error payload without trapping; successful results return `none`. |
 | `substring` | `substring(text: String, start: Int, length: Int) -> Result[String, String]` | Uses UTF-8 code-point indexes and reports range errors. |
 | `contains`, `starts_with`, `ends_with`, `trim`, `split`, `replace`, `codepoints` | Text operations with explicit String signatures. | Preserve UTF-8 validation and deterministic output. |
 | `byte_at` | `byte_at(text: String, index: Int) -> Result[Int, String]` | Reads a byte with a checked index. |

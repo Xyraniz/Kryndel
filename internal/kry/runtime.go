@@ -1796,6 +1796,11 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return nilVal(), r.fail(e, "cannot unwrap error Result: %s", display(*a[0].Inner))
 		}
 		return cloneValue(*a[0].Inner), nil
+	case "result_error":
+		if a[0].OK {
+			return optVal(false, nilVal()), nil
+		}
+		return optVal(true, *a[0].Inner), nil
 	case "some":
 		return optVal(true, a[0]), nil
 	case "none":

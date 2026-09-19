@@ -258,6 +258,15 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("result_unwrap expects Result[T, E]")
 		}
 		return t.A, nil
+	case "result_error":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyResult || !typeKnown(t.A) || !typeKnown(t.B) {
+			return bad("result_error expects Result[T, E]")
+		}
+		return Opt(t.B), nil
 	case "some":
 		t, d := arg(0, nil)
 		if d != nil {

@@ -53,6 +53,28 @@ main()
 	}
 }
 
+func TestResultErrorReadsFailuresWithoutUnwrapping(t *testing.T) {
+	src := `
+fn main() -> Result[Nil, String] {
+    let failure: Result[Int, String] = err("not found")
+    let success: Result[Int, String] = ok(7)
+    assert_eq(is_some(result_error(failure)), true)
+    assert_eq(unwrap_or(result_error(failure), "fallback"), "not found")
+    assert_eq(is_none(result_error(success)), true)
+    return ok(nil)
+}
+main()
+`
+	p, c := testProgram(t, src)
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("result_error failed: %s", d.Message)
+	}
+}
+
 func TestJSONNumberHelpersPreserveUInt64Precision(t *testing.T) {
 	raw, err := decodeJSONNode("18446744073709551615")
 	if err != nil {

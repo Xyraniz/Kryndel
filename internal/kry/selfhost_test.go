@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -108,5 +109,81 @@ func TestStage1SourceCompilerMatchesDirectELFOracle(t *testing.T) {
 	}
 	if !bytes.Equal(stage1, oracle) {
 		t.Fatalf("source stage1 output differs from direct ELF oracle: stage1=%d oracle=%d", len(stage1), len(oracle))
+	}
+}
+
+func TestStage2SourceCompilerParsesExpressionsAndEscapes(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "source_stage2.kry")
+	compiler := filepath.Join(root, "..", "..", "selfhost", "source_compiler.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerProgram, d := LoadProgram(compiler, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "source-stage2")
+	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, DefaultLimits(), Sandbox{}, []string{fixture, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage2 source compiler failed: %s", d.Message)
+	}
+	stage2, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle, err := BuildDirectELF(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stage2, oracle) {
+		t.Fatalf("source stage2 output differs from direct ELF oracle: stage2=%d oracle=%d", len(stage2), len(oracle))
+	}
+}
+
+func TestStage2SourceCompilerRejectsUnsupportedSyntax(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := filepath.Join(root, "..", "..", "selfhost", "source_compiler.kry")
+	compilerProgram, d := LoadProgram(compiler, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "unsupported.kry")
+	outputPath := filepath.Join(dir, "unsupported-output")
+	if err := os.WriteFile(inputPath, []byte("while true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, DefaultLimits(), Sandbox{}, []string{inputPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d == nil {
+		t.Fatal("unsupported source syntax was accepted")
+	} else if !strings.Contains(d.Message, "unsupported statement") {
+		t.Fatalf("unexpected unsupported-syntax diagnostic: %s", d.Message)
 	}
 }
