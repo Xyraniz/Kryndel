@@ -227,7 +227,7 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 		fmt.Println("built " + out)
 		return 0
 	}
-	p, _, d := e.CheckPath(src)
+	p, c, d := e.CheckPath(src)
 	if d != nil {
 		return report(d, jsonMode)
 	}
@@ -235,13 +235,15 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	if err != nil {
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "%v", err), jsonMode)
 	}
-	data, err := kry.BuildNative(p, t, format)
+	data, err := kry.BuildNative(p, c, t, format)
 	if err != nil {
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "native build failed: %v", err), jsonMode)
 	}
 	if out == "" {
 		if format == "exe" || format == "pe" {
 			out = strings.TrimSuffix(src, ".kry") + ".exe"
+		} else if format == "c" {
+			out = strings.TrimSuffix(src, ".kry") + ".c"
 		} else {
 			out = strings.TrimSuffix(src, ".kry")
 		}
