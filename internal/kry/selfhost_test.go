@@ -645,3 +645,119 @@ func TestStage8SourceOptionResultFrontendParities(t *testing.T) {
 		}
 	}
 }
+
+func TestStage9SourceArrayFrontendParities(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "array_runtime_stage6.kry")
+	compiler := filepath.Join(root, "..", "..", "selfhost", "source_kir_compiler.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerProgram, d := LoadProgram(compiler, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "source-array-stage9")
+	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, DefaultLimits(), Sandbox{}, []string{fixture, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage9 source Array compiler failed: %s", d.Message)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := BuildDirectELF(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("stage9 source Array compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
+	}
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		runnable := filepath.Join(dir, "source-array-stage9.run")
+		if err := os.WriteFile(runnable, got, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command(runnable).Output()
+		if err != nil {
+			t.Fatalf("self-hosted source Array ELF failed to execute: %v", err)
+		}
+		if string(output) != "3\n20\n40\n7\n" {
+			t.Fatalf("unexpected self-hosted source Array output %q", output)
+		}
+	}
+}
+
+func TestStage10SourceNestedGenericFrontendParities(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "source_nested_generics_stage10.kry")
+	compiler := filepath.Join(root, "..", "..", "selfhost", "source_kir_compiler.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerProgram, d := LoadProgram(compiler, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "source-nested-generics-stage10")
+	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, DefaultLimits(), Sandbox{}, []string{fixture, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage10 source nested generic compiler failed: %s", d.Message)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := BuildDirectELF(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("stage10 source nested generic compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
+	}
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		runnable := filepath.Join(dir, "source-nested-generics-stage10.run")
+		if err := os.WriteFile(runnable, got, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command(runnable).Output()
+		if err != nil {
+			t.Fatalf("self-hosted source nested generic ELF failed to execute: %v", err)
+		}
+		if string(output) != "true\n8\ntrue\ntrue\n5\n" {
+			t.Fatalf("unexpected self-hosted source nested generic output %q", output)
+		}
+	}
+}
