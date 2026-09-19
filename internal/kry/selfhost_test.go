@@ -1527,3 +1527,155 @@ func TestStage23KryndelDynamicStrParity(t *testing.T) {
 		t.Fatalf("unexpected stage23 self-hosted ELF output %q", output)
 	}
 }
+
+func TestStage24DirectInt(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_int_stage24.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-int-stage24")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage24 direct int ELF failed to execute: %v", err)
+	}
+	want := "-42\n17\n0\n9223372036854775807\n-9223372036854775808\n255\n1\n0\n"
+	if string(output) != want {
+		t.Fatalf("unexpected stage24 direct int output %q", output)
+	}
+}
+
+func TestStage24KryndelDynamicIntParity(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_int_stage24.kry")
+	backend := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendProgram, d := LoadProgram(backend, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "direct-int-stage24.kir")
+	outputPath := filepath.Join(dir, "direct-int-stage24-selfhost")
+	kir, err := EmitKIR(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backendLimits := DefaultLimits()
+	// Stage 24 emits a complete decimal parser as Kryndel source. Its
+	// interpreter bootstrap is intentionally bounded, but needs more than the
+	// ordinary 10-second application budget on slower developer machines.
+	backendLimits.MaxWallTimeMS = 60_000
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, backendLimits, Sandbox{}, []string{kirPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage24 Kryndel dynamic backend failed: %s", d.Message)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := BuildDirectELF(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		first := -1
+		for i := 0; i < len(got) && i < len(want); i++ {
+			if got[i] != want[i] {
+				first = i
+				break
+			}
+		}
+		if first == -1 {
+			first = len(got)
+		}
+		t.Fatalf("stage24 Kryndel int backend differs from direct ELF oracle at offset %d: got=%d want=%d", first, len(got), len(want))
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("self-hosted ELF execution requires linux-amd64")
+	}
+	runnable := filepath.Join(dir, "direct-int-stage24-selfhost.run")
+	if err := os.WriteFile(runnable, got, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage24 self-hosted ELF failed to execute: %v", err)
+	}
+	wantOutput := "-42\n17\n0\n9223372036854775807\n-9223372036854775808\n255\n1\n0\n"
+	if string(output) != wantOutput {
+		t.Fatalf("unexpected stage24 self-hosted ELF output %q", output)
+	}
+}
+
+func TestStage24IntRejectsInvalidInput(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_int_invalid_stage24.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-int-invalid-stage24")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command(runnable).Run(); err == nil {
+		t.Fatal("invalid decimal input unexpectedly succeeded")
+	} else if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("invalid decimal input exited incorrectly: %v", err)
+	}
+}

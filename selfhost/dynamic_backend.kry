@@ -252,20 +252,24 @@ fn host_int_to_string_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 8
 }
 
-fn host_bytes_from_array_label(state: EmitState) -> Int {
+fn host_int_from_string_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 9
 }
 
-fn host_process_args_label(state: EmitState) -> Int {
+fn host_bytes_from_array_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 10
 }
 
-fn host_fs_read_text_label(state: EmitState) -> Int {
+fn host_process_args_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 11
 }
 
-fn host_fs_write_bytes_label(state: EmitState) -> Int {
+fn host_fs_read_text_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 12
+}
+
+fn host_fs_write_bytes_label(state: EmitState) -> Int {
+    return state.assembler.box_alloc_label + 13
 }
 
 fn state_with_env(state: EmitState, env: CompileEnv) -> EmitState {
@@ -900,6 +904,63 @@ fn emit_int_to_string_runtime(state: EmitState) -> Result[EmitState, String] {
     return ok(append_code(result_unwrap(bound_restore), [u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)]))
 }
 
+fn emit_int_from_string_runtime(state: EmitState) -> Result[EmitState, String] {
+    let bound: Result[EmitState, String] = bind_label(state, host_int_from_string_label(state))
+    if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind host String-to-Int runtime")) }
+    let digits: LabelState = new_label(result_unwrap(bound))
+    let negative: LabelState = new_label(digits.state)
+    let positive: LabelState = new_label(negative.state)
+    let done: LabelState = new_label(positive.state)
+    let return_value: LabelState = new_label(done.state)
+    let mut current: EmitState = append_code(return_value.state, [
+        u8(83), u8(85), u8(65), u8(84), u8(65), u8(85), u8(65), u8(86), u8(65), u8(87),
+        u8(73), u8(137), u8(252), u8(77), u8(139), u8(44), u8(36),
+        u8(77), u8(49), u8(246), u8(77), u8(49), u8(255), u8(72), u8(49), u8(237), u8(72), u8(49), u8(219),
+        u8(77), u8(133), u8(237)
+    ])
+    current = emit_jump(current, current.env.trap_label, true, u8(132))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(45)])
+    current = emit_jump(current, negative.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(43)])
+    current = emit_jump(current, positive.label, true, u8(132))
+    current = emit_jump(current, digits.label, false, u8(0))
+    let bound_negative: Result[EmitState, String] = bind_label(current, negative.label)
+    if is_err(bound_negative) { return err(unwrap_or(result_error(bound_negative), "dynamic backend: cannot bind String-to-Int negative path")) }
+    current = append_code(result_unwrap(bound_negative), [u8(65), u8(183), u8(1), u8(189), u8(1), u8(0), u8(0), u8(0), u8(73), u8(255), u8(198)])
+    current = emit_jump(current, digits.label, false, u8(0))
+    let bound_positive: Result[EmitState, String] = bind_label(current, positive.label)
+    if is_err(bound_positive) { return err(unwrap_or(result_error(bound_positive), "dynamic backend: cannot bind String-to-Int positive path")) }
+    current = append_code(result_unwrap(bound_positive), [u8(189), u8(1), u8(0), u8(0), u8(0), u8(73), u8(255), u8(198)])
+    current = emit_jump(current, digits.label, false, u8(0))
+    let bound_digits: Result[EmitState, String] = bind_label(current, digits.label)
+    if is_err(bound_digits) { return err(unwrap_or(result_error(bound_digits), "dynamic backend: cannot bind String-to-Int digits")) }
+    current = append_code(result_unwrap(bound_digits), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, done.label, true, u8(132))
+    current = append_code(current, [
+        u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(48)
+    ])
+    current = emit_jump(current, current.env.trap_label, true, u8(130))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, current.env.trap_label, true, u8(135))
+    current = append_code(current, [u8(131), u8(232), u8(48), u8(72), u8(107), u8(219), u8(10)])
+    current = emit_jump(current, current.env.trap_label, true, u8(128))
+    current = append_code(current, [u8(72), u8(41), u8(195)])
+    current = emit_jump(current, current.env.trap_label, true, u8(128))
+    current = append_code(current, [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, digits.label, false, u8(0))
+    let bound_done: Result[EmitState, String] = bind_label(current, done.label)
+    if is_err(bound_done) { return err(unwrap_or(result_error(bound_done), "dynamic backend: cannot bind String-to-Int completion")) }
+    current = append_code(result_unwrap(bound_done), [u8(76), u8(137), u8(240), u8(72), u8(57), u8(232)])
+    current = emit_jump(current, current.env.trap_label, true, u8(132))
+    current = append_code(current, [u8(69), u8(132), u8(255)])
+    current = emit_jump(current, return_value.label, true, u8(133))
+    current = append_code(current, [u8(72), u8(247), u8(219)])
+    current = emit_jump(current, current.env.trap_label, true, u8(128))
+    let bound_return: Result[EmitState, String] = bind_label(current, return_value.label)
+    if is_err(bound_return) { return err(unwrap_or(result_error(bound_return), "dynamic backend: cannot bind String-to-Int return")) }
+    return ok(append_code(result_unwrap(bound_return), [u8(72), u8(137), u8(216), u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)]))
+}
+
 fn emit_bytes_from_array_runtime(state: EmitState) -> Result[EmitState, String] {
     let bound: Result[EmitState, String] = bind_label(state, host_bytes_from_array_label(state))
     if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind host Bytes allocator")) }
@@ -1110,7 +1171,8 @@ fn emit_integer(state: EmitState, unsigned: Bool) -> Result[EmitState, String] {
     if !unsigned {
         current = emit_jump(current, digits_label.label, true, u8(137))
         current = append_code(current, [u8(65), u8(178), u8(1), u8(72), u8(247), u8(216)])
-        current = emit_jump(current, current.env.trap_label, true, u8(128))
+        // MinInt remains a valid unsigned magnitude for decimal division;
+        // trapping after negation would reject a valid Int display value.
     }
     let bound_digits: Result[EmitState, String] = bind_label(current, digits_label.label)
     if is_err(bound_digits) { return err(unwrap_or(result_error(bound_digits), "dynamic backend: cannot bind integer digits")) }
@@ -1296,6 +1358,25 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
             if result_unwrap(json_array_len(arguments)) != 0 { return err("dynamic backend: process_args expects no arguments") }
             let marked: EmitState = state_with_array_used(state_with_host_used(state))
             return ok(emit_label_call(marked, host_process_args_label(marked)))
+        }
+        if target == "builtin:int" {
+            if result_unwrap(json_array_len(arguments)) != 1 { return err("dynamic backend: int expects one numeric, Bool, or String argument") }
+            let integer_argument: Json = result_unwrap(json_array_get(arguments, 0))
+            let type_name: String = expr_type(integer_argument)
+            if type_name == "Int" || type_name == "Bool" { return emit_expression(state, integer_argument) }
+            if starts_with(type_name, "UInt") {
+                let emitted: Result[EmitState, String] = emit_expression(state, integer_argument)
+                if is_err(emitted) { return err(expression_error(emitted)) }
+                let tested: EmitState = append_code(result_unwrap(emitted), [u8(72), u8(133), u8(192)])
+                return ok(emit_jump(tested, tested.env.trap_label, true, u8(136)))
+            }
+            if type_name == "String" {
+                let emitted: Result[EmitState, String] = emit_expression(state, integer_argument)
+                if is_err(emitted) { return err(expression_error(emitted)) }
+                let marked: EmitState = state_with_host_used(append_code(result_unwrap(emitted), [u8(72), u8(137), u8(199)]))
+                return ok(emit_label_call(marked, host_int_from_string_label(marked)))
+            }
+            return err("dynamic backend: int does not support type '" + type_name + "'")
         }
         if target == "builtin:str" {
             if result_unwrap(json_array_len(arguments)) != 1 { return err("dynamic backend: str expects one Display argument") }
@@ -1946,12 +2027,136 @@ fn emit_function_bodies(state: EmitState, functions: Json, index: Int, base_env:
     return emit_function_bodies(returned, functions, index + 1, base_env)
 }
 
+fn expression_uses_runtime(expression: Json, target: String) -> Bool {
+    if json_kind(expression) == "null" { return false }
+    let kind: String = text(field(expression, "kind"))
+    if kind == "call" {
+        let call_target: String = text(field(expression, "call_target"))
+        if call_target == target {
+            let arguments: Json = field(expression, "args")
+            let argument_count: Int = result_unwrap(json_array_len(arguments))
+            if argument_count != 1 { return true }
+            let argument: Json = result_unwrap(json_array_get(arguments, 0))
+            let argument_type: String = expr_type(argument)
+            if target == "builtin:str" && argument_type != "String" { return true }
+            if target == "builtin:int" && argument_type == "String" { return true }
+        }
+        let arguments: Json = field(expression, "args")
+        let count: Int = result_unwrap(json_array_len(arguments))
+        let mut index: Int = 0
+        while index < count {
+            if expression_uses_runtime(result_unwrap(json_array_get(arguments, index)), target) { return true }
+            index = index + 1
+        }
+        return false
+    }
+    if kind == "binary" {
+        return expression_uses_runtime(field(expression, "left"), target) || expression_uses_runtime(field(expression, "right"), target)
+    }
+    if kind == "unary" || kind == "propagate" {
+        return expression_uses_runtime(field(expression, "operand"), target)
+    }
+    if kind == "index" {
+        return expression_uses_runtime(field(expression, "base"), target) || expression_uses_runtime(field(expression, "left"), target)
+    }
+    if kind == "field" { return expression_uses_runtime(field(expression, "base"), target) }
+    if kind == "array" || kind == "set" {
+        let items: Json = field(expression, "items")
+        let count: Int = result_unwrap(json_array_len(items))
+        let mut index: Int = 0
+        while index < count {
+            if expression_uses_runtime(result_unwrap(json_array_get(items, index)), target) { return true }
+            index = index + 1
+        }
+        return false
+    }
+    if kind == "map" {
+        let keys: Json = field(expression, "map_keys")
+        let key_count: Int = result_unwrap(json_array_len(keys))
+        let mut index: Int = 0
+        while index < key_count {
+            if expression_uses_runtime(result_unwrap(json_array_get(keys, index)), target) { return true }
+            index = index + 1
+        }
+    }
+    if kind == "struct" || kind == "map" {
+        let values: Json = field(expression, "values")
+        let value_count: Int = result_unwrap(json_array_len(values))
+        let mut value_index: Int = 0
+        while value_index < value_count {
+            if expression_uses_runtime(result_unwrap(json_array_get(values, value_index)), target) { return true }
+            value_index = value_index + 1
+        }
+    }
+    return false
+}
+
+fn statements_use_runtime(statements: Json, target: String) -> Bool {
+    let count: Int = result_unwrap(json_array_len(statements))
+    let mut index: Int = 0
+    while index < count {
+        let statement: Json = result_unwrap(json_array_get(statements, index))
+        let kind: String = text(field(statement, "kind"))
+        if (kind == "let" || kind == "const") && expression_uses_runtime(field(statement, "init"), target) { return true }
+        if kind == "expr" && expression_uses_runtime(field(statement, "expr"), target) { return true }
+        if kind == "assign" && (expression_uses_runtime(field(statement, "target"), target) || expression_uses_runtime(field(statement, "value"), target)) { return true }
+        if kind == "if" {
+            if expression_uses_runtime(field(statement, "cond"), target) || statements_use_runtime(field(statement, "then"), target) || statements_use_runtime(field(statement, "else"), target) { return true }
+        }
+        if kind == "while" {
+            if expression_uses_runtime(field(statement, "cond"), target) || statements_use_runtime(field(statement, "body"), target) { return true }
+        }
+        if kind == "return" && expression_uses_runtime(field(statement, "return"), target) { return true }
+        if kind == "for" {
+            if expression_uses_runtime(field(statement, "iter"), target) || statements_use_runtime(field(statement, "body"), target) { return true }
+        }
+        if kind == "match" {
+            if expression_uses_runtime(field(statement, "scrutinee"), target) { return true }
+            let arms: Json = field(statement, "arms")
+            let arm_count: Int = result_unwrap(json_array_len(arms))
+            let mut arm_index: Int = 0
+            while arm_index < arm_count {
+                let arm: Json = result_unwrap(json_array_get(arms, arm_index))
+                if statements_use_runtime(field(arm, "body"), target) { return true }
+                arm_index = arm_index + 1
+            }
+        }
+        if kind == "defer" && expression_uses_runtime(field(statement, "expr"), target) { return true }
+        if kind == "unsafe" && statements_use_runtime(field(statement, "body"), target) { return true }
+        index = index + 1
+    }
+    return false
+}
+
+fn document_uses_runtime(document: Json, target: String) -> Bool {
+    if statements_use_runtime(field(document, "statements"), target) { return true }
+    let functions: Json = field(document, "functions")
+    let function_count: Int = result_unwrap(json_array_len(functions))
+    let mut function_index: Int = 0
+    while function_index < function_count {
+        let function: Json = result_unwrap(json_array_get(functions, function_index))
+        if statements_use_runtime(field(function, "body"), target) { return true }
+        let parameters: Json = field(function, "params")
+        let parameter_count: Int = result_unwrap(json_array_len(parameters))
+        let mut parameter_index: Int = 0
+        while parameter_index < parameter_count {
+            let parameter: Json = result_unwrap(json_array_get(parameters, parameter_index))
+            if expression_uses_runtime(field(parameter, "default"), target) { return true }
+            parameter_index = parameter_index + 1
+        }
+        function_index = function_index + 1
+    }
+    return false
+}
+
 fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     let target: Json = field(document, "target")
     if text(field(target, "os")) != "linux" || text(field(target, "arch")) != "amd64" { return err("dynamic backend supports only linux-amd64") }
     let functions: Json = field(document, "functions")
     let struct_fields: Map[String, Json] = collect_struct_fields(field(document, "structs"))
     let statements: Json = entry_statements(document)
+    let uses_int_to_string: Bool = document_uses_runtime(document, "builtin:str")
+    let uses_int_from_string: Bool = document_uses_runtime(document, "builtin:int")
     let mut state: EmitState = emit_prologue(new_dynamic_state())
     let end_label: LabelState = new_label(state)
     let trap_label: LabelState = new_label(end_label.state)
@@ -1968,7 +2173,8 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     let host_map_insert_label: LabelState = new_label(host_map_find_label.state)
     let host_substring_label: LabelState = new_label(host_map_insert_label.state)
     let host_int_to_string_label: LabelState = new_label(host_substring_label.state)
-    let host_bytes_label: LabelState = new_label(host_int_to_string_label.state)
+    let host_int_from_string_label: LabelState = new_label(host_int_to_string_label.state)
+    let host_bytes_label: LabelState = new_label(host_int_from_string_label.state)
     let host_process_label: LabelState = new_label(host_bytes_label.state)
     let host_read_label: LabelState = new_label(host_process_label.state)
     let host_write_label: LabelState = new_label(host_read_label.state)
@@ -1999,9 +2205,16 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
         let string_runtime: Result[EmitState, String] = emit_string_alloc_runtime(lowered)
         if is_err(string_runtime) { return err(unwrap_or(result_error(string_runtime), "dynamic backend: host String runtime lowering failed")) }
         lowered = result_unwrap(string_runtime)
-        let int_string_runtime: Result[EmitState, String] = emit_int_to_string_runtime(lowered)
-        if is_err(int_string_runtime) { return err(unwrap_or(result_error(int_string_runtime), "dynamic backend: host Int-to-String runtime lowering failed")) }
-        lowered = result_unwrap(int_string_runtime)
+        if uses_int_to_string {
+            let int_string_runtime: Result[EmitState, String] = emit_int_to_string_runtime(lowered)
+            if is_err(int_string_runtime) { return err(unwrap_or(result_error(int_string_runtime), "dynamic backend: host Int-to-String runtime lowering failed")) }
+            lowered = result_unwrap(int_string_runtime)
+        }
+        if uses_int_from_string {
+            let string_int_runtime: Result[EmitState, String] = emit_int_from_string_runtime(lowered)
+            if is_err(string_int_runtime) { return err(unwrap_or(result_error(string_int_runtime), "dynamic backend: host String-to-Int runtime lowering failed")) }
+            lowered = result_unwrap(string_int_runtime)
+        }
         let bytes_runtime: Result[EmitState, String] = emit_bytes_from_array_runtime(lowered)
         if is_err(bytes_runtime) { return err(unwrap_or(result_error(bytes_runtime), "dynamic backend: host Bytes runtime lowering failed")) }
         lowered = result_unwrap(bytes_runtime)
@@ -2055,7 +2268,7 @@ fn has_dynamic_expression(expression: Json) -> Bool {
     if kind == "array" || kind == "index" { return true }
     if kind == "call" {
         let target: String = text(field(expression, "call_target"))
-        if target == "builtin:len" || target == "builtin:bytes" || target == "builtin:process_args" || target == "builtin:fs_read_text" || target == "builtin:fs_write_bytes" || target == "builtin:array_push" || target == "builtin:array_get" || target == "builtin:array_indices" || target == "builtin:array_concat" || target == "builtin:some" || target == "builtin:none" || target == "builtin:ok" || target == "builtin:err" || target == "builtin:is_some" || target == "builtin:is_none" || target == "builtin:is_ok" || target == "builtin:is_err" || target == "builtin:unwrap_or" || target == "builtin:result_unwrap" || target == "builtin:result_error" {
+        if target == "builtin:int" || target == "builtin:len" || target == "builtin:bytes" || target == "builtin:process_args" || target == "builtin:fs_read_text" || target == "builtin:fs_write_bytes" || target == "builtin:array_push" || target == "builtin:array_get" || target == "builtin:array_indices" || target == "builtin:array_concat" || target == "builtin:some" || target == "builtin:none" || target == "builtin:ok" || target == "builtin:err" || target == "builtin:is_some" || target == "builtin:is_none" || target == "builtin:is_ok" || target == "builtin:is_err" || target == "builtin:unwrap_or" || target == "builtin:result_unwrap" || target == "builtin:result_error" {
             return true
         }
         let arguments: Json = field(expression, "args")

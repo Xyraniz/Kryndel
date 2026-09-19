@@ -1,0 +1,23 @@
+fn parse(value: String) -> Int {
+    return int(value)
+}
+
+fn from_uint(value: UInt8) -> Int {
+    return int(value)
+}
+
+fn from_bool(value: Bool) -> Int {
+    return int(value)
+}
+
+fn main() -> Nil {
+    println(parse("-42"))
+    println(parse("+17"))
+    println(parse("0"))
+    println(parse("9223372036854775807"))
+    println(parse("-9223372036854775808"))
+    println(from_uint(u8(255)))
+    println(from_bool(true))
+    println(from_bool(false))
+    return nil
+}

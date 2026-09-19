@@ -52,9 +52,12 @@ type directMachine struct {
 	mapInsertLabel      int
 	substringLabel      int
 	intToStringLabel    int
+	intFromStringLabel  int
 	mapRuntimeUsed      bool
 	stringCharsUsed     bool
 	substringUsed       bool
+	intToStringUsed     bool
+	intFromStringUsed   bool
 	bytesFromArrayLabel int
 	processArgsLabel    int
 	fsReadTextLabel     int
@@ -114,6 +117,7 @@ func newDirectMachine() *directMachine {
 	m.mapInsertLabel = m.newLabel()
 	m.substringLabel = m.newLabel()
 	m.intToStringLabel = m.newLabel()
+	m.intFromStringLabel = m.newLabel()
 	m.bytesFromArrayLabel = m.newLabel()
 	m.processArgsLabel = m.newLabel()
 	m.fsReadTextLabel = m.newLabel()
@@ -1542,6 +1546,108 @@ func (m *directMachine) emitIntToStringRuntime() error {
 	return nil
 }
 
+func (m *directMachine) emitIntFromStringRuntime() error {
+	if err := m.bind(m.intFromStringLabel); err != nil {
+		return err
+	}
+	// rdi points to a String object. Parse an optional sign followed by a
+	// complete ASCII decimal sequence. Accumulation stays negative so the
+	// exact Int minimum remains representable; malformed input and overflow
+	// branch to the normal checked trap path.
+	digits := m.newLabel()
+	negative := m.newLabel()
+	positive := m.newLabel()
+	done := m.newLabel()
+	returnValue := m.newLabel()
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=String
+		0x4d, 0x8b, 0x2c, 0x24, // r13=byte length
+		0x4d, 0x31, 0xf6, // r14=byte index
+		0x4d, 0x31, 0xff, // r15=negative flag
+		0x48, 0x31, 0xed, // rbp=minimum digit index (0 or 1 after a sign)
+		0x48, 0x31, 0xdb, // rbx=negative accumulator
+		0x4d, 0x85, 0xed, // reject empty String
+	)
+	if err := m.emitConditionalJump(0x84, m.trapLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08) // al=first byte
+	m.code = append(m.code, 0x3c, 0x2d)                         // '-'
+	if err := m.emitConditionalJump(0x84, negative); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0x2b) // '+'
+	if err := m.emitConditionalJump(0x84, positive); err != nil {
+		return err
+	}
+	if err := m.emitJump(digits); err != nil {
+		return err
+	}
+	if err := m.bind(negative); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0xb7, 0x01, 0xbd, 0x01, 0x00, 0x00, 0x00, 0x49, 0xff, 0xc6) // sign=negative; minimum index=1
+	if err := m.emitJump(digits); err != nil {
+		return err
+	}
+	if err := m.bind(positive); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0xbd, 0x01, 0x00, 0x00, 0x00, 0x49, 0xff, 0xc6) // minimum index=1; consume '+'
+	if err := m.emitJump(digits); err != nil {
+		return err
+	}
+	if err := m.bind(digits); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)                 // index versus length
+	if err := m.emitConditionalJump(0x84, done); err != nil { // je: all bytes consumed
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	m.code = append(m.code, 0x3c, 0x30)
+	if err := m.emitConditionalJump(0x82, m.trapLabel); err != nil { // jb
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0x39)
+	if err := m.emitConditionalJump(0x87, m.trapLabel); err != nil { // ja
+		return err
+	}
+	m.code = append(m.code,
+		0x83, 0xe8, 0x30, // eax -= '0'
+		0x48, 0x6b, 0xdb, 0x0a, // rbx *= 10
+	)
+	m.emitTrapOnOverflow()
+	m.code = append(m.code, 0x48, 0x29, 0xc3) // rbx -= digit
+	m.emitTrapOnOverflow()
+	m.code = append(m.code, 0x49, 0xff, 0xc6) // index++
+	if err := m.emitJump(digits); err != nil {
+		return err
+	}
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf0, 0x48, 0x39, 0xe8)      // cmp index, minimum digit index
+	if err := m.emitConditionalJump(0x84, m.trapLabel); err != nil { // reject sign-only strings
+		return err
+	}
+	m.code = append(m.code, 0x45, 0x84, 0xff) // negative input?
+	if err := m.emitConditionalJump(0x85, returnValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xf7, 0xdb) // positive result = -negative accumulator
+	m.emitTrapOnOverflow()
+	if err := m.bind(returnValue); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x89, 0xd8, // rax=parsed Int
+		0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3,
+	)
+	return nil
+}
+
 func (m *directMachine) emitBytesFromArrayRuntime() error {
 	if err := m.bind(m.bytesFromArrayLabel); err != nil {
 		return err
@@ -2066,7 +2172,9 @@ func (m *directMachine) emitInteger(unsigned bool) error {
 		}
 		m.code = append(m.code, 0x41, 0xb2, 0x01) // mov r10b, 1
 		m.code = append(m.code, 0x48, 0xf7, 0xd8) // neg rax
-		m.emitTrapOnOverflow()
+		// MinInt remains its unsigned two's-complement magnitude here. The
+		// following unsigned division emits 9223372036854775808 safely, so
+		// trapping on the negation would reject a valid Int display value.
 	}
 	if err := m.bind(digits); err != nil {
 		return err
@@ -2708,7 +2816,36 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			binary.LittleEndian.PutUint64(displayKind[:], kind)
 			m.code = append(m.code, displayKind[:]...)
 			m.hostRuntimeUsed = true
+			m.intToStringUsed = true
 			return m.emitLabelCall(m.intToStringLabel)
+		case "int":
+			if len(e.Args) != 1 || e.Args[0].Type == nil {
+				return fmt.Errorf("direct ELF int expects one numeric, Bool, or String argument")
+			}
+			argument := e.Args[0]
+			switch argument.Type.Kind {
+			case TyInt, TyBool:
+				return m.emitExpr(argument)
+			case TyUInt:
+				if err := m.emitExpr(argument); err != nil {
+					return err
+				}
+				m.code = append(m.code, 0x48, 0x85, 0xc0) // reject UInt values above Int max
+				if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil {
+					return err
+				}
+				return nil
+			case TyString:
+				if err := m.emitExpr(argument); err != nil {
+					return err
+				}
+				m.code = append(m.code, 0x48, 0x89, 0xc7) // rdi=String
+				m.hostRuntimeUsed = true
+				m.intFromStringUsed = true
+				return m.emitLabelCall(m.intFromStringLabel)
+			default:
+				return fmt.Errorf("direct ELF backend int does not support %s", argument.Type.String())
+			}
 		case "len":
 			if len(e.Args) != 1 || e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyArray && e.Args[0].Type.Kind != TyBytes) {
 				return fmt.Errorf("direct ELF backend supports len(Array[T]) and len(Bytes)")
@@ -3591,11 +3728,15 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 				return nil, err
 			}
 		}
-		// Host finalization emits the complete deterministic host-runtime slice;
-		// keep this order identical to dynamic_backend.kry even when a program
-		// does not call str directly.
-		if err := m.emitIntToStringRuntime(); err != nil {
-			return nil, err
+		if m.intToStringUsed {
+			if err := m.emitIntToStringRuntime(); err != nil {
+				return nil, err
+			}
+		}
+		if m.intFromStringUsed {
+			if err := m.emitIntFromStringRuntime(); err != nil {
+				return nil, err
+			}
 		}
 		if err := m.emitBytesFromArrayRuntime(); err != nil {
 			return nil, err

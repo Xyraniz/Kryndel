@@ -1,0 +1,8 @@
+fn parse(value: String) -> Int {
+    return int(value)
+}
+
+fn main() -> Nil {
+    println(parse("12x"))
+    return nil
+}
