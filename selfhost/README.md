@@ -13,7 +13,7 @@ The KIR stage accepts:
 - string literals, static variable references, `str(...)`, and string concatenation;
 - top-level `print(...)` and `println(...)` calls.
 
-The dynamic KIR stage additionally accepts top-level and nested `let`/`const`, mutable Int/Bool slots, assignments, checked signed arithmetic, comparisons, bitwise operations, `if`/`else`, `while`, `break`, `continue`, static display values, and dynamic `Int`/`UInt` values inside `print`/`println`. It emits stack loads/stores, decimal integer conversion, relative branches, RIP-relative data references, overflow traps, and Linux syscalls directly from Kryndel. Functions, `for`, `match`, heap values, and non-Linux targets remain explicit rejection points.
+The dynamic KIR stage additionally accepts top-level and nested `let`/`const`, mutable Int/Bool/UInt slots, assignments, checked signed arithmetic, wrapping fixed-width unsigned arithmetic, comparisons, bitwise operations, `if`/`else`, `while`, `break`, `continue`, static display values, and dynamic `Int`/`UInt` values inside `print`/`println`. It emits stack loads/stores, decimal integer conversion, relative branches, RIP-relative data references, overflow traps, and Linux syscalls directly from Kryndel. Functions, `for`, `match`, heap values, and non-Linux targets remain explicit rejection points.
 
 Dynamic bindings, arbitrary calls, control flow, functions, and non-Linux targets are rejected with explicit errors. This restriction is intentional while the lowering is being expanded.
 

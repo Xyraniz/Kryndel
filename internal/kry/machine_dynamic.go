@@ -312,6 +312,26 @@ func (m *directMachine) emitExpr(e *Expr) error {
 		}
 	case ExBinary:
 		return m.emitBinary(e)
+	case ExCall:
+		if e.Receiver != nil || len(e.Args) != 1 {
+			return fmt.Errorf("direct ELF backend supports only one-argument numeric conversions")
+		}
+		switch e.Name {
+		case "u8", "u16", "u32", "u64":
+			value, ok := directStaticValue(e.Args[0], m.staticEnv)
+			if !ok || (value.Kind != VInt && value.Kind != VUInt) {
+				return fmt.Errorf("direct ELF backend requires a static argument for %s", e.Name)
+			}
+			if value.Kind == VInt {
+				m.emitMoveImmediate(uint64(value.I))
+			} else {
+				m.emitMoveImmediate(value.U)
+			}
+			m.emitUIntMask(machineBits(e.Type))
+			return nil
+		default:
+			return fmt.Errorf("direct ELF backend does not support call %s", e.Name)
+		}
 	default:
 		return fmt.Errorf("direct ELF backend does not support expression kind %s", exprName(e.Kind))
 	}

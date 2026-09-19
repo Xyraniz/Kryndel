@@ -205,6 +205,19 @@ fn emit_int(state: EmitState, value: Int) -> EmitState {
     return append_code(state, array_concat([u8(72), u8(184)], dyn_u64_bytes(int_u64(value))))
 }
 
+fn emit_uint_mask(state: EmitState, bits: Int) -> EmitState {
+    if bits == 0 || bits == 64 {
+        return state
+    }
+    let mask: UInt64 = (u64(1) << bits) - u64(1)
+    return append_code(state, array_concat([u8(72), u8(37)], dyn_u32_bytes(u32(mask))))
+}
+
+fn emit_uint(state: EmitState, value: UInt64, bits: Int) -> EmitState {
+    let loaded: EmitState = append_code(state, array_concat([u8(72), u8(184)], dyn_u64_bytes(value)))
+    return emit_uint_mask(loaded, bits)
+}
+
 fn emit_load_slot(state: EmitState, slot: Int) -> EmitState {
     return append_code(state, array_concat([u8(72), u8(139), u8(133)], i32_bytes(0 - slot)))
 }
@@ -322,6 +335,9 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
     if json_kind(constant) == "object" {
         let constant_kind: String = text(field(constant, "kind"))
         if constant_kind == "int" { return ok(emit_int(state, result_unwrap(json_int(field(constant, "int"))))) }
+        if constant_kind == "uint" {
+            return ok(emit_uint(state, result_unwrap(json_uint(field(constant, "uint"))), result_unwrap(json_int(field(constant, "uint_bits")))))
+        }
         if constant_kind == "bool" {
             if result_unwrap(json_bool(field(constant, "bool"))) { return ok(emit_int(state, 1)) }
             return ok(emit_int(state, 0))
@@ -330,6 +346,20 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
     let kind: String = text(field(expression, "kind"))
     if kind == "int" {
         return ok(emit_int(state, result_unwrap(json_int(field(expression, "int")))))
+    }
+    if kind == "uint" {
+        return ok(emit_uint(state, result_unwrap(json_uint(field(expression, "uint"))), result_unwrap(json_int(field(expression, "uint_bits")))))
+    }
+    if kind == "call" {
+        let target: String = text(field(expression, "call_target"))
+        let arguments: Json = field(expression, "args")
+        let argument: Json = result_unwrap(json_array_get(arguments, 0))
+        let value: UInt64 = u64(result_unwrap(json_int(field(argument, "int"))))
+        if target == "builtin:u8" { return ok(emit_uint(state, value, 8)) }
+        if target == "builtin:u16" { return ok(emit_uint(state, value, 16)) }
+        if target == "builtin:u32" { return ok(emit_uint(state, value, 32)) }
+        if target == "builtin:u64" { return ok(emit_uint(state, value, 64)) }
+        return err("dynamic backend: unsupported call '" + target + "'")
     }
     if kind == "bool" {
         let value: Bool = result_unwrap(json_bool(field(expression, "bool")))
