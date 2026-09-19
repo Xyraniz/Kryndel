@@ -36,6 +36,18 @@ type cgen struct {
 	fnBase string
 	// loopBases tracks the defer-stack depth at each enclosing loop.
 	loopBases []string
+	// polyFns lists the top-level fn(String) -> String handlers referenced by
+	// poly_register, in registration order, so the runtime dispatch table can
+	// be emitted as a static array of function pointers.
+	polyFns []*Function
+	// globals holds the names of top-level bindings, emitted as file-scope
+	// static KValue cells so functions can reference them.
+	globals map[string]bool
+	// locals is a stack of in-scope local binding names, used to decide
+	// whether an identifier refers to a global or a local.
+	locals []map[string]bool
+	// topLevel is true while emitting the top-level statement list.
+	topLevel bool
 }
 
 // GenerateC lowers a checked program to C source. It returns an error when the
@@ -51,6 +63,7 @@ func GenerateC(p *Program, c *Checker) (string, error) {
 		structID: map[string]int{},
 		enumID:   map[string]int{},
 		fnName:   map[*Function]string{},
+		globals:  map[string]bool{},
 	}
 	g.structs = append(g.structs, p.Structs...)
 	g.enums = append(g.enums, p.Enums...)
@@ -63,9 +76,14 @@ func GenerateC(p *Program, c *Checker) (string, error) {
 	for _, f := range p.Functions {
 		g.fnName[f] = g.symbol(f)
 	}
+	g.collectPolyHandlers()
+	g.collectGlobals()
 
 	g.emitRuntime()
+	g.emitGlobals()
 	g.emitMetadata()
+	g.emitPrototypes()
+	g.emitPolyTable()
 	g.emitFunctions()
 	g.emitMain()
 	if g.unsupported != "" {
@@ -104,6 +122,91 @@ func (g *cgen) fail(format string, args ...any) {
 	if g.unsupported == "" {
 		g.unsupported = fmt.Sprintf(format, args...)
 	}
+}
+
+// collectPolyHandlers records every top-level fn(String) -> String so the
+// runtime dispatch table can resolve handler names dynamically (the name may
+// be passed through a wrapper function rather than written as a literal).
+func (g *cgen) collectPolyHandlers() {
+	for _, f := range g.prog.Functions {
+		if f.Receiver != nil || len(f.Params) != 1 {
+			continue
+		}
+		pt := mustResolve(g.env, f.Params[0].Type)
+		rt := mustResolve(g.env, f.Return)
+		if pt != nil && rt != nil && pt.Kind == TyString && rt.Kind == TyString {
+			g.polyFns = append(g.polyFns, f)
+		}
+	}
+}
+
+// collectGlobals records top-level let/const bindings so they can be emitted
+// as file-scope cells and referenced from functions.
+func (g *cgen) collectGlobals() {
+	for _, st := range g.prog.Statements {
+		if st.Kind == StLet || st.Kind == StConst {
+			g.globals[st.Name] = true
+		}
+	}
+}
+
+// isGlobal reports whether an identifier resolves to a top-level binding that
+// is not shadowed by an in-scope local.
+func (g *cgen) isGlobal(name string) bool {
+	if !g.globals[name] {
+		return false
+	}
+	for i := len(g.locals) - 1; i >= 0; i-- {
+		if g.locals[i][name] {
+			return false
+		}
+	}
+	return true
+}
+
+// emitGlobals declares file-scope cells for every top-level binding.
+func (g *cgen) emitGlobals() {
+	for _, st := range g.prog.Statements {
+		if st.Kind == StLet || st.Kind == StConst {
+			fmt.Fprintf(&g.buf, "static KValue %s;\n", sanitize(st.Name))
+		}
+	}
+}
+
+// emitPrototypes forward-declares every generated function so the dispatch
+// table and mutually recursive calls compile without ordering constraints.
+func (g *cgen) emitPrototypes() {
+	for _, f := range g.prog.Functions {
+		fmt.Fprintf(&g.buf, "static KValue %s(void);\n", g.fnName[f])
+	}
+}
+
+// emitPolyTable emits the handler name table and function-pointer table used
+// by poly_register/poly_dispatch.
+func (g *cgen) emitPolyTable() {
+	fmt.Fprintf(&g.buf, "static const char *k_poly_names_data[%d] = {", len(g.polyFns)+1)
+	for i, f := range g.polyFns {
+		if i > 0 {
+			g.buf.WriteString(", ")
+		}
+		g.buf.WriteString(cString(f.Name))
+	}
+	if len(g.polyFns) == 0 {
+		g.buf.WriteString("0")
+	}
+	g.buf.WriteString("};\n")
+	fmt.Fprintf(&g.buf, "static KValue (*k_poly_fns_data[%d])(void) = {", len(g.polyFns)+1)
+	for i, f := range g.polyFns {
+		if i > 0 {
+			g.buf.WriteString(", ")
+		}
+		g.buf.WriteString(g.fnName[f])
+	}
+	if len(g.polyFns) == 0 {
+		g.buf.WriteString("0")
+	}
+	g.buf.WriteString("};\n")
+	fmt.Fprintf(&g.buf, "static int k_poly_nfns_data = %d;\n", len(g.polyFns))
 }
 
 func (g *cgen) emitRuntime() {
@@ -178,14 +281,17 @@ func (g *cgen) emitFunction(f *Function) {
 	if f.Receiver != nil {
 		fmt.Fprintf(&g.buf, "  KValue self = k_args[0];\n")
 	}
+	g.locals = append(g.locals, map[string]bool{})
 	for i, p := range f.Params {
 		off := i
 		if f.Receiver != nil {
 			off = i + 1
 		}
 		fmt.Fprintf(&g.buf, "  KValue %s = k_args[%d];\n", sanitize(p.Name), off)
+		g.locals[len(g.locals)-1][p.Name] = true
 	}
 	g.block(f.Body, "  ")
+	g.locals = g.locals[:len(g.locals)-1]
 	fmt.Fprintf(&g.buf, "  return kv_nil();\n}\n")
 }
 
@@ -193,12 +299,17 @@ func (g *cgen) emitMain() {
 	g.buf.WriteString("int main(void) {\n")
 	g.buf.WriteString("  k_structs = k_structs_data;\n")
 	g.buf.WriteString("  k_enums = k_enums_data;\n")
+	g.buf.WriteString("  k_poly_names = k_poly_names_data;\n")
+	g.buf.WriteString("  k_poly_fns = k_poly_fns_data;\n")
+	g.buf.WriteString("  k_poly_nfns = k_poly_nfns_data;\n")
 	g.buf.WriteString("  if (setjmp(k_jmp)) { fflush(stdout); fprintf(stderr, \"kryndel: %s\\n\", k_errbuf); return 1; }\n")
 	g.buf.WriteString("  int _fb = k_ndefers;\n")
 	g.fnBase = "_fb"
 	g.deferBases = nil
 	g.loopBases = nil
+	g.topLevel = true
 	g.block(g.prog.Statements, "  ")
+	g.topLevel = false
 	if len(g.prog.Statements) == 0 {
 		if f := g.env.Functions["main"]; f != nil {
 			fmt.Fprintf(&g.buf, "  { k_args[0] = kv_nil(); KValue _r = %s(); (void)_r; }\n", g.fnName[f])
@@ -214,12 +325,23 @@ func (g *cgen) block(body []*Stmt, indent string) {
 	base := g.next()
 	fmt.Fprintf(&g.buf, "%s{ int %s = k_ndefers;\n", indent, base)
 	g.deferBases = append(g.deferBases, base)
+	g.locals = append(g.locals, map[string]bool{})
 	for _, s := range body {
 		g.stmt(s, indent+"  ")
 	}
 	fmt.Fprintf(&g.buf, "%s  while (k_ndefers > %s) k_defers[--k_ndefers]();\n", indent, base)
 	fmt.Fprintf(&g.buf, "%s}\n", indent)
 	g.deferBases = g.deferBases[:len(g.deferBases)-1]
+	g.locals = g.locals[:len(g.locals)-1]
+}
+
+// nestedBlock emits a block that is not the top-level statement list, so
+// bindings inside it are locals rather than globals.
+func (g *cgen) nestedBlock(body []*Stmt, indent string) {
+	wasTop := g.topLevel
+	g.topLevel = false
+	g.block(body, indent)
+	g.topLevel = wasTop
 }
 
 func (g *cgen) stmt(s *Stmt, indent string) {
@@ -228,7 +350,14 @@ func (g *cgen) stmt(s *Stmt, indent string) {
 	}
 	switch s.Kind {
 	case StLet, StConst:
-		fmt.Fprintf(&g.buf, "%sKValue %s = %s;\n", indent, sanitize(s.Name), g.expr(s.Init))
+		if g.topLevel {
+			fmt.Fprintf(&g.buf, "%s%s = %s;\n", indent, sanitize(s.Name), g.expr(s.Init))
+		} else {
+			fmt.Fprintf(&g.buf, "%sKValue %s = %s;\n", indent, sanitize(s.Name), g.expr(s.Init))
+			if len(g.locals) > 0 {
+				g.locals[len(g.locals)-1][s.Name] = true
+			}
+		}
 	case StAssign:
 		if s.Target == nil || s.Target.Kind != ExVar {
 			g.fail("assignment target must be a binding")
@@ -241,10 +370,10 @@ func (g *cgen) stmt(s *Stmt, indent string) {
 		cond := g.next()
 		fmt.Fprintf(&g.buf, "%s{ KValue %s = %s; if (%s.tag != K_BOOL) kfail(\"condition must be Bool\");\n", indent, cond, g.expr(s.Cond), cond)
 		fmt.Fprintf(&g.buf, "%s  if (%s.u.b) {\n", indent, cond)
-		g.block(s.Then, indent+"    ")
+		g.nestedBlock(s.Then, indent+"    ")
 		if len(s.Else) > 0 {
 			fmt.Fprintf(&g.buf, "%s  } else {\n", indent)
-			g.block(s.Else, indent+"    ")
+			g.nestedBlock(s.Else, indent+"    ")
 		}
 		fmt.Fprintf(&g.buf, "%s  }\n%s}\n", indent, indent)
 	case StWhile:
@@ -254,7 +383,7 @@ func (g *cgen) stmt(s *Stmt, indent string) {
 		fmt.Fprintf(&g.buf, "%s  while (1) {\n", indent)
 		cond := g.next()
 		fmt.Fprintf(&g.buf, "%s    KValue %s = %s; if (%s.tag != K_BOOL) kfail(\"condition must be Bool\"); if (!%s.u.b) break;\n", indent, cond, g.expr(s.Cond), cond, cond)
-		g.block(s.Body, indent+"    ")
+		g.nestedBlock(s.Body, indent+"    ")
 		fmt.Fprintf(&g.buf, "%s  }\n", indent)
 		g.loopBases = g.loopBases[:len(g.loopBases)-1]
 		fmt.Fprintf(&g.buf, "%s}\n", indent)
@@ -267,7 +396,7 @@ func (g *cgen) stmt(s *Stmt, indent string) {
 		fmt.Fprintf(&g.buf, "%s  KValue %s = k_iter_items(%s);\n", indent, it, g.expr(s.Iter))
 		fmt.Fprintf(&g.buf, "%s  for (size_t %s = 0; %s < %s.u.a.len; %s++) {\n", indent, idx, idx, it, idx)
 		fmt.Fprintf(&g.buf, "%s    KValue %s = %s.u.a.items[%s];\n", indent, sanitize(s.Name), it, idx)
-		g.block(s.Body, indent+"    ")
+		g.nestedBlock(s.Body, indent+"    ")
 		fmt.Fprintf(&g.buf, "%s  }\n", indent)
 		g.loopBases = g.loopBases[:len(g.loopBases)-1]
 		fmt.Fprintf(&g.buf, "%s}\n", indent)
@@ -284,7 +413,7 @@ func (g *cgen) stmt(s *Stmt, indent string) {
 	case StDefer:
 		g.emitDefer(s, indent)
 	case StUnsafe:
-		g.block(s.Body, indent)
+		g.nestedBlock(s.Body, indent)
 	default:
 		g.fail("unsupported statement kind %d", s.Kind)
 	}
@@ -921,9 +1050,89 @@ func (g *cgen) builtinCall(e *Expr, b Builtin) string {
 		return fmt.Sprintf("k_sign(%s)", arg(0))
 	case "clamp":
 		return fmt.Sprintf("k_clamp(%s, %s, %s)", arg(0), arg(1), arg(2))
+	case "shared_new":
+		return fmt.Sprintf("k_shared_new(%s)", arg(0))
+	case "shared_read":
+		return fmt.Sprintf("k_shared_read(%s)", arg(0))
+	case "shared_write":
+		return fmt.Sprintf("k_shared_write(%s, %s)", arg(0), arg(1))
+	case "shared_swap":
+		return fmt.Sprintf("k_shared_swap(%s, %s)", arg(0), arg(1))
+	case "actor_channel":
+		return "k_actor_channel()"
+	case "actor_channel_with_capacity":
+		return fmt.Sprintf("k_actor_channel_cap(%s)", arg(0))
+	case "actor_send":
+		return fmt.Sprintf("k_actor_send(%s, %s)", arg(0), arg(1))
+	case "actor_try_receive":
+		return fmt.Sprintf("k_actor_try_receive(%s)", arg(0))
+	case "actor_receive_timeout":
+		return fmt.Sprintf("k_actor_receive_timeout(%s, %s)", arg(0), arg(1))
+	case "actor_close":
+		return fmt.Sprintf("k_actor_close(%s)", arg(0))
+	case "task_group":
+		return "k_task_group()"
+	case "task_spawn":
+		return g.taskSpawn(e)
+	case "task_group_cancel":
+		return fmt.Sprintf("k_task_group_cancel(%s)", arg(0))
+	case "task_group_wait":
+		return fmt.Sprintf("k_task_group_wait(%s)", arg(0))
+	case "thread_spawn":
+		return g.threadSpawn(e)
+	case "await":
+		return fmt.Sprintf("k_await(%s)", arg(0))
+	case "await_timeout":
+		return fmt.Sprintf("k_await_timeout(%s, %s)", arg(0), arg(1))
+	case "poly_register":
+		return g.polyRegister(e)
+	case "poly_reorder":
+		return g.polyReorder(e)
+	case "poly_dispatch":
+		return fmt.Sprintf("k_poly_dispatch(%s, %s)", arg(0), arg(1))
 	}
 	g.fail("builtin '%s' is not supported by the native backend", b.Name)
 	return "kv_nil()"
+}
+
+// threadSpawn lowers thread_spawn("worker") to a thread handle wrapping the
+// worker function pointer.
+func (g *cgen) threadSpawn(e *Expr) string {
+	if len(e.Args) != 1 || e.Args[0].Kind != ExString {
+		g.fail("thread_spawn requires a literal worker function name")
+		return "kv_nil()"
+	}
+	f := g.env.Functions[e.Args[0].Str]
+	if f == nil {
+		g.fail("thread_spawn references unknown worker '%s'", e.Args[0].Str)
+		return "kv_nil()"
+	}
+	return fmt.Sprintf("k_thread_spawn(%s)", g.fnName[f])
+}
+
+// taskSpawn lowers task_spawn(group, "worker") to a task-group-owned thread.
+func (g *cgen) taskSpawn(e *Expr) string {
+	if len(e.Args) != 2 || e.Args[1].Kind != ExString {
+		g.fail("task_spawn requires a literal worker function name")
+		return "kv_nil()"
+	}
+	f := g.env.Functions[e.Args[1].Str]
+	if f == nil {
+		g.fail("task_spawn references unknown worker '%s'", e.Args[1].Str)
+		return "kv_nil()"
+	}
+	return fmt.Sprintf("k_task_spawn(%s, %s, 0, 0)", g.expr(e.Args[0]), g.fnName[f])
+}
+
+// polyRegister lowers poly_register(slot, handler, priority). The handler name
+// is resolved at runtime so wrappers can forward it dynamically.
+func (g *cgen) polyRegister(e *Expr) string {
+	return fmt.Sprintf("k_poly_register(%s, %s, %s)", g.expr(e.Args[0]), g.expr(e.Args[1]), g.expr(e.Args[2]))
+}
+
+// polyReorder lowers poly_reorder(slot, handler, before).
+func (g *cgen) polyReorder(e *Expr) string {
+	return fmt.Sprintf("k_poly_reorder(%s, %s, %s)", g.expr(e.Args[0]), g.expr(e.Args[1]), g.expr(e.Args[2]))
 }
 
 // cString renders a Go string as a C string literal.
