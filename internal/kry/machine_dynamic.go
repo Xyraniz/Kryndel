@@ -1534,6 +1534,130 @@ func machineBits(t *Type) uint8 {
 	return 0
 }
 
+func (m *directMachine) emitAssert(e *Expr, equal bool) error {
+	if equal {
+		if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[1].Type == nil || e.Args[0].Type.Kind != e.Args[1].Type.Kind {
+			return fmt.Errorf("direct ELF assert_eq expects two values of the same scalar type")
+		}
+		kind := e.Args[0].Type.Kind
+		if kind != TyInt && kind != TyUInt && kind != TyBool {
+			return fmt.Errorf("direct ELF assert_eq supports Int, UInt, and Bool values")
+		}
+		if err := m.emitExpr(e.Args[0]); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x50)
+		if err := m.emitExpr(e.Args[1]); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x48, 0x89, 0xc1, 0x58, 0x48, 0x39, 0xc8)
+		if err := m.emitConditionalJump(0x85, m.trapLabel); err != nil { // jne: assertion failed
+			return err
+		}
+	} else {
+		if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyBool {
+			return fmt.Errorf("direct ELF assert expects one Bool value")
+		}
+		if err := m.emitExpr(e.Args[0]); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x48, 0x85, 0xc0)
+		if err := m.emitConditionalJump(0x84, m.trapLabel); err != nil { // je: assertion failed
+			return err
+		}
+	}
+	m.emitMoveImmediate(0)
+	return nil
+}
+
+func (m *directMachine) emitStringPredicate(e *Expr, mode string) error {
+	if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[1].Type == nil || e.Args[0].Type.Kind != TyString || e.Args[1].Type.Kind != TyString {
+		return fmt.Errorf("direct ELF %s expects two String arguments", mode)
+	}
+	if err := m.emitExpr(e.Args[0]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50)
+	if err := m.emitExpr(e.Args[1]); err != nil {
+		return err
+	}
+	// r8=haystack, r9=needle, r10=haystack length, r11=needle length.
+	m.code = append(m.code, 0x48, 0x89, 0xc1, 0x58, 0x49, 0x89, 0xc0, 0x49, 0x89, 0xc9, 0x4d, 0x8b, 0x10, 0x4d, 0x8b, 0x19)
+	falseLabel := m.newLabel()
+	foundLabel := m.newLabel()
+	doneLabel := m.newLabel()
+	if mode == "contains" || mode == "starts_with" || mode == "ends_with" {
+		m.code = append(m.code, 0x4d, 0x39, 0xda) // cmp r10, r11
+		if err := m.emitConditionalJump(0x82, falseLabel); err != nil { // jb: needle longer than haystack
+			return err
+		}
+	}
+	if mode == "ends_with" {
+		m.code = append(m.code, 0x4c, 0x89, 0xd2, 0x4c, 0x29, 0xda) // rdx = haystack length - needle length
+	} else {
+		m.code = append(m.code, 0x48, 0x31, 0xd2) // rdx = 0
+	}
+	innerLabel := m.newLabel()
+	mismatchLabel := m.newLabel()
+	outerLabel := innerLabel
+	if mode == "contains" {
+		outerLabel = m.newLabel()
+		if err := m.bind(outerLabel); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x4c, 0x89, 0xd0, 0x4c, 0x29, 0xd8, 0x48, 0x39, 0xc2) // compare index with last valid start
+		if err := m.emitConditionalJump(0x87, falseLabel); err != nil { // ja: index beyond last valid start
+			return err
+		}
+	}
+	m.code = append(m.code, 0x48, 0x31, 0xf6) // rsi=0 for this candidate start
+	if err := m.bind(innerLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x39, 0xde) // compare with needle length
+	if err := m.emitConditionalJump(0x84, foundLabel); err != nil { // je: all bytes matched
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x89, 0xd7, 0x48, 0x01, 0xf7,
+		0x49, 0x0f, 0xb6, 0x44, 0x38, 0x08,
+		0x41, 0x0f, 0xb6, 0x4c, 0x31, 0x08,
+		0x39, 0xc8,
+	)
+	if err := m.emitConditionalJump(0x85, mismatchLabel); err != nil { // jne: byte mismatch
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xff, 0xc6)
+	if err := m.emitJump(innerLabel); err != nil {
+		return err
+	}
+	if err := m.bind(mismatchLabel); err != nil {
+		return err
+	}
+	if mode == "contains" {
+		m.code = append(m.code, 0x48, 0xff, 0xc2)
+		if err := m.emitJump(outerLabel); err != nil {
+			return err
+		}
+	} else {
+		if err := m.emitJump(falseLabel); err != nil {
+			return err
+		}
+	}
+	if err := m.bind(foundLabel); err != nil {
+		return err
+	}
+	m.emitMoveImmediate(1)
+	if err := m.emitJump(doneLabel); err != nil {
+		return err
+	}
+	if err := m.bind(falseLabel); err != nil {
+		return err
+	}
+	m.emitMoveImmediate(0)
+	return m.bind(doneLabel)
+}
+
 func (m *directMachine) emitExpr(e *Expr) error {
 	if e == nil {
 		return fmt.Errorf("direct ELF backend cannot lower a missing expression")
@@ -1621,6 +1745,12 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			return fmt.Errorf("direct ELF backend does not support receiver call %s", e.Name)
 		}
 		switch e.Name {
+		case "assert":
+			return m.emitAssert(e, false)
+		case "assert_eq":
+			return m.emitAssert(e, true)
+		case "contains", "starts_with", "ends_with":
+			return m.emitStringPredicate(e, e.Name)
 		case "len":
 			if len(e.Args) != 1 || e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyArray && e.Args[0].Type.Kind != TyBytes) {
 				return fmt.Errorf("direct ELF backend supports len(Array[T]) and len(Bytes)")
@@ -1995,7 +2125,7 @@ func directHasStructuredFeatureExpr(e *Expr) bool {
 	}
 	if e.Kind == ExCall {
 		switch e.Name {
-		case "u8", "u16", "u32", "u64":
+		case "assert", "assert_eq", "contains", "starts_with", "ends_with", "u8", "u16", "u32", "u64":
 			return true
 		}
 	}
@@ -2307,8 +2437,14 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 				}
 				continue
 			}
-			if len(s.Expr.Args) != 1 || (s.Expr.Name != "print" && s.Expr.Name != "println") {
-				return fmt.Errorf("direct ELF backend supports only print/println or zero-argument user calls")
+			if s.Expr.Name != "print" && s.Expr.Name != "println" {
+				if err := m.emitExpr(s.Expr); err != nil {
+					return err
+				}
+				continue
+			}
+			if len(s.Expr.Args) != 1 {
+				return fmt.Errorf("direct ELF backend %s expects one argument", s.Expr.Name)
 			}
 			if err := m.emitStaticOutput(s.Expr, s.Expr.Name); err != nil {
 				return err

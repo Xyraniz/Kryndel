@@ -1,0 +1,8 @@
+fn main() -> Nil {
+    assert(contains("self-hosted", "host"))
+    assert(starts_with("self-hosted", "self"))
+    assert(ends_with("self-hosted", "hosted"))
+    assert(!contains("self-hosted", "compiler"))
+    println("string-predicates")
+    return nil
+}

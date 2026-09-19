@@ -304,7 +304,7 @@ func TestStage3SourceKIRCompilerRejectsUnsupportedSyntax(t *testing.T) {
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, "unsupported.kry")
 	outputPath := filepath.Join(dir, "unsupported-output")
-	if err := os.WriteFile(inputPath, []byte("for item in values { println(item) }\n"), 0o600); err != nil {
+	if err := os.WriteFile(inputPath, []byte("match value { }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, DefaultLimits(), Sandbox{}, []string{inputPath, outputPath})
@@ -1283,5 +1283,40 @@ func TestStage18SourceFrontendStructForParity(t *testing.T) {
 	}
 	if string(output) != "48\n" {
 		t.Fatalf("unexpected stage18 source frontend output %q", output)
+	}
+}
+
+func TestStage19DirectStringPredicates(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_string_predicates_stage19.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-string-predicates-stage19")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage19 direct string predicate ELF failed: %v", err)
+	}
+	if string(output) != "string-predicates\n" {
+		t.Fatalf("unexpected stage19 string predicate output %q", output)
 	}
 }

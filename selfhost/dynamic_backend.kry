@@ -1126,6 +1126,32 @@ fn emit_function_call(state: EmitState, expression: Json) -> Result[EmitState, S
     return emit_call(current, text(field(expression, "name")))
 }
 
+fn emit_assert_call(state: EmitState, expression: Json, equal: Bool) -> Result[EmitState, String] {
+    let arguments: Json = field(expression, "args")
+    let count: Int = result_unwrap(json_array_len(arguments))
+    if equal {
+        if count != 2 { return err("dynamic backend: assert_eq expects two arguments") }
+        let left: Json = result_unwrap(json_array_get(arguments, 0))
+        let right: Json = result_unwrap(json_array_get(arguments, 1))
+        let type_name: String = expr_type(left)
+        if type_name != expr_type(right) || (type_name != "Int" && type_name != "Bool" && !starts_with(type_name, "UInt")) { return err("dynamic backend: assert_eq supports matching Int, UInt, or Bool values") }
+        let first: Result[EmitState, String] = emit_expression(state, left)
+        if is_err(first) { return err(expression_error(first)) }
+        let pushed: EmitState = append_code(result_unwrap(first), [u8(80)])
+        let second: Result[EmitState, String] = emit_expression(pushed, right)
+        if is_err(second) { return err(expression_error(second)) }
+        let compared: EmitState = append_code(result_unwrap(second), [u8(72), u8(137), u8(193), u8(88), u8(72), u8(57), u8(200)])
+        let failed: EmitState = emit_jump(compared, compared.env.trap_label, true, u8(133))
+        return ok(emit_int(failed, 0))
+    }
+    if count != 1 || expr_type(result_unwrap(json_array_get(arguments, 0))) != "Bool" { return err("dynamic backend: assert expects one Bool argument") }
+    let emitted: Result[EmitState, String] = emit_expression(state, result_unwrap(json_array_get(arguments, 0)))
+    if is_err(emitted) { return err(expression_error(emitted)) }
+    let tested: EmitState = append_code(result_unwrap(emitted), [u8(72), u8(133), u8(192)])
+    let failed: EmitState = emit_jump(tested, tested.env.trap_label, true, u8(132))
+    return ok(emit_int(failed, 0))
+}
+
 fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, String] {
     let constant: Json = field(expression, "const")
     if json_kind(constant) == "object" {
@@ -1166,6 +1192,8 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
         let target: String = text(field(expression, "call_target"))
         if starts_with(target, "function:") { return emit_function_call(state, expression) }
         let arguments: Json = field(expression, "args")
+        if target == "builtin:assert" { return emit_assert_call(state, expression, false) }
+        if target == "builtin:assert_eq" { return emit_assert_call(state, expression, true) }
         if target == "builtin:none" {
             if result_unwrap(json_array_len(arguments)) != 0 { return err("dynamic backend: none expects no arguments") }
             return ok(emit_int(state, 0))

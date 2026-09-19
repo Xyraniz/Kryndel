@@ -666,7 +666,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                 else { return_type = "UInt64" }
                 call_target = "builtin:" + token.text
                 builtin_unsigned_conversion = true
-            } else if token.text == "some" || token.text == "none" || token.text == "ok" || token.text == "err" || token.text == "is_some" || token.text == "is_none" || token.text == "is_ok" || token.text == "is_err" || token.text == "unwrap_or" || token.text == "result_unwrap" || token.text == "result_error" || token.text == "len" || token.text == "array_push" || token.text == "array_get" || token.text == "array_concat" || token.text == "array_indices" {
+            } else if token.text == "assert" || token.text == "assert_eq" || token.text == "contains" || token.text == "starts_with" || token.text == "ends_with" || token.text == "string_chars" || token.text == "substring" || token.text == "str" || token.text == "int" || token.text == "some" || token.text == "none" || token.text == "ok" || token.text == "err" || token.text == "is_some" || token.text == "is_none" || token.text == "is_ok" || token.text == "is_err" || token.text == "unwrap_or" || token.text == "result_unwrap" || token.text == "result_error" || token.text == "len" || token.text == "array_push" || token.text == "array_get" || token.text == "array_concat" || token.text == "array_indices" {
                 call_target = "builtin:" + token.text
                 builtin_generic = true
             } else {
@@ -711,7 +711,30 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             }
             if !builtin_generic && !builtin_unsigned_conversion && argument_index != len(expected) { return err("parser: wrong number of function arguments") }
             if builtin_generic {
-                if token.text == "none" {
+                if token.text == "assert" {
+                    if argument_index != 1 || unwrap_or(array_get(argument_types, 0), "") != "Bool" { return err("parser: assert expects one Bool") }
+                    return_type = "Nil"
+                } else if token.text == "assert_eq" {
+                    if argument_index != 2 || unwrap_or(array_get(argument_types, 0), "") != unwrap_or(array_get(argument_types, 1), "") { return err("parser: assert_eq expects matching values") }
+                    let asserted_type: String = unwrap_or(array_get(argument_types, 0), "")
+                    if asserted_type != "Int" && asserted_type != "Bool" && !starts_with(asserted_type, "UInt") { return err("parser: assert_eq supports Int, UInt, and Bool") }
+                    return_type = "Nil"
+                } else if token.text == "contains" || token.text == "starts_with" || token.text == "ends_with" {
+                    if argument_index != 2 || unwrap_or(array_get(argument_types, 0), "") != "String" || unwrap_or(array_get(argument_types, 1), "") != "String" { return err("parser: string predicate expects two String arguments") }
+                    return_type = "Bool"
+                } else if token.text == "string_chars" {
+                    if argument_index != 1 || unwrap_or(array_get(argument_types, 0), "") != "String" { return err("parser: string_chars expects one String") }
+                    return_type = "Array[String]"
+                } else if token.text == "substring" {
+                    if argument_index != 3 || unwrap_or(array_get(argument_types, 0), "") != "String" || unwrap_or(array_get(argument_types, 1), "") != "Int" || unwrap_or(array_get(argument_types, 2), "") != "Int" { return err("parser: substring expects String, Int, Int") }
+                    return_type = "Result[String,String]"
+                } else if token.text == "str" {
+                    if argument_index != 1 { return err("parser: str expects one argument") }
+                    return_type = "String"
+                } else if token.text == "int" {
+                    if argument_index != 1 || (unwrap_or(array_get(argument_types, 0), "") != "String" && unwrap_or(array_get(argument_types, 0), "") != "Int" && unwrap_or(array_get(argument_types, 0), "") != "Bool") { return err("parser: int expects String, Int, or Bool") }
+                    return_type = "Int"
+                } else if token.text == "none" {
                     if argument_index != 0 { return err("parser: none expects no arguments") }
                     return_type = "Option[Int]"
                 } else if token.text == "some" {
