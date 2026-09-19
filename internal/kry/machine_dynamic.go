@@ -3,6 +3,7 @@ package kry
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 )
 
 // directMachine is the second direct-ELF slice. It lowers checked Int/Bool
@@ -32,6 +33,10 @@ type directMachine struct {
 	functionReturns   map[string]*Type
 	stringConcatLabel int
 	stringConcatUsed  bool
+	arrayAllocLabel   int
+	arrayPushLabel    int
+	arrayConcatLabel  int
+	arrayRuntimeUsed  bool
 	inFunction        bool
 	currentFunction   string
 }
@@ -71,6 +76,9 @@ func newDirectMachine() *directMachine {
 	m.endLabel = m.newLabel()
 	m.trapLabel = m.newLabel()
 	m.stringConcatLabel = m.newLabel()
+	m.arrayAllocLabel = m.newLabel()
+	m.arrayPushLabel = m.newLabel()
+	m.arrayConcatLabel = m.newLabel()
 	return m
 }
 
@@ -216,6 +224,181 @@ func (m *directMachine) emitStringConcatRuntime() error {
 		0x4d, 0x8d, 0x6d, 0x08, 0x4c, 0x89, 0xee,
 		0x48, 0x8d, 0x7b, 0x08, 0x48, 0x01, 0xef,
 		0x4c, 0x89, 0xf9, 0xf3, 0xa4,
+		0x48, 0x89, 0xd8,
+		0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3,
+	)
+	return nil
+}
+
+func (m *directMachine) emitArrayAllocCall() error {
+	// The element count is in RAX; the allocator receives it in RDI and
+	// returns an immutable {u64 length, u64 elements[]} object in RAX.
+	m.code = append(m.code, 0x48, 0x89, 0xc7)
+	m.arrayRuntimeUsed = true
+	return m.emitLabelCall(m.arrayAllocLabel)
+}
+
+func (m *directMachine) emitArrayLiteral(e *Expr) error {
+	m.emitMoveImmediate(uint64(len(e.Items)))
+	if err := m.emitArrayAllocCall(); err != nil {
+		return err
+	}
+	// Keep the allocated object on the machine stack while each element is
+	// evaluated. Nested expressions balance their own temporary stack usage.
+	m.code = append(m.code, 0x50) // push rax
+	for index, item := range e.Items {
+		if err := m.emitExpr(item); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x49, 0x89, 0xc0)       // mov r8, rax
+		m.code = append(m.code, 0x48, 0x8b, 0x0c, 0x24) // mov rcx, [rsp]
+		m.code = append(m.code, 0x48, 0xba)
+		var offset [8]byte
+		binary.LittleEndian.PutUint64(offset[:], uint64(8+index*8))
+		m.code = append(m.code, offset[:]...)
+		m.code = append(m.code, 0x48, 0x01, 0xca, 0x4c, 0x89, 0x02) // add rdx, rcx; mov [rdx], r8
+	}
+	m.code = append(m.code, 0x58) // pop rax
+	return nil
+}
+
+func (m *directMachine) emitArrayIndex(e *Expr) error {
+	if e.Base == nil || e.Base.Type == nil || e.Base.Type.Kind != TyArray {
+		return fmt.Errorf("direct ELF backend supports indexing only Array[T] in the dynamic slice")
+	}
+	if err := m.emitExpr(e.Base); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50) // push array pointer
+	if err := m.emitExpr(e.Left); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc1, 0x58)                  // mov rcx, rax; pop rax
+	m.code = append(m.code, 0x48, 0x85, 0xc9)                        // test rcx, rcx
+	if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil { // js: negative index
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x3b, 0x08)                        // cmp rcx, [rax]
+	if err := m.emitConditionalJump(0x83, m.trapLabel); err != nil { // jae: index >= length
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8b, 0x44, 0xc8, 0x08) // mov rax, [rax+rcx*8+8]
+	return nil
+}
+
+func (m *directMachine) emitArrayPushCall(e *Expr) error {
+	if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray {
+		return fmt.Errorf("direct ELF backend expects array_push(Array[T], T)")
+	}
+	if err := m.emitExpr(e.Args[0]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50) // push array pointer
+	if err := m.emitExpr(e.Args[1]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc6, 0x58) // mov rsi, rax; pop rax
+	m.code = append(m.code, 0x48, 0x89, 0xc7)       // mov rdi, rax
+	m.arrayRuntimeUsed = true
+	return m.emitLabelCall(m.arrayPushLabel)
+}
+
+func (m *directMachine) emitArrayConcatCall() error {
+	// emitBinary leaves the left and right array pointers in RAX and RCX.
+	m.code = append(m.code, 0x48, 0x89, 0xc7, 0x48, 0x89, 0xce) // mov rdi, rax; mov rsi, rcx
+	m.arrayRuntimeUsed = true
+	return m.emitLabelCall(m.arrayConcatLabel)
+}
+
+func (m *directMachine) emitArrayAllocRuntime() error {
+	if err := m.bind(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	// mmap((count + 1) * 8, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON,
+	//      -1, 0), with the count written into the first word.
+	m.code = append(m.code,
+		0x53, 0x55,
+		0x48, 0x89, 0xfd, // mov rbp, rdi (preserve count)
+		0x48, 0x89, 0xf8, 0x48, 0xff, 0xc0,
+	)
+	m.emitTrapOnOverflow()
+	m.code = append(m.code,
+		0x48, 0xc1, 0xe0, 0x03,
+	)
+	m.emitTrapOnOverflow()
+	m.code = append(m.code,
+		0x48, 0x89, 0xc7,
+		0x48, 0x89, 0xfe, 0x48, 0x31, 0xff,
+		0xba, 0x03, 0x00, 0x00, 0x00,
+		0x41, 0xba, 0x22, 0x00, 0x00, 0x00,
+		0x41, 0xb8, 0xff, 0xff, 0xff, 0xff,
+		0x45, 0x31, 0xc9,
+		0xb8, 0x09, 0x00, 0x00, 0x00, 0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil { // js: mmap error
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0x28, 0x5d, 0x5b, 0xc3) // [rax]=count; restore; return
+	return nil
+}
+
+func (m *directMachine) emitArrayPushRuntime() error {
+	if err := m.bind(m.arrayPushLabel); err != nil {
+		return err
+	}
+	// rdi=array, rsi=value. The object is immutable, so allocate a new
+	// object, copy the old qwords, and append the value.
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, 0x49, 0x89, 0xf5,
+		0x49, 0x8b, 0x04, 0x24, 0x49, 0x89, 0xc6,
+		0x4d, 0x89, 0xf7, 0x49, 0x83, 0xc7, 0x01,
+	)
+	m.emitTrapOnOverflow()
+	m.code = append(m.code, 0x4c, 0x89, 0xff) // mov rdi, r15
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x89, 0xc3,
+		0x49, 0x8d, 0x74, 0x24, 0x08,
+		0x48, 0x8d, 0x7b, 0x08,
+		0x4c, 0x89, 0xf1, 0xf3, 0x48, 0xa5,
+		0x4c, 0x89, 0xf2, 0x48, 0xc1, 0xe2, 0x03,
+		0x48, 0x01, 0xda, 0x48, 0x83, 0xc2, 0x08,
+		0x4c, 0x89, 0x2a,
+		0x48, 0x89, 0xd8,
+		0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3,
+	)
+	return nil
+}
+
+func (m *directMachine) emitArrayConcatRuntime() error {
+	if err := m.bind(m.arrayConcatLabel); err != nil {
+		return err
+	}
+	// rdi=left, rsi=right. Both operands and the result use the same qword
+	// object ABI as array_push.
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, 0x49, 0x89, 0xf5,
+		0x49, 0x8b, 0x04, 0x24, 0x49, 0x89, 0xc6,
+		0x49, 0x8b, 0x45, 0x00, 0x49, 0x89, 0xc7,
+		0x4c, 0x89, 0xf5, 0x4c, 0x01, 0xfd,
+	)
+	m.emitTrapOnOverflow()
+	m.code = append(m.code, 0x48, 0x89, 0xef) // mov rdi, rbp
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x89, 0xc3,
+		0x49, 0x8d, 0x74, 0x24, 0x08,
+		0x48, 0x8d, 0x7b, 0x08,
+		0x4c, 0x89, 0xf1, 0xf3, 0x48, 0xa5,
+		0x49, 0x8d, 0x75, 0x08,
+		0x4c, 0x89, 0xf9, 0xf3, 0x48, 0xa5,
 		0x48, 0x89, 0xd8,
 		0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3,
 	)
@@ -368,6 +551,9 @@ func machineScalarType(name string) (*Type, bool) {
 	case "Nil":
 		return TNil, true
 	default:
+		if strings.HasPrefix(name, "Array[") && strings.HasSuffix(name, "]") {
+			return Arr(TUnknown), true
+		}
 		return nil, false
 	}
 }
@@ -472,6 +658,8 @@ func (m *directMachine) emitExpr(e *Expr) error {
 	case ExString:
 		m.emitStringAddress(e.Str)
 		return nil
+	case ExArray:
+		return m.emitArrayLiteral(e)
 	case ExVar:
 		slot, ok := m.slots[e.Name]
 		if !ok {
@@ -504,15 +692,44 @@ func (m *directMachine) emitExpr(e *Expr) error {
 		}
 	case ExBinary:
 		return m.emitBinary(e)
+	case ExIndex:
+		return m.emitArrayIndex(e)
 	case ExCall:
 		if e.Function != nil {
 			return m.emitFunctionCall(e)
 		}
-		if e.Receiver != nil || len(e.Args) != 1 {
-			return fmt.Errorf("direct ELF backend supports only one-argument numeric conversions")
+		if e.Receiver != nil {
+			return fmt.Errorf("direct ELF backend does not support receiver call %s", e.Name)
 		}
 		switch e.Name {
+		case "len":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray {
+				return fmt.Errorf("direct ELF backend supports len(Array[T]) only")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x8b, 0x00) // mov rax, [rax]
+			return nil
+		case "array_push":
+			return m.emitArrayPushCall(e)
+		case "array_concat":
+			if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray || e.Args[1].Type == nil || e.Args[1].Type.Kind != TyArray {
+				return fmt.Errorf("direct ELF backend expects array_concat(Array[T], Array[T])")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if err := m.emitExpr(e.Args[1]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc1, 0x58)
+			return m.emitArrayConcatCall()
 		case "u8", "u16", "u32", "u64":
+			if len(e.Args) != 1 {
+				return fmt.Errorf("direct ELF backend conversion %s expects one argument", e.Name)
+			}
 			value, ok := directStaticValue(e.Args[0], m.staticEnv)
 			if !ok || (value.Kind != VInt && value.Kind != VUInt) {
 				return fmt.Errorf("direct ELF backend requires a static argument for %s", e.Name)
@@ -548,6 +765,12 @@ func (m *directMachine) emitBinary(e *Expr) error {
 			return fmt.Errorf("direct ELF backend does not support String operator %s", opText(e.Op))
 		}
 		return m.emitStringConcatCall()
+	}
+	if e.Type != nil && e.Type.Kind == TyArray {
+		if e.Op != PLUS {
+			return fmt.Errorf("direct ELF backend does not support Array operator %s", opText(e.Op))
+		}
+		return m.emitArrayConcatCall()
 	}
 	switch e.Op {
 	case PLUS:
@@ -690,6 +913,52 @@ func directHasDynamicControl(stmts []*Stmt) bool {
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+func directHasArrayFeatureExpr(e *Expr) bool {
+	if e == nil {
+		return false
+	}
+	if e.Kind == ExArray || e.Kind == ExIndex {
+		return true
+	}
+	if e.Type != nil && e.Type.Kind == TyArray {
+		return true
+	}
+	if e.Kind == ExCall {
+		if e.Name == "len" || e.Name == "array_push" || e.Name == "array_concat" {
+			return true
+		}
+		for _, argument := range e.Args {
+			if directHasArrayFeatureExpr(argument) {
+				return true
+			}
+		}
+	}
+	if directHasArrayFeatureExpr(e.Left) || directHasArrayFeatureExpr(e.Right) || directHasArrayFeatureExpr(e.Operand) || directHasArrayFeatureExpr(e.Base) {
+		return true
+	}
+	for _, item := range e.Items {
+		if directHasArrayFeatureExpr(item) {
+			return true
+		}
+	}
+	return false
+}
+
+func directHasArrayFeatures(stmts []*Stmt) bool {
+	for _, s := range stmts {
+		if s == nil {
+			continue
+		}
+		if directHasArrayFeatureExpr(s.Init) || directHasArrayFeatureExpr(s.Expr) || directHasArrayFeatureExpr(s.Target) || directHasArrayFeatureExpr(s.Value) || directHasArrayFeatureExpr(s.Cond) || directHasArrayFeatureExpr(s.Return) {
+			return true
+		}
+		if directHasArrayFeatures(s.Then) || directHasArrayFeatures(s.Else) || directHasArrayFeatures(s.Body) {
+			return true
 		}
 	}
 	return false
@@ -1018,7 +1287,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
-	if len(m.functionOrder) > 0 || m.stringConcatUsed {
+	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed {
 		if err := m.emitJump(m.endLabel); err != nil {
 			return nil, err
 		}
@@ -1059,6 +1328,17 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	}
 	if m.stringConcatUsed {
 		if err := m.emitStringConcatRuntime(); err != nil {
+			return nil, err
+		}
+	}
+	if m.arrayRuntimeUsed {
+		if err := m.emitArrayAllocRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitArrayPushRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitArrayConcatRuntime(); err != nil {
 			return nil, err
 		}
 	}

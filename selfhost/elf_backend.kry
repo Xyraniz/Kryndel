@@ -114,12 +114,16 @@ pub fn eval_display(expression: Json, bindings: Map[String, String]) -> Result[S
         let operator: String = json_text(json_field(expression, "operator"))
         let typ: String = json_text(json_field(expression, "type"))
         if typ == "Int" {
-            return ok(str(result_unwrap(eval_int(expression, bindings))))
+            let value: Result[Int, String] = eval_int(expression, bindings)
+            if is_err(value) { return err(unwrap_or(result_error(value), "expression is not a static Int")) }
+            return ok(str(result_unwrap(value)))
         }
         if operator == "+" {
-            let left: String = result_unwrap(eval_display(json_field(expression, "left"), bindings))
-            let right: String = result_unwrap(eval_display(json_field(expression, "right"), bindings))
-            return ok(left + right)
+            let left_result: Result[String, String] = eval_display(json_field(expression, "left"), bindings)
+            if is_err(left_result) { return err(unwrap_or(result_error(left_result), "expression is not statically displayable")) }
+            let right_result: Result[String, String] = eval_display(json_field(expression, "right"), bindings)
+            if is_err(right_result) { return err(unwrap_or(result_error(right_result), "expression is not statically displayable")) }
+            return ok(result_unwrap(left_result) + result_unwrap(right_result))
         }
         return err("unsupported static binary expression")
     }

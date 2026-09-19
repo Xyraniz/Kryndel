@@ -1,0 +1,20 @@
+fn make_values(start: Int, count: Int) -> Array[Int] {
+    let mut values: Array[Int] = []
+    let mut index: Int = 0
+    while index < count {
+        values = array_push(values, start + index)
+        index = index + 1
+    }
+    return values
+}
+
+fn main() -> Nil {
+    let left: Array[Int] = [10, 20]
+    let right: Array[Int] = [30]
+    let joined: Array[Int] = left + right
+    println(len(joined))
+    println(joined[1])
+    println(array_push(joined, 40)[3])
+    println(make_values(5, 3)[2])
+    return nil
+}

@@ -17,8 +17,8 @@ const (
 // containing assignments or control flow use the second machine-code slice.
 // Both paths emit genuine x86-64 instructions and reject unsupported language
 // constructs before bytes are returned. The current dynamic slice also
-// supports scalar SysV AMD64 function calls; aggregate ABI and runtime
-// lowering grows in later bootstrap milestones.
+// supports scalar and pointer-like SysV AMD64 function calls, including the
+// immutable qword-array ABI and its Linux mmap runtime.
 func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	if target.OS != "linux" || target.Arch != "amd64" {
 		return nil, fmt.Errorf("direct ELF backend currently supports only linux-amd64")
@@ -40,7 +40,7 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 		return emitELF64WriteExit(output), nil
 	}
 	stmts, stmtErr := directDynamicStatements(p)
-	if stmtErr == nil && (directHasDynamicControl(stmts) || directHasUserFunctions(p)) {
+	if stmtErr == nil && (directHasDynamicControl(stmts) || directHasArrayFeatures(stmts) || directHasUserFunctions(p)) {
 		return buildDirectDynamicELF(p)
 	}
 	return nil, err

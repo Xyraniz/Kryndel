@@ -85,6 +85,77 @@ println("after")
 	}
 }
 
+func TestDirectELFLowersImmutableArrayRuntime(t *testing.T) {
+	p, c := testProgram(t, `
+fn make_values(start: Int, count: Int) -> Array[Int] {
+    let mut values: Array[Int] = []
+    let mut index: Int = 0
+    while index < count {
+        values = array_push(values, start + index)
+        index = index + 1
+    }
+    return values
+}
+fn main() -> Nil {
+    let left: Array[Int] = [10, 20]
+    let right: Array[Int] = [30]
+    let joined: Array[Int] = left + right
+    println(len(joined))
+    println(joined[1])
+    println(array_push(joined, 40)[3])
+    println(make_values(5, 3)[2])
+    return nil
+}
+`)
+	data, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectNative(data); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return
+	}
+	path := filepath.Join(t.TempDir(), "array-runtime-program")
+	if err := os.WriteFile(path, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(path).Output()
+	if err != nil {
+		t.Fatalf("array runtime direct ELF failed to execute: %v", err)
+	}
+	if string(out) != "3\n20\n40\n7\n" {
+		t.Fatalf("unexpected array runtime output %q", out)
+	}
+}
+
+func TestDirectELFLowersTopLevelArrayRuntime(t *testing.T) {
+	p, c := testProgram(t, `
+let values: Array[Int] = [1, 2]
+println(len(values))
+println(values[0])
+`)
+	data, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return
+	}
+	path := filepath.Join(t.TempDir(), "top-level-array-program")
+	if err := os.WriteFile(path, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(path).Output()
+	if err != nil {
+		t.Fatalf("top-level array direct ELF failed to execute: %v", err)
+	}
+	if string(out) != "2\n1\n" {
+		t.Fatalf("unexpected top-level array output %q", out)
+	}
+}
+
 func TestRuntimeReceivesExplicitProgramArguments(t *testing.T) {
 	p, c := testProgram(t, `let args: Array[String] = process_args()
 assert_eq(args[0], "input.kir")
