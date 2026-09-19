@@ -17,8 +17,8 @@ const (
 // containing assignments or control flow use the second machine-code slice.
 // Both paths emit genuine x86-64 instructions and reject unsupported language
 // constructs before bytes are returned. The current dynamic slice also
-// supports zero-argument Nil functions; the general ABI and runtime lowering
-// grows in later bootstrap milestones.
+// supports scalar SysV AMD64 function calls; aggregate ABI and runtime
+// lowering grows in later bootstrap milestones.
 func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	if target.OS != "linux" || target.Arch != "amd64" {
 		return nil, fmt.Errorf("direct ELF backend currently supports only linux-amd64")

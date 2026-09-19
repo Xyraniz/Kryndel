@@ -6,27 +6,30 @@ import (
 )
 
 // directMachine is the second direct-ELF slice. It lowers checked Int/Bool
-// state, assignments, comparisons, if/while control flow, zero-argument Nil
-// functions, and static or dynamic integer output to x86-64 instructions. It
-// intentionally has no runtime or C dependency.
+// state, assignments, comparisons, if/while control flow, scalar functions,
+// and static or dynamic integer output to x86-64 instructions. It intentionally
+// has no runtime or C dependency.
 // Unsupported values fail during compilation instead of silently changing
 // Kryndel semantics.
 type directMachine struct {
-	code           []byte
-	data           []byte
-	dataByText     map[string]int
-	dataRefs       []machineDataRef
-	labels         []machineLabel
-	slots          map[string]machineSlot
-	nextSlot       int32
-	loops          []machineLoop
-	endLabel       int
-	trapLabel      int
-	staticEnv      map[string]Value
-	bufferOffset   int32
-	functionLabels map[string]int
-	functionOrder  []*Function
-	inFunction     bool
+	code            []byte
+	data            []byte
+	dataByText      map[string]int
+	dataRefs        []machineDataRef
+	labels          []machineLabel
+	slots           map[string]machineSlot
+	nextSlot        int32
+	loops           []machineLoop
+	endLabel        int
+	trapLabel       int
+	staticEnv       map[string]Value
+	bufferOffset    int32
+	functionLabels  map[string]int
+	functionOrder   []*Function
+	functionSlots   map[string]map[string]machineSlot
+	functionReturns map[string]*Type
+	inFunction      bool
+	currentFunction string
 }
 
 type machineSlot struct {
@@ -52,10 +55,12 @@ type machineDataRef struct {
 
 func newDirectMachine() *directMachine {
 	m := &directMachine{
-		dataByText:     map[string]int{},
-		slots:          map[string]machineSlot{},
-		staticEnv:      map[string]Value{},
-		functionLabels: map[string]int{},
+		dataByText:      map[string]int{},
+		slots:           map[string]machineSlot{},
+		staticEnv:       map[string]Value{},
+		functionLabels:  map[string]int{},
+		functionSlots:   map[string]map[string]machineSlot{},
+		functionReturns: map[string]*Type{},
 	}
 	m.endLabel = m.newLabel()
 	m.trapLabel = m.newLabel()
@@ -253,6 +258,81 @@ func (m *directMachine) emitInteger(unsigned bool) error {
 	return nil
 }
 
+func machineScalarType(name string) (*Type, bool) {
+	switch name {
+	case "Int":
+		return TInt, true
+	case "Bool":
+		return TBool, true
+	case "UInt8":
+		return TUInt8, true
+	case "UInt16":
+		return TUInt16, true
+	case "UInt32":
+		return TUInt32, true
+	case "UInt64":
+		return TUInt64, true
+	case "Nil":
+		return TNil, true
+	default:
+		return nil, false
+	}
+}
+
+func (m *directMachine) emitMoveArg(index int) error {
+	if index < 0 || index >= 6 {
+		return fmt.Errorf("direct ELF backend supports at most six scalar arguments")
+	}
+	// SysV AMD64 integer argument registers: rdi, rsi, rdx, rcx, r8, r9.
+	registerMoves := [6][]byte{
+		{0x48, 0x89, 0xc7},
+		{0x48, 0x89, 0xc6},
+		{0x48, 0x89, 0xc2},
+		{0x48, 0x89, 0xc1},
+		{0x49, 0x89, 0xc0},
+		{0x49, 0x89, 0xc1},
+	}
+	m.code = append(m.code, registerMoves[index]...)
+	return nil
+}
+
+func (m *directMachine) emitStoreArg(index int, slot machineSlot) error {
+	if index < 0 || index >= 6 {
+		return fmt.Errorf("direct ELF backend supports at most six scalar arguments")
+	}
+	// Move the incoming register through RAX so the existing checked slot
+	// store remains the single encoding path for local storage.
+	registerLoads := [6][]byte{
+		{0x48, 0x89, 0xf8},
+		{0x48, 0x89, 0xf0},
+		{0x48, 0x89, 0xd0},
+		{0x48, 0x89, 0xc8},
+		{0x4c, 0x89, 0xc0},
+		{0x4c, 0x89, 0xc8},
+	}
+	m.code = append(m.code, registerLoads[index]...)
+	m.emitStoreSlot(slot)
+	return nil
+}
+
+func (m *directMachine) emitFunctionCall(e *Expr) error {
+	if e.Function == nil {
+		return fmt.Errorf("direct ELF backend has no resolved function call")
+	}
+	if len(e.Args) > 6 {
+		return fmt.Errorf("direct ELF backend function '%s' has too many arguments", e.Function.Name)
+	}
+	for index, argument := range e.Args {
+		if err := m.emitExpr(argument); err != nil {
+			return err
+		}
+		if err := m.emitMoveArg(index); err != nil {
+			return err
+		}
+	}
+	return m.emitCall(e.Function.Name)
+}
+
 func machineBits(t *Type) uint8 {
 	if t != nil && t.Kind == TyUInt {
 		return t.Bits
@@ -327,7 +407,7 @@ func (m *directMachine) emitExpr(e *Expr) error {
 		return m.emitBinary(e)
 	case ExCall:
 		if e.Function != nil {
-			return fmt.Errorf("direct ELF backend does not support using function '%s' as a value", e.Function.Name)
+			return m.emitFunctionCall(e)
 		}
 		if e.Receiver != nil || len(e.Args) != 1 {
 			return fmt.Errorf("direct ELF backend supports only one-argument numeric conversions")
@@ -586,17 +666,30 @@ func (m *directMachine) prepareFunctions(p *Program) error {
 		if f == nil || f.Name == "main" {
 			continue
 		}
-		if len(f.Params) != 0 {
-			return fmt.Errorf("direct ELF backend function '%s' requires zero parameters", f.Name)
-		}
-		if f.Return == nil || f.Return.Name != "Nil" {
-			return fmt.Errorf("direct ELF backend function '%s' must return Nil", f.Name)
-		}
 		if _, exists := m.functionLabels[f.Name]; exists {
 			return fmt.Errorf("direct ELF backend has duplicate function '%s'", f.Name)
 		}
+		if len(f.Params) > 6 {
+			return fmt.Errorf("direct ELF backend function '%s' has too many parameters", f.Name)
+		}
+		returnTypeName := typeSpecString(f.Return)
+		returnType, ok := machineScalarType(returnTypeName)
+		if !ok {
+			return fmt.Errorf("direct ELF backend function '%s' has unsupported return type %s", f.Name, returnTypeName)
+		}
 		m.functionLabels[f.Name] = m.newLabel()
 		m.functionOrder = append(m.functionOrder, f)
+		m.functionReturns[f.Name] = returnType
+		slots := map[string]machineSlot{}
+		for index, param := range f.Params {
+			paramTypeName := typeSpecString(param.Type)
+			paramType, ok := machineScalarType(paramTypeName)
+			if !ok || paramType.Kind == TyNil {
+				return fmt.Errorf("direct ELF backend function '%s' parameter '%s' has unsupported type %s", f.Name, param.Name, paramTypeName)
+			}
+			slots[param.Name] = machineSlot{offset: int32((index + 1) * 8), typ: paramType}
+		}
+		m.functionSlots[f.Name] = slots
 	}
 	for _, f := range m.functionOrder {
 		if err := m.collectFunction(f.Body); err != nil {
@@ -757,10 +850,18 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 			}
 		case StReturn:
 			if m.inFunction {
+				returnType := m.functionReturns[m.currentFunction]
 				if s.Return != nil && s.Return.Kind != ExNil {
-					return fmt.Errorf("direct ELF backend function return values are not supported yet")
+					if returnType == nil || returnType.Kind == TyNil {
+						return fmt.Errorf("direct ELF backend Nil function cannot return a value")
+					}
+					if err := m.emitExpr(s.Return); err != nil {
+						return err
+					}
+				} else if returnType != nil && returnType.Kind != TyNil {
+					return fmt.Errorf("direct ELF backend scalar function must return a value")
 				}
-				m.code = append(m.code, 0xc3)
+				m.code = append(m.code, 0xc9, 0xc3)
 				continue
 			}
 			if err := m.emitJump(m.endLabel); err != nil {
@@ -795,16 +896,39 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 		if err := m.emitJump(m.endLabel); err != nil {
 			return nil, err
 		}
+		mainSlots := m.slots
+		mainStatic := m.staticEnv
+		mainLoops := m.loops
 		for _, f := range m.functionOrder {
 			if err := m.bind(m.functionLabels[f.Name]); err != nil {
 				return nil, err
 			}
 			m.inFunction = true
+			m.currentFunction = f.Name
+			m.slots = m.functionSlots[f.Name]
+			m.staticEnv = map[string]Value{}
+			m.loops = nil
+			m.bufferOffset = int32(len(f.Params)*8 + 1)
+			functionFrame := (int(m.bufferOffset) + 63 + 15) &^ 15
+			m.code = append(m.code, 0x55, 0x48, 0x89, 0xe5)
+			m.code = append(m.code, 0x48, 0x81, 0xec)
+			var functionSize [4]byte
+			binary.LittleEndian.PutUint32(functionSize[:], uint32(functionFrame))
+			m.code = append(m.code, functionSize[:]...)
+			for index, param := range f.Params {
+				if err := m.emitStoreArg(index, m.functionSlots[f.Name][param.Name]); err != nil {
+					return nil, fmt.Errorf("function '%s': %w", f.Name, err)
+				}
+			}
 			if err := m.emitStatements(f.Body); err != nil {
 				return nil, fmt.Errorf("function '%s': %w", f.Name, err)
 			}
 			m.inFunction = false
-			m.code = append(m.code, 0xc3)
+			m.currentFunction = ""
+			m.slots = mainSlots
+			m.staticEnv = mainStatic
+			m.loops = mainLoops
+			m.code = append(m.code, 0xc9, 0xc3)
 		}
 	}
 	if err := m.bind(m.endLabel); err != nil {
