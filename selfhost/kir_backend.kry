@@ -1,0 +1,13 @@
+import "elf_backend"
+
+fn main() -> Nil {
+    let args: Array[String] = process_args()
+    assert_eq(len(args), 2)
+    let input: String = args[0]
+    let output: String = args[1]
+    let source: String = result_unwrap(fs_read_text(input))
+    let document: Json = result_unwrap(json_parse(source))
+    let executable: Bytes = result_unwrap(compile_kir(document))
+    result_unwrap(fs_write_bytes(output, executable))
+    return nil
+}

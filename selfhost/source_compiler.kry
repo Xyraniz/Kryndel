@@ -1,0 +1,38 @@
+import "elf_backend"
+
+// Stage 1 source frontend. It intentionally accepts one source-level form:
+// print("literal") and println("literal"), one per line, plus comments and
+// blank lines. The parser rejects everything else instead of guessing.
+fn main() -> Nil {
+    let args: Array[String] = process_args()
+    assert_eq(len(args), 2)
+    let input: String = args[0]
+    let output: String = args[1]
+    let source: String = result_unwrap(fs_read_text(input))
+    let mut payload: Array[UInt8] = []
+    for raw_line in string_lines(source) {
+        let line: String = trim(raw_line)
+        if line == "" || starts_with(line, "//") {
+            continue
+        }
+        let mut text: String = ""
+        let mut newline: Bool = false
+        if starts_with(line, "println(\"") && ends_with(line, "\")") {
+            let start: Int = len("println(\"")
+            text = result_unwrap(substring(line, start, len(line) - start - 2))
+            newline = true
+        } else if starts_with(line, "print(\"") && ends_with(line, "\")") {
+            let start: Int = len("print(\"")
+            text = result_unwrap(substring(line, start, len(line) - start - 2))
+        } else {
+            assert(false)
+        }
+        payload = array_concat(payload, u8_array(string_to_bytes(text)))
+        if newline {
+            payload = array_push(payload, u8(10))
+        }
+    }
+    let executable: Bytes = emit_elf(payload)
+    result_unwrap(fs_write_bytes(output, executable))
+    return nil
+}

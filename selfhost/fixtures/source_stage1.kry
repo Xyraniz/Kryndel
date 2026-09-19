@@ -1,0 +1,2 @@
+// source frontend fixture
+println("compiled directly from source")

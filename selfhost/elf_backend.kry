@@ -135,7 +135,7 @@ fn eval_display(expression: Json, bindings: Map[String, String]) -> Result[Strin
     return err("expression is not statically displayable")
 }
 
-fn emit_elf(payload: Array[UInt8]) -> Bytes {
+pub fn emit_elf(payload: Array[UInt8]) -> Bytes {
     // ELF header (64 bytes), program header (56 bytes), code (33 bytes), data.
     let file_size: Int = 153 + len(payload)
     let mut file: Array[UInt8] = []
@@ -177,7 +177,7 @@ fn emit_elf(payload: Array[UInt8]) -> Bytes {
     return bytes_from_u8(file)
 }
 
-fn compile_kir(document: Json) -> Result[Bytes, String] {
+pub fn compile_kir(document: Json) -> Result[Bytes, String] {
     let statements: Json = json_field(document, "statements")
     let mut payload: Array[UInt8] = []
     let mut bindings: Map[String, String] = {}
@@ -213,16 +213,4 @@ fn compile_kir(document: Json) -> Result[Bytes, String] {
         index = index + 1
     }
     return ok(emit_elf(payload))
-}
-
-fn main() -> Nil {
-    let args: Array[String] = process_args()
-    assert_eq(len(args), 2)
-    let input: String = args[0]
-    let output: String = args[1]
-    let source: String = result_unwrap(fs_read_text(input))
-    let document: Json = result_unwrap(json_parse(source))
-    let executable: Bytes = result_unwrap(compile_kir(document))
-    result_unwrap(fs_write_bytes(output, executable))
-    return nil
 }

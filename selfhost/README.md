@@ -1,6 +1,6 @@
 # Self-hosting stages
 
-`elf_backend.kry` is the first executable compiler component written in Kryndel. It consumes the checked frontend's `kry-ir/v1` JSON and writes a Linux x86-64 ELF64 file without invoking C, Go, or an external assembler.
+`elf_backend.kry` is the reusable lowering component of the first executable compiler written in Kryndel. `kir_backend.kry` provides its command-line entrypoint. Together they consume the checked frontend's `kry-ir/v1` JSON and write a Linux x86-64 ELF64 file without invoking C, Go, or an external assembler.
 
 The current stage accepts:
 
@@ -15,7 +15,7 @@ An end-to-end run from the repository root is:
 
 ```text
 kry emit selfhost/fixtures/static_output.kry --format=kry-ir -o input.kir
-kry run selfhost/elf_backend.kry input.kir stage1
+kry run selfhost/kir_backend.kry input.kir stage1
 ```
 
 The Go direct backend is kept as a byte-level oracle for this stage. The regression test executes the Kryndel backend under the interpreter and requires byte-identical ELF output before a change can pass.
