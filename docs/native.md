@@ -78,9 +78,18 @@ display and float formatting are byte-for-byte identical, and `defer` unwinds
 per block. The backend supports functions, recursion, `if`/`else`, `while`,
 `for`, `match`, structs, enums, arrays, maps, sets, strings, bytes, `Option`,
 `Result`, the `?` operator, and the pure, filesystem, environment, JSON, crypto,
-process and timing builtins. Constructs that are not yet supported (threads,
-actors, HTTP, WebSockets, Windows APIs, polymorphic dispatch) are rejected with
-a categorized diagnostic instead of silently degrading; output is never
+process and timing builtins. It also supports the deterministic concurrency
+surface: `shared_new`/`shared_read`/`shared_write`/`shared_swap`, actor
+mailboxes (`actor_channel`, `actor_send`, `actor_try_receive`,
+`actor_receive_timeout`, `actor_close`), task groups (`task_group`,
+`task_spawn`, `task_group_cancel`, `task_group_wait`), worker threads
+(`thread_spawn`, `await`, `await_timeout`) and runtime polymorphism
+(`poly_register`, `poly_reorder`, `poly_dispatch`). Because values are
+immutable, shared cells are heap pointers and actor mailboxes are FIFO queues;
+worker threads are not executed concurrently but are run on demand by `await`,
+which preserves the observable result for the deterministic subset. Constructs
+that are not yet supported (HTTP, WebSockets, Windows APIs) are rejected with a
+categorized diagnostic instead of silently degrading; output is never
 mislabeled as native merely because a file has a native-looking suffix.
 
 ## Portability

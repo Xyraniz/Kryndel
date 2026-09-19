@@ -249,6 +249,7 @@ func cloneValue(v Value) Value {
 		return v
 	}
 }
+
 // lessValue orders Int, Float, and String values for array_sort. Values of
 // other kinds compare by their display form so sorting never panics.
 func lessValue(a, b Value) bool {
@@ -2478,6 +2479,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	}
 	return bad("unknown builtin")
 }
+
 // normalizeJSON converts json.Number values into Int (when integral) or Float
 // so the interpreter and the native backend agree on JSON number semantics.
 func normalizeJSON(v any) any {

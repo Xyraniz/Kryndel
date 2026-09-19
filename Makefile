@@ -19,6 +19,8 @@ check: build
 	$(BINARY) check examples/discord_bot.kry
 	$(BINARY) check examples/runtime_polymorphism.kry
 	$(BINARY) check examples/dispatch_library.kry
+	$(BINARY) check examples/new_builtins.kry
+	$(BINARY) check examples/concurrency.kry
 
 test: build check
 	$(GO) test ./...
@@ -32,6 +34,8 @@ test: build check
 	$(BINARY) run examples/native_features.kry
 	$(BINARY) run examples/runtime_polymorphism.kry
 	$(BINARY) run examples/dispatch_library.kry
+	$(BINARY) run examples/new_builtins.kry
+	$(BINARY) run examples/concurrency.kry
 	$(BINARY) build examples/hello.kry --format=elf --target=linux-x64 -o build/hello.elf
 	$(BINARY) inspect build/hello.elf
 
@@ -64,6 +68,14 @@ native-parity: build
 	$(BINARY) run examples/native_features.kry > build/native_features.interp.out
 	./build/native_features.elf > build/native_features.native.out
 	diff build/native_features.interp.out build/native_features.native.out
+	$(BINARY) build examples/new_builtins.kry --format=elf --target=linux-x64 -o build/new_builtins.elf
+	$(BINARY) run examples/new_builtins.kry > build/new_builtins.interp.out
+	./build/new_builtins.elf > build/new_builtins.native.out
+	diff build/new_builtins.interp.out build/new_builtins.native.out
+	$(BINARY) build examples/concurrency.kry --format=elf --target=linux-x64 -o build/concurrency.elf
+	$(BINARY) run examples/concurrency.kry > build/concurrency.interp.out
+	./build/concurrency.elf > build/concurrency.native.out
+	diff build/concurrency.interp.out build/concurrency.native.out
 
 install-association: build
 	tools/install-association.sh

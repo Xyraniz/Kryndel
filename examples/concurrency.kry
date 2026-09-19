@@ -1,0 +1,55 @@
+fn worker() -> Int {
+    shared_write(shared, 7)
+    return shared_read(shared)
+}
+
+fn first() -> Int { return 4 }
+fn second() -> Int { return 8 }
+
+fn add_prefix(value: String) -> String {
+    return "prefix:" + value
+}
+
+fn add_suffix(value: String) -> String {
+    return value + ":suffix"
+}
+
+fn show(slot: String) -> Nil {
+    match poly_dispatch(slot, "value") {
+        ok(value) => { println(value) }
+        err(message) => { println("error: " + message) }
+    }
+}
+
+let shared: Shared[Int] = shared_new(0)
+
+let thread: Thread[Int] = thread_spawn("worker")
+let result: Int = await(thread)
+println(result)
+println(shared_read(shared))
+let old: Int = shared_swap(shared, 9)
+println(old)
+println(shared_read(shared))
+
+let actor: Actor[Int] = actor_channel()
+actor_send(actor, 5)
+match actor_try_receive(actor) {
+    ok(v) => { println(v) }
+    err(e) => { println(e) }
+}
+actor_close(actor)
+
+let group: TaskGroup = task_group()
+let a: Thread[Int] = task_spawn(group, "first")
+let b: Thread[Int] = task_spawn(group, "second")
+match task_group_wait(group) {
+    ok(_) => { println("group ok") }
+    err(e) => { println(e) }
+}
+println(await(a) + await(b))
+
+let first_reg: Result[Nil, String] = poly_register("format", "add_prefix", 10)
+let second_reg: Result[Nil, String] = poly_register("format", "add_suffix", 5)
+show("format")
+let moved: Result[Nil, String] = poly_reorder("format", "add_suffix", "add_prefix")
+show("format")

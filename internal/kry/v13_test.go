@@ -382,6 +382,82 @@ func TestNativeBackendExtendedBuiltins(t *testing.T) {
 	}
 }
 
+// TestNativeBackendConcurrency builds a program that exercises shared cells,
+// actors, task groups, threads and runtime polymorphism natively and checks the
+// output matches the interpreter byte-for-byte.
+func TestNativeBackendConcurrency(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("native parity test requires linux/amd64")
+	}
+	src := `fn worker() -> Int {
+    shared_write(shared, 7)
+    return shared_read(shared)
+}
+fn first() -> Int { return 4 }
+fn second() -> Int { return 8 }
+fn add_prefix(value: String) -> String { return "prefix:" + value }
+fn add_suffix(value: String) -> String { return value + ":suffix" }
+fn show(slot: String) -> Nil {
+    match poly_dispatch(slot, "value") {
+        ok(value) => { println(value) }
+        err(message) => { println("error: " + message) }
+    }
+}
+let shared: Shared[Int] = shared_new(0)
+let thread: Thread[Int] = thread_spawn("worker")
+let result: Int = await(thread)
+println(result)
+println(shared_read(shared))
+let old: Int = shared_swap(shared, 9)
+println(old)
+println(shared_read(shared))
+let actor: Actor[Int] = actor_channel()
+actor_send(actor, 5)
+match actor_try_receive(actor) {
+    ok(v) => { println(v) }
+    err(e) => { println(e) }
+}
+actor_close(actor)
+let group: TaskGroup = task_group()
+let a: Thread[Int] = task_spawn(group, "first")
+let b: Thread[Int] = task_spawn(group, "second")
+match task_group_wait(group) {
+    ok(_) => { println("group ok") }
+    err(e) => { println(e) }
+}
+println(await(a) + await(b))
+let r1: Result[Nil, String] = poly_register("format", "add_prefix", 10)
+let r2: Result[Nil, String] = poly_register("format", "add_suffix", 5)
+show("format")
+let moved: Result[Nil, String] = poly_reorder("format", "add_suffix", "add_prefix")
+show("format")
+`
+	p, d := Parse(&Source{Name: "main.kry", Text: src}, DefaultLimits())
+	if d != nil {
+		t.Fatal(d)
+	}
+	c, d := Check(p, DefaultLimits())
+	if d != nil {
+		t.Fatal(d)
+	}
+	elf, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf")
+	if err != nil {
+		t.Fatalf("concurrency builtins must be supported by the native backend: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "program")
+	if err := os.WriteFile(path, elf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(path).Output()
+	if err != nil {
+		t.Fatalf("AOT executable failed: %v", err)
+	}
+	want := "7\n7\n7\n9\n5\ngroup ok\n12\nprefix:value\nvalue:suffix\n"
+	if string(out) != want {
+		t.Fatalf("native concurrency output mismatch:\n got %q\nwant %q", out, want)
+	}
+}
+
 // TestNativeBackendRejectsUnsupported ensures unsupported builtins fail loudly
 // instead of silently degrading to a stub.
 func TestNativeBackendRejectsUnsupported(t *testing.T) {
