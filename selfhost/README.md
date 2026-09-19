@@ -60,3 +60,5 @@ Stage 20 adds the direct-ELF `string_chars` runtime. It counts UTF-8 leading-byt
 Stage 21 adds immutable direct-ELF maps backed by alternating key/value words. `map_get` and `map_contains_key` perform typed scalar or UTF-8 string lookup, while `map_insert` copies the map and replaces or appends without mutation. The regression covers replacement, missing-key fallback, and assertion paths.
 
 Stage 22 adds checked direct-ELF `substring`. It interprets `start` and `length` as Unicode code-point indices, copies the selected UTF-8 byte range through the native string allocator, and returns an explicit `Result` error for invalid ranges.
+
+Stage 23 adds direct-ELF and self-hosted dynamic-backend `str` lowering for dynamic `Int`, fixed-width `UInt`, `Bool`, and immutable `String` values. Signed and unsigned decimal conversion is performed in a stack buffer and copied into the native String ABI; the regression covers negative, zero, maximum `UInt8`, both Boolean values, multibyte UTF-8, byte-for-byte parity, and Linux execution.

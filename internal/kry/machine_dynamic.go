@@ -51,6 +51,7 @@ type directMachine struct {
 	mapFindLabel        int
 	mapInsertLabel      int
 	substringLabel      int
+	intToStringLabel    int
 	mapRuntimeUsed      bool
 	stringCharsUsed     bool
 	substringUsed       bool
@@ -112,6 +113,7 @@ func newDirectMachine() *directMachine {
 	m.mapFindLabel = m.newLabel()
 	m.mapInsertLabel = m.newLabel()
 	m.substringLabel = m.newLabel()
+	m.intToStringLabel = m.newLabel()
 	m.bytesFromArrayLabel = m.newLabel()
 	m.processArgsLabel = m.newLabel()
 	m.fsReadTextLabel = m.newLabel()
@@ -1421,6 +1423,125 @@ func (m *directMachine) emitSubstringRuntime() error {
 	return nil
 }
 
+func (m *directMachine) emitIntToStringRuntime() error {
+	if err := m.bind(m.intToStringLabel); err != nil {
+		return err
+	}
+	// rdi=value, rsi=kind (0=signed Int, 1=UInt, 2=Bool). The numeric
+	// conversion writes backwards into a private stack buffer and then uses
+	// the checked mmap-backed String allocator. String arguments do not enter
+	// this runtime: the lowering returns their immutable pointer unchanged.
+	boolFalse := m.newLabel()
+	numeric := m.newLabel()
+	signed := m.newLabel()
+	digits := m.newLabel()
+	digitLoop := m.newLabel()
+	addSign := m.newLabel()
+	ready := m.newLabel()
+	restore := m.newLabel()
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=value
+		0x49, 0x89, 0xf5, // r13=display kind
+		0x49, 0x83, 0xfd, 0x02, // cmp r13, 2
+	)
+	if err := m.emitConditionalJump(0x85, numeric); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x85, 0xe4) // test r12, r12
+	if err := m.emitConditionalJump(0x84, boolFalse); err != nil {
+		return err
+	}
+	m.emitStringAddress("true")
+	if err := m.emitJump(restore); err != nil {
+		return err
+	}
+	if err := m.bind(boolFalse); err != nil {
+		return err
+	}
+	m.emitStringAddress("false")
+	if err := m.emitJump(restore); err != nil {
+		return err
+	}
+	if err := m.bind(numeric); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x83, 0xec, 0x20, // reserve 32-byte digit buffer
+		0x4c, 0x8d, 0x74, 0x24, 0x20, // r14=&buffer[32] (one past the buffer)
+		0x45, 0x31, 0xff, // r15=negative flag
+		0x4d, 0x85, 0xed, // signed kind?
+	)
+	if err := m.emitConditionalJump(0x84, signed); err != nil {
+		return err
+	}
+	if err := m.emitJump(digits); err != nil {
+		return err
+	}
+	if err := m.bind(signed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x85, 0xe4)                   // test value
+	if err := m.emitConditionalJump(0x89, digits); err != nil { // jns
+		return err
+	}
+	m.code = append(m.code,
+		0x41, 0xb7, 0x01, // r15b=1
+		0x49, 0xf7, 0xdc, // neg r12; MinInt remains its unsigned magnitude
+	)
+	if err := m.bind(digits); err != nil {
+		return err
+	}
+	if err := m.bind(digitLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x31, 0xd2, // zero rdx for div
+		0x4c, 0x89, 0xe0, // rax=r12
+		0x48, 0xc7, 0xc1, 0x0a, 0x00, 0x00, 0x00, // rcx=10
+		0x48, 0xf7, 0xf1, // div rcx
+		0x80, 0xc2, 0x30, // dl += '0'
+		0x49, 0xff, 0xce, // --r14
+		0x41, 0x88, 0x16, // [r14]=dl
+		0x49, 0x89, 0xc4, // r12=quotient
+		0x4d, 0x85, 0xe4, // test r12
+	)
+	if err := m.emitConditionalJump(0x85, digitLoop); err != nil { // jnz
+		return err
+	}
+	if err := m.emitJump(addSign); err != nil {
+		return err
+	}
+	if err := m.bind(addSign); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x45, 0x84, 0xff) // test r15b
+	if err := m.emitConditionalJump(0x84, ready); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0xff, 0xce, // --r14
+		0x41, 0xc6, 0x06, 0x2d, // [r14]='-'
+	)
+	if err := m.bind(ready); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x8d, 0x74, 0x24, 0x20, // rsi=&buffer[32]
+		0x4c, 0x29, 0xf6, // rsi-=r14
+		0x4c, 0x89, 0xf7, // rdi=r14
+	)
+	if err := m.emitLabelCall(m.stringAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xc4, 0x20) // release digit buffer
+	if err := m.bind(restore); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
 func (m *directMachine) emitBytesFromArrayRuntime() error {
 	if err := m.bind(m.bytesFromArrayLabel); err != nil {
 		return err
@@ -2560,6 +2681,34 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			m.hostRuntimeUsed = true
 			m.substringUsed = true
 			return m.emitLabelCall(m.substringLabel)
+		case "str":
+			if len(e.Args) != 1 || e.Args[0].Type == nil {
+				return fmt.Errorf("direct ELF str expects one Display argument")
+			}
+			argument := e.Args[0]
+			if argument.Type.Kind == TyString {
+				return m.emitExpr(argument)
+			}
+			kind := uint64(0)
+			switch argument.Type.Kind {
+			case TyInt:
+				kind = 0
+			case TyUInt:
+				kind = 1
+			case TyBool:
+				kind = 2
+			default:
+				return fmt.Errorf("direct ELF backend str does not support %s", argument.Type.String())
+			}
+			if err := m.emitExpr(argument); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7, 0x48, 0xbe)
+			var displayKind [8]byte
+			binary.LittleEndian.PutUint64(displayKind[:], kind)
+			m.code = append(m.code, displayKind[:]...)
+			m.hostRuntimeUsed = true
+			return m.emitLabelCall(m.intToStringLabel)
 		case "len":
 			if len(e.Args) != 1 || e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyArray && e.Args[0].Type.Kind != TyBytes) {
 				return fmt.Errorf("direct ELF backend supports len(Array[T]) and len(Bytes)")
@@ -3441,6 +3590,12 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			if err := m.emitSubstringRuntime(); err != nil {
 				return nil, err
 			}
+		}
+		// Host finalization emits the complete deterministic host-runtime slice;
+		// keep this order identical to dynamic_backend.kry even when a program
+		// does not call str directly.
+		if err := m.emitIntToStringRuntime(); err != nil {
+			return nil, err
 		}
 		if err := m.emitBytesFromArrayRuntime(); err != nil {
 			return nil, err

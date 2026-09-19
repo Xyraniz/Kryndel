@@ -1,0 +1,25 @@
+fn show_int(value: Int) -> String {
+    return str(value)
+}
+
+fn show_uint(value: UInt8) -> String {
+    return str(value)
+}
+
+fn show_bool(value: Bool) -> String {
+    return str(value)
+}
+
+fn show_string(value: String) -> String {
+    return str(value)
+}
+
+fn main() -> Nil {
+    println(show_int(-42))
+    println(show_int(0))
+    println(show_uint(u8(255)))
+    println(show_bool(true))
+    println(show_bool(false))
+    println(show_string("hé"))
+    return nil
+}

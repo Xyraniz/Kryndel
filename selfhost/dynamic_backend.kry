@@ -248,20 +248,24 @@ fn host_substring_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 7
 }
 
-fn host_bytes_from_array_label(state: EmitState) -> Int {
+fn host_int_to_string_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 8
 }
 
-fn host_process_args_label(state: EmitState) -> Int {
+fn host_bytes_from_array_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 9
 }
 
-fn host_fs_read_text_label(state: EmitState) -> Int {
+fn host_process_args_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 10
 }
 
-fn host_fs_write_bytes_label(state: EmitState) -> Int {
+fn host_fs_read_text_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 11
+}
+
+fn host_fs_write_bytes_label(state: EmitState) -> Int {
+    return state.assembler.box_alloc_label + 12
 }
 
 fn state_with_env(state: EmitState, env: CompileEnv) -> EmitState {
@@ -826,6 +830,76 @@ fn emit_string_alloc_runtime(state: EmitState) -> Result[EmitState, String] {
     return ok(current)
 }
 
+fn emit_int_to_string_runtime(state: EmitState) -> Result[EmitState, String] {
+    let bound: Result[EmitState, String] = bind_label(state, host_int_to_string_label(state))
+    if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind host Int-to-String runtime")) }
+    let bool_false: LabelState = new_label(result_unwrap(bound))
+    let numeric: LabelState = new_label(bool_false.state)
+    let signed: LabelState = new_label(numeric.state)
+    let digits: LabelState = new_label(signed.state)
+    let digit_loop: LabelState = new_label(digits.state)
+    let add_sign: LabelState = new_label(digit_loop.state)
+    let ready: LabelState = new_label(add_sign.state)
+    let restore: LabelState = new_label(ready.state)
+    let mut current: EmitState = append_code(restore.state, [
+        u8(83), u8(85), u8(65), u8(84), u8(65), u8(85), u8(65), u8(86), u8(65), u8(87),
+        u8(73), u8(137), u8(252), u8(73), u8(137), u8(245),
+        u8(73), u8(131), u8(253), u8(2)
+    ])
+    current = emit_jump(current, numeric.label, true, u8(133))
+    current = append_code(current, [u8(77), u8(133), u8(228)])
+    current = emit_jump(current, bool_false.label, true, u8(132))
+    current = emit_string(current, "true")
+    current = emit_jump(current, restore.label, false, u8(0))
+    let bound_false: Result[EmitState, String] = bind_label(current, bool_false.label)
+    if is_err(bound_false) { return err(unwrap_or(result_error(bound_false), "dynamic backend: cannot bind Int-to-String false path")) }
+    current = emit_string(result_unwrap(bound_false), "false")
+    current = emit_jump(current, restore.label, false, u8(0))
+    let bound_numeric: Result[EmitState, String] = bind_label(current, numeric.label)
+    if is_err(bound_numeric) { return err(unwrap_or(result_error(bound_numeric), "dynamic backend: cannot bind Int-to-String numeric path")) }
+    current = append_code(result_unwrap(bound_numeric), [
+        u8(72), u8(131), u8(236), u8(32),
+        u8(76), u8(141), u8(116), u8(36), u8(32),
+        u8(69), u8(49), u8(255), u8(77), u8(133), u8(237)
+    ])
+    current = emit_jump(current, signed.label, true, u8(132))
+    current = emit_jump(current, digits.label, false, u8(0))
+    let bound_signed: Result[EmitState, String] = bind_label(current, signed.label)
+    if is_err(bound_signed) { return err(unwrap_or(result_error(bound_signed), "dynamic backend: cannot bind Int-to-String signed path")) }
+    current = append_code(result_unwrap(bound_signed), [u8(77), u8(133), u8(228)])
+    current = emit_jump(current, digits.label, true, u8(137))
+    current = append_code(current, [u8(65), u8(183), u8(1), u8(73), u8(247), u8(220)])
+    let bound_digits: Result[EmitState, String] = bind_label(current, digits.label)
+    if is_err(bound_digits) { return err(unwrap_or(result_error(bound_digits), "dynamic backend: cannot bind Int-to-String digits")) }
+    current = result_unwrap(bound_digits)
+    let bound_loop: Result[EmitState, String] = bind_label(current, digit_loop.label)
+    if is_err(bound_loop) { return err(unwrap_or(result_error(bound_loop), "dynamic backend: cannot bind Int-to-String digit loop")) }
+    current = append_code(result_unwrap(bound_loop), [
+        u8(72), u8(49), u8(210), u8(76), u8(137), u8(224),
+        u8(72), u8(199), u8(193), u8(10), u8(0), u8(0), u8(0),
+        u8(72), u8(247), u8(241), u8(128), u8(194), u8(48),
+        u8(73), u8(255), u8(206), u8(65), u8(136), u8(22),
+        u8(73), u8(137), u8(196), u8(77), u8(133), u8(228)
+    ])
+    current = emit_jump(current, digit_loop.label, true, u8(133))
+    current = emit_jump(current, add_sign.label, false, u8(0))
+    let bound_sign: Result[EmitState, String] = bind_label(current, add_sign.label)
+    if is_err(bound_sign) { return err(unwrap_or(result_error(bound_sign), "dynamic backend: cannot bind Int-to-String sign")) }
+    current = append_code(result_unwrap(bound_sign), [u8(69), u8(132), u8(255)])
+    current = emit_jump(current, ready.label, true, u8(132))
+    current = append_code(current, [u8(73), u8(255), u8(206), u8(65), u8(198), u8(6), u8(45)])
+    let bound_ready: Result[EmitState, String] = bind_label(current, ready.label)
+    if is_err(bound_ready) { return err(unwrap_or(result_error(bound_ready), "dynamic backend: cannot bind Int-to-String ready path")) }
+    current = append_code(result_unwrap(bound_ready), [
+        u8(72), u8(141), u8(116), u8(36), u8(32), u8(76), u8(41), u8(246), u8(76), u8(137), u8(247)
+    ])
+    current = emit_label_call(current, host_string_alloc_label(current))
+    current = append_code(current, [u8(72), u8(131), u8(196), u8(32)])
+    let bound_restore: Result[EmitState, String] = bind_label(current, restore.label)
+    if is_err(bound_restore) { return err(unwrap_or(result_error(bound_restore), "dynamic backend: cannot bind Int-to-String restore")) }
+    return ok(append_code(result_unwrap(bound_restore), [u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)]))
+}
+
 fn emit_bytes_from_array_runtime(state: EmitState) -> Result[EmitState, String] {
     let bound: Result[EmitState, String] = bind_label(state, host_bytes_from_array_label(state))
     if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind host Bytes allocator")) }
@@ -1222,6 +1296,27 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
             if result_unwrap(json_array_len(arguments)) != 0 { return err("dynamic backend: process_args expects no arguments") }
             let marked: EmitState = state_with_array_used(state_with_host_used(state))
             return ok(emit_label_call(marked, host_process_args_label(marked)))
+        }
+        if target == "builtin:str" {
+            if result_unwrap(json_array_len(arguments)) != 1 { return err("dynamic backend: str expects one Display argument") }
+            let display_argument: Json = result_unwrap(json_array_get(arguments, 0))
+            let type_name: String = expr_type(display_argument)
+            if type_name == "String" { return emit_expression(state, display_argument) }
+            let mut display_kind: UInt64 = u64(0)
+            if type_name == "Bool" {
+                display_kind = u64(2)
+            } else if type_name == "Int" {
+                display_kind = u64(0)
+            } else if starts_with(type_name, "UInt") {
+                display_kind = u64(1)
+            } else {
+                return err("dynamic backend: str does not support type '" + type_name + "'")
+            }
+            let emitted: Result[EmitState, String] = emit_expression(state, display_argument)
+            if is_err(emitted) { return err(expression_error(emitted)) }
+            let moved: EmitState = append_code(result_unwrap(emitted), array_concat([u8(72), u8(137), u8(199), u8(72), u8(190)], dyn_u64_bytes(display_kind)))
+            let marked: EmitState = state_with_host_used(moved)
+            return ok(emit_label_call(marked, host_int_to_string_label(marked)))
         }
         let argument: Json = result_unwrap(json_array_get(arguments, 0))
         if target == "builtin:len" {
@@ -1629,7 +1724,7 @@ fn finalize_jumps(state: EmitState) -> Result[EmitState, String] {
     for index in array_indices(current.assembler.jumps) {
         let patch: JumpPatch = unwrap_or(array_get(current.assembler.jumps, index), JumpPatch{ label: -1, position: -1 })
         let target: Int = unwrap_or(array_get(current.assembler.labels, patch.label), -1)
-        if target < 0 { return err("dynamic backend: unresolved label") }
+        if target < 0 { return err("dynamic backend: unresolved label " + str(patch.label) + " at patch " + str(patch.position) + " (label count " + str(len(current.assembler.labels)) + ")") }
         let updated: Result[EmitState, String] = patch_code(current, patch.position, i32_bytes(target - patch.position - 4))
         if is_err(updated) { return err(unwrap_or(result_error(updated), "dynamic backend: jump patch failed")) }
         current = result_unwrap(updated)
@@ -1872,7 +1967,8 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     let host_map_find_label: LabelState = new_label(host_equal_label.state)
     let host_map_insert_label: LabelState = new_label(host_map_find_label.state)
     let host_substring_label: LabelState = new_label(host_map_insert_label.state)
-    let host_bytes_label: LabelState = new_label(host_substring_label.state)
+    let host_int_to_string_label: LabelState = new_label(host_substring_label.state)
+    let host_bytes_label: LabelState = new_label(host_int_to_string_label.state)
     let host_process_label: LabelState = new_label(host_bytes_label.state)
     let host_read_label: LabelState = new_label(host_process_label.state)
     let host_write_label: LabelState = new_label(host_read_label.state)
@@ -1896,9 +1992,16 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
         lowered = result_unwrap(emitted)
     }
     if lowered.assembler.host_runtime_used {
+        // The host slice always emits process_args, whose runtime allocates
+        // its result through the shared Array allocator, just like the Go
+        // direct backend marks arrayRuntimeUsed while finalizing host code.
+        lowered = state_with_array_used(lowered)
         let string_runtime: Result[EmitState, String] = emit_string_alloc_runtime(lowered)
         if is_err(string_runtime) { return err(unwrap_or(result_error(string_runtime), "dynamic backend: host String runtime lowering failed")) }
         lowered = result_unwrap(string_runtime)
+        let int_string_runtime: Result[EmitState, String] = emit_int_to_string_runtime(lowered)
+        if is_err(int_string_runtime) { return err(unwrap_or(result_error(int_string_runtime), "dynamic backend: host Int-to-String runtime lowering failed")) }
+        lowered = result_unwrap(int_string_runtime)
         let bytes_runtime: Result[EmitState, String] = emit_bytes_from_array_runtime(lowered)
         if is_err(bytes_runtime) { return err(unwrap_or(result_error(bytes_runtime), "dynamic backend: host Bytes runtime lowering failed")) }
         lowered = result_unwrap(bytes_runtime)
