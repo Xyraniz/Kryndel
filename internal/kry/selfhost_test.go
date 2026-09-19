@@ -970,3 +970,55 @@ func TestStage14DirectStructAndForParity(t *testing.T) {
 		t.Fatalf("unexpected stage14 direct ELF output %q", output)
 	}
 }
+
+func TestStage15DirectHostIO(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_host_io_stage15.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input.txt")
+	output := filepath.Join(dir, "output.bin")
+	rejected := filepath.Join(dir, "missing", "output.bin")
+	if err := os.WriteFile(input, []byte("host-io"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runnable := filepath.Join(dir, "direct-host-io-stage15")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(runnable, input, output, rejected)
+	outputText, err := command.Output()
+	if err != nil {
+		t.Fatalf("stage15 direct host I/O ELF failed to execute: %v", err)
+	}
+	if string(outputText) != "3\nhost-io\ntrue\nfalse\n" {
+		t.Fatalf("unexpected stage15 direct host I/O output %q", outputText)
+	}
+	written, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != "ABC" {
+		t.Fatalf("unexpected stage15 written bytes %q", written)
+	}
+	if _, err := os.Stat(rejected); !os.IsNotExist(err) {
+		t.Fatalf("rejected path was unexpectedly created: %v", err)
+	}
+}

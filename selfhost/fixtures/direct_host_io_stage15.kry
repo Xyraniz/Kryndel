@@ -1,0 +1,12 @@
+fn main() -> Nil {
+    let args: Array[String] = process_args()
+    let source: String = result_unwrap(fs_read_text(args[0]))
+    let data: Bytes = bytes([65, 66, 67])
+    let written: Result[Nil, String] = fs_write_bytes(args[1], data)
+    let rejected: Result[Nil, String] = fs_write_bytes(args[2], data)
+    println(len(args))
+    println(source)
+    println(is_ok(written))
+    println(is_ok(rejected))
+    return nil
+}

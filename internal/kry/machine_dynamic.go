@@ -13,40 +13,46 @@ import (
 // Unsupported values fail during compilation instead of silently changing
 // Kryndel semantics.
 type directMachine struct {
-	code              []byte
-	data              []byte
-	dataByText        map[string]int
-	stringObjects     map[string]int
-	dataRefs          []machineDataRef
-	labels            []machineLabel
-	slots             map[string]machineSlot
-	nextSlot          int32
-	loops             []machineLoop
-	endLabel          int
-	trapLabel         int
-	staticEnv         map[string]Value
-	bufferOffset      int32
-	functionLabels    map[string]int
-	functionOrder     []*Function
-	functionSlots     map[string]map[string]machineSlot
-	functionNextSlot  map[string]int32
-	statementSlots    map[*Stmt]machineSlot
-	forIterSlots      map[*Stmt]machineSlot
-	forIndexSlots     map[*Stmt]machineSlot
-	scopeStack        []map[string]machineSlot
-	functionReturns   map[string]*Type
-	stringConcatLabel int
-	stringConcatUsed  bool
-	arrayAllocLabel   int
-	arrayPushLabel    int
-	arrayConcatLabel  int
-	arrayRuntimeUsed  bool
-	boxAllocLabel     int
-	boxRuntimeUsed    bool
-	structAllocLabel  int
-	structRuntimeUsed bool
-	inFunction        bool
-	currentFunction   string
+	code                []byte
+	data                []byte
+	dataByText          map[string]int
+	stringObjects       map[string]int
+	dataRefs            []machineDataRef
+	labels              []machineLabel
+	slots               map[string]machineSlot
+	nextSlot            int32
+	loops               []machineLoop
+	endLabel            int
+	trapLabel           int
+	staticEnv           map[string]Value
+	bufferOffset        int32
+	functionLabels      map[string]int
+	functionOrder       []*Function
+	functionSlots       map[string]map[string]machineSlot
+	functionNextSlot    map[string]int32
+	statementSlots      map[*Stmt]machineSlot
+	forIterSlots        map[*Stmt]machineSlot
+	forIndexSlots       map[*Stmt]machineSlot
+	scopeStack          []map[string]machineSlot
+	functionReturns     map[string]*Type
+	stringConcatLabel   int
+	stringConcatUsed    bool
+	arrayAllocLabel     int
+	arrayPushLabel      int
+	arrayConcatLabel    int
+	arrayRuntimeUsed    bool
+	boxAllocLabel       int
+	boxRuntimeUsed      bool
+	structAllocLabel    int
+	structRuntimeUsed   bool
+	stringAllocLabel    int
+	bytesFromArrayLabel int
+	processArgsLabel    int
+	fsReadTextLabel     int
+	fsWriteBytesLabel   int
+	hostRuntimeUsed     bool
+	inFunction          bool
+	currentFunction     string
 }
 
 type machineSlot struct {
@@ -92,6 +98,11 @@ func newDirectMachine() *directMachine {
 	m.arrayConcatLabel = m.newLabel()
 	m.boxAllocLabel = m.newLabel()
 	m.structAllocLabel = m.newLabel()
+	m.stringAllocLabel = m.newLabel()
+	m.bytesFromArrayLabel = m.newLabel()
+	m.processArgsLabel = m.newLabel()
+	m.fsReadTextLabel = m.newLabel()
+	m.fsWriteBytesLabel = m.newLabel()
 	return m
 }
 
@@ -733,8 +744,8 @@ func (m *directMachine) emitStructAllocRuntime() error {
 	)
 	m.emitTrapOnOverflow()
 	m.code = append(m.code,
-		0x48, 0x89, 0xc7, // mov rdi, rax
-		0x48, 0x31, 0xf6, // xor rsi, rsi
+		0x48, 0x89, 0xc6, // mov rsi, rax
+		0x48, 0x31, 0xff, // xor rdi, rdi
 		0xba, 0x03, 0x00, 0x00, 0x00, // PROT_READ|PROT_WRITE
 		0x41, 0xba, 0x22, 0x00, 0x00, 0x00, // MAP_PRIVATE|MAP_ANONYMOUS
 		0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, // fd=-1
@@ -744,6 +755,469 @@ func (m *directMachine) emitStructAllocRuntime() error {
 		0x48, 0x85, 0xc0,
 	)
 	if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil { // js: mmap error
+		return err
+	}
+	m.code = append(m.code, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitStringAllocRuntime() error {
+	if err := m.bind(m.stringAllocLabel); err != nil {
+		return err
+	}
+	// rdi=source bytes, rsi=length. Return a {length, bytes[]} String object.
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+		0x49, 0x89, 0xfe, // mov r14, rdi
+		0x49, 0x89, 0xf5, // mov r13, rsi
+	)
+	m.code = append(m.code,
+		0x48, 0x89, 0xf0, // mov rax, rsi
+		0x48, 0x83, 0xc0, 0x08, // add rax, 8
+	)
+	m.emitTrapOnOverflow()
+	m.code = append(m.code,
+		0x48, 0x89, 0xc6,
+		0x48, 0x31, 0xff,
+		0xba, 0x03, 0x00, 0x00, 0x00,
+		0x41, 0xba, 0x22, 0x00, 0x00, 0x00,
+		0x41, 0xb8, 0xff, 0xff, 0xff, 0xff,
+		0x45, 0x31, 0xc9,
+		0xb8, 0x09, 0x00, 0x00, 0x00,
+		0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x89, 0xc4, // mov r12, rax
+		0x4c, 0x89, 0x28, // mov [rax], r13
+	)
+	m.code = append(m.code,
+		0x48, 0x8d, 0x78, 0x08,
+		0x4c, 0x89, 0xf6,
+		0x4c, 0x89, 0xe9,
+		0xf3, 0xa4,
+	)
+	m.code = append(m.code,
+		0x4c, 0x89, 0xe0,
+		0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3,
+	)
+	return nil
+}
+
+func (m *directMachine) emitBytesFromArrayRuntime() error {
+	if err := m.bind(m.bytesFromArrayLabel); err != nil {
+		return err
+	}
+	// rdi=Array[Int]. Return a {length, bytes[]} Bytes object after
+	// validating every element as an unsigned octet.
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // mov r12, rdi (source array)
+		0x49, 0x8b, 0x2c, 0x24, // mov rbp, [r12] (length)
+		0x49, 0x89, 0xed, // mov r13, rbp
+		0x48, 0x89, 0xe8, // mov rax, rbp
+		0x48, 0x83, 0xc0, 0x08, // add rax, 8
+	)
+	m.emitTrapOnOverflow()
+	m.code = append(m.code,
+		0x48, 0x89, 0xc6, // mov rsi, rax
+		0x48, 0x31, 0xff, // addr=0
+		0xba, 0x03, 0x00, 0x00, 0x00,
+		0x41, 0xba, 0x22, 0x00, 0x00, 0x00,
+		0x41, 0xb8, 0xff, 0xff, 0xff, 0xff,
+		0x45, 0x31, 0xc9,
+		0xb8, 0x09, 0x00, 0x00, 0x00,
+		0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x89, 0xc6, // mov r14, rax (destination Bytes)
+	)
+	m.code = append(m.code,
+		0x4c, 0x89, 0x28, // [r14]=length
+		0x45, 0x31, 0xff, // index=0
+	)
+	loop := m.newLabel()
+	done := m.newLabel()
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xf8, // mov rax, r15
+		0x4c, 0x39, 0xe8, // cmp rax, rbp
+	)
+	if err := m.emitConditionalJump(0x83, done); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xff, // mov rdi, r15
+		0x48, 0xc1, 0xe7, 0x03,
+		0x4c, 0x01, 0xe7,
+		0x48, 0x83, 0xc7, 0x08,
+		0x48, 0x8b, 0x07, // load Array[Int] element
+		0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x3d, 0xff, 0x00, 0x00, 0x00,
+	)
+	if err := m.emitConditionalJump(0x87, m.trapLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x8d, 0x7e, 0x08,
+		0x4c, 0x01, 0xff,
+		0x88, 0x07,
+		0x49, 0xff, 0xc7,
+	)
+	if err := m.emitJump(loop); err != nil {
+		return err
+	}
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xf0,
+		0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3,
+	)
+	return nil
+}
+
+func (m *directMachine) emitProcessArgsRuntime() error {
+	if err := m.bind(m.processArgsLabel); err != nil {
+		return err
+	}
+	m.arrayRuntimeUsed = true
+	m.code = append(m.code,
+		0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x4c, 0x8b, 0x65, 0x08, // mov r12, [rbp+8] (argc)
+		0x49, 0xff, 0xcc, // exclude argv[0]
+		0x4c, 0x89, 0xe7, // mov rdi, r12 (array allocator count)
+		0x4c, 0x89, 0xe0, // mov rax, r12
+	)
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x89, 0xc5,
+		0x45, 0x31, 0xf6,
+		0x4c, 0x8d, 0x7d, 0x18,
+	)
+	loop := m.newLabel()
+	done := m.newLabel()
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf0) // mov rax, r14
+	m.code = append(m.code, 0x4c, 0x39, 0xe0) // cmp rax, r12
+	if err := m.emitConditionalJump(0x83, done); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xf7,
+		0x48, 0xc1, 0xe7, 0x03,
+		0x4c, 0x01, 0xff,
+		0x4c, 0x8b, 0x07, // mov r8, [rdi]
+		0x45, 0x31, 0xc9,
+	)
+	lengthLoop := m.newLabel()
+	lengthDone := m.newLabel()
+	if err := m.bind(lengthLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x43, 0x80, 0x3c, 0x08, 0x00)
+	if err := m.emitConditionalJump(0x84, lengthDone); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc1)
+	if err := m.emitJump(lengthLoop); err != nil {
+		return err
+	}
+	if err := m.bind(lengthDone); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xc7,
+		0x4c, 0x89, 0xce,
+	)
+	if err := m.emitLabelCall(m.stringAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xea,
+		0x4c, 0x89, 0xf7,
+		0x48, 0xc1, 0xe7, 0x03,
+		0x4c, 0x01, 0xef,
+		0x48, 0x83, 0xc7, 0x08,
+		0x48, 0x89, 0x07,
+		0x49, 0xff, 0xc6,
+	)
+	if err := m.emitJump(loop); err != nil {
+		return err
+	}
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xe8) // mov rax, r13 (result array)
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitFSReadTextRuntime() error {
+	if err := m.bind(m.fsReadTextLabel); err != nil {
+		return err
+	}
+	// rdi=String path. The syscall path is a temporary NUL-terminated copy;
+	// the returned Result owns a freshly allocated String object.
+	m.code = append(m.code,
+		0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x53, 0x55,
+		0x49, 0x89, 0xfc,
+		0x49, 0x8d, 0x7c, 0x24, 0x08,
+		0x49, 0x8b, 0x34, 0x24,
+	)
+	if err := m.emitLabelCall(m.stringAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x89, 0xc5,
+		0x49, 0x8b, 0x4d, 0x00,
+		0x4c, 0x01, 0xe9,
+		0xc6, 0x41, 0x08, 0x00,
+		0x48, 0x81, 0xec, 0x90, 0x00, 0x00, 0x00,
+		0x49, 0x8d, 0x7d, 0x08,
+		0x48, 0x31, 0xf6,
+		0x48, 0x31, 0xd2,
+		0xb8, 0x02, 0x00, 0x00, 0x00,
+		0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	openFail := m.newLabel()
+	closeFail := m.newLabel()
+	errorLabel := m.newLabel()
+	if err := m.emitConditionalJump(0x88, openFail); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x89, 0xc6,
+		0x4c, 0x89, 0xf7,
+		0x48, 0x89, 0xe6,
+		0xb8, 0x05, 0x00, 0x00, 0x00,
+		0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x88, closeFail); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x8b, 0x7c, 0x24, 0x30,
+		0x4d, 0x85, 0xff,
+	)
+	nonZero := m.newLabel()
+	allocSize := m.newLabel()
+	if err := m.emitConditionalJump(0x85, nonZero); err != nil {
+		return err
+	}
+	m.emitMoveImmediate(1)
+	if err := m.emitJump(allocSize); err != nil {
+		return err
+	}
+	if err := m.bind(nonZero); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf8) // mov rax, r15
+	if err := m.bind(allocSize); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x89, 0xc6,
+		0x48, 0x31, 0xff,
+		0xba, 0x03, 0x00, 0x00, 0x00,
+		0x41, 0xba, 0x22, 0x00, 0x00, 0x00,
+		0x41, 0xb8, 0xff, 0xff, 0xff, 0xff,
+		0x45, 0x31, 0xc9,
+		0xb8, 0x09, 0x00, 0x00, 0x00,
+		0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x88, closeFail); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc3, 0x48, 0x31, 0xed)
+	readLoop := m.newLabel()
+	readDone := m.newLabel()
+	if err := m.bind(readLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x39, 0xfd) // cmp rbp, r15
+	if err := m.emitConditionalJump(0x83, readDone); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xf7,
+		0x48, 0x8d, 0x34, 0x2b,
+		0x4c, 0x89, 0xfa,
+		0x48, 0x29, 0xea,
+		0x31, 0xc0,
+		0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x8e, closeFail); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x01, 0xc5)
+	if err := m.emitJump(readLoop); err != nil {
+		return err
+	}
+	if err := m.bind(readDone); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf7, 0xb8, 0x03, 0x00, 0x00, 0x00, 0x0f, 0x05)
+	m.code = append(m.code, 0x48, 0x89, 0xdf, 0x4c, 0x89, 0xfe)
+	if err := m.emitLabelCall(m.stringAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x81, 0xc4, 0x90, 0x00, 0x00, 0x00, 0x5d, 0x5b, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c)
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	returnLabel := m.newLabel()
+	if err := m.emitJump(returnLabel); err != nil {
+		return err
+	}
+	if err := m.bind(openFail); err != nil {
+		return err
+	}
+	if err := m.emitJump(errorLabel); err != nil {
+		return err
+	}
+	if err := m.bind(closeFail); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf7, 0xb8, 0x03, 0x00, 0x00, 0x00, 0x0f, 0x05)
+	if err := m.emitJump(errorLabel); err != nil {
+		return err
+	}
+	if err := m.bind(errorLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x81, 0xc4, 0x90, 0x00, 0x00, 0x00, 0x5d, 0x5b, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c)
+	m.emitStringAddress("fs_read_text failed")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	if err := m.bind(returnLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitFSWriteBytesRuntime() error {
+	if err := m.bind(m.fsWriteBytesLabel); err != nil {
+		return err
+	}
+	// rdi=String path, rsi=Bytes. Both use the same {length, bytes[]} layout.
+	m.code = append(m.code,
+		0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x53, 0x55,
+		0x49, 0x89, 0xfc,
+		0x49, 0x89, 0xf5,
+		0x49, 0x8d, 0x7c, 0x24, 0x08,
+		0x49, 0x8b, 0x34, 0x24,
+	)
+	if err := m.emitLabelCall(m.stringAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x89, 0xc7,
+		0x49, 0x8b, 0x4f, 0x00,
+		0x4c, 0x01, 0xf9,
+		0xc6, 0x41, 0x08, 0x00,
+		0x49, 0x8d, 0x7f, 0x08,
+		0x48, 0xc7, 0xc6, 0x41, 0x02, 0x00, 0x00,
+		0xba, 0xb6, 0x01, 0x00, 0x00,
+		0xb8, 0x02, 0x00, 0x00, 0x00,
+		0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	openFail := m.newLabel()
+	closeFail := m.newLabel()
+	errorLabel := m.newLabel()
+	if err := m.emitConditionalJump(0x88, openFail); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x89, 0xc6,
+		0x48, 0x31, 0xed,
+	)
+	writeLoop := m.newLabel()
+	writeDone := m.newLabel()
+	if err := m.bind(writeLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x3b, 0x6d, 0x00) // cmp rbp, [r13]
+	if err := m.emitConditionalJump(0x83, writeDone); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xf7,
+		0x49, 0x8d, 0x75, 0x08,
+		0x48, 0x01, 0xee,
+		0x49, 0x8b, 0x55, 0x00,
+		0x48, 0x29, 0xea,
+		0xb8, 0x01, 0x00, 0x00, 0x00,
+		0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x8e, closeFail); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x01, 0xc5)
+	if err := m.emitJump(writeLoop); err != nil {
+		return err
+	}
+	if err := m.bind(writeDone); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf7, 0xb8, 0x03, 0x00, 0x00, 0x00, 0x0f, 0x05)
+	m.code = append(m.code, 0x5d, 0x5b, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c)
+	m.emitMoveImmediate(0)
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	returnLabel := m.newLabel()
+	if err := m.emitJump(returnLabel); err != nil {
+		return err
+	}
+	if err := m.bind(openFail); err != nil {
+		return err
+	}
+	if err := m.emitJump(errorLabel); err != nil {
+		return err
+	}
+	if err := m.bind(closeFail); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf7, 0xb8, 0x03, 0x00, 0x00, 0x00, 0x0f, 0x05)
+	if err := m.emitJump(errorLabel); err != nil {
+		return err
+	}
+	if err := m.bind(errorLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x5d, 0x5b, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c)
+	m.emitStringAddress("fs_write_bytes failed")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	if err := m.bind(returnLabel); err != nil {
 		return err
 	}
 	m.code = append(m.code, 0xc3)
@@ -1148,14 +1622,24 @@ func (m *directMachine) emitExpr(e *Expr) error {
 		}
 		switch e.Name {
 		case "len":
-			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray {
-				return fmt.Errorf("direct ELF backend supports len(Array[T]) only")
+			if len(e.Args) != 1 || e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyArray && e.Args[0].Type.Kind != TyBytes) {
+				return fmt.Errorf("direct ELF backend supports len(Array[T]) and len(Bytes)")
 			}
 			if err := m.emitExpr(e.Args[0]); err != nil {
 				return err
 			}
 			m.code = append(m.code, 0x48, 0x8b, 0x00) // mov rax, [rax]
 			return nil
+		case "bytes":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray {
+				return fmt.Errorf("direct ELF backend bytes expects Array[Int]")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // mov rdi, rax
+			m.hostRuntimeUsed = true
+			return m.emitLabelCall(m.bytesFromArrayLabel)
 		case "array_push":
 			return m.emitArrayPushCall(e)
 		case "array_concat":
@@ -1232,6 +1716,36 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			return m.emitArrayGet(e)
 		case "array_indices":
 			return m.emitArrayIndices(e)
+		case "process_args":
+			if len(e.Args) != 0 {
+				return fmt.Errorf("direct ELF backend process_args expects no arguments")
+			}
+			m.hostRuntimeUsed = true
+			return m.emitLabelCall(m.processArgsLabel)
+		case "fs_read_text":
+			if len(e.Args) != 1 {
+				return fmt.Errorf("direct ELF backend fs_read_text expects one argument")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // mov rdi, rax
+			m.hostRuntimeUsed = true
+			return m.emitLabelCall(m.fsReadTextLabel)
+		case "fs_write_bytes":
+			if len(e.Args) != 2 {
+				return fmt.Errorf("direct ELF backend fs_write_bytes expects two arguments")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50) // path pointer
+			if err := m.emitExpr(e.Args[1]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc6, 0x5f) // rsi=bytes; pop rdi=path
+			m.hostRuntimeUsed = true
+			return m.emitLabelCall(m.fsWriteBytesLabel)
 		case "u8", "u16", "u32", "u64":
 			if len(e.Args) != 1 {
 				return fmt.Errorf("direct ELF backend conversion %s expects one argument", e.Name)
@@ -1917,7 +2431,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
-	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed || m.structRuntimeUsed {
+	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed || m.structRuntimeUsed || m.hostRuntimeUsed {
 		if err := m.emitJump(m.endLabel); err != nil {
 			return nil, err
 		}
@@ -1961,6 +2475,23 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			m.loops = mainLoops
 			m.scopeStack = mainScopes
 			m.code = append(m.code, 0xc9, 0xc3)
+		}
+	}
+	if m.hostRuntimeUsed {
+		if err := m.emitStringAllocRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitBytesFromArrayRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitProcessArgsRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitFSReadTextRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitFSWriteBytesRuntime(); err != nil {
+			return nil, err
 		}
 	}
 	if m.stringConcatUsed {
