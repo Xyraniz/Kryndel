@@ -53,6 +53,23 @@ func run(args []string) int {
 			}
 			e.Limits.MaxWallTimeMS = int64(v)
 			i = n
+		case "--passphrase":
+			if i+1 >= len(args) {
+				return usage("--passphrase requires a value")
+			}
+			e.Passphrase = args[i+1]
+			i += 2
+		case "--passphrase-file":
+			if i+1 >= len(args) {
+				return usage("--passphrase-file requires a path")
+			}
+			pass, err := readPassphraseFile(args[i+1])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "kry:", err)
+				return 2
+			}
+			e.Passphrase = pass
+			i += 2
 		default:
 			return usage("unknown option " + args[i])
 		}
@@ -69,6 +86,10 @@ func run(args []string) int {
 	if isProgramPath(cmd) {
 		if len(rest) != 0 {
 			return usage("a direct program invocation does not accept extra arguments")
+		}
+		if err := maybePromptPassphrase(e, cmd); err != nil {
+			fmt.Fprintln(os.Stderr, "kry:", err)
+			return 2
 		}
 		_, d := e.RunPath(cmd)
 		return report(d, jsonMode)
@@ -99,6 +120,10 @@ func run(args []string) int {
 	case "run":
 		if len(rest) != 1 {
 			return usage("run expects one source or artifact path")
+		}
+		if err := maybePromptPassphrase(e, rest[0]); err != nil {
+			fmt.Fprintln(os.Stderr, "kry:", err)
+			return 2
 		}
 		_, d := e.RunPath(rest[0])
 		return report(d, jsonMode)
@@ -191,11 +216,57 @@ func usage(msg string) int {
 	fmt.Fprintln(os.Stderr, "try 'kry --help'")
 	return 2
 }
+// readPassphraseFile reads a passphrase from a file, trimming a single trailing
+// newline so files created by editors or `echo` work as expected.
+func readPassphraseFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("cannot read passphrase file: %v", err)
+	}
+	s := strings.TrimRight(string(data), "\r\n")
+	if s == "" {
+		return "", fmt.Errorf("passphrase file is empty")
+	}
+	return s, nil
+}
+
+// maybePromptPassphrase asks for a passphrase on the terminal when the target is
+// a sealed artifact and none was supplied on the command line. Non-interactive
+// callers (pipes, CI) simply get the "passphrase required" error from the
+// engine instead of hanging on a prompt.
+func maybePromptPassphrase(e *kry.Engine, path string) error {
+	if e.Passphrase != "" || filepath.Ext(path) != ".kexe" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil // let the engine report the read error
+	}
+	if !kry.IsSealedArtifact(data) {
+		return nil
+	}
+	info, err := os.Stdin.Stat()
+	if err != nil || (info.Mode()&os.ModeCharDevice) == 0 {
+		return nil // not a terminal; engine will report the missing passphrase
+	}
+	fmt.Fprint(os.Stderr, "passphrase: ")
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && line == "" {
+		return fmt.Errorf("cannot read passphrase: %v", err)
+	}
+	e.Passphrase = strings.TrimRight(line, "\r\n")
+	return nil
+}
+
 func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	if len(a) < 1 {
 		return usage("build expects FILE")
 	}
 	src, out, format, target := a[0], "", "kexe", "host"
+	encrypt := false
+	obfuscate := false
+	iterations := 0
 	for i := 1; i < len(a); i++ {
 		x := a[i]
 		switch {
@@ -212,14 +283,44 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 		case x == "--target" && i+1 < len(a):
 			target = a[i+1]
 			i++
+		case x == "--encrypt":
+			encrypt = true
+		case x == "--obfuscate":
+			obfuscate = true
+		case strings.HasPrefix(x, "--iterations="):
+			v, err := strconv.Atoi(strings.TrimPrefix(x, "--iterations="))
+			if err != nil || v < 0 {
+				return usage("invalid --iterations value")
+			}
+			iterations = v
+		case x == "--iterations" && i+1 < len(a):
+			v, err := strconv.Atoi(a[i+1])
+			if err != nil || v < 0 {
+				return usage("invalid --iterations value")
+			}
+			iterations = v
+			i++
 		case x == "--release", x == "--debug", x == "--gui":
 		default:
 			return usage("unknown build option " + x)
 		}
 	}
+	if encrypt && format != "kexe" && format != "" {
+		return usage("--encrypt only applies to the kexe container format")
+	}
 	if format == "kexe" || format == "" {
 		if out == "" {
 			out = strings.TrimSuffix(src, ".kry") + ".kexe"
+		}
+		if encrypt {
+			if e.Passphrase == "" {
+				return usage("--encrypt requires --passphrase or --passphrase-file")
+			}
+			if d := e.BuildSealedPath(src, out, e.Passphrase, iterations); d != nil {
+				return report(d, jsonMode)
+			}
+			fmt.Println("built " + out + " (encrypted)")
+			return 0
 		}
 		if d := e.BuildPath(src, out); d != nil {
 			return report(d, jsonMode)
@@ -235,7 +336,7 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	if err != nil {
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "%v", err), jsonMode)
 	}
-	data, err := kry.BuildNative(p, c, t, format)
+	data, err := kry.BuildNativeOpts(p, c, t, format, obfuscate)
 	if err != nil {
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "native build failed: %v", err), jsonMode)
 	}
@@ -619,5 +720,7 @@ func printHelp() {
 	fmt.Println("commands: check, run, build, emit, inspect, fmt, repl, doctor, version")
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
 	fmt.Println("build formats: kexe, exe/pe, elf; targets: windows-x64, windows-arm64, linux-x64")
+	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate")
 	fmt.Println("global options: --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-instructions N, --max-wall-ms N")
+	fmt.Println("sealed artifacts: --passphrase VALUE, --passphrase-file PATH (AES-256-GCM + PBKDF2-SHA256)")
 }

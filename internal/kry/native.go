@@ -47,10 +47,23 @@ func ParseNativeTarget(raw string) (NativeTarget, error) {
 // compiler for Windows targets), producing genuine PE/ELF binaries that execute
 // the full checked language rather than a constant-output stub.
 func BuildNative(p *Program, c *Checker, target NativeTarget, format string) ([]byte, error) {
+	return BuildNativeOpts(p, c, target, format, false)
+}
+
+// BuildNativeOpts is BuildNative with an explicit obfuscation flag. When
+// obfuscate is true, string literals are masked so their plaintext does not
+// appear in the produced executable.
+func BuildNativeOpts(p *Program, c *Checker, target NativeTarget, format string, obfuscate bool) ([]byte, error) {
 	if p == nil || c == nil {
 		return nil, fmt.Errorf("missing checked program")
 	}
-	src, err := GenerateC(p, c)
+	var src string
+	var err error
+	if obfuscate {
+		src, err = GenerateCObfuscated(p, c)
+	} else {
+		src, err = GenerateC(p, c)
+	}
 	if err != nil {
 		return nil, err
 	}

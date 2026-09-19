@@ -9,6 +9,9 @@ type Engine struct {
 	Limits         Limits
 	JSON           bool
 	RestrictedRoot string
+	// Passphrase unlocks sealed (encrypted) artifacts. It is never written to
+	// disk and is only held for the lifetime of the process.
+	Passphrase string
 }
 
 func NewEngine() *Engine { return &Engine{Limits: DefaultLimits()} }
@@ -17,6 +20,13 @@ func (e *Engine) CheckPath(path string) (*Program, *Checker, *Diagnostic) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, nil, Diag(CatIO, nil, 1, 1, "cannot read artifact: %v", err)
+		}
+		if IsSealedArtifact(data) {
+			plain, err := DecryptArtifact(data, e.Passphrase, e.Limits)
+			if err != nil {
+				return nil, nil, Diag(CatArtifact, nil, 1, 1, "%v", err)
+			}
+			data = plain
 		}
 		a, d := DecodeArtifact(data, e.Limits)
 		if d != nil {
@@ -79,6 +89,35 @@ func (e *Engine) BuildPath(path, out string) *Diagnostic {
 	}
 	return nil
 }
+// BuildSealedPath builds a .kexe artifact and wraps it in an authenticated,
+// passphrase-protected container. The plaintext artifact never touches disk.
+func (e *Engine) BuildSealedPath(path, out, passphrase string, iterations int) *Diagnostic {
+        p, _, d := e.CheckPath(path)
+        if d != nil {
+                return d
+        }
+        if filepath.Ext(path) == ".kexe" {
+                return Diag(CatCLI, nil, 1, 1, "build expects a source .kry file")
+        }
+        data, d := BuildArtifact(p, path)
+        if d != nil {
+                return d
+        }
+        sealed, err := EncryptArtifact(data, passphrase, iterations)
+        if err != nil {
+                return Diag(CatArtifact, nil, 1, 1, "cannot encrypt artifact: %v", err)
+        }
+        if e.RestrictedRoot != "" {
+                sb := Sandbox{Root: e.RestrictedRoot, Restricted: true}
+                if err := sb.Write(out, sealed); err != nil {
+                        return Diag(CatIO, nil, 1, 1, "cannot write artifact: %v", err)
+                }
+        } else if err := WriteArtifact(out, sealed); err != nil {
+                return Diag(CatIO, nil, 1, 1, "cannot write artifact: %v", err)
+        }
+        return nil
+}
+
 func (e *Engine) FormatPath(path string, write, check bool) (string, *Diagnostic, int) {
 	src, d := ReadSource(path, e.Limits)
 	if d != nil {
