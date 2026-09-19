@@ -1089,6 +1089,11 @@ fn parse_statement(parser: SourceParser) -> Result[ParsedStatements, String] {
     if token.text == "print" || token.text == "println" { return parse_output(current) }
     if token.text == "if" { return parse_if(current) }
     if token.text == "while" { return parse_while(current) }
+    if token.text == "break" || token.text == "continue" {
+        let separated: Result[SourceParser, String] = finish_statement(advance(current))
+        if is_err(separated) { return err(parser_error(separated)) }
+        return ok(ParsedStatements{ parser: result_unwrap(separated), json: statement_json(token.text, "\"expr\":null") })
+    }
     if token.text == "return" { return parse_return(current) }
     if token.kind == "identifier" && current_token(advance(current)).text == "=" { return parse_assignment(current) }
     if token.kind == "identifier" && current_token(advance(current)).text == "(" { return parse_call_statement(current) }

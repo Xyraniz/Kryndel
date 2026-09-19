@@ -1,0 +1,11 @@
+let mut index: Int = 0
+while index < 5 {
+    index = index + 1
+    if index == 2 {
+        continue
+    }
+    if index == 4 {
+        break
+    }
+    println(index)
+}

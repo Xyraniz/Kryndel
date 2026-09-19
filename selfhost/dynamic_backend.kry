@@ -1055,6 +1055,11 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         let guarded: EmitState = emit_jump(tested, else_label.label, true, u8(132))
         let then_state: Result[EmitState, String] = compile_statements(guarded, field(statement, "then"))
         if is_err(then_state) { return err(compile_error(then_state)) }
+        if result_unwrap(json_array_len(field(statement, "else"))) == 0 {
+            let bound: Result[EmitState, String] = bind_label(result_unwrap(then_state), else_label.label)
+            if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind empty if join")) }
+            return ok(result_unwrap(bound))
+        }
         let join_label: LabelState = new_label(result_unwrap(then_state))
         let jumped: EmitState = emit_jump(join_label.state, join_label.label, false, u8(0))
         let bound_else: Result[EmitState, String] = bind_label(jumped, else_label.label)

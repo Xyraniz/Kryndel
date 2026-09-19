@@ -761,3 +761,61 @@ func TestStage10SourceNestedGenericFrontendParities(t *testing.T) {
 		}
 	}
 }
+
+func TestStage11SourceLoopControlFrontendParities(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "source_loop_control_stage11.kry")
+	compiler := filepath.Join(root, "..", "..", "selfhost", "source_kir_compiler.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerProgram, d := LoadProgram(compiler, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "source-loop-control-stage11")
+	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, DefaultLimits(), Sandbox{}, []string{fixture, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage11 source loop-control compiler failed: %s", d.Message)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := BuildDirectELF(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("stage11 source loop-control compiler differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
+	}
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		runnable := filepath.Join(dir, "source-loop-control-stage11.run")
+		if err := os.WriteFile(runnable, got, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command(runnable).Output()
+		if err != nil {
+			t.Fatalf("self-hosted source loop-control ELF failed to execute: %v", err)
+		}
+		if string(output) != "1\n3\n" {
+			t.Fatalf("unexpected self-hosted source loop-control output %q", output)
+		}
+	}
+}

@@ -1478,9 +1478,13 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 				if err := m.emitStatements(s.Else); err != nil {
 					return err
 				}
-			}
-			if err := m.bind(joinLabel); err != nil {
-				return err
+				if err := m.bind(joinLabel); err != nil {
+					return err
+				}
+			} else {
+				if err := m.bind(elseLabel); err != nil {
+					return err
+				}
 			}
 		case StWhile:
 			conditionLabel := m.newLabel()
