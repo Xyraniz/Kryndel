@@ -213,7 +213,22 @@ func WriteArtifact(path string, data []byte) error {
 		return e
 	}
 	ok = true
+	// Native executables must be runnable; the artifact writer is also used
+	// for .kexe containers, so only widen permissions when the caller asked
+	// for an executable by extension.
+	if isExecutablePath(path) {
+		_ = os.Chmod(path, 0o755)
+	}
 	return nil
+}
+
+// isExecutablePath reports whether a written file should be marked executable.
+func isExecutablePath(path string) bool {
+	switch filepath.Ext(path) {
+	case ".exe", ".elf", ".out", ".bin":
+		return true
+	}
+	return false
 }
 func ProgramFromArtifact(a *Artifact, lim Limits) (*Program, *Diagnostic) {
 	if len(a.Entries) == 0 {

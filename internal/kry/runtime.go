@@ -579,6 +579,13 @@ func (r *Runtime) run() (result *Diagnostic) {
 			return Diag(CatRuntime, s.Tok.Source, s.Tok.Line, s.Tok.Column, "control flow escaped top level")
 		}
 	}
+	// Top-level defer blocks must run when the program finishes, mirroring
+	// the block-scoped defer semantics used inside functions.
+	for i := len(r.Global.Defers) - 1; i >= 0; i-- {
+		if x := r.execBlock(newRunScope(r.Global), r.Global.Defers[i]); x.Diag != nil {
+			return x.Diag
+		}
+	}
 	if len(r.Prog.Statements) == 0 {
 		if f := r.Funcs["main"]; f != nil {
 			v, d := r.evalCall(r.Global, &Expr{Kind: ExCall, Name: "main", Tok: f.Tok})
