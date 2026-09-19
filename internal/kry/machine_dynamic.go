@@ -6,22 +6,24 @@ import (
 )
 
 // directMachine is the second direct-ELF slice. It lowers checked Int/Bool
-// state, assignments, comparisons, if/while control flow, and literal output
-// to x86-64 instructions. It intentionally has no runtime or C dependency.
+// state, assignments, comparisons, if/while control flow, and static or
+// dynamic integer output to x86-64 instructions. It intentionally has no
+// runtime or C dependency.
 // Unsupported values fail during compilation instead of silently changing
 // Kryndel semantics.
 type directMachine struct {
-	code       []byte
-	data       []byte
-	dataByText map[string]int
-	dataRefs   []machineDataRef
-	labels     []machineLabel
-	slots      map[string]machineSlot
-	nextSlot   int32
-	loops      []machineLoop
-	endLabel   int
-	trapLabel  int
-	staticEnv  map[string]Value
+	code         []byte
+	data         []byte
+	dataByText   map[string]int
+	dataRefs     []machineDataRef
+	labels       []machineLabel
+	slots        map[string]machineSlot
+	nextSlot     int32
+	loops        []machineLoop
+	endLabel     int
+	trapLabel    int
+	staticEnv    map[string]Value
+	bufferOffset int32
 }
 
 type machineSlot struct {
@@ -163,6 +165,79 @@ func (m *directMachine) emitUIntMask(bits uint8) {
 	var mask [4]byte
 	binary.LittleEndian.PutUint32(mask[:], uint32((uint64(1)<<bits)-1))
 	m.code = append(m.code, mask[:]...)
+}
+
+func (m *directMachine) emitInteger(unsigned bool) error {
+	// The buffer grows down from rbp-(nextSlot+1), leaving 63 bytes for the
+	// longest signed decimal Int plus its sign. R8 is the moving end pointer;
+	// R9 is the divisor and R10b records a negative signed input.
+	m.code = append(m.code, 0x4c, 0x8d, 0x85)
+	var buffer [4]byte
+	binary.LittleEndian.PutUint32(buffer[:], uint32(-m.bufferOffset))
+	m.code = append(m.code, buffer[:]...)
+	m.code = append(m.code, 0x49, 0xb9)
+	var ten [8]byte
+	binary.LittleEndian.PutUint64(ten[:], 10)
+	m.code = append(m.code, ten[:]...)
+	zero := m.newLabel()
+	digits := m.newLabel()
+	addSign := m.newLabel()
+	ready := m.newLabel()
+	m.code = append(m.code, 0x45, 0x31, 0xd2)                 // xor r10d, r10d
+	m.code = append(m.code, 0x48, 0x85, 0xc0)                 // test rax, rax
+	if err := m.emitConditionalJump(0x84, zero); err != nil { // jz zero
+		return err
+	}
+	if !unsigned {
+		if err := m.emitConditionalJump(0x89, digits); err != nil { // jns digits
+			return err
+		}
+		m.code = append(m.code, 0x41, 0xb2, 0x01) // mov r10b, 1
+		m.code = append(m.code, 0x48, 0xf7, 0xd8) // neg rax
+		m.emitTrapOnOverflow()
+	}
+	if err := m.bind(digits); err != nil {
+		return err
+	}
+	loop := m.newLabel()
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x31, 0xd2, 0x49, 0xf7, 0xf1) // xor edx, edx; div r9
+	m.code = append(m.code, 0x80, 0xc2, 0x30, 0x49, 0xff, 0xc8, 0x41, 0x88, 0x10)
+	m.code = append(m.code, 0x48, 0x85, 0xc0)                 // test rax, rax
+	if err := m.emitConditionalJump(0x85, loop); err != nil { // jnz loop
+		return err
+	}
+	if err := m.emitJump(addSign); err != nil {
+		return err
+	}
+	if err := m.bind(zero); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc8, 0x41, 0xc6, 0x00, 0x30)
+	if err := m.emitJump(addSign); err != nil {
+		return err
+	}
+	if err := m.bind(addSign); err != nil {
+		return err
+	}
+	if !unsigned {
+		m.code = append(m.code, 0x45, 0x84, 0xd2) // test r10b, r10b
+		if err := m.emitConditionalJump(0x84, ready); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x49, 0xff, 0xc8, 0x41, 0xc6, 0x00, 0x2d)
+	}
+	if err := m.bind(ready); err != nil {
+		return err
+	}
+	// write(1, r8, bufferEnd-r8)
+	m.code = append(m.code, 0xb8, 0x01, 0, 0, 0, 0xbf, 0x01, 0, 0, 0)
+	m.code = append(m.code, 0x4c, 0x89, 0xc6, 0x48, 0x8d, 0x95)
+	m.code = append(m.code, buffer[:]...)
+	m.code = append(m.code, 0x48, 0x29, 0xf2, 0x0f, 0x05)
+	return nil
 }
 
 func machineBits(t *Type) uint8 {
@@ -438,7 +513,19 @@ func (m *directMachine) emitStaticOutput(e *Expr, name string) error {
 	}
 	v, ok := directStaticValue(e.Args[0], m.staticEnv)
 	if !ok || (v.Kind != VString && v.Kind != VInt && v.Kind != VBool && v.Kind != VUInt) {
-		return fmt.Errorf("direct ELF backend supports only statically displayable print values")
+		if e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyInt && e.Args[0].Type.Kind != TyUInt) {
+			return fmt.Errorf("direct ELF backend supports only statically displayable print values")
+		}
+		if err := m.emitExpr(e.Args[0]); err != nil {
+			return err
+		}
+		if err := m.emitInteger(e.Args[0].Type.Kind == TyUInt); err != nil {
+			return err
+		}
+		if name == "println" {
+			m.emitWrite("\n")
+		}
+		return nil
 	}
 	text := display(v)
 	if name == "println" {
@@ -575,6 +662,8 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	// push rbp; mov rbp, rsp; reserve aligned local storage.
 	m.code = append(m.code, 0x55, 0x48, 0x89, 0xe5)
 	frame := (int(m.nextSlot) + 15) &^ 15
+	m.bufferOffset = m.nextSlot + 1
+	frame = (int(m.nextSlot) + 64 + 15) &^ 15
 	if frame > 0 {
 		m.code = append(m.code, 0x48, 0x81, 0xec)
 		var size [4]byte

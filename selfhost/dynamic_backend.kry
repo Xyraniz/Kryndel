@@ -20,6 +20,7 @@ struct DataPatch {
 struct Assembler {
     code: Array[UInt8],
     data: Array[UInt8],
+    data_by_text: Map[String, Int],
     labels: Array[Int],
     jumps: Array[JumpPatch],
     data_patches: Array[DataPatch],
@@ -34,6 +35,7 @@ struct CompileEnv {
     continues: Array[Int],
     end_label: Int,
     trap_label: Int,
+    buffer_offset: Int,
 }
 
 struct EmitState {
@@ -104,42 +106,49 @@ fn dyn_u64_bytes(value: UInt64) -> Array[UInt8] {
 
 fn state_with_code(state: EmitState, code: Array[UInt8]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: code, data: state.assembler.data, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_data(state: EmitState, data: Array[UInt8]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: data, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: state.assembler.data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        env: state.env,
+    }
+}
+
+fn state_with_data_index(state: EmitState, data: Array[UInt8], data_by_text: Map[String, Int]) -> EmitState {
+    return EmitState{
+        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_labels(state: EmitState, labels: Array[Int]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, labels: labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, labels: labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_jumps(state: EmitState, jumps: Array[JumpPatch]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, labels: state.assembler.labels, jumps: jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, labels: state.assembler.labels, jumps: jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_data_patches(state: EmitState, patches: Array[DataPatch]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_frame_patch(state: EmitState, position: Int) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: position },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: position },
         env: state.env,
     }
 }
@@ -206,8 +215,19 @@ fn emit_store_slot(state: EmitState, slot: Int) -> EmitState {
 
 fn emit_write(state: EmitState, value: String) -> EmitState {
     let bytes: Array[UInt8] = u8_array(string_to_bytes(value))
-    let data_offset: Int = len(state.assembler.data)
-    let with_data: EmitState = state_with_data(state, array_concat(state.assembler.data, bytes))
+    let known_offset: Option[Int] = map_get(state.assembler.data_by_text, value)
+    let mut data_offset: Int = 0
+    let mut with_data: EmitState = state
+    if is_some(known_offset) {
+        data_offset = unwrap_or(known_offset, 0)
+    } else {
+        data_offset = len(state.assembler.data)
+        with_data = state_with_data_index(
+            state,
+            array_concat(state.assembler.data, bytes),
+            map_insert(state.assembler.data_by_text, value, data_offset)
+        )
+    }
     let start: Int = len(with_data.assembler.code)
     let code: Array[UInt8] = array_concat(
         [
@@ -221,6 +241,49 @@ fn emit_write(state: EmitState, value: String) -> EmitState {
     let with_code: EmitState = append_code(with_data, code)
     let patch: DataPatch = DataPatch{ displacement: start + 13, instruction_end: start + 17, data_offset: data_offset }
     return state_with_data_patches(with_code, array_push(with_code.assembler.data_patches, patch))
+}
+
+fn emit_integer(state: EmitState, unsigned: Bool) -> Result[EmitState, String] {
+    let mut current: EmitState = append_code(state, array_concat([u8(76), u8(141), u8(133)], i32_bytes(0 - state.env.buffer_offset)))
+    current = append_code(current, array_concat([u8(73), u8(185)], dyn_u64_bytes(u64(10))))
+    let zero_label: LabelState = new_label(current)
+    let digits_label: LabelState = new_label(zero_label.state)
+    let sign_label: LabelState = new_label(digits_label.state)
+    let ready_label: LabelState = new_label(sign_label.state)
+    current = append_code(ready_label.state, [u8(69), u8(49), u8(210), u8(72), u8(133), u8(192)])
+    current = emit_jump(current, zero_label.label, true, u8(132))
+    if !unsigned {
+        current = emit_jump(current, digits_label.label, true, u8(137))
+        current = append_code(current, [u8(65), u8(178), u8(1), u8(72), u8(247), u8(216)])
+        current = emit_jump(current, current.env.trap_label, true, u8(128))
+    }
+    let bound_digits: Result[EmitState, String] = bind_label(current, digits_label.label)
+    if is_err(bound_digits) { return err(unwrap_or(result_error(bound_digits), "dynamic backend: cannot bind integer digits")) }
+    current = result_unwrap(bound_digits)
+    let loop_label: LabelState = new_label(current)
+    let bound_loop: Result[EmitState, String] = bind_label(loop_label.state, loop_label.label)
+    if is_err(bound_loop) { return err(unwrap_or(result_error(bound_loop), "dynamic backend: cannot bind integer loop")) }
+    current = append_code(result_unwrap(bound_loop), [u8(72), u8(49), u8(210), u8(73), u8(247), u8(241), u8(128), u8(194), u8(48), u8(73), u8(255), u8(200), u8(65), u8(136), u8(16), u8(72), u8(133), u8(192)])
+    current = emit_jump(current, loop_label.label, true, u8(133))
+    current = emit_jump(current, sign_label.label, false, u8(0))
+    let bound_zero: Result[EmitState, String] = bind_label(current, zero_label.label)
+    if is_err(bound_zero) { return err(unwrap_or(result_error(bound_zero), "dynamic backend: cannot bind integer zero")) }
+    current = append_code(result_unwrap(bound_zero), [u8(73), u8(255), u8(200), u8(65), u8(198), u8(0), u8(48)])
+    current = emit_jump(current, sign_label.label, false, u8(0))
+    let bound_sign: Result[EmitState, String] = bind_label(current, sign_label.label)
+    if is_err(bound_sign) { return err(unwrap_or(result_error(bound_sign), "dynamic backend: cannot bind integer sign")) }
+    current = result_unwrap(bound_sign)
+    if !unsigned {
+        current = append_code(current, [u8(69), u8(132), u8(210)])
+        current = emit_jump(current, ready_label.label, true, u8(132))
+        current = append_code(current, [u8(73), u8(255), u8(200), u8(65), u8(198), u8(0), u8(45)])
+    }
+    let bound_ready: Result[EmitState, String] = bind_label(current, ready_label.label)
+    if is_err(bound_ready) { return err(unwrap_or(result_error(bound_ready), "dynamic backend: cannot bind integer output")) }
+    current = append_code(result_unwrap(bound_ready), [u8(184), u8(1), u8(0), u8(0), u8(0), u8(191), u8(1), u8(0), u8(0), u8(0), u8(76), u8(137), u8(198), u8(72), u8(141), u8(149)])
+    current = append_code(current, i32_bytes(0 - state.env.buffer_offset))
+    current = append_code(current, [u8(72), u8(41), u8(242), u8(15), u8(5)])
+    return ok(current)
 }
 
 fn expr_type(expression: Json) -> String {
@@ -255,6 +318,15 @@ fn expression_error(value: Result[EmitState, String]) -> String {
 }
 
 fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, String] {
+    let constant: Json = field(expression, "const")
+    if json_kind(constant) == "object" {
+        let constant_kind: String = text(field(constant, "kind"))
+        if constant_kind == "int" { return ok(emit_int(state, result_unwrap(json_int(field(constant, "int"))))) }
+        if constant_kind == "bool" {
+            if result_unwrap(json_bool(field(constant, "bool"))) { return ok(emit_int(state, 1)) }
+            return ok(emit_int(state, 0))
+        }
+    }
     let kind: String = text(field(expression, "kind"))
     if kind == "int" {
         return ok(emit_int(state, result_unwrap(json_int(field(expression, "int")))))
@@ -332,7 +404,7 @@ fn compile_error(value: Result[EmitState, String]) -> String {
 fn allocate_slot(state: EmitState, name: String) -> Result[EmitState, String] {
     if map_contains_key(state.env.slots, name) { return err("dynamic backend: shadowed slot '" + name + "'") }
     let offset: Int = state.env.next_slot + 8
-    let env: CompileEnv = CompileEnv{ slots: map_insert(state.env.slots, name, offset), static_values: state.env.static_values, next_slot: offset, breaks: state.env.breaks, continues: state.env.continues, end_label: state.env.end_label, trap_label: state.env.trap_label }
+    let env: CompileEnv = CompileEnv{ slots: map_insert(state.env.slots, name, offset), static_values: state.env.static_values, next_slot: offset, breaks: state.env.breaks, continues: state.env.continues, end_label: state.env.end_label, trap_label: state.env.trap_label, buffer_offset: state.env.buffer_offset }
     return ok(state_with_env(state, env))
 }
 
@@ -357,7 +429,7 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         if !mutable {
             let display_value: Result[String, String] = eval_display(init, stored.env.static_values)
             if is_ok(display_value) {
-                let env: CompileEnv = CompileEnv{ slots: stored.env.slots, static_values: map_insert(stored.env.static_values, name, result_unwrap(display_value)), next_slot: stored.env.next_slot, breaks: stored.env.breaks, continues: stored.env.continues, end_label: stored.env.end_label, trap_label: stored.env.trap_label }
+                let env: CompileEnv = CompileEnv{ slots: stored.env.slots, static_values: map_insert(stored.env.static_values, name, result_unwrap(display_value)), next_slot: stored.env.next_slot, breaks: stored.env.breaks, continues: stored.env.continues, end_label: stored.env.end_label, trap_label: stored.env.trap_label, buffer_offset: stored.env.buffer_offset }
                 return ok(state_with_env(stored, env))
             }
         }
@@ -371,7 +443,7 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         let value: Result[EmitState, String] = emit_expression(state, field(statement, "value"))
         if is_err(value) { return err(expression_error(value)) }
         let stored: EmitState = emit_store_slot(result_unwrap(value), unwrap_or(slot, -1))
-        return ok(state_with_env(stored, CompileEnv{ slots: stored.env.slots, static_values: map_remove(stored.env.static_values, name), next_slot: stored.env.next_slot, breaks: stored.env.breaks, continues: stored.env.continues, end_label: stored.env.end_label, trap_label: stored.env.trap_label }))
+        return ok(state_with_env(stored, CompileEnv{ slots: stored.env.slots, static_values: map_remove(stored.env.static_values, name), next_slot: stored.env.next_slot, breaks: stored.env.breaks, continues: stored.env.continues, end_label: stored.env.end_label, trap_label: stored.env.trap_label, buffer_offset: stored.env.buffer_offset }))
     }
     if kind == "expr" {
         let expression: Json = field(statement, "expr")
@@ -379,10 +451,19 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         if target != "builtin:print" && target != "builtin:println" { return err("dynamic backend: only print and println are supported") }
         let argument: Json = result_unwrap(json_array_get(field(expression, "args"), 0))
         let display_value: Result[String, String] = eval_display(argument, state.env.static_values)
-        if is_err(display_value) { return err(unwrap_or(result_error(display_value), "dynamic backend: print value is not static")) }
-        let mut output: String = result_unwrap(display_value)
-        if target == "builtin:println" { output = output + "\n" }
-        return ok(emit_write(state, output))
+        if is_ok(display_value) {
+            let mut output: String = result_unwrap(display_value)
+            if target == "builtin:println" { output = output + "\n" }
+            return ok(emit_write(state, output))
+        }
+        let type_name: String = expr_type(argument)
+        if type_name != "Int" && !starts_with(type_name, "UInt") { return err(unwrap_or(result_error(display_value), "dynamic backend: print value is not static")) }
+        let generated: Result[EmitState, String] = emit_expression(state, argument)
+        if is_err(generated) { return err(expression_error(generated)) }
+        let output_state: Result[EmitState, String] = emit_integer(result_unwrap(generated), starts_with(type_name, "UInt"))
+        if is_err(output_state) { return err(unwrap_or(result_error(output_state), "dynamic backend: integer output failed")) }
+        if target == "builtin:println" { return ok(emit_write(result_unwrap(output_state), "\n")) }
+        return ok(result_unwrap(output_state))
     }
     if kind == "if" {
         let else_label: LabelState = new_label(state)
@@ -411,11 +492,11 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         if is_err(condition) { return err(expression_error(condition)) }
         let tested: EmitState = append_code(result_unwrap(condition), [u8(72), u8(133), u8(192)])
         let guarded: EmitState = emit_jump(tested, end_label.label, true, u8(132))
-        let env: CompileEnv = CompileEnv{ slots: guarded.env.slots, static_values: guarded.env.static_values, next_slot: guarded.env.next_slot, breaks: array_push(guarded.env.breaks, end_label.label), continues: array_push(guarded.env.continues, condition_label.label), end_label: guarded.env.end_label, trap_label: guarded.env.trap_label }
+        let env: CompileEnv = CompileEnv{ slots: guarded.env.slots, static_values: guarded.env.static_values, next_slot: guarded.env.next_slot, breaks: array_push(guarded.env.breaks, end_label.label), continues: array_push(guarded.env.continues, condition_label.label), end_label: guarded.env.end_label, trap_label: guarded.env.trap_label, buffer_offset: guarded.env.buffer_offset }
         let body: Result[EmitState, String] = compile_statements(state_with_env(guarded, env), field(statement, "body"))
         if is_err(body) { return err(compile_error(body)) }
         let body_state: EmitState = result_unwrap(body)
-        let restored: EmitState = state_with_env(body_state, CompileEnv{ slots: body_state.env.slots, static_values: body_state.env.static_values, next_slot: body_state.env.next_slot, breaks: array_slice(body_state.env.breaks, 0, len(body_state.env.breaks) - 1), continues: array_slice(body_state.env.continues, 0, len(body_state.env.continues) - 1), end_label: body_state.env.end_label, trap_label: body_state.env.trap_label })
+        let restored: EmitState = state_with_env(body_state, CompileEnv{ slots: body_state.env.slots, static_values: body_state.env.static_values, next_slot: body_state.env.next_slot, breaks: array_slice(body_state.env.breaks, 0, len(body_state.env.breaks) - 1), continues: array_slice(body_state.env.continues, 0, len(body_state.env.continues) - 1), end_label: body_state.env.end_label, trap_label: body_state.env.trap_label, buffer_offset: body_state.env.buffer_offset })
         let looped: EmitState = emit_jump(restored, condition_label.label, false, u8(0))
         let bound_end: Result[EmitState, String] = bind_label(looped, end_label.label)
         if is_err(bound_end) { return err(unwrap_or(result_error(bound_end), "dynamic backend: cannot bind loop end")) }
@@ -524,9 +605,31 @@ fn emit_dynamic_elf(code: Array[UInt8], data: Array[UInt8]) -> Bytes {
 }
 
 fn new_dynamic_state() -> EmitState {
-    let assembler: Assembler = Assembler{ code: [], data: [], labels: [], jumps: [], data_patches: [], frame_patch: -1 }
-    let env: CompileEnv = CompileEnv{ slots: {}, static_values: {}, next_slot: 0, breaks: [], continues: [], end_label: -1, trap_label: -1 }
+    let assembler: Assembler = Assembler{ code: [], data: [], data_by_text: {}, labels: [], jumps: [], data_patches: [], frame_patch: -1 }
+    let env: CompileEnv = CompileEnv{ slots: {}, static_values: {}, next_slot: 0, breaks: [], continues: [], end_label: -1, trap_label: -1, buffer_offset: 1 }
     return EmitState{ assembler: assembler, env: env }
+}
+
+fn count_slots(statements: Json) -> Int {
+    let count: Int = result_unwrap(json_array_len(statements))
+    let mut index: Int = 0
+    let mut total: Int = 0
+    while index < count {
+        let statement: Json = result_unwrap(json_array_get(statements, index))
+        let kind: String = text(field(statement, "kind"))
+        if kind == "let" || kind == "const" {
+            total = total + 1
+        }
+        if kind == "if" {
+            total = total + count_slots(field(statement, "then"))
+            total = total + count_slots(field(statement, "else"))
+        }
+        if kind == "while" {
+            total = total + count_slots(field(statement, "body"))
+        }
+        index = index + 1
+    }
+    return total
 }
 
 fn compile_dynamic(document: Json) -> Result[Bytes, String] {
@@ -535,7 +638,8 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     let mut state: EmitState = emit_prologue(new_dynamic_state())
     let end_label: LabelState = new_label(state)
     let trap_label: LabelState = new_label(end_label.state)
-    state = state_with_env(trap_label.state, CompileEnv{ slots: {}, static_values: {}, next_slot: 0, breaks: [], continues: [], end_label: end_label.label, trap_label: trap_label.label })
+    let slot_count: Int = count_slots(field(document, "statements"))
+    state = state_with_env(trap_label.state, CompileEnv{ slots: {}, static_values: {}, next_slot: 0, breaks: [], continues: [], end_label: end_label.label, trap_label: trap_label.label, buffer_offset: slot_count * 8 + 1 })
     let compiled: Result[EmitState, String] = compile_statements(state, field(document, "statements"))
     if is_err(compiled) { return err(compile_error(compiled)) }
     let ended: Result[EmitState, String] = bind_label(result_unwrap(compiled), end_label.label)
@@ -544,7 +648,7 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     let trapped: Result[EmitState, String] = bind_label(normal, trap_label.label)
     if is_err(trapped) { return err(unwrap_or(result_error(trapped), "dynamic backend: cannot bind trap")) }
     let failed: EmitState = emit_exit(result_unwrap(trapped), u8(1))
-    let frame: Result[EmitState, String] = patch_code(failed, failed.assembler.frame_patch, i32_bytes(align_frame(failed.env.next_slot)))
+    let frame: Result[EmitState, String] = patch_code(failed, failed.assembler.frame_patch, i32_bytes(align_frame(failed.env.buffer_offset + 63)))
     if is_err(frame) { return err(unwrap_or(result_error(frame), "dynamic backend: frame patch failed")) }
     let jumps: Result[EmitState, String] = finalize_jumps(result_unwrap(frame))
     if is_err(jumps) { return err(unwrap_or(result_error(jumps), "dynamic backend: jump finalization failed")) }

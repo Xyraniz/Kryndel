@@ -52,6 +52,7 @@ let mut index: Int = 0
 let message: String = "loop"
 while index < 3 {
     println(message)
+    println(index)
     index = index + 1
 }
 if index == 3 {
@@ -79,7 +80,7 @@ println("after")
 	if err != nil {
 		t.Fatalf("dynamic direct ELF failed to execute: %v", err)
 	}
-	if string(out) != "loop\nloop\nloop\ndone\nafter\n" {
+	if string(out) != "loop\n0\nloop\n1\nloop\n2\ndone\nafter\n" {
 		t.Fatalf("unexpected dynamic direct ELF output %q", out)
 	}
 }
