@@ -58,3 +58,5 @@ Stage 19 adds native direct-ELF lowering for `assert`, `assert_eq`, `contains`, 
 Stage 20 adds the direct-ELF `string_chars` runtime. It counts UTF-8 leading-byte sequences, allocates the result array through the existing checked `mmap` allocator, and creates each code-point string through the existing string allocator. The regression exercises ASCII plus multibyte `é` and `🙂` values and verifies their exact output on Linux amd64.
 
 Stage 21 adds immutable direct-ELF maps backed by alternating key/value words. `map_get` and `map_contains_key` perform typed scalar or UTF-8 string lookup, while `map_insert` copies the map and replaces or appends without mutation. The regression covers replacement, missing-key fallback, and assertion paths.
+
+Stage 22 adds checked direct-ELF `substring`. It interprets `start` and `length` as Unicode code-point indices, copies the selected UTF-8 byte range through the native string allocator, and returns an explicit `Result` error for invalid ranges.

@@ -50,8 +50,10 @@ type directMachine struct {
 	stringEqualLabel    int
 	mapFindLabel        int
 	mapInsertLabel      int
+	substringLabel      int
 	mapRuntimeUsed      bool
 	stringCharsUsed     bool
+	substringUsed       bool
 	bytesFromArrayLabel int
 	processArgsLabel    int
 	fsReadTextLabel     int
@@ -109,6 +111,7 @@ func newDirectMachine() *directMachine {
 	m.stringEqualLabel = m.newLabel()
 	m.mapFindLabel = m.newLabel()
 	m.mapInsertLabel = m.newLabel()
+	m.substringLabel = m.newLabel()
 	m.bytesFromArrayLabel = m.newLabel()
 	m.processArgsLabel = m.newLabel()
 	m.fsReadTextLabel = m.newLabel()
@@ -1194,6 +1197,227 @@ func (m *directMachine) emitMapInsertRuntime() error {
 		return err
 	}
 	m.code = append(m.code, 0x48, 0x89, 0xe8, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitSubstringRuntime() error {
+	if err := m.bind(m.substringLabel); err != nil {
+		return err
+	}
+	// rdi=String, rsi=start code-point index, rdx=code-point length. Return
+	// Result[String,String] as the same boxed {tag,payload} value used by the
+	// interpreter and C runtime: tag 0 is ok and tag 1 is err.
+	negativeError := m.newLabel()
+	startError := m.newLabel()
+	endError := m.newLabel()
+	startFound := m.newLabel()
+	endFound := m.newLabel()
+	done := m.newLabel()
+	startLoop := m.newLabel()
+	startOne := m.newLabel()
+	startTwo := m.newLabel()
+	startThree := m.newLabel()
+	startAdvance := m.newLabel()
+	endLoop := m.newLabel()
+	endOne := m.newLabel()
+	endTwo := m.newLabel()
+	endThree := m.newLabel()
+	endAdvance := m.newLabel()
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=source String
+		0x49, 0x89, 0xf5, // r13=start code-point index
+		0x49, 0x89, 0xd6, // r14=remaining code-point length
+		0x4d, 0x8b, 0x3c, 0x24, // r15=source byte length
+		0x48, 0x31, 0xdb, // rbx=byte index
+		0x48, 0x31, 0xed, // rbp=code-point index
+		0x4d, 0x85, 0xed, // validate start >= 0
+	)
+	if err := m.emitConditionalJump(0x88, negativeError); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x85, 0xf6)
+	if err := m.emitConditionalJump(0x88, negativeError); err != nil {
+		return err
+	}
+	if err := m.bind(startLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x39, 0xed)
+	if err := m.emitConditionalJump(0x84, startFound); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x39, 0xfb)
+	if err := m.emitConditionalJump(0x83, startError); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x0f, 0xb6, 0x44, 0x1c, 0x08, 0x3c, 0x80)
+	if err := m.emitConditionalJump(0x82, startOne); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0xe0)
+	if err := m.emitConditionalJump(0x82, startTwo); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0xf0)
+	if err := m.emitConditionalJump(0x82, startThree); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc1, 0x04, 0x00, 0x00, 0x00)
+	if err := m.emitJump(startAdvance); err != nil {
+		return err
+	}
+	if err := m.bind(startThree); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc1, 0x03, 0x00, 0x00, 0x00)
+	if err := m.emitJump(startAdvance); err != nil {
+		return err
+	}
+	if err := m.bind(startTwo); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc1, 0x02, 0x00, 0x00, 0x00)
+	if err := m.emitJump(startAdvance); err != nil {
+		return err
+	}
+	if err := m.bind(startOne); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc1, 0x01, 0x00, 0x00, 0x00)
+	if err := m.bind(startAdvance); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xd8, 0x48, 0x01, 0xc8)
+	if err := m.emitConditionalJump(0x80, startError); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x39, 0xf8)
+	if err := m.emitConditionalJump(0x87, startError); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc3, 0x48, 0xff, 0xc5)
+	if err := m.emitJump(startLoop); err != nil {
+		return err
+	}
+	if err := m.bind(startFound); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0xd8, 0x4d, 0x85, 0xf6)
+	if err := m.emitConditionalJump(0x84, endFound); err != nil {
+		return err
+	}
+	if err := m.bind(endLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x85, 0xf6)
+	if err := m.emitConditionalJump(0x84, endFound); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x39, 0xfb)
+	if err := m.emitConditionalJump(0x83, endError); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x0f, 0xb6, 0x44, 0x1c, 0x08, 0x3c, 0x80)
+	if err := m.emitConditionalJump(0x82, endOne); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0xe0)
+	if err := m.emitConditionalJump(0x82, endTwo); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0xf0)
+	if err := m.emitConditionalJump(0x82, endThree); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc1, 0x04, 0x00, 0x00, 0x00)
+	if err := m.emitJump(endAdvance); err != nil {
+		return err
+	}
+	if err := m.bind(endThree); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc1, 0x03, 0x00, 0x00, 0x00)
+	if err := m.emitJump(endAdvance); err != nil {
+		return err
+	}
+	if err := m.bind(endTwo); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc1, 0x02, 0x00, 0x00, 0x00)
+	if err := m.emitJump(endAdvance); err != nil {
+		return err
+	}
+	if err := m.bind(endOne); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc1, 0x01, 0x00, 0x00, 0x00)
+	if err := m.bind(endAdvance); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xd8, 0x48, 0x01, 0xc8)
+	if err := m.emitConditionalJump(0x80, endError); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x39, 0xf8)
+	if err := m.emitConditionalJump(0x87, endError); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc3, 0x49, 0xff, 0xce)
+	if err := m.emitJump(endLoop); err != nil {
+		return err
+	}
+	if err := m.bind(endFound); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x89, 0xd9, // r9=end byte index
+		0x4c, 0x89, 0xe7,
+		0x48, 0x83, 0xc7, 0x08,
+		0x4c, 0x01, 0xc7,
+		0x4c, 0x89, 0xce,
+		0x4c, 0x29, 0xc6,
+	)
+	if err := m.emitLabelCall(m.stringAllocLabel); err != nil {
+		return err
+	}
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(negativeError); err != nil {
+		return err
+	}
+	m.emitStringAddress("substring range is out of bounds")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(startError); err != nil {
+		return err
+	}
+	m.emitStringAddress("substring range is out of bounds")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(endError); err != nil {
+		return err
+	}
+	m.emitStringAddress("substring range is out of bounds")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
 	return nil
 }
 
@@ -2317,6 +2541,25 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			m.arrayRuntimeUsed = true
 			m.stringCharsUsed = true
 			return m.emitLabelCall(m.stringCharsLabel)
+		case "substring":
+			if len(e.Args) != 3 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyString || e.Args[1].Type == nil || e.Args[1].Type.Kind != TyInt || e.Args[2].Type == nil || e.Args[2].Type.Kind != TyInt {
+				return fmt.Errorf("direct ELF substring expects String, Int, and Int arguments")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if err := m.emitExpr(e.Args[1]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if err := m.emitExpr(e.Args[2]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc2, 0x5e, 0x5f) // rdx=length, rsi=start, rdi=String
+			m.hostRuntimeUsed = true
+			m.substringUsed = true
+			return m.emitLabelCall(m.substringLabel)
 		case "len":
 			if len(e.Args) != 1 || e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyArray && e.Args[0].Type.Kind != TyBytes) {
 				return fmt.Errorf("direct ELF backend supports len(Array[T]) and len(Bytes)")
@@ -3191,6 +3434,11 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 		}
 		if m.stringCharsUsed {
 			if err := m.emitStringCharsRuntime(); err != nil {
+				return nil, err
+			}
+		}
+		if m.substringUsed {
+			if err := m.emitSubstringRuntime(); err != nil {
 				return nil, err
 			}
 		}

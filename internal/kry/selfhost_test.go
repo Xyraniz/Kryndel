@@ -1390,3 +1390,38 @@ func TestStage21DirectMapRuntime(t *testing.T) {
 		t.Fatalf("unexpected stage21 map output %q", output)
 	}
 }
+
+func TestStage22DirectSubstring(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_substring_stage22.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-substring-stage22")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage22 direct substring ELF failed: %v", err)
+	}
+	if string(output) != "true\né🙂\n" {
+		t.Fatalf("unexpected stage22 substring output %q", output)
+	}
+}

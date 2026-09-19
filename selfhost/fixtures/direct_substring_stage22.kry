@@ -1,0 +1,12 @@
+fn main() -> Nil {
+    let selected: Result[String, String] = substring("aé🙂z", 1, 2)
+    println(is_ok(selected))
+    if is_ok(selected) {
+        println(result_unwrap(selected))
+    } else {
+        println(unwrap_or(result_error(selected), "noerror"))
+    }
+    let invalid: Result[String, String] = substring("abc", 4, 1)
+    assert_eq(is_err(invalid), true)
+    return nil
+}
