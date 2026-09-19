@@ -1,0 +1,16 @@
+fn field_status(value: String, key: String) -> String {
+    let parsed: Json = result_unwrap(json_parse(value))
+    let result: Result[Json, String] = json_object_get(parsed, key)
+    if is_ok(result) { return "ok" }
+    return unwrap_or(result_error(result), "unknown error")
+}
+
+fn main() -> Nil {
+    let parsed: Json = result_unwrap(json_parse("{}"))
+    println(json_kind(parsed))
+    println(field_status("{}", "missing"))
+    println(field_status("{\"a\":[1],\"b\":{}}", "a"))
+    println(field_status("{\"a\":[1],\"b\":{}}", "b"))
+    println(field_status("{\"a\":1}", "missing"))
+    return nil
+}

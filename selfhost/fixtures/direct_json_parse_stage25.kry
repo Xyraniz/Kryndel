@@ -1,0 +1,37 @@
+fn valid(value: String) -> Bool {
+    return is_ok(json_parse(value))
+}
+
+fn kind(value: String) -> String {
+    return json_kind(result_unwrap(json_parse(value)))
+}
+
+fn field_kind(value: String, key: String) -> String {
+    let parsed: Json = result_unwrap(json_parse(value))
+    return json_kind(result_unwrap(json_object_get(parsed, key)))
+}
+
+fn has_field(value: String, key: String) -> Bool {
+    let parsed: Json = result_unwrap(json_parse(value))
+    return is_ok(json_object_get(parsed, key))
+}
+
+fn main() -> Nil {
+    println(valid("{\"a\":[1,true]}"))
+    println(valid("[1,{\"b\":\"x\"}]"))
+    println(valid("\"hello\""))
+    println(valid("12"))
+    println(valid(""))
+    println(valid("{"))
+    println(kind("{\"a\":1}"))
+    println(kind("[1]"))
+    println(kind("\"x\""))
+    println(kind("true"))
+    println(kind("null"))
+    println(kind("42"))
+    println(field_kind("{\"a\":[1],\"b\":{}}", "a"))
+    println(field_kind("{\"a\":[1],\"b\":{}}", "b"))
+    println(has_field("{\"a\":1}", "a"))
+    println(has_field("{\"a\":1}", "missing"))
+    return nil
+}

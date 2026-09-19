@@ -1679,3 +1679,39 @@ func TestStage24IntRejectsInvalidInput(t *testing.T) {
 		t.Fatalf("invalid decimal input exited incorrectly: %v", err)
 	}
 }
+
+func TestStage25DirectJSON(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_json_parse_stage25.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-json-stage25")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage25 direct JSON ELF failed to execute: %v", err)
+	}
+	want := "true\ntrue\ntrue\ntrue\nfalse\nfalse\nobject\narray\nstring\nbool\nnull\nnumber\narray\nobject\ntrue\nfalse\n"
+	if string(output) != want {
+		t.Fatalf("unexpected stage25 direct JSON output %q", output)
+	}
+}

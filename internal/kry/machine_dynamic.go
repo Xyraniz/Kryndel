@@ -53,11 +53,16 @@ type directMachine struct {
 	substringLabel      int
 	intToStringLabel    int
 	intFromStringLabel  int
+	jsonParseLabel      int
+	jsonSkipLabel       int
+	jsonKindLabel       int
+	jsonObjectGetLabel  int
 	mapRuntimeUsed      bool
 	stringCharsUsed     bool
 	substringUsed       bool
 	intToStringUsed     bool
 	intFromStringUsed   bool
+	jsonRuntimeUsed     bool
 	bytesFromArrayLabel int
 	processArgsLabel    int
 	fsReadTextLabel     int
@@ -118,6 +123,10 @@ func newDirectMachine() *directMachine {
 	m.substringLabel = m.newLabel()
 	m.intToStringLabel = m.newLabel()
 	m.intFromStringLabel = m.newLabel()
+	m.jsonParseLabel = m.newLabel()
+	m.jsonSkipLabel = m.newLabel()
+	m.jsonKindLabel = m.newLabel()
+	m.jsonObjectGetLabel = m.newLabel()
 	m.bytesFromArrayLabel = m.newLabel()
 	m.processArgsLabel = m.newLabel()
 	m.fsReadTextLabel = m.newLabel()
@@ -1648,6 +1657,765 @@ func (m *directMachine) emitIntFromStringRuntime() error {
 	return nil
 }
 
+func (m *directMachine) emitJSONSkipRuntime() error {
+	if err := m.bind(m.jsonSkipLabel); err != nil {
+		return err
+	}
+	// rdi=String/Json text, rsi=start byte offset. Return the exclusive end
+	// offset in rax, or -1 for a truncated value. JSON values are scanned as
+	// strings, containers, or primitive tokens; nested braces are ignored while
+	// inside quoted strings and escaped bytes consume their following byte.
+	start := m.newLabel()
+	stringStart := m.newLabel()
+	stringLoop := m.newLabel()
+	stringEscape := m.newLabel()
+	stringEnd := m.newLabel()
+	containerStart := m.newLabel()
+	containerLoop := m.newLabel()
+	containerString := m.newLabel()
+	containerEscape := m.newLabel()
+	containerEnterString := m.newLabel()
+	containerLeaveString := m.newLabel()
+	containerOpen := m.newLabel()
+	containerClose := m.newLabel()
+	primitiveStart := m.newLabel()
+	primitiveLoop := m.newLabel()
+	primitiveDone := m.newLabel()
+	success := m.newLabel()
+	failure := m.newLabel()
+	whitespace := m.newLabel()
+
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=String
+		0x4d, 0x8b, 0x2c, 0x24, // r13=length
+		0x49, 0x89, 0xf6, // r14=start offset
+		0x4d, 0x31, 0xff, // r15=container depth
+		0x31, 0xdb, // bl=string mode
+	)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+	if err := m.bind(start); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee) // cmp r14, r13
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08) // al=byte at offset
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, whitespace); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, '"')
+	if err := m.emitConditionalJump(0x84, stringStart); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '{')
+	if err := m.emitConditionalJump(0x84, containerStart); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '[')
+	if err := m.emitConditionalJump(0x84, containerStart); err != nil {
+		return err
+	}
+	if err := m.emitJump(primitiveStart); err != nil {
+		return err
+	}
+
+	if err := m.bind(whitespace); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+
+	if err := m.bind(stringStart); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(stringLoop); err != nil {
+		return err
+	}
+	if err := m.bind(stringLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08, 0x3c, '\\')
+	if err := m.emitConditionalJump(0x84, stringEscape); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '"')
+	if err := m.emitConditionalJump(0x84, stringEnd); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(stringLoop); err != nil {
+		return err
+	}
+	if err := m.bind(stringEscape); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x83, 0xc6, 0x02)
+	if err := m.emitJump(stringLoop); err != nil {
+		return err
+	}
+	if err := m.bind(stringEnd); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(success); err != nil {
+		return err
+	}
+
+	if err := m.bind(containerStart); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6, 0x41, 0xbf, 0x01, 0x00, 0x00, 0x00, 0x31, 0xdb)
+	if err := m.emitJump(containerLoop); err != nil {
+		return err
+	}
+	if err := m.bind(containerLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08, 0x84, 0xdb)
+	if err := m.emitConditionalJump(0x85, containerString); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '"')
+	if err := m.emitConditionalJump(0x84, containerEnterString); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '{')
+	if err := m.emitConditionalJump(0x84, containerOpen); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '[')
+	if err := m.emitConditionalJump(0x84, containerOpen); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '}')
+	if err := m.emitConditionalJump(0x84, containerClose); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, ']')
+	if err := m.emitConditionalJump(0x84, containerClose); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(containerLoop); err != nil {
+		return err
+	}
+
+	if err := m.bind(containerString); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '\\')
+	if err := m.emitConditionalJump(0x84, containerEscape); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '"')
+	if err := m.emitConditionalJump(0x84, containerLeaveString); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(containerLoop); err != nil {
+		return err
+	}
+	if err := m.bind(containerEscape); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x83, 0xc6, 0x02)
+	if err := m.emitJump(containerLoop); err != nil {
+		return err
+	}
+	if err := m.bind(containerEnterString); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0xb3, 0x01, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(containerLoop); err != nil {
+		return err
+	}
+	if err := m.bind(containerLeaveString); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x31, 0xdb, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(containerLoop); err != nil {
+		return err
+	}
+	if err := m.bind(containerOpen); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(containerLoop); err != nil {
+		return err
+	}
+	if err := m.bind(containerClose); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xcf, 0x49, 0xff, 0xc6, 0x4d, 0x85, 0xff)
+	if err := m.emitConditionalJump(0x84, success); err != nil {
+		return err
+	}
+	if err := m.emitJump(containerLoop); err != nil {
+		return err
+	}
+
+	if err := m.bind(primitiveStart); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf5)
+	if err := m.emitJump(primitiveLoop); err != nil {
+		return err
+	}
+	if err := m.bind(primitiveLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, primitiveDone); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r', ',', ']', '}'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, primitiveDone); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(primitiveLoop); err != nil {
+		return err
+	}
+	if err := m.bind(primitiveDone); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf0, 0x48, 0x39, 0xe8)
+	if err := m.emitConditionalJump(0x84, failure); err != nil {
+		return err
+	}
+	if err := m.emitJump(success); err != nil {
+		return err
+	}
+
+	if err := m.bind(success); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf0, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	if err := m.bind(failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitJSONParseRuntime() error {
+	if err := m.bind(m.jsonParseLabel); err != nil {
+		return err
+	}
+	// Json uses the same immutable {length, bytes} layout as String. Parsing
+	// validates one complete value and preserves the source pointer on success;
+	// accessors later return freshly allocated slices for nested values.
+	valueEnd := m.newLabel()
+	trailingLoop := m.newLabel()
+	trailingWhitespace := m.newLabel()
+	success := m.newLabel()
+	failure := m.newLabel()
+	m.code = append(m.code, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x49, 0x89, 0xfc, 0x4d, 0x8b, 0x2c, 0x24)
+	m.code = append(m.code, 0x48, 0x31, 0xf6)
+	if err := m.emitLabelCall(m.jsonSkipLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xf8, 0xff)
+	if err := m.emitConditionalJump(0x84, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0xc6)
+	if err := m.emitJump(valueEnd); err != nil {
+		return err
+	}
+	if err := m.bind(valueEnd); err != nil {
+		return err
+	}
+	if err := m.bind(trailingLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x84, success); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, trailingWhitespace); err != nil {
+			return err
+		}
+	}
+	if err := m.emitJump(failure); err != nil {
+		return err
+	}
+	if err := m.bind(trailingWhitespace); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(trailingLoop); err != nil {
+		return err
+	}
+	if err := m.bind(success); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xe0)
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0xc3)
+	if err := m.bind(failure); err != nil {
+		return err
+	}
+	m.emitStringAddress("invalid JSON")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitJSONKindRuntime() error {
+	if err := m.bind(m.jsonKindLabel); err != nil {
+		return err
+	}
+	// rdi points to the validated Json/String text. Return the stable kind name
+	// as an immutable String object without allocating a second copy.
+	object := m.newLabel()
+	array := m.newLabel()
+	stringValue := m.newLabel()
+	boolean := m.newLabel()
+	null := m.newLabel()
+	number := m.newLabel()
+	invalid := m.newLabel()
+	loop := m.newLabel()
+	m.code = append(m.code, 0x48, 0x31, 0xc9, 0x48, 0x8b, 0x17) // rcx=index, rdx=length
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x39, 0xd1)
+	if err := m.emitConditionalJump(0x83, invalid); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8d, 0x44, 0x0f, 0x08, 0x0f, 0xb6, 0x00)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, loop); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, '{')
+	if err := m.emitConditionalJump(0x84, object); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '[')
+	if err := m.emitConditionalJump(0x84, array); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '"')
+	if err := m.emitConditionalJump(0x84, stringValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 't')
+	if err := m.emitConditionalJump(0x84, boolean); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 'f')
+	if err := m.emitConditionalJump(0x84, boolean); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 'n')
+	if err := m.emitConditionalJump(0x84, null); err != nil {
+		return err
+	}
+	if err := m.emitJump(number); err != nil {
+		return err
+	}
+
+	for _, item := range []struct {
+		label int
+		text  string
+	}{
+		{object, "object"},
+		{array, "array"},
+		{stringValue, "string"},
+		{boolean, "bool"},
+		{null, "null"},
+		{number, "number"},
+		{invalid, "invalid"},
+	} {
+		if err := m.bind(item.label); err != nil {
+			return err
+		}
+		m.emitStringAddress(item.text)
+		m.code = append(m.code, 0xc3)
+	}
+	return nil
+}
+
+func (m *directMachine) emitJSONObjectGetRuntime() error {
+	if err := m.bind(m.jsonObjectGetLabel); err != nil {
+		return err
+	}
+	// rdi=Json object text, rsi=String key. Return Result[Json,String]. The
+	// returned Json is a freshly allocated String slice containing the selected
+	// value, so nested access never aliases a temporary parser buffer.
+	start := m.newLabel()
+	objectLoop := m.newLabel()
+	keyLoop := m.newLabel()
+	keyEscape := m.newLabel()
+	keyEnd := m.newLabel()
+	keyMismatch := m.newLabel()
+	keyAdvance := m.newLabel()
+	afterKey := m.newLabel()
+	keyLengthMismatch := m.newLabel()
+	valueStart := m.newLabel()
+	afterValue := m.newLabel()
+	found := m.newLabel()
+	notFound := m.newLabel()
+	typeError := m.newLabel()
+	failure := m.newLabel()
+	whitespace := m.newLabel()
+	afterKeyWhitespace := m.newLabel()
+	afterKeyWhitespaceNext := m.newLabel()
+	afterValueWhitespace := m.newLabel()
+	afterValueWhitespaceNext := m.newLabel()
+	valueWhitespaceNext := m.newLabel()
+	objectWhitespace := m.newLabel()
+	nextEntry := m.newLabel()
+
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=Json text
+		0x49, 0x89, 0xf5, // r13=key String
+		0x4d, 0x8b, 0x34, 0x24, // r14=Json length
+		0x4d, 0x31, 0xff, // r15=cursor
+	)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+	if err := m.bind(start); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xfe)
+	if err := m.emitConditionalJump(0x86, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x3c, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, whitespace); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, '{')
+	if err := m.emitConditionalJump(0x85, typeError); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7)
+	if err := m.emitJump(objectLoop); err != nil {
+		return err
+	}
+
+	if err := m.bind(objectWhitespace); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7)
+	if err := m.emitJump(objectLoop); err != nil {
+		return err
+	}
+
+	if err := m.bind(whitespace); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7)
+	if err := m.emitJump(start); err != nil {
+		return err
+	}
+
+	if err := m.bind(objectLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xfe)
+	if err := m.emitConditionalJump(0x86, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x3c, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, objectWhitespace); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, '}')
+	if err := m.emitConditionalJump(0x84, notFound); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '"')
+	if err := m.emitConditionalJump(0x85, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7, 0x41, 0xb9, 0x01, 0x00, 0x00, 0x00, 0x45, 0x31, 0xc0) // cursor++, match=true, key index=0
+	if err := m.emitJump(keyLoop); err != nil {
+		return err
+	}
+
+	if err := m.bind(keyLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xfe)
+	if err := m.emitConditionalJump(0x86, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x3c, 0x08)
+	m.code = append(m.code, 0x3c, '\\')
+	if err := m.emitConditionalJump(0x84, keyEscape); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '"')
+	if err := m.emitConditionalJump(0x84, keyEnd); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x45, 0x85, 0xc9)
+	if err := m.emitConditionalJump(0x84, keyAdvance); err != nil {
+		return err
+	}
+	// Compare the unescaped key byte with the requested String key. The
+	// source compiler emits identifier keys without escapes; escaped keys are
+	// rejected as a mismatch rather than being silently decoded incorrectly.
+	m.code = append(m.code, 0x4d, 0x89, 0xea, 0x4d, 0x8b, 0x12, 0x4d, 0x39, 0xd0)
+	if err := m.emitConditionalJump(0x83, keyMismatch); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x89, 0xea, 0x4d, 0x01, 0xc2, 0x41, 0x0f, 0xb6, 0x4a, 0x08, 0x38, 0xc8)
+	if err := m.emitConditionalJump(0x85, keyMismatch); err != nil {
+		return err
+	}
+	if err := m.emitJump(keyAdvance); err != nil {
+		return err
+	}
+
+	if err := m.bind(keyMismatch); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x45, 0x31, 0xc9)
+	if err := m.emitJump(keyAdvance); err != nil {
+		return err
+	}
+	if err := m.bind(keyEscape); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x45, 0x31, 0xc9, 0x49, 0x83, 0xc7, 0x02)
+	if err := m.emitJump(keyLoop); err != nil {
+		return err
+	}
+	if err := m.bind(keyAdvance); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7, 0x49, 0xff, 0xc0)
+	if err := m.emitJump(keyLoop); err != nil {
+		return err
+	}
+
+	if err := m.bind(keyEnd); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7, 0x45, 0x85, 0xc9)
+	if err := m.emitConditionalJump(0x84, afterKey); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x89, 0xea, 0x4d, 0x8b, 0x12, 0x4d, 0x39, 0xd0)
+	if err := m.emitConditionalJump(0x85, keyLengthMismatch); err != nil {
+		return err
+	}
+	if err := m.emitJump(afterKey); err != nil {
+		return err
+	}
+
+	if err := m.bind(keyLengthMismatch); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x45, 0x31, 0xc9)
+	if err := m.emitJump(afterKey); err != nil {
+		return err
+	}
+
+	if err := m.bind(afterKey); err != nil {
+		return err
+	}
+	if err := m.emitJump(afterKeyWhitespace); err != nil {
+		return err
+	}
+	if err := m.bind(afterKeyWhitespace); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xfe)
+	if err := m.emitConditionalJump(0x86, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x3c, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, afterKeyWhitespaceNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, ':')
+	if err := m.emitConditionalJump(0x85, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7)
+	if err := m.emitJump(valueStart); err != nil {
+		return err
+	}
+	if err := m.bind(afterKeyWhitespaceNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7)
+	if err := m.emitJump(afterKeyWhitespace); err != nil {
+		return err
+	}
+
+	if err := m.bind(valueStart); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xfe)
+	if err := m.emitConditionalJump(0x86, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x3c, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, valueWhitespaceNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xfd)                   // rbp=value start
+	m.code = append(m.code, 0x4c, 0x89, 0xe7, 0x4c, 0x89, 0xfe) // rdi=Json, rsi=value offset
+	if err := m.emitLabelCall(m.jsonSkipLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xf8, 0xff)
+	if err := m.emitConditionalJump(0x84, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc3) // rbx=value end
+	m.code = append(m.code, 0x45, 0x85, 0xc9) // key matched?
+	if err := m.emitConditionalJump(0x85, found); err != nil {
+		return err
+	}
+	if err := m.emitJump(afterValue); err != nil {
+		return err
+	}
+
+	if err := m.bind(afterValue); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0xdf)
+	if err := m.emitJump(afterValueWhitespace); err != nil {
+		return err
+	}
+	if err := m.bind(afterValueWhitespaceNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7)
+	if err := m.emitJump(afterValueWhitespace); err != nil {
+		return err
+	}
+	if err := m.bind(valueWhitespaceNext); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7)
+	if err := m.emitJump(valueStart); err != nil {
+		return err
+	}
+	if err := m.bind(afterValueWhitespace); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xfe)
+	if err := m.emitConditionalJump(0x86, failure); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x3c, 0x08)
+	for _, value := range []byte{' ', '\t', '\n', '\r'} {
+		m.code = append(m.code, 0x3c, value)
+		if err := m.emitConditionalJump(0x84, afterValueWhitespaceNext); err != nil {
+			return err
+		}
+	}
+	m.code = append(m.code, 0x3c, ',')
+	if err := m.emitConditionalJump(0x84, nextEntry); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, '}')
+	if err := m.emitConditionalJump(0x84, notFound); err != nil {
+		return err
+	}
+	if err := m.emitJump(failure); err != nil {
+		return err
+	}
+	if err := m.bind(nextEntry); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7) // consume ','
+	if err := m.emitJump(objectLoop); err != nil {
+		return err
+	}
+
+	if err := m.bind(found); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xe2, 0x48, 0x01, 0xea, 0x48, 0x8d, 0x7a, 0x08, 0x48, 0x89, 0xde, 0x48, 0x29, 0xee)
+	if err := m.emitLabelCall(m.stringAllocLabel); err != nil {
+		return err
+	}
+	if err := m.emitBoxCall(0); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+
+	if err := m.bind(notFound); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON object key not found")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	if err := m.bind(typeError); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON value is not an object")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	if err := m.bind(failure); err != nil {
+		return err
+	}
+	m.emitStringAddress("JSON object access failed")
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
 func (m *directMachine) emitBytesFromArrayRuntime() error {
 	if err := m.bind(m.bytesFromArrayLabel); err != nil {
 		return err
@@ -2846,6 +3614,43 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			default:
 				return fmt.Errorf("direct ELF backend int does not support %s", argument.Type.String())
 			}
+		case "json_parse":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyString {
+				return fmt.Errorf("direct ELF json_parse expects one String argument")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // rdi=JSON text String
+			m.hostRuntimeUsed = true
+			m.jsonRuntimeUsed = true
+			return m.emitLabelCall(m.jsonParseLabel)
+		case "json_kind":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyJSON {
+				return fmt.Errorf("direct ELF json_kind expects one Json argument")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // rdi=Json text
+			m.hostRuntimeUsed = true
+			m.jsonRuntimeUsed = true
+			return m.emitLabelCall(m.jsonKindLabel)
+		case "json_object_get":
+			if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyJSON || e.Args[1].Type == nil || e.Args[1].Type.Kind != TyString {
+				return fmt.Errorf("direct ELF json_object_get expects (Json, String)")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50) // preserve Json while evaluating key
+			if err := m.emitExpr(e.Args[1]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc6, 0x58, 0x48, 0x89, 0xc7) // rsi=key, rdi=Json
+			m.hostRuntimeUsed = true
+			m.jsonRuntimeUsed = true
+			return m.emitLabelCall(m.jsonObjectGetLabel)
 		case "len":
 			if len(e.Args) != 1 || e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyArray && e.Args[0].Type.Kind != TyBytes) {
 				return fmt.Errorf("direct ELF backend supports len(Array[T]) and len(Bytes)")
@@ -3748,6 +4553,20 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			return nil, err
 		}
 		if err := m.emitFSWriteBytesRuntime(); err != nil {
+			return nil, err
+		}
+	}
+	if m.jsonRuntimeUsed {
+		if err := m.emitJSONParseRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitJSONSkipRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitJSONKindRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitJSONObjectGetRuntime(); err != nil {
 			return nil, err
 		}
 	}
