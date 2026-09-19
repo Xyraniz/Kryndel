@@ -125,6 +125,9 @@ type Param struct {
 	Name string
 	Type *TypeSpec
 	Tok  Token
+	// Default is the expression used when the caller omits this argument. It is
+	// nil for required parameters. Defaults must be trailing.
+	Default *Expr
 }
 type Function struct {
 	Name       string

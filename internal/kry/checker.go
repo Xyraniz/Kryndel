@@ -336,6 +336,19 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 		}
 		sc.Values[p.Name] = Binding{Type: t, Mutable: false}
 	}
+	for _, p := range f.Params {
+		if p.Default == nil {
+			continue
+		}
+		t, _ := resolveSpec(c.Env, p.Type, 0)
+		dt, d := c.checkExpr(sc, p.Default, t)
+		if d != nil {
+			return d
+		}
+		if !compatible(t, dt) {
+			return Diag(CatType, p.Default.Tok.Source, p.Default.Tok.Line, p.Default.Tok.Column, "default value for parameter '%s' expected %s, found %s", p.Name, t, dt)
+		}
+	}
 	rt, d := resolveSpec(c.Env, f.Return, 0)
 	if d != nil {
 		return d
@@ -1047,8 +1060,8 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		if f == nil {
 			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown method '%s' for %s", e.Name, rt)
 		}
-		if len(e.Args) != len(f.Params) {
-			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "method '%s' expects %d argument(s), got %d", e.Name, len(f.Params), len(e.Args))
+		if len(e.Args) < minArgs(f) || len(e.Args) > len(f.Params) {
+			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "method '%s' expects %d to %d argument(s), got %d", e.Name, minArgs(f), len(f.Params), len(e.Args))
 		}
 		for i, a := range e.Args {
 			pt, _ := resolveSpec(c.Env, f.Params[i].Type, 0)
@@ -1105,7 +1118,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 }
 
 func (c *Checker) matchFunctionCall(sc *Scope, e *Expr, f *Function) (*Type, bool) {
-	if len(e.Args) != len(f.Params) {
+	if len(e.Args) < minArgs(f) || len(e.Args) > len(f.Params) {
 		return nil, false
 	}
 	previous := c.Env.TypeParams
@@ -1141,6 +1154,17 @@ func (c *Checker) matchFunctionCall(sc *Scope, e *Expr, f *Function) (*Type, boo
 		return nil, false
 	}
 	return rt, true
+}
+
+// minArgs returns the number of required (non-defaulted) parameters.
+func minArgs(f *Function) int {
+	n := 0
+	for _, p := range f.Params {
+		if p.Default == nil {
+			n++
+		}
+	}
+	return n
 }
 
 func satisfiesConstraint(t *Type, constraint string) bool {

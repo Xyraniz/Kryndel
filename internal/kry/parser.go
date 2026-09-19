@@ -158,10 +158,18 @@ func (p *Parser) function(pub bool) *Function {
 	}
 	p.expect(LPAREN, "expected '(' after function name")
 	if !p.check(RPAREN) {
+		seenDefault := false
 		for {
 			pt := p.expect(ID, "expected a parameter name")
 			p.expect(COLON, "function parameters require an explicit type")
-			f.Params = append(f.Params, Param{Name: pt.Text(), Type: p.typeSpec(), Tok: pt})
+			param := Param{Name: pt.Text(), Type: p.typeSpec(), Tok: pt}
+			if p.match(EQUAL) {
+				param.Default = p.expression()
+				seenDefault = true
+			} else if seenDefault {
+				p.fail(pt, "required parameter '%s' cannot follow a parameter with a default value", pt.Text())
+			}
+			f.Params = append(f.Params, param)
 			if !p.match(COMMA) {
 				break
 			}
