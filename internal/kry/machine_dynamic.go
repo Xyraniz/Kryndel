@@ -30,6 +30,10 @@ type directMachine struct {
 	functionOrder     []*Function
 	functionSlots     map[string]map[string]machineSlot
 	functionNextSlot  map[string]int32
+	statementSlots    map[*Stmt]machineSlot
+	forIterSlots      map[*Stmt]machineSlot
+	forIndexSlots     map[*Stmt]machineSlot
+	scopeStack        []map[string]machineSlot
 	functionReturns   map[string]*Type
 	stringConcatLabel int
 	stringConcatUsed  bool
@@ -39,6 +43,8 @@ type directMachine struct {
 	arrayRuntimeUsed  bool
 	boxAllocLabel     int
 	boxRuntimeUsed    bool
+	structAllocLabel  int
+	structRuntimeUsed bool
 	inFunction        bool
 	currentFunction   string
 }
@@ -73,6 +79,9 @@ func newDirectMachine() *directMachine {
 		functionLabels:   map[string]int{},
 		functionSlots:    map[string]map[string]machineSlot{},
 		functionNextSlot: map[string]int32{},
+		statementSlots:   map[*Stmt]machineSlot{},
+		forIterSlots:     map[*Stmt]machineSlot{},
+		forIndexSlots:    map[*Stmt]machineSlot{},
 		functionReturns:  map[string]*Type{},
 	}
 	m.endLabel = m.newLabel()
@@ -82,6 +91,7 @@ func newDirectMachine() *directMachine {
 	m.arrayPushLabel = m.newLabel()
 	m.arrayConcatLabel = m.newLabel()
 	m.boxAllocLabel = m.newLabel()
+	m.structAllocLabel = m.newLabel()
 	return m
 }
 
@@ -117,6 +127,16 @@ func (m *directMachine) emitCall(name string) error {
 	}
 	m.code = append(m.code, 0xe8)
 	return m.emitLabelDisplacement(label)
+}
+
+func functionKey(f *Function) string {
+	if f == nil {
+		return "<nil>"
+	}
+	if f.Module == "" {
+		return f.Name
+	}
+	return f.Module + "::" + f.Name
 }
 
 func (m *directMachine) emitLabelCall(label int) error {
@@ -568,6 +588,121 @@ func (m *directMachine) emitArrayGet(e *Expr) error {
 	return m.bind(joinLabel)
 }
 
+func (m *directMachine) emitArrayIndices(e *Expr) error {
+	if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray {
+		return fmt.Errorf("direct ELF backend array_indices expects one Array argument")
+	}
+	if err := m.emitExpr(e.Args[0]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50)                   // input array
+	m.code = append(m.code, 0x48, 0x8b, 0x04, 0x24) // mov rax, [rsp]
+	m.code = append(m.code, 0x48, 0x8b, 0x00)       // mov rax, [rax]
+	if err := m.emitArrayAllocCall(); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50)             // result array
+	m.code = append(m.code, 0x48, 0x31, 0xc9) // xor rcx, rcx
+	loop := m.newLabel()
+	done := m.newLabel()
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x8b, 0x54, 0x24, 0x08, // mov rdx, [rsp+8] (input array)
+		0x48, 0x3b, 0x0a, // cmp rcx, [rdx]
+	)
+	if err := m.emitConditionalJump(0x83, done); err != nil { // jae
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x8b, 0x14, 0x24, // mov rdx, [rsp] (result array)
+		0x49, 0x89, 0xc8, // mov r8, rcx
+		0x49, 0xc1, 0xe0, 0x03, // shl r8, 3
+		0x49, 0x83, 0xc0, 0x08, // add r8, 8
+		0x4c, 0x01, 0xc2, // add rdx, r8
+		0x48, 0x89, 0x0a, // mov [rdx], rcx
+		0x48, 0xff, 0xc1, // inc rcx
+	)
+	if err := m.emitJump(loop); err != nil {
+		return err
+	}
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x58, 0x48, 0x83, 0xc4, 0x08) // pop result; drop input
+	return nil
+}
+
+func (m *directMachine) emitStructAllocCall(fieldCount int) error {
+	if fieldCount < 0 {
+		return fmt.Errorf("direct ELF backend received a negative struct field count")
+	}
+	m.emitMoveImmediate(uint64(fieldCount))
+	return m.emitArrayAllocCall()
+}
+
+func (m *directMachine) emitStructLiteral(e *Expr) error {
+	if e.Type == nil || e.Type.Kind != TyStruct || e.Type.Struct == nil {
+		return fmt.Errorf("direct ELF backend struct literal has no checked declaration")
+	}
+	if len(e.Fields) != len(e.Values) || len(e.Fields) != len(e.Type.Struct.Fields) {
+		return fmt.Errorf("direct ELF backend struct literal has an invalid field count")
+	}
+	if err := m.emitStructAllocCall(len(e.Type.Struct.Fields)); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50) // keep object pointer while evaluating fields
+	for i, name := range e.Fields {
+		fieldIndex := -1
+		for index, field := range e.Type.Struct.Fields {
+			if field.Name == name {
+				fieldIndex = index
+				break
+			}
+		}
+		if fieldIndex < 0 {
+			return fmt.Errorf("direct ELF backend struct literal has unknown field '%s'", name)
+		}
+		if err := m.emitExpr(e.Values[i]); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x49, 0x89, 0xc0)       // mov r8, rax
+		m.code = append(m.code, 0x48, 0x8b, 0x0c, 0x24) // mov rcx, [rsp]
+		m.code = append(m.code, 0x48, 0xba)
+		var offset [8]byte
+		binary.LittleEndian.PutUint64(offset[:], uint64((fieldIndex+1)*8))
+		m.code = append(m.code, offset[:]...)
+		m.code = append(m.code, 0x48, 0x01, 0xca, 0x4c, 0x89, 0x02) // add rdx, rcx; mov [rdx], r8
+	}
+	m.code = append(m.code, 0x58) // pop object pointer
+	return nil
+}
+
+func (m *directMachine) emitStructField(e *Expr) error {
+	if e.Base == nil || e.Base.Type == nil || e.Base.Type.Kind != TyStruct || e.Base.Type.Struct == nil {
+		return fmt.Errorf("direct ELF backend field access has no checked struct type")
+	}
+	fieldIndex := -1
+	for index, field := range e.Base.Type.Struct.Fields {
+		if field.Name == e.Field {
+			fieldIndex = index
+			break
+		}
+	}
+	if fieldIndex < 0 {
+		return fmt.Errorf("direct ELF backend has no struct field '%s'", e.Field)
+	}
+	if err := m.emitExpr(e.Base); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8b, 0x80)
+	var offset [4]byte
+	binary.LittleEndian.PutUint32(offset[:], uint32((fieldIndex+1)*8))
+	m.code = append(m.code, offset[:]...)
+	return nil
+}
+
 func (m *directMachine) emitBoxAllocRuntime() error {
 	if err := m.bind(m.boxAllocLabel); err != nil {
 		return err
@@ -587,6 +722,34 @@ func (m *directMachine) emitBoxAllocRuntime() error {
 	return nil
 }
 
+func (m *directMachine) emitStructAllocRuntime() error {
+	if err := m.bind(m.structAllocLabel); err != nil {
+		return err
+	}
+	// rdi=count. Allocate count qwords for the boxed struct payload.
+	m.code = append(m.code,
+		0x48, 0x89, 0xf8, // mov rax, rdi
+		0x48, 0xc1, 0xe0, 0x03, // shl rax, 3
+	)
+	m.emitTrapOnOverflow()
+	m.code = append(m.code,
+		0x48, 0x89, 0xc7, // mov rdi, rax
+		0x48, 0x31, 0xf6, // xor rsi, rsi
+		0xba, 0x03, 0x00, 0x00, 0x00, // PROT_READ|PROT_WRITE
+		0x41, 0xba, 0x22, 0x00, 0x00, 0x00, // MAP_PRIVATE|MAP_ANONYMOUS
+		0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, // fd=-1
+		0x45, 0x31, 0xc9, // offset=0
+		0xb8, 0x09, 0x00, 0x00, 0x00, // mmap
+		0x0f, 0x05,
+		0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil { // js: mmap error
+		return err
+	}
+	m.code = append(m.code, 0xc3)
+	return nil
+}
+
 func (m *directMachine) emitWrite(text string) {
 	offset := m.addData(text)
 	// mov eax, SYS_write; mov edi, STDOUT_FILENO
@@ -602,6 +765,32 @@ func (m *directMachine) emitWrite(text string) {
 
 func (m *directMachine) emitExit(status byte) {
 	m.code = append(m.code, 0xb8, 0x3c, 0, 0, 0, 0xbf, status, 0, 0, 0, 0x0f, 0x05)
+}
+
+func (m *directMachine) lookupSlot(name string) (machineSlot, bool) {
+	for index := len(m.scopeStack) - 1; index >= 0; index-- {
+		if slot, ok := m.scopeStack[index][name]; ok {
+			return slot, true
+		}
+	}
+	return machineSlot{}, false
+}
+
+func (m *directMachine) pushScope() {
+	m.scopeStack = append(m.scopeStack, map[string]machineSlot{})
+}
+
+func (m *directMachine) popScope() {
+	if len(m.scopeStack) > 0 {
+		m.scopeStack = m.scopeStack[:len(m.scopeStack)-1]
+	}
+}
+
+func (m *directMachine) bindSlot(name string, slot machineSlot) {
+	if len(m.scopeStack) == 0 {
+		m.pushScope()
+	}
+	m.scopeStack[len(m.scopeStack)-1][name] = slot
 }
 
 func (m *directMachine) emitLoadSlot(slot machineSlot) {
@@ -757,6 +946,10 @@ func machineScalarType(name string) (*Type, bool) {
 		return TUInt64, true
 	case "String":
 		return TString, true
+	case "Bytes":
+		return TBytes, true
+	case "Float":
+		return TFloat, true
 	case "Json":
 		return TJSON, true
 	case "Nil":
@@ -776,6 +969,34 @@ func machineScalarType(name string) (*Type, bool) {
 		}
 		return nil, false
 	}
+}
+
+func machineValueTypeSupported(t *Type) bool {
+	if t == nil || t.Kind == TyNil || t.Kind == TyVoid || t.Kind == TyError || t.Kind == TyUnknown {
+		return false
+	}
+	switch t.Kind {
+	case TyInt, TyUInt, TyBool, TyString, TyBytes, TyFloat, TyJSON, TyStruct,
+		TyArray, TyOption, TyResult, TyMap:
+		return true
+	default:
+		return false
+	}
+}
+
+func machineTypeFromSpec(p *Program, spec *TypeSpec) (*Type, bool) {
+	name := typeSpecString(spec)
+	if typ, ok := machineScalarType(name); ok {
+		return typ, true
+	}
+	if p != nil {
+		for _, decl := range p.Structs {
+			if decl != nil && decl.Name == name {
+				return &Type{Kind: TyStruct, Name: name, Struct: decl}, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func (m *directMachine) emitMoveArg(index int) error {
@@ -829,7 +1050,7 @@ func (m *directMachine) emitFunctionCall(e *Expr) error {
 			return err
 		}
 	}
-	return m.emitCall(e.Function.Name)
+	return m.emitCall(functionKey(e.Function))
 }
 
 func machineBits(t *Type) uint8 {
@@ -878,10 +1099,12 @@ func (m *directMachine) emitExpr(e *Expr) error {
 	case ExString:
 		m.emitStringAddress(e.Str)
 		return nil
+	case ExStruct:
+		return m.emitStructLiteral(e)
 	case ExArray:
 		return m.emitArrayLiteral(e)
 	case ExVar:
-		slot, ok := m.slots[e.Name]
+		slot, ok := m.lookupSlot(e.Name)
 		if !ok {
 			return fmt.Errorf("direct ELF backend has no storage for binding '%s'", e.Name)
 		}
@@ -914,6 +1137,8 @@ func (m *directMachine) emitExpr(e *Expr) error {
 		return m.emitBinary(e)
 	case ExIndex:
 		return m.emitArrayIndex(e)
+	case ExField:
+		return m.emitStructField(e)
 	case ExCall:
 		if e.Function != nil {
 			return m.emitFunctionCall(e)
@@ -1005,18 +1230,14 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			return m.emitResultError(e.Args[0])
 		case "array_get":
 			return m.emitArrayGet(e)
+		case "array_indices":
+			return m.emitArrayIndices(e)
 		case "u8", "u16", "u32", "u64":
 			if len(e.Args) != 1 {
 				return fmt.Errorf("direct ELF backend conversion %s expects one argument", e.Name)
 			}
-			value, ok := directStaticValue(e.Args[0], m.staticEnv)
-			if !ok || (value.Kind != VInt && value.Kind != VUInt) {
-				return fmt.Errorf("direct ELF backend requires a static argument for %s", e.Name)
-			}
-			if value.Kind == VInt {
-				m.emitMoveImmediate(uint64(value.I))
-			} else {
-				m.emitMoveImmediate(value.U)
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
 			}
 			m.emitUIntMask(machineBits(e.Type))
 			return nil
@@ -1182,7 +1403,9 @@ func directHasDynamicControl(stmts []*Stmt) bool {
 			return true
 		case StWhile:
 			return true
-		case StFor, StUnsafe, StDefer:
+		case StFor:
+			return true
+		case StUnsafe, StDefer:
 			if directHasDynamicControl(s.Body) {
 				return true
 			}
@@ -1243,6 +1466,61 @@ func directHasArrayFeatures(stmts []*Stmt) bool {
 	return false
 }
 
+func directHasStructuredFeatureExpr(e *Expr) bool {
+	if e == nil {
+		return false
+	}
+	if e.Kind == ExStruct || e.Kind == ExField {
+		return true
+	}
+	if e.Type != nil {
+		switch e.Type.Kind {
+		case TyStruct, TyMap, TyJSON, TyBytes, TyOption, TyResult:
+			return true
+		}
+	}
+	if e.Kind == ExCall {
+		switch e.Name {
+		case "u8", "u16", "u32", "u64":
+			return true
+		}
+	}
+	if directHasStructuredFeatureExpr(e.Left) || directHasStructuredFeatureExpr(e.Right) || directHasStructuredFeatureExpr(e.Operand) || directHasStructuredFeatureExpr(e.Base) || directHasStructuredFeatureExpr(e.Receiver) {
+		return true
+	}
+	for _, argument := range e.Args {
+		if directHasStructuredFeatureExpr(argument) {
+			return true
+		}
+	}
+	for _, item := range e.Items {
+		if directHasStructuredFeatureExpr(item) {
+			return true
+		}
+	}
+	for _, value := range e.Values {
+		if directHasStructuredFeatureExpr(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func directHasStructuredFeatures(stmts []*Stmt) bool {
+	for _, s := range stmts {
+		if s == nil {
+			continue
+		}
+		if directHasStructuredFeatureExpr(s.Init) || directHasStructuredFeatureExpr(s.Expr) || directHasStructuredFeatureExpr(s.Target) || directHasStructuredFeatureExpr(s.Value) || directHasStructuredFeatureExpr(s.Cond) || directHasStructuredFeatureExpr(s.Return) {
+			return true
+		}
+		if directHasStructuredFeatures(s.Then) || directHasStructuredFeatures(s.Else) || directHasStructuredFeatures(s.Body) {
+			return true
+		}
+	}
+	return false
+}
+
 func directHasUserFunctions(p *Program) bool {
 	for _, f := range p.Functions {
 		if f != nil && f.Name != "main" {
@@ -1253,39 +1531,10 @@ func directHasUserFunctions(p *Program) bool {
 }
 
 func (m *directMachine) collect(stmts []*Stmt) error {
-	for _, s := range stmts {
-		if s == nil {
-			continue
-		}
-		switch s.Kind {
-		case StLet, StConst:
-			if s.Init == nil {
-				return fmt.Errorf("direct ELF backend requires an initializer for '%s'", s.Name)
-			}
-			if _, exists := m.slots[s.Name]; exists {
-				return fmt.Errorf("direct ELF backend does not support shadowed binding '%s'", s.Name)
-			}
-			m.nextSlot += 8
-			m.slots[s.Name] = machineSlot{offset: m.nextSlot, typ: s.Init.Type}
-		case StIf:
-			if err := m.collect(s.Then); err != nil {
-				return err
-			}
-			if err := m.collect(s.Else); err != nil {
-				return err
-			}
-		case StWhile:
-			if err := m.collect(s.Body); err != nil {
-				return err
-			}
-		case StFor, StMatch, StDefer, StUnsafe:
-			return fmt.Errorf("direct ELF backend does not support statement kind %s", stmtName(s.Kind))
-		}
-	}
-	return nil
+	return m.collectFunctionBlock(stmts, []map[string]machineSlot{m.slots}, &m.nextSlot)
 }
 
-func (m *directMachine) collectFunction(stmts []*Stmt, slots map[string]machineSlot, nextSlot *int32) error {
+func (m *directMachine) collectFunctionBlock(stmts []*Stmt, scopes []map[string]machineSlot, nextSlot *int32) error {
 	for _, s := range stmts {
 		if s == nil {
 			continue
@@ -1295,31 +1544,44 @@ func (m *directMachine) collectFunction(stmts []*Stmt, slots map[string]machineS
 			if s.Init == nil {
 				return fmt.Errorf("direct ELF backend requires an initializer for '%s'", s.Name)
 			}
-			if _, exists := slots[s.Name]; exists {
+			current := scopes[len(scopes)-1]
+			if _, exists := current[s.Name]; exists {
 				return fmt.Errorf("direct ELF backend does not support shadowed binding '%s'", s.Name)
 			}
-			localType, ok := machineScalarType(s.Init.Type.String())
-			if !ok || localType.Kind == TyNil {
+			if !machineValueTypeSupported(s.Init.Type) {
 				return fmt.Errorf("direct ELF backend function local '%s' has unsupported type %s", s.Name, s.Init.Type.String())
 			}
 			*nextSlot += 8
-			slots[s.Name] = machineSlot{offset: *nextSlot, typ: localType}
+			slot := machineSlot{offset: *nextSlot, typ: s.Init.Type}
+			m.statementSlots[s] = slot
+			current[s.Name] = slot
 		case StAssign:
-			if s.Target == nil || s.Target.Kind != ExVar {
-				return fmt.Errorf("direct ELF backend function assignment target must be a binding")
-			}
-			if _, exists := slots[s.Target.Name]; !exists {
-				return fmt.Errorf("direct ELF backend function assignment uses unknown binding '%s'", s.Target.Name)
-			}
+			// The checker has already validated the target. Its slot is resolved
+			// from the active scope stack during emission.
 		case StIf:
-			if err := m.collectFunction(s.Then, slots, nextSlot); err != nil {
+			if err := m.collectFunctionBlock(s.Then, append(scopes, map[string]machineSlot{}), nextSlot); err != nil {
 				return err
 			}
-			if err := m.collectFunction(s.Else, slots, nextSlot); err != nil {
+			if err := m.collectFunctionBlock(s.Else, append(scopes, map[string]machineSlot{}), nextSlot); err != nil {
 				return err
 			}
 		case StWhile:
-			if err := m.collectFunction(s.Body, slots, nextSlot); err != nil {
+			if err := m.collectFunctionBlock(s.Body, append(scopes, map[string]machineSlot{}), nextSlot); err != nil {
+				return err
+			}
+		case StFor:
+			if s.Iter == nil || s.Iter.Type == nil || s.Iter.Type.Kind != TyArray {
+				return fmt.Errorf("direct ELF backend for requires an Array iterator")
+			}
+			*nextSlot += 8
+			m.forIterSlots[s] = machineSlot{offset: *nextSlot, typ: s.Iter.Type}
+			*nextSlot += 8
+			m.forIndexSlots[s] = machineSlot{offset: *nextSlot, typ: TInt}
+			*nextSlot += 8
+			itemSlot := machineSlot{offset: *nextSlot, typ: s.Iter.Type.A}
+			m.statementSlots[s] = itemSlot
+			loopScope := append(scopes, map[string]machineSlot{s.Name: itemSlot})
+			if err := m.collectFunctionBlock(s.Body, loopScope, nextSlot); err != nil {
 				return err
 			}
 		case StExpr, StReturn, StBreak, StContinue:
@@ -1332,29 +1594,34 @@ func (m *directMachine) collectFunction(stmts []*Stmt, slots map[string]machineS
 	return nil
 }
 
+func (m *directMachine) collectFunction(stmts []*Stmt, slots map[string]machineSlot, nextSlot *int32) error {
+	return m.collectFunctionBlock(stmts, []map[string]machineSlot{slots}, nextSlot)
+}
+
 func (m *directMachine) prepareFunctions(p *Program) error {
 	for _, f := range p.Functions {
 		if f == nil || f.Name == "main" {
 			continue
 		}
-		if _, exists := m.functionLabels[f.Name]; exists {
+		key := functionKey(f)
+		if _, exists := m.functionLabels[key]; exists {
 			return fmt.Errorf("direct ELF backend has duplicate function '%s'", f.Name)
 		}
 		if len(f.Params) > 6 {
 			return fmt.Errorf("direct ELF backend function '%s' has too many parameters", f.Name)
 		}
 		returnTypeName := typeSpecString(f.Return)
-		returnType, ok := machineScalarType(returnTypeName)
+		returnType, ok := machineTypeFromSpec(p, f.Return)
 		if !ok {
 			return fmt.Errorf("direct ELF backend function '%s' has unsupported return type %s", f.Name, returnTypeName)
 		}
-		m.functionLabels[f.Name] = m.newLabel()
+		m.functionLabels[key] = m.newLabel()
 		m.functionOrder = append(m.functionOrder, f)
-		m.functionReturns[f.Name] = returnType
+		m.functionReturns[key] = returnType
 		slots := map[string]machineSlot{}
 		for index, param := range f.Params {
 			paramTypeName := typeSpecString(param.Type)
-			paramType, ok := machineScalarType(paramTypeName)
+			paramType, ok := machineTypeFromSpec(p, param.Type)
 			if !ok || paramType.Kind == TyNil {
 				return fmt.Errorf("direct ELF backend function '%s' parameter '%s' has unsupported type %s", f.Name, param.Name, paramTypeName)
 			}
@@ -1364,8 +1631,8 @@ func (m *directMachine) prepareFunctions(p *Program) error {
 		if err := m.collectFunction(f.Body, slots, &nextSlot); err != nil {
 			return fmt.Errorf("function '%s': %w", f.Name, err)
 		}
-		m.functionSlots[f.Name] = slots
-		m.functionNextSlot[f.Name] = nextSlot
+		m.functionSlots[key] = slots
+		m.functionNextSlot[key] = nextSlot
 	}
 	return nil
 }
@@ -1411,6 +1678,74 @@ func (m *directMachine) emitStaticOutput(e *Expr, name string) error {
 	return nil
 }
 
+func (m *directMachine) emitScopedStatements(stmts []*Stmt) error {
+	m.pushScope()
+	defer m.popScope()
+	return m.emitStatements(stmts)
+}
+
+func (m *directMachine) emitFor(s *Stmt) error {
+	iterSlot, ok := m.forIterSlots[s]
+	if !ok {
+		return fmt.Errorf("direct ELF backend has no iterator slot for '%s'", s.Name)
+	}
+	indexSlot, ok := m.forIndexSlots[s]
+	if !ok {
+		return fmt.Errorf("direct ELF backend has no index slot for '%s'", s.Name)
+	}
+	itemSlot, ok := m.statementSlots[s]
+	if !ok {
+		return fmt.Errorf("direct ELF backend has no loop binding slot for '%s'", s.Name)
+	}
+	if err := m.emitExpr(s.Iter); err != nil {
+		return err
+	}
+	m.emitStoreSlot(iterSlot)
+	m.emitMoveImmediate(0)
+	m.emitStoreSlot(indexSlot)
+	conditionLabel := m.newLabel()
+	incrementLabel := m.newLabel()
+	endLabel := m.newLabel()
+	if err := m.bind(conditionLabel); err != nil {
+		return err
+	}
+	// Load the iterator and index, then check the same bounds that array_get
+	// uses before loading the element into the loop binding.
+	m.emitLoadSlot(iterSlot)
+	m.code = append(m.code, 0x50) // array pointer
+	m.emitLoadSlot(indexSlot)
+	m.code = append(m.code, 0x48, 0x89, 0xc1, 0x58) // rcx=index, rax=array
+	m.code = append(m.code, 0x48, 0x85, 0xc9)       // test index
+	if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x3b, 0x08) // cmp index, [array]
+	if err := m.emitConditionalJump(0x83, endLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8b, 0x44, 0xc8, 0x08) // load element
+	m.emitStoreSlot(itemSlot)
+	m.loops = append(m.loops, machineLoop{breakLabel: endLabel, continueLabel: incrementLabel})
+	m.pushScope()
+	m.bindSlot(s.Name, itemSlot)
+	err := m.emitStatements(s.Body)
+	m.popScope()
+	m.loops = m.loops[:len(m.loops)-1]
+	if err != nil {
+		return err
+	}
+	if err := m.bind(incrementLabel); err != nil {
+		return err
+	}
+	m.emitLoadSlot(indexSlot)
+	m.code = append(m.code, 0x48, 0xff, 0xc0) // increment index
+	m.emitStoreSlot(indexSlot)
+	if err := m.emitJump(conditionLabel); err != nil {
+		return err
+	}
+	return m.bind(endLabel)
+}
+
 func (m *directMachine) emitStatements(stmts []*Stmt) error {
 	for _, s := range stmts {
 		if s == nil {
@@ -1421,8 +1756,12 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 			if err := m.emitExpr(s.Init); err != nil {
 				return err
 			}
-			slot := m.slots[s.Name]
+			slot, ok := m.statementSlots[s]
+			if !ok {
+				return fmt.Errorf("direct ELF backend has no slot for binding '%s'", s.Name)
+			}
 			m.emitStoreSlot(slot)
+			m.bindSlot(s.Name, slot)
 			if !s.Mutable {
 				if value, ok := directStaticValue(s.Init, m.staticEnv); ok {
 					m.staticEnv[s.Name] = value
@@ -1435,7 +1774,7 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 			if err := m.emitExpr(s.Value); err != nil {
 				return err
 			}
-			slot, ok := m.slots[s.Target.Name]
+			slot, ok := m.lookupSlot(s.Target.Name)
 			if !ok {
 				return fmt.Errorf("direct ELF backend has no storage for '%s'", s.Target.Name)
 			}
@@ -1449,7 +1788,7 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 				if len(s.Expr.Args) != 0 {
 					return fmt.Errorf("direct ELF backend function '%s' requires zero arguments", s.Expr.Function.Name)
 				}
-				if err := m.emitCall(s.Expr.Function.Name); err != nil {
+				if err := m.emitCall(functionKey(s.Expr.Function)); err != nil {
 					return err
 				}
 				continue
@@ -1470,7 +1809,7 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 			if err := m.emitConditionalJump(0x84, elseLabel); err != nil {
 				return err
 			}
-			if err := m.emitStatements(s.Then); err != nil {
+			if err := m.emitScopedStatements(s.Then); err != nil {
 				return err
 			}
 			if len(s.Else) > 0 {
@@ -1480,7 +1819,7 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 				if err := m.bind(elseLabel); err != nil {
 					return err
 				}
-				if err := m.emitStatements(s.Else); err != nil {
+				if err := m.emitScopedStatements(s.Else); err != nil {
 					return err
 				}
 				if err := m.bind(joinLabel); err != nil {
@@ -1505,7 +1844,7 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 				return err
 			}
 			m.loops = append(m.loops, machineLoop{breakLabel: endLabel, continueLabel: conditionLabel})
-			if err := m.emitStatements(s.Body); err != nil {
+			if err := m.emitScopedStatements(s.Body); err != nil {
 				return err
 			}
 			m.loops = m.loops[:len(m.loops)-1]
@@ -1513,6 +1852,10 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 				return err
 			}
 			if err := m.bind(endLabel); err != nil {
+				return err
+			}
+		case StFor:
+			if err := m.emitFor(s); err != nil {
 				return err
 			}
 		case StBreak:
@@ -1559,6 +1902,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.collect(stmts); err != nil {
 		return nil, err
 	}
+	m.scopeStack = []map[string]machineSlot{{}}
 	// push rbp; mov rbp, rsp; reserve aligned local storage.
 	m.code = append(m.code, 0x55, 0x48, 0x89, 0xe5)
 	frame := (int(m.nextSlot) + 15) &^ 15
@@ -1573,23 +1917,29 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
-	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed {
+	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed || m.structRuntimeUsed {
 		if err := m.emitJump(m.endLabel); err != nil {
 			return nil, err
 		}
 		mainSlots := m.slots
 		mainStatic := m.staticEnv
 		mainLoops := m.loops
+		mainScopes := m.scopeStack
 		for _, f := range m.functionOrder {
-			if err := m.bind(m.functionLabels[f.Name]); err != nil {
+			key := functionKey(f)
+			if err := m.bind(m.functionLabels[key]); err != nil {
 				return nil, err
 			}
 			m.inFunction = true
-			m.currentFunction = f.Name
-			m.slots = m.functionSlots[f.Name]
+			m.currentFunction = key
+			m.slots = m.functionSlots[key]
 			m.staticEnv = map[string]Value{}
 			m.loops = nil
-			m.bufferOffset = m.functionNextSlot[f.Name] + 1
+			m.scopeStack = []map[string]machineSlot{{}}
+			for _, param := range f.Params {
+				m.bindSlot(param.Name, m.functionSlots[key][param.Name])
+			}
+			m.bufferOffset = m.functionNextSlot[key] + 1
 			functionFrame := (int(m.bufferOffset) + 63 + 15) &^ 15
 			m.code = append(m.code, 0x55, 0x48, 0x89, 0xe5)
 			m.code = append(m.code, 0x48, 0x81, 0xec)
@@ -1597,7 +1947,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			binary.LittleEndian.PutUint32(functionSize[:], uint32(functionFrame))
 			m.code = append(m.code, functionSize[:]...)
 			for index, param := range f.Params {
-				if err := m.emitStoreArg(index, m.functionSlots[f.Name][param.Name]); err != nil {
+				if err := m.emitStoreArg(index, m.functionSlots[key][param.Name]); err != nil {
 					return nil, fmt.Errorf("function '%s': %w", f.Name, err)
 				}
 			}
@@ -1609,6 +1959,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			m.slots = mainSlots
 			m.staticEnv = mainStatic
 			m.loops = mainLoops
+			m.scopeStack = mainScopes
 			m.code = append(m.code, 0xc9, 0xc3)
 		}
 	}
@@ -1630,6 +1981,11 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	}
 	if m.boxRuntimeUsed {
 		if err := m.emitBoxAllocRuntime(); err != nil {
+			return nil, err
+		}
+	}
+	if m.structRuntimeUsed {
+		if err := m.emitStructAllocRuntime(); err != nil {
 			return nil, err
 		}
 	}

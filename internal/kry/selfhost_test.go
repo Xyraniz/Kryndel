@@ -935,3 +935,38 @@ func TestStage13SourceOpaqueABIFunctionParities(t *testing.T) {
 		}
 	}
 }
+
+func TestStage14DirectStructAndForParity(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_struct_loop_stage14.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "direct-struct-loop-stage14")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage14 direct ELF failed to execute: %v", err)
+	}
+	if string(output) != "48\n" {
+		t.Fatalf("unexpected stage14 direct ELF output %q", output)
+	}
+}

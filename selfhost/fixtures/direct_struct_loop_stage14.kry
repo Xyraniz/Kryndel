@@ -1,0 +1,23 @@
+struct Pair {
+    left: Int,
+    right: Int,
+}
+
+fn make_pair() -> Pair {
+    return Pair{ left: 20, right: 22 }
+}
+
+fn sum(values: Array[Int]) -> Int {
+    let mut total: Int = 0
+    for value in array_indices(values) {
+        total = total + value
+    }
+    return total
+}
+
+fn main() -> Nil {
+    let pair: Pair = make_pair()
+    let values: Array[Int] = [1, 2, 3, 4]
+    println(pair.left + pair.right + sum(values))
+    return nil
+}

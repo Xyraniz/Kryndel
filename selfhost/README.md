@@ -42,3 +42,5 @@ kry run selfhost/kir_backend.kry option-result.kir option-result-stage7
 ```
 
 The Go direct backend is kept as a byte-level oracle for these stages. Regression tests execute both Kryndel programs under the interpreter and require byte-identical ELF output before a change can pass. This is bootstrap progress, not yet a complete self-hosting compiler: functions, modules/import resolution, general heap values, linker/object-file support, and Windows target remain ahead of this subset.
+
+Stage 14 extends the direct ELF oracle with boxed struct values (literals, field loads, function parameters and returns), scoped shadowing, `for` lowering over `Array[T]`, and `array_indices`. It is covered by an executable Linux regression fixture. The self-hosted Kryndel emitter must mirror this ABI before the feature is considered part of the bootstrap path.

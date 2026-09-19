@@ -40,7 +40,7 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 		return emitELF64WriteExit(output), nil
 	}
 	stmts, stmtErr := directDynamicStatements(p)
-	if stmtErr == nil && (directHasDynamicControl(stmts) || directHasArrayFeatures(stmts) || directHasUserFunctions(p)) {
+	if stmtErr == nil && (directHasDynamicControl(stmts) || directHasArrayFeatures(stmts) || directHasStructuredFeatures(stmts) || directHasUserFunctions(p)) {
 		return buildDirectDynamicELF(p)
 	}
 	return nil, err
