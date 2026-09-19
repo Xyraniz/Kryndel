@@ -1890,6 +1890,17 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return TError, d
 		}
 		return Res(TBytes, TString), nil
+	case "camera_capture":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		if _, d := arg(2, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TBytes, TString), nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not implemented", b.Name)
 }

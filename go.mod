@@ -3,6 +3,7 @@ module github.com/Xyraniz/Kryndel
 go 1.22
 
 require (
+	github.com/blackjack/webcam v0.6.1
 	github.com/ebitengine/purego v0.8.2
 	github.com/kbinani/screenshot v0.0.0-20250624051815-089614a94018
 	github.com/shirou/gopsutil/v3 v3.24.5

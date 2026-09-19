@@ -163,5 +163,6 @@ func init() {
 		Builtin{"screen_display_bounds", "screen_display_bounds(display: Int) -> Result[Json,String]", "graphics", "copy", "display/API failure", "Return one display's desktop coordinates and dimensions as JSON.", "2.5.0", 1, "screen_display_bounds"},
 		Builtin{"screen_capture", "screen_capture(x: Int,y: Int,width: Int,height: Int) -> Result[Bytes,String]", "graphics", "copy", "capture/encoding/limit failure", "Capture a desktop region as bounded PNG bytes.", "2.5.0", 4, "screen_capture"},
 		Builtin{"screen_capture_display", "screen_capture_display(display: Int) -> Result[Bytes,String]", "graphics", "copy", "capture/encoding/limit failure", "Capture one active display as bounded PNG bytes.", "2.5.0", 1, "screen_capture_display"},
+		Builtin{"camera_capture", "camera_capture(device: String,width: Int,height: Int) -> Result[Bytes,String]", "graphics", "copy", "device/capture/encoding/limit failure", "Capture one webcam frame as bounded PNG bytes.", "2.6.0", 3, "camera_capture"},
 	)
 }

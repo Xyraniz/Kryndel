@@ -2329,6 +2329,12 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, bytesVal(value)), nil
+	case "camera_capture":
+		value, err := cameraCapture(r.Ctx.Ctx, a[0].S, a[1].I, a[2].I, r.Lim.MaxOutputBytes)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(value)), nil
 	case "shared_new":
 		return Value{Kind: VShared, Shared: &SharedCell{value: cloneValue(a[0])}}, nil
 	case "shared_read":
