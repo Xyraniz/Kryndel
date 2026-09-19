@@ -158,5 +158,6 @@ func init() {
 		Builtin{"ffi_library_close", "ffi_library_close(library: FFILibrary) -> Nil", "ffi", "handle", "close failure", "Unload a native library when no symbols are in use.", "2.2.0", 1, "ffi_library_close"},
 		Builtin{"process_list", "process_list() -> Result[Json,String]", "process", "copy", "enumeration/limit failure", "Enumerate running processes as bounded JSON metadata.", "2.3.0", 0, "process_list"},
 		Builtin{"process_info", "process_info(pid: Int) -> Result[Json,String]", "process", "copy", "lookup failure", "Read metadata for one running process as JSON.", "2.3.0", 1, "process_info"},
+		Builtin{"geocode_ip", "geocode_ip(ip: String) -> Result[Json,String]", "network", "copy", "validation/HTTP/JSON failure", "Look up an IP address through the configured geocoder and return validated JSON.", "2.4.0", 1, "geocode_ip"},
 	)
 }

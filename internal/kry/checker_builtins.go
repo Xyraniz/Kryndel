@@ -1866,6 +1866,11 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return TError, d
 		}
 		return Res(TJSON, TString), nil
+	case "geocode_ip":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return Res(TJSON, TString), nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not implemented", b.Name)
 }
