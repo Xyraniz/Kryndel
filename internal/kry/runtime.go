@@ -1677,11 +1677,17 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if len(a[0].S) > r.Lim.MaxStringBytes || !json.Valid([]byte(a[0].S)) {
 			return resVal(false, stringVal("invalid JSON")), nil
 		}
+		// Use a number-preserving decoder so large integers keep their exact
+		// value instead of being rounded through float64, then normalize each
+		// number to Int when integral and Float otherwise. This matches the
+		// native backend's JSON model exactly.
+		dec := json.NewDecoder(strings.NewReader(a[0].S))
+		dec.UseNumber()
 		var raw any
-		if err := json.Unmarshal([]byte(a[0].S), &raw); err != nil {
+		if err := dec.Decode(&raw); err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
-		canon, err := json.Marshal(raw)
+		canon, err := json.Marshal(normalizeJSON(raw))
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
@@ -2099,63 +2105,63 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	case "crypto_random_bytes":
 		n := int(a[0].I)
 		if n <= 0 || n > 1024 {
-			return bad("random bytes length must be between 1 and 1024")
+			return resVal(false, stringVal("random bytes length must be between 1 and 1024")), nil
 		}
 		buf := make([]byte, n)
 		if _, err := rand.Read(buf); err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
-		return bytesVal(buf), nil
+		return resVal(true, bytesVal(buf)), nil
 	case "fs_read_dir":
 		entries, err := r.Sandbox.ReadDir(a[0].S)
 		if err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
 		names := make([]Value, len(entries))
 		for i, e := range entries {
 			names[i] = stringVal(e.Name())
 		}
-		return arrVal(names), nil
+		return resVal(true, arrVal(names)), nil
 	case "fs_create_dir":
 		err := r.Sandbox.Mkdir(a[0].S, 0755)
 		if err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
-		return nilVal(), nil
+		return resVal(true, nilVal()), nil
 	case "fs_create_dir_all":
 		err := r.Sandbox.MkdirAll(a[0].S, 0755)
 		if err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
-		return nilVal(), nil
+		return resVal(true, nilVal()), nil
 	case "fs_remove_file":
 		err := r.Sandbox.Remove(a[0].S)
 		if err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
-		return nilVal(), nil
+		return resVal(true, nilVal()), nil
 	case "fs_remove_dir_all":
 		err := r.Sandbox.RemoveAll(a[0].S)
 		if err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
-		return nilVal(), nil
+		return resVal(true, nilVal()), nil
 	case "fs_copy_file":
 		src, dst := a[0].S, a[1].S
 		data, err := r.Sandbox.ReadFile(src)
 		if err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
 		if err := r.Sandbox.WriteFile(dst, data, 0644); err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
-		return nilVal(), nil
+		return resVal(true, nilVal()), nil
 	case "fs_move_file":
 		src, dst := a[0].S, a[1].S
 		if err := r.Sandbox.Rename(src, dst); err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
-		return nilVal(), nil
+		return resVal(true, nilVal()), nil
 	case "fs_is_file":
 		info, err := r.Sandbox.Stat(a[0].S)
 		if err != nil {
@@ -2171,15 +2177,15 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	case "fs_file_size":
 		info, err := r.Sandbox.Stat(a[0].S)
 		if err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
-		return intVal(info.Size()), nil
+		return resVal(true, intVal(info.Size())), nil
 	case "fs_file_modified_time":
 		info, err := r.Sandbox.Stat(a[0].S)
 		if err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
-		return intVal(info.ModTime().Unix()), nil
+		return resVal(true, intVal(info.ModTime().Unix())), nil
 	case "fs_join_path":
 		base := a[0].S
 		parts := a[1].Array
@@ -2191,18 +2197,18 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	case "fs_absolute_path":
 		abs, err := filepath.Abs(a[0].S)
 		if err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
-		return stringVal(abs), nil
+		return resVal(true, stringVal(abs)), nil
 	case "fs_temp_dir":
 		return stringVal(os.TempDir()), nil
 	case "fs_temp_file":
 		f, err := os.CreateTemp("", a[0].S+"-*")
 		if err != nil {
-			return bad(err.Error())
+			return resVal(false, stringVal(err.Error())), nil
 		}
 		f.Close()
-		return stringVal(f.Name()), nil
+		return resVal(true, stringVal(f.Name())), nil
 	case "async_sleep_ms":
 		time.Sleep(time.Duration(a[0].I) * time.Millisecond)
 		return nilVal(), nil
@@ -2243,6 +2249,33 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	}
 	return bad("unknown builtin")
 }
+// normalizeJSON converts json.Number values into Int (when integral) or Float
+// so the interpreter and the native backend agree on JSON number semantics.
+func normalizeJSON(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		if i, err := t.Int64(); err == nil {
+			return i
+		}
+		if f, err := t.Float64(); err == nil {
+			return f
+		}
+		return t.String()
+	case []any:
+		for i := range t {
+			t[i] = normalizeJSON(t[i])
+		}
+		return t
+	case map[string]any:
+		for k := range t {
+			t[k] = normalizeJSON(t[k])
+		}
+		return t
+	default:
+		return v
+	}
+}
+
 func (r *Runtime) httpRequestAuth(e *Expr, method, rawURL, body, token string) (Value, *Diagnostic) {
 	if token == "" {
 		return resVal(false, stringVal("empty authentication token")), nil
