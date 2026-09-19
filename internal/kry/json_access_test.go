@@ -75,6 +75,28 @@ main()
 	}
 }
 
+func TestArraySetCopiesAndChecksBounds(t *testing.T) {
+	src := `
+fn main() -> Result[Array[Int], String] {
+    let original: Array[Int] = [1, 2, 3]
+    let replaced: Array[Int] = result_unwrap(array_set(original, 1, 9))
+    assert_eq(unwrap_or(array_get(original, 1), 0), 2)
+    assert_eq(unwrap_or(array_get(replaced, 1), 0), 9)
+    assert_eq(is_err(array_set(original, 3, 9)), true)
+    return ok(replaced)
+}
+main()
+`
+	p, c := testProgram(t, src)
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("array_set failed: %s", d.Message)
+	}
+}
+
 func TestJSONNumberHelpersPreserveUInt64Precision(t *testing.T) {
 	raw, err := decodeJSONNode("18446744073709551615")
 	if err != nil {

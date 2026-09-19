@@ -55,6 +55,7 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `array_indices` | `array_indices(value: Array[T]) -> Array[Int]` | Return `0..len-1` for enumeration alongside `array_get`. |
 | `array_zip` | `array_zip(left: Array[T], right: Array[T]) -> Array[Array[T]]` | Pair two arrays element-wise up to the shorter length. |
 | `array_pop`, `array_get` | `Array[T] -> Option[T]` | Return `none` for out-of-range or empty access. |
+| `array_set` | `array_set(value: Array[T], index: Int, replacement: T) -> Result[Array[T], String]` | Return a copied array with one checked replacement; the input array is never mutated. |
 | `array_concat`, `array_slice`, `array_reverse`, `array_contains`, `array_join` | Collection operations. | Require homogeneous element types and checked indexes. |
 | `map_get`, `map_insert`, `map_keys` | `Map[K,V]` operations. | Maps preserve deterministic insertion order; insertion returns a new map and missing reads return `none`. |
 | `set_contains`, `set_insert`, `set_len` | `Set[T]` operations. | Sets deduplicate by recursive value equality and return new values on insertion. |

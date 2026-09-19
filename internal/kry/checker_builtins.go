@@ -412,6 +412,26 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("array_get expects Array[T] and Int")
 		}
 		return Opt(t.A), nil
+	case "array_set":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		z, d := arg(1, TInt)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray || !typeEqual(z, TInt) {
+			return bad("array_set expects Array[T] and Int")
+		}
+		v, d := arg(2, t.A)
+		if d != nil {
+			return TError, d
+		}
+		if !compatible(t.A, v) {
+			return bad("array_set replacement type mismatch")
+		}
+		return Res(t, TString), nil
 	case "array_concat":
 		t, d := arg(0, nil)
 		if d != nil {

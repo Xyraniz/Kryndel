@@ -29,6 +29,7 @@ func init() {
 		Builtin{"u32", "u32(value: Int|UInt) -> UInt32", "pure", "copy", "range failure", "Checked conversion to a 32-bit unsigned integer.", "2.9.0", 1, "u32"},
 		Builtin{"u64", "u64(value: Int|UInt) -> UInt64", "pure", "copy", "range failure", "Checked conversion to a 64-bit unsigned integer.", "2.9.0", 1, "u64"},
 		Builtin{"result_error", "result_error(value: Result[T,E]) -> Option[E]", "pure", "copy", "none", "Read the error payload of a failed Result without unwrapping it.", "2.9.0", 1, "result_error"},
+		Builtin{"array_set", "array_set(value: Array[T],index: Int,replacement: T) -> Result[Array[T],String]", "pure", "copy", "range failure", "Replace one array element immutably with a checked index.", "2.9.0", 3, "array_set"},
 		Builtin{"bytes_from_u8", "bytes_from_u8(value: Array[UInt8]) -> Bytes", "pure", "copy", "range failure", "Convert an array of UInt8 values to raw bytes.", "2.9.0", 1, "bytes_from_u8"},
 		Builtin{"u8_array", "u8_array(value: Bytes) -> Array[UInt8]", "pure", "copy", "none", "Expose raw bytes as UInt8 values.", "2.9.0", 1, "u8_array"},
 		Builtin{"json_kind", "json_kind(value: Json) -> String", "json", "copy", "invalid JSON", "Return the validated JSON node kind.", "2.9.0", 1, "json_kind"},

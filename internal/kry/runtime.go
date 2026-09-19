@@ -1867,6 +1867,16 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return optVal(false, nilVal()), nil
 		}
 		return optVal(true, a[0].Array[a[1].I]), nil
+	case "array_set":
+		if a[1].I < 0 || a[1].I >= int64(len(a[0].Array)) {
+			return resVal(false, stringVal("array index out of range")), nil
+		}
+		items := make([]Value, len(a[0].Array))
+		for i, item := range a[0].Array {
+			items[i] = cloneValue(item)
+		}
+		items[a[1].I] = cloneValue(a[2])
+		return resVal(true, arrVal(items)), nil
 	case "array_concat":
 		if len(a[0].Array) > r.Lim.MaxArrayElements-len(a[1].Array) {
 			return bad("array size limit exceeded")
