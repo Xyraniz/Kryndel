@@ -3,6 +3,7 @@ package kry
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -518,5 +519,71 @@ func TestStage6ArrayRuntimeParities(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("array runtime backend differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
+	}
+}
+
+func TestStage7OptionResultRuntimeParities(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "option_result_runtime_stage7.kry")
+	backend := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendProgram, d := LoadProgram(backend, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	kir, err := EmitKIR(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "option-result.kir")
+	outputPath := filepath.Join(dir, "option-result-stage7")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, DefaultLimits(), Sandbox{}, []string{kirPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("Option/Result runtime backend failed: %s", d.Message)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := BuildDirectELF(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Option/Result runtime backend differs from direct ELF oracle: got=%d want=%d", len(got), len(want))
+	}
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		runnable := filepath.Join(dir, "option-result-stage7.run")
+		if err := os.WriteFile(runnable, got, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command(runnable).Output()
+		if err != nil {
+			t.Fatalf("self-hosted Option/Result ELF failed to execute: %v", err)
+		}
+		if string(output) != "true\ntrue\n7\n41\ntrue\ntrue\n42\nbad\n99\n" {
+			t.Fatalf("unexpected self-hosted Option/Result output %q", output)
+		}
 	}
 }

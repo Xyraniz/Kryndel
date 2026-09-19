@@ -37,6 +37,8 @@ type directMachine struct {
 	arrayPushLabel    int
 	arrayConcatLabel  int
 	arrayRuntimeUsed  bool
+	boxAllocLabel     int
+	boxRuntimeUsed    bool
 	inFunction        bool
 	currentFunction   string
 }
@@ -79,6 +81,7 @@ func newDirectMachine() *directMachine {
 	m.arrayAllocLabel = m.newLabel()
 	m.arrayPushLabel = m.newLabel()
 	m.arrayConcatLabel = m.newLabel()
+	m.boxAllocLabel = m.newLabel()
 	return m
 }
 
@@ -405,6 +408,185 @@ func (m *directMachine) emitArrayConcatRuntime() error {
 	return nil
 }
 
+func (m *directMachine) emitBoxCall(tag uint64) error {
+	m.code = append(m.code, 0x48, 0x89, 0xc7, 0x48, 0xbe)
+	var value [8]byte
+	binary.LittleEndian.PutUint64(value[:], tag)
+	m.code = append(m.code, value[:]...)
+	m.boxRuntimeUsed = true
+	return m.emitLabelCall(m.boxAllocLabel)
+}
+
+func (m *directMachine) emitOptionPredicate(e *Expr, none bool) error {
+	if err := m.emitExpr(e); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	set := byte(0x95)
+	if none {
+		set = 0x94
+	}
+	m.code = append(m.code, 0x0f, set, 0xc0, 0x48, 0x0f, 0xb6, 0xc0)
+	return nil
+}
+
+func (m *directMachine) emitResultPredicate(e *Expr, failed bool) error {
+	if err := m.emitExpr(e); err != nil {
+		return err
+	}
+	nilLabel := m.newLabel()
+	joinLabel := m.newLabel()
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x84, nilLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0x38, 0)
+	set := byte(0x94)
+	if failed {
+		set = 0x95
+	}
+	m.code = append(m.code, 0x0f, set, 0xc0, 0x48, 0x0f, 0xb6, 0xc0)
+	if err := m.emitJump(joinLabel); err != nil {
+		return err
+	}
+	if err := m.bind(nilLabel); err != nil {
+		return err
+	}
+	m.emitMoveImmediate(0)
+	if err := m.bind(joinLabel); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *directMachine) emitUnwrapOr(e *Expr) error {
+	if len(e.Args) != 2 {
+		return fmt.Errorf("direct ELF backend unwrap_or expects two arguments")
+	}
+	if err := m.emitExpr(e.Args[0]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50)
+	if err := m.emitExpr(e.Args[1]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc6, 0x5f, 0x48, 0x85, 0xff)
+	noneLabel := m.newLabel()
+	joinLabel := m.newLabel()
+	if err := m.emitConditionalJump(0x84, noneLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8b, 0x47, 0x08)
+	if err := m.emitJump(joinLabel); err != nil {
+		return err
+	}
+	if err := m.bind(noneLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xf0) // mov rax, rsi
+	return m.bind(joinLabel)
+}
+
+func (m *directMachine) emitResultUnwrap(e *Expr) error {
+	if err := m.emitExpr(e); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x84, m.trapLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0x38, 0)
+	if err := m.emitConditionalJump(0x85, m.trapLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8b, 0x40, 0x08)
+	return nil
+}
+
+func (m *directMachine) emitResultError(e *Expr) error {
+	if err := m.emitExpr(e); err != nil {
+		return err
+	}
+	nilLabel := m.newLabel()
+	joinLabel := m.newLabel()
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x84, nilLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0x38, 0)
+	if err := m.emitConditionalJump(0x84, nilLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8b, 0x78, 0x08, 0x48, 0xbe, 1, 0, 0, 0, 0, 0, 0, 0)
+	m.boxRuntimeUsed = true
+	if err := m.emitLabelCall(m.boxAllocLabel); err != nil {
+		return err
+	}
+	if err := m.emitJump(joinLabel); err != nil {
+		return err
+	}
+	if err := m.bind(nilLabel); err != nil {
+		return err
+	}
+	m.emitMoveImmediate(0)
+	return m.bind(joinLabel)
+}
+
+func (m *directMachine) emitArrayGet(e *Expr) error {
+	if len(e.Args) != 2 {
+		return fmt.Errorf("direct ELF backend array_get expects two arguments")
+	}
+	if err := m.emitExpr(e.Args[0]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50)
+	if err := m.emitExpr(e.Args[1]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc6, 0x5f, 0x48, 0x85, 0xf6)
+	nilLabel := m.newLabel()
+	joinLabel := m.newLabel()
+	if err := m.emitConditionalJump(0x88, nilLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x3b, 0x37)
+	if err := m.emitConditionalJump(0x83, nilLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8b, 0x44, 0xf7, 0x08, 0x48, 0x89, 0xc7, 0x48, 0xbe, 1, 0, 0, 0, 0, 0, 0, 0)
+	m.boxRuntimeUsed = true
+	if err := m.emitLabelCall(m.boxAllocLabel); err != nil {
+		return err
+	}
+	if err := m.emitJump(joinLabel); err != nil {
+		return err
+	}
+	if err := m.bind(nilLabel); err != nil {
+		return err
+	}
+	m.emitMoveImmediate(0)
+	return m.bind(joinLabel)
+}
+
+func (m *directMachine) emitBoxAllocRuntime() error {
+	if err := m.bind(m.boxAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x53, 0x55, 0x48, 0x89, 0xfd, 0x48, 0x89, 0xf3,
+		0x48, 0x31, 0xff,
+		0x48, 0xbe, 0x10, 0, 0, 0, 0, 0, 0, 0,
+		0xba, 0x03, 0, 0, 0,
+		0x41, 0xba, 0x22, 0, 0, 0, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff,
+		0x45, 0x31, 0xc9, 0xb8, 0x09, 0, 0, 0, 0x0f, 0x05, 0x48, 0x85, 0xc0,
+	)
+	if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0x18, 0x48, 0x89, 0x68, 0x08, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
 func (m *directMachine) emitWrite(text string) {
 	offset := m.addData(text)
 	// mov eax, SYS_write; mov edi, STDOUT_FILENO
@@ -532,6 +714,33 @@ func (m *directMachine) emitInteger(unsigned bool) error {
 	return nil
 }
 
+func (m *directMachine) emitBooleanOutput(e *Expr, newline bool) error {
+	if err := m.emitExpr(e); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	falseLabel := m.newLabel()
+	joinLabel := m.newLabel()
+	if err := m.emitConditionalJump(0x84, falseLabel); err != nil {
+		return err
+	}
+	m.emitWrite("true")
+	if err := m.emitJump(joinLabel); err != nil {
+		return err
+	}
+	if err := m.bind(falseLabel); err != nil {
+		return err
+	}
+	m.emitWrite("false")
+	if err := m.bind(joinLabel); err != nil {
+		return err
+	}
+	if newline {
+		m.emitWrite("\n")
+	}
+	return nil
+}
+
 func machineScalarType(name string) (*Type, bool) {
 	switch name {
 	case "Int":
@@ -553,6 +762,12 @@ func machineScalarType(name string) (*Type, bool) {
 	default:
 		if strings.HasPrefix(name, "Array[") && strings.HasSuffix(name, "]") {
 			return Arr(TUnknown), true
+		}
+		if strings.HasPrefix(name, "Option[") && strings.HasSuffix(name, "]") {
+			return Opt(TUnknown), true
+		}
+		if strings.HasPrefix(name, "Result[") && strings.HasSuffix(name, "]") {
+			return Res(TUnknown, TUnknown), true
 		}
 		return nil, false
 	}
@@ -726,6 +941,65 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			}
 			m.code = append(m.code, 0x48, 0x89, 0xc1, 0x58)
 			return m.emitArrayConcatCall()
+		case "some":
+			if len(e.Args) != 1 {
+				return fmt.Errorf("direct ELF backend some expects one argument")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			return m.emitBoxCall(1)
+		case "none":
+			if len(e.Args) != 0 {
+				return fmt.Errorf("direct ELF backend none expects no arguments")
+			}
+			m.emitMoveImmediate(0)
+			return nil
+		case "ok", "err":
+			if len(e.Args) != 1 {
+				return fmt.Errorf("direct ELF backend %s expects one argument", e.Name)
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			if e.Name == "ok" {
+				return m.emitBoxCall(0)
+			}
+			return m.emitBoxCall(1)
+		case "is_some":
+			if len(e.Args) != 1 {
+				return fmt.Errorf("direct ELF backend is_some expects one argument")
+			}
+			return m.emitOptionPredicate(e.Args[0], false)
+		case "is_none":
+			if len(e.Args) != 1 {
+				return fmt.Errorf("direct ELF backend is_none expects one argument")
+			}
+			return m.emitOptionPredicate(e.Args[0], true)
+		case "is_ok":
+			if len(e.Args) != 1 {
+				return fmt.Errorf("direct ELF backend is_ok expects one argument")
+			}
+			return m.emitResultPredicate(e.Args[0], false)
+		case "is_err":
+			if len(e.Args) != 1 {
+				return fmt.Errorf("direct ELF backend is_err expects one argument")
+			}
+			return m.emitResultPredicate(e.Args[0], true)
+		case "unwrap_or":
+			return m.emitUnwrapOr(e)
+		case "result_unwrap":
+			if len(e.Args) != 1 {
+				return fmt.Errorf("direct ELF backend result_unwrap expects one argument")
+			}
+			return m.emitResultUnwrap(e.Args[0])
+		case "result_error":
+			if len(e.Args) != 1 {
+				return fmt.Errorf("direct ELF backend result_error expects one argument")
+			}
+			return m.emitResultError(e.Args[0])
+		case "array_get":
+			return m.emitArrayGet(e)
 		case "u8", "u16", "u32", "u64":
 			if len(e.Args) != 1 {
 				return fmt.Errorf("direct ELF backend conversion %s expects one argument", e.Name)
@@ -929,7 +1203,7 @@ func directHasArrayFeatureExpr(e *Expr) bool {
 		return true
 	}
 	if e.Kind == ExCall {
-		if e.Name == "len" || e.Name == "array_push" || e.Name == "array_concat" {
+		if e.Name == "len" || e.Name == "array_push" || e.Name == "array_concat" || e.Name == "array_get" || e.Name == "some" || e.Name == "none" || e.Name == "ok" || e.Name == "err" || e.Name == "is_some" || e.Name == "is_none" || e.Name == "is_ok" || e.Name == "is_err" || e.Name == "unwrap_or" || e.Name == "result_unwrap" || e.Name == "result_error" {
 			return true
 		}
 		for _, argument := range e.Args {
@@ -1108,6 +1382,9 @@ func (m *directMachine) emitStaticOutput(e *Expr, name string) error {
 			return nil
 		}
 		if e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyInt && e.Args[0].Type.Kind != TyUInt) {
+			if e.Args[0].Type != nil && e.Args[0].Type.Kind == TyBool {
+				return m.emitBooleanOutput(e.Args[0], name == "println")
+			}
 			return fmt.Errorf("direct ELF backend supports only statically displayable print values")
 		}
 		if err := m.emitExpr(e.Args[0]); err != nil {
@@ -1287,7 +1564,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
-	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed {
+	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed {
 		if err := m.emitJump(m.endLabel); err != nil {
 			return nil, err
 		}
@@ -1339,6 +1616,11 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			return nil, err
 		}
 		if err := m.emitArrayConcatRuntime(); err != nil {
+			return nil, err
+		}
+	}
+	if m.boxRuntimeUsed {
+		if err := m.emitBoxAllocRuntime(); err != nil {
 			return nil, err
 		}
 	}

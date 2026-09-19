@@ -156,6 +156,42 @@ println(values[0])
 	}
 }
 
+func TestDirectELFLowersOptionAndResultRuntime(t *testing.T) {
+	p, c := testProgram(t, `
+let empty: Option[Int] = none()
+let present: Option[Int] = some(41)
+println(is_none(empty))
+println(is_some(present))
+println(unwrap_or(empty, 7))
+println(unwrap_or(present, 7))
+let success: Result[Int, String] = ok(42)
+let failure: Result[Int, String] = err("bad")
+println(is_ok(success))
+println(is_err(failure))
+println(result_unwrap(success))
+println(unwrap_or(result_error(failure), "fallback"))
+println(unwrap_or(array_get([7, 8], 4), 99))
+`)
+	data, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return
+	}
+	path := filepath.Join(t.TempDir(), "option-result-program")
+	if err := os.WriteFile(path, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(path).Output()
+	if err != nil {
+		t.Fatalf("option/result direct ELF failed to execute: %v", err)
+	}
+	if string(out) != "true\ntrue\n7\n41\ntrue\ntrue\n42\nbad\n99\n" {
+		t.Fatalf("unexpected option/result output %q", out)
+	}
+}
+
 func TestRuntimeReceivesExplicitProgramArguments(t *testing.T) {
 	p, c := testProgram(t, `let args: Array[String] = process_args()
 assert_eq(args[0], "input.kir")
