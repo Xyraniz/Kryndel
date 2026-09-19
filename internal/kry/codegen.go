@@ -857,6 +857,12 @@ func (g *cgen) builtinCall(e *Expr, b Builtin) string {
 		return "k_fs_temp_dir(kv_nil())"
 	case "fs_temp_file":
 		return fmt.Sprintf("k_fs_temp_file(%s)", arg(0))
+	case "sleep_ms":
+		return fmt.Sprintf("k_sleep(%s)", arg(0))
+	case "yield_now":
+		return "k_yield_now()"
+	case "process_run":
+		return fmt.Sprintf("k_process_run(%s, %s)", arg(0), arg(1))
 	}
 	g.fail("builtin '%s' is not supported by the native backend", b.Name)
 	return "kv_nil()"
