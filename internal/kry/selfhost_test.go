@@ -1022,3 +1022,108 @@ func TestStage15DirectHostIO(t *testing.T) {
 		t.Fatalf("rejected path was unexpectedly created: %v", err)
 	}
 }
+
+func TestStage16KryndelBackendHostIOParity(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_host_io_stage15.kry")
+	backend := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendProgram, d := LoadProgram(backend, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	kir, err := EmitKIR(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "host-io-stage15.kir")
+	outputPath := filepath.Join(dir, "host-io-stage16")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, DefaultLimits(), Sandbox{}, []string{kirPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage16 Kryndel backend failed: %s", d.Message)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := BuildDirectELF(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		first := -1
+		for i := 0; i < len(got) && i < len(want); i++ {
+			if got[i] != want[i] {
+				first = i
+				break
+			}
+		}
+		if first == -1 && len(got) != len(want) {
+			first = len(got)
+		}
+		start := first - 16
+		if start < 0 {
+			start = 0
+		}
+		end := first + 32
+		if end > len(got) {
+			end = len(got)
+		}
+		wantEnd := end
+		if wantEnd > len(want) {
+			wantEnd = len(want)
+		}
+		t.Fatalf("stage16 host I/O backend differs: offset=%d got[%d:%d]=% x want[%d:%d]=% x", first, start, end, got[start:end], start, wantEnd, want[start:wantEnd])
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("self-hosted ELF execution requires linux-amd64")
+	}
+	input := filepath.Join(dir, "input.txt")
+	output := filepath.Join(dir, "output.bin")
+	rejected := filepath.Join(dir, "missing", "output.bin")
+	if err := os.WriteFile(input, []byte("host-io"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runnable := filepath.Join(dir, "kryndel-host-io-stage16")
+	if err := os.WriteFile(runnable, got, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outputText, err := exec.Command(runnable, input, output, rejected).Output()
+	if err != nil {
+		t.Fatalf("stage16 self-hosted ELF failed to execute: %v", err)
+	}
+	if string(outputText) != "3\nhost-io\ntrue\nfalse\n" {
+		t.Fatalf("unexpected stage16 self-hosted ELF output %q", outputText)
+	}
+	written, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != "ABC" {
+		t.Fatalf("unexpected stage16 self-hosted written bytes %q", written)
+	}
+	if _, err := os.Stat(rejected); !os.IsNotExist(err) {
+		t.Fatalf("stage16 rejected path was unexpectedly created: %v", err)
+	}
+}
