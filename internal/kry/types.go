@@ -29,6 +29,8 @@ const (
 	TyActor
 	TyShared
 	TyTaskGroup
+	TyRegex
+	TyRandom
 )
 
 type Type struct {
@@ -92,6 +94,10 @@ func (t *Type) String() string {
 		return "Shared[" + t.A.String() + "]"
 	case TyTaskGroup:
 		return "TaskGroup"
+	case TyRegex:
+		return "Regex"
+	case TyRandom:
+		return "Random"
 	case TyJSON:
 		return "Json"
 	case TyWebSocket:
@@ -300,6 +306,10 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 			return TJSON, nil
 		case "WebSocket":
 			return &Type{Kind: TyWebSocket, Name: "WebSocket"}, nil
+		case "Regex":
+			return &Type{Kind: TyRegex, Name: "Regex"}, nil
+		case "Random":
+			return &Type{Kind: TyRandom, Name: "Random"}, nil
 		case "Array":
 			return Arr(TUnknown), nil
 		}

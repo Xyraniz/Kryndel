@@ -13,10 +13,12 @@ import (
 	"fmt"
 	"io"
 	"math"
+	mrand "math/rand"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -49,8 +51,17 @@ const (
 	VActor
 	VShared
 	VTaskGroup
+	VRegex
+	VRandom
 	VTailCall
 )
+
+type regexHandle struct{ re *regexp.Regexp }
+
+type randomHandle struct {
+	mu  sync.Mutex
+	rng *mrand.Rand
+}
 
 type Value struct {
 	Kind    ValueKind
@@ -75,6 +86,8 @@ type Value struct {
 	Actor   *Actor
 	Shared  *SharedCell
 	Group   *TaskGroup
+	Regex   *regexHandle
+	Random  *randomHandle
 	Tail    *TailCall
 }
 
@@ -165,6 +178,10 @@ func display(v Value) string {
 		return "<Shared>"
 	case VTaskGroup:
 		return "<TaskGroup>"
+	case VRegex:
+		return "<Regex>"
+	case VRandom:
+		return "<Random>"
 	case VTailCall:
 		return "<tail-call>"
 	case VMap:
@@ -208,6 +225,10 @@ func cloneValue(v Value) Value {
 	case VShared:
 		return v
 	case VTaskGroup:
+		return v
+	case VRegex:
+		return v
+	case VRandom:
 		return v
 	case VTailCall:
 		return v
@@ -337,6 +358,10 @@ func equalValue(a, b Value) bool {
 		return a.Shared == b.Shared
 	case VTaskGroup:
 		return a.Group == b.Group
+	case VRegex:
+		return a.Regex == b.Regex
+	case VRandom:
+		return a.Random == b.Random
 	case VTailCall:
 		return a.Tail == b.Tail
 	case VSet:
@@ -1809,6 +1834,135 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(fmt.Sprintf("process exited with code %d", ee.ExitCode()))), nil
 		}
 		return resVal(false, stringVal(err.Error())), nil
+	case "uuid_v4":
+		value, err := uuidV4()
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, stringVal(value)), nil
+	case "uuid_v5":
+		value, err := uuidV5(a[0].S, a[1].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, stringVal(value)), nil
+	case "uuid_is_valid":
+		return boolVal(validUUID(a[0].S)), nil
+	case "platform_os":
+		return stringVal(platformOS()), nil
+	case "platform_arch":
+		return stringVal(platformArch()), nil
+	case "platform_runtime":
+		return stringVal(platformRuntime()), nil
+	case "platform_hostname":
+		host, err := os.Hostname()
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, stringVal(host)), nil
+	case "dotenv_load":
+		data, err := r.Sandbox.ReadFile(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		values, err := dotenvParse(string(data))
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		entries := make([]MapEntry, 0, len(values))
+		keys := make([]string, 0, len(values))
+		for key := range values {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			entries = append(entries, MapEntry{Key: stringVal(key), Value: stringVal(values[key])})
+		}
+		return resVal(true, Value{Kind: VMap, Map: entries}), nil
+	case "datetime_now":
+		return stringVal(time.Now().UTC().Format(time.RFC3339Nano)), nil
+	case "datetime_unix_ms":
+		return intVal(time.Now().UnixMilli()), nil
+	case "datetime_format":
+		value := time.UnixMilli(a[0].I).UTC().Format(a[1].S)
+		return resVal(true, stringVal(value)), nil
+	case "datetime_parse":
+		value, err := time.Parse(a[1].S, a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, intVal(value.UnixMilli())), nil
+	case "random_new":
+		return Value{Kind: VRandom, Random: newRandom(a[0].I)}, nil
+	case "random_int":
+		value, err := randomInt(a[0].Random, a[1].I, a[2].I)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, intVal(value)), nil
+	case "random_float":
+		value, err := randomFloat(a[0].Random)
+		if err != nil {
+			return bad(err.Error())
+		}
+		return floatVal(value), nil
+	case "random_choice":
+		if a[0].Random == nil {
+			return bad("invalid Random handle")
+		}
+		if len(a[1].Array) == 0 {
+			return optVal(false, nilVal()), nil
+		}
+		index, err := randomInt(a[0].Random, 0, int64(len(a[1].Array)-1))
+		if err != nil {
+			return bad(err.Error())
+		}
+		return optVal(true, a[1].Array[index]), nil
+	case "regex_compile":
+		re, err := regexp.Compile(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VRegex, Regex: &regexHandle{re: re}}), nil
+	case "regex_is_match":
+		if a[0].Regex == nil || a[0].Regex.re == nil {
+			return bad("invalid Regex handle")
+		}
+		return boolVal(a[0].Regex.re.MatchString(a[1].S)), nil
+	case "regex_find":
+		if a[0].Regex == nil || a[0].Regex.re == nil {
+			return bad("invalid Regex handle")
+		}
+		indices := a[0].Regex.re.FindStringIndex(a[1].S)
+		if indices == nil {
+			return optVal(false, nilVal()), nil
+		}
+		return optVal(true, stringVal(a[1].S[indices[0]:indices[1]])), nil
+	case "regex_find_all":
+		if a[0].Regex == nil || a[0].Regex.re == nil {
+			return bad("invalid Regex handle")
+		}
+		matches := a[0].Regex.re.FindAllString(a[1].S, r.Lim.MaxArrayElements)
+		out := make([]Value, len(matches))
+		for i, match := range matches {
+			out[i] = stringVal(match)
+		}
+		return arrVal(out), nil
+	case "regex_replace_all":
+		if a[0].Regex == nil || a[0].Regex.re == nil {
+			return bad("invalid Regex handle")
+		}
+		return stringVal(a[0].Regex.re.ReplaceAllString(a[1].S, a[2].S)), nil
+	case "regex_split":
+		if a[0].Regex == nil || a[0].Regex.re == nil {
+			return bad("invalid Regex handle")
+		}
+		parts := a[0].Regex.re.Split(a[1].S, r.Lim.MaxArrayElements)
+		out := make([]Value, len(parts))
+		for i, part := range parts {
+			out[i] = stringVal(part)
+		}
+		return arrVal(out), nil
 	case "shared_new":
 		return Value{Kind: VShared, Shared: &SharedCell{value: cloneValue(a[0])}}, nil
 	case "shared_read":
@@ -2714,6 +2868,7 @@ func (r *Runtime) toFloat(e *Expr, v Value) (Value, *Diagnostic) {
 	}
 	return nilVal(), r.fail(e, "float conversion is unsupported")
 }
+
 // normalizeSliceIndex maps a Python-style index (which may be negative) onto
 // the range [0, length]. Indices outside the range are clamped, matching the
 // forgiving behaviour Python programmers expect from slicing.

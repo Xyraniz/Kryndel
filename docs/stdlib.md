@@ -74,6 +74,13 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `websocket_connect`, `websocket_send`, `websocket_receive`, `websocket_close` | RFC 6455 WebSocket lifecycle. | Require `ws`/`wss`, validate the handshake, mask client frames, bound payloads, and expose `WebSocket` as non-Copy. |
 | `process_run` | `process_run(program: String, args: Array[String]) -> Result[Int,String]` | Starts a program directly without a shell and bounds combined output. |
 | `win_registry_get`, `win_service_query`, `win_eventlog_write`, `win_raw_input`, `win_device_io_control` | Windows-only host operations. | Return an explicit unsupported-target failure on non-Windows; native adapters use Win32-compatible entry points. |
+| `uuid_v4`, `uuid_v5`, `uuid_is_valid` | UUID generation and validation. | v4 uses the OS CSPRNG; v5 follows the RFC name-based SHA-1 format; malformed namespaces return `err`. |
+| `platform_os`, `platform_arch`, `platform_runtime`, `platform_hostname` | Host identity and runtime metadata. | The OS, architecture, and runtime are read locally; hostname access is fallible and returns `Result`. |
+| `dotenv_load` | `dotenv_load(path: String) -> Result[Map[String,String],String]` | Reads through the Kryndel sandbox, supports `export`, quoted values, comments, and `${NAME}` expansion, and never mutates the process environment. |
+| `datetime_now`, `datetime_unix_ms` | Current UTC timestamp helpers. | `datetime_now` returns RFC 3339 with nanoseconds; Unix milliseconds are signed `Int` values. |
+| `datetime_format`, `datetime_parse` | `Int` Unix milliseconds and Go time layouts. | Formatting and parsing are explicit and return `err` for invalid layouts or timestamps. |
+| `random_new`, `random_int`, `random_float`, `random_choice` | Seeded `Random` handle operations. | Each handle is isolated and mutex-protected; integer ranges are inclusive, and empty choices return `none`. |
+| `regex_compile`, `regex_is_match`, `regex_find`, `regex_find_all`, `regex_replace_all`, `regex_split` | RE2 regular-expression operations over UTF-8 strings. | Compilation errors are returned as `err`; the RE2 engine guarantees bounded, non-backtracking matching. |
 
 String-to-number conversion rejects whitespace-dependent partial parses and inputs such as `"12xyz"`. Float values and results must be finite. Integer arithmetic and `abs(Int minimum)` are checked. `Bytes` conversion never applies an implicit text encoding to arbitrary values.
 

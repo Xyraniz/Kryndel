@@ -87,10 +87,12 @@ mailboxes (`actor_channel`, `actor_send`, `actor_try_receive`,
 (`poly_register`, `poly_reorder`, `poly_dispatch`). Because values are
 immutable, shared cells are heap pointers and actor mailboxes are FIFO queues;
 worker threads are not executed concurrently but are run on demand by `await`,
-which preserves the observable result for the deterministic subset. Constructs
-that are not yet supported (HTTP, WebSockets, Windows APIs) are rejected with a
-categorized diagnostic instead of silently degrading; output is never
-mislabeled as native merely because a file has a native-looking suffix.
+which preserves the observable result for the deterministic subset. Host-
+integrated builtins are added to the native support matrix only when the
+generated C runtime has an implementation for the selected target; until then
+they are rejected with a categorized diagnostic instead of silently degrading.
+Output is never mislabeled as native merely because a file has a native-looking
+suffix.
 
 ### Cryptography in the native runtime
 

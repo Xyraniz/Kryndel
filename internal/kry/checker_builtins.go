@@ -1491,6 +1491,143 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return TError, d
 		}
 		return t, nil
+	case "uuid_v4":
+		return Res(TString, TString), nil
+	case "uuid_v5":
+		for i := 0; i < 2; i++ {
+			if _, d := arg(i, TString); d != nil {
+				return TError, d
+			}
+		}
+		return Res(TString, TString), nil
+	case "uuid_is_valid":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return TBool, nil
+	case "platform_os", "platform_arch", "platform_runtime":
+		return TString, nil
+	case "platform_hostname":
+		return Res(TString, TString), nil
+	case "dotenv_load":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return Res(MapOf(TString, TString), TString), nil
+	case "datetime_now":
+		return TString, nil
+	case "datetime_unix_ms":
+		return TInt, nil
+	case "datetime_format", "datetime_parse":
+		want := TInt
+		if b.Name == "datetime_parse" {
+			want = TString
+		}
+		if _, d := arg(0, want); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TString); d != nil {
+			return TError, d
+		}
+		if b.Name == "datetime_parse" {
+			return Res(TInt, TString), nil
+		}
+		return Res(TString, TString), nil
+	case "random_new":
+		if _, d := arg(0, TInt); d != nil {
+			return TError, d
+		}
+		return &Type{Kind: TyRandom, Name: "Random"}, nil
+	case "random_int":
+		r, d := arg(0, &Type{Kind: TyRandom, Name: "Random"})
+		if d != nil {
+			return TError, d
+		}
+		if r.Kind != TyRandom {
+			return bad("random_int expects Random as its first argument")
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		if _, d := arg(2, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TInt, TString), nil
+	case "random_float":
+		if r, d := arg(0, &Type{Kind: TyRandom, Name: "Random"}); d != nil || r.Kind != TyRandom {
+			if d != nil {
+				return TError, d
+			}
+			return bad("random_float expects Random")
+		}
+		return TFloat, nil
+	case "random_choice":
+		r, d := arg(0, &Type{Kind: TyRandom, Name: "Random"})
+		if d != nil {
+			return TError, d
+		}
+		if r.Kind != TyRandom {
+			return bad("random_choice expects Random as its first argument")
+		}
+		v, d := arg(1, nil)
+		if d != nil {
+			return TError, d
+		}
+		if v.Kind != TyArray {
+			return bad("random_choice expects Array[T]")
+		}
+		return Opt(v.A), nil
+	case "regex_compile":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return Res(&Type{Kind: TyRegex, Name: "Regex"}, TString), nil
+	case "regex_is_match":
+		if r, d := arg(0, &Type{Kind: TyRegex, Name: "Regex"}); d != nil || r.Kind != TyRegex {
+			if d != nil {
+				return TError, d
+			}
+			return bad("regex_is_match expects Regex")
+		}
+		if _, d := arg(1, TString); d != nil {
+			return TError, d
+		}
+		return TBool, nil
+	case "regex_find":
+		if r, d := arg(0, &Type{Kind: TyRegex, Name: "Regex"}); d != nil || r.Kind != TyRegex {
+			if d != nil {
+				return TError, d
+			}
+			return bad("regex_find expects Regex")
+		}
+		if _, d := arg(1, TString); d != nil {
+			return TError, d
+		}
+		return Opt(TString), nil
+	case "regex_find_all", "regex_split":
+		if r, d := arg(0, &Type{Kind: TyRegex, Name: "Regex"}); d != nil || r.Kind != TyRegex {
+			if d != nil {
+				return TError, d
+			}
+			return bad(b.Name + " expects Regex")
+		}
+		if _, d := arg(1, TString); d != nil {
+			return TError, d
+		}
+		return Arr(TString), nil
+	case "regex_replace_all":
+		if r, d := arg(0, &Type{Kind: TyRegex, Name: "Regex"}); d != nil || r.Kind != TyRegex {
+			if d != nil {
+				return TError, d
+			}
+			return bad("regex_replace_all expects Regex")
+		}
+		for i := 1; i < 3; i++ {
+			if _, d := arg(i, TString); d != nil {
+				return TError, d
+			}
+		}
+		return TString, nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not implemented", b.Name)
 }
