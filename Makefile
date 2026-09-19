@@ -15,6 +15,7 @@ check: build
 	$(BINARY) check examples/typed_data.kry
 	$(BINARY) check examples/module_demo.kry
 	$(BINARY) check examples/collections.kry
+	$(BINARY) check examples/native_features.kry
 	$(BINARY) check examples/discord_bot.kry
 	$(BINARY) check examples/runtime_polymorphism.kry
 	$(BINARY) check examples/dispatch_library.kry
@@ -28,6 +29,7 @@ test: build check
 	$(BINARY) run examples/typed_data.kry
 	$(BINARY) run examples/module_demo.kry
 	$(BINARY) run examples/collections.kry
+	$(BINARY) run examples/native_features.kry
 	$(BINARY) run examples/runtime_polymorphism.kry
 	$(BINARY) run examples/dispatch_library.kry
 	$(BINARY) build examples/hello.kry --format=elf --target=linux-x64 -o build/hello.elf
@@ -56,6 +58,12 @@ native-smoke: build
 	$(BINARY) inspect build/hello.exe
 	$(BINARY) build examples/hello.kry --format=elf --target=linux-x64 -o build/hello.elf
 	$(BINARY) inspect build/hello.elf
+
+native-parity: build
+	$(BINARY) build examples/native_features.kry --format=elf --target=linux-x64 -o build/native_features.elf
+	$(BINARY) run examples/native_features.kry > build/native_features.interp.out
+	./build/native_features.elf > build/native_features.native.out
+	diff build/native_features.interp.out build/native_features.native.out
 
 install-association: build
 	tools/install-association.sh
