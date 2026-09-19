@@ -8,6 +8,9 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `println` | `println(value: Display) -> Nil` | Writes one value and a newline; a stream failure is reported. |
 | `len` | `len(value: String\|Array[T]\|Bytes\|Map[K,V]\|Set[T]) -> Int` | Counts UTF-8 code points, elements, octets, map entries, or unique set elements. |
 | `bytes` | `bytes(value: Array[Int]) -> Bytes` | Converts integers in `0..255`; out-of-range elements are rejected. |
+| `u8`, `u16`, `u32`, `u64` | `uN(value: Int\|UInt) -> UIntN` | Checked conversion to a fixed-width unsigned value; negative and out-of-range inputs are rejected. |
+| `bytes_from_u8` | `bytes_from_u8(value: Array[UInt8]) -> Bytes` | Converts a typed UInt8 array to raw bytes. |
+| `u8_array` | `u8_array(value: Bytes) -> Array[UInt8]` | Exposes every byte as a UInt8 value. |
 | `string_to_bytes` | `string_to_bytes(value: String) -> Bytes` | Preserves valid UTF-8 bytes; invalid UTF-8 is rejected. |
 | `bytes_to_string` | `bytes_to_string(value: Bytes) -> String` | Decodes only valid UTF-8; malformed bytes are rejected. |
 | `array_push` | `array_push(array: Array[T], value: T) -> Array[T]` | Returns a new array; mismatched elements and allocation overflow are rejected. |
@@ -17,9 +20,9 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `bool` | `bool(value: Display) -> Bool` | Performs explicit conversion using documented scalar and collection rules. |
 | `assert` | `assert(condition: Bool) -> Nil` | A false condition raises a runtime assertion error. |
 | `assert_eq` | `assert_eq(left: T, right: T) -> Nil` | Unequal values raise a runtime assertion error. |
-| `abs` | `abs(value: Int\|Float) -> Int\|Float` | Computes checked absolute value; Int minimum and non-finite Float values are rejected. |
-| `sqrt` | `sqrt(value: Int\|Float) -> Float` | Computes a finite square root; negative and non-finite values are rejected. |
-| `min`, `max` | `min/max(left: Int\|Float, right: Int\|Float) -> Int\|Float` | Require matching numeric operands. |
+| `abs` | `abs(value: Int\|UInt\|Float) -> Int\|UInt\|Float` | Computes checked absolute value for signed values and preserves unsigned values. |
+| `sqrt` | `sqrt(value: Int\|UInt\|Float) -> Float` | Computes a finite square root; negative and non-finite values are rejected. |
+| `min`, `max` | `min/max(left: Int\|UInt\|Float, right: Int\|UInt\|Float) -> Int\|UInt\|Float` | Require matching numeric operands. |
 | `floor`, `ceil`, `round` | `floor/ceil/round(value: Float) -> Int` | Convert finite rounded results only when representable as Int. |
 | `pow`, `log`, `sin`, `cos` | `pow/log/sin/cos(value: Float, ...) -> Float` | Require finite Float results. |
 | `is_nan`, `is_finite` | `is_nan/is_finite(value: Float) -> Bool` | Inspect floating-point classification. |

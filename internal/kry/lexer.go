@@ -69,6 +69,11 @@ const (
 	OR
 	QUESTION
 	PIPE
+	BITAND
+	BITXOR
+	SHL
+	SHR
+	BITNOT
 )
 
 type Token struct {
@@ -284,6 +289,12 @@ func Lex(src *Source, lim Limits) ([]Token, *Diagnostic) {
 			case "||":
 				k = OR
 				wid = 2
+			case "<<":
+				k = SHL
+				wid = 2
+			case ">>":
+				k = SHR
+				wid = 2
 			}
 		}
 		if k == EOF {
@@ -330,6 +341,12 @@ func Lex(src *Source, lim Limits) ([]Token, *Diagnostic) {
 				k = QUESTION
 			case '|':
 				k = PIPE
+			case '&':
+				k = BITAND
+			case '^':
+				k = BITXOR
+			case '~':
+				k = BITNOT
 
 			default:
 				return nil, Diag(CatLex, src, ln, cl, "unexpected character %q", r)

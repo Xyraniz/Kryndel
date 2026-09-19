@@ -4,7 +4,7 @@ Kryndel uses bounded per-invocation Go state for the source tree, tokens, typed 
 
 ## Value categories
 
-`Int`, `Float`, `Bool`, and `Nil` are copied by value. Enum tags are copied by value. Strings and bytes carry a length and immutable storage. Arrays carry an element type, a length, and immutable value storage. Structs, options, and results contain immutable value descriptors and payloads. Passing these values to a function copies the descriptor; operations such as concatenation and `array_push` allocate a new logical value rather than mutating the source.
+`Int`, fixed-width `UInt` values, `Float`, `Bool`, and `Nil` are copied by value. Enum tags are copied by value. Strings and bytes carry a length and immutable storage. Arrays carry an element type, a length, and immutable value storage. Structs, options, and results contain immutable value descriptors and payloads. Passing these values to a function copies the descriptor; operations such as concatenation and `array_push` allocate a new logical value rather than mutating the source.
 
 `Channel[T]` and `Thread[T]` are opaque runtime handles. They are synchronized or joined through explicit builtins and are not Copy values for channel transfer. Raw pointers, arbitrary casts, file descriptors, sockets, and child-process handles are not source-language values.
 

@@ -757,8 +757,16 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				t = TBool
 			}
 		} else {
-			if !numeric(ot) {
-				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unary sign expects Int or Float")
+			if e.Op == BITNOT {
+				if !isUInt(ot) {
+					d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "'~' expects UInt8, UInt16, UInt32, or UInt64")
+				} else {
+					t = ot
+				}
+			} else if !numeric(ot) {
+				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unary sign expects Int, UInt, or Float")
+			} else if isUInt(ot) && e.Op == MINUS {
+				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unary '-' is not defined for UInt; use wrapping subtraction")
 			} else {
 				t = ot
 			}
@@ -782,7 +790,11 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			t = TBool
 			break
 		}
-		rt, dd := c.checkExpr(sc, e.Right, lt)
+		rightExpected := lt
+		if e.Op == SHL || e.Op == SHR {
+			rightExpected = TInt
+		}
+		rt, dd := c.checkExpr(sc, e.Right, rightExpected)
 		if dd != nil {
 			d = dd
 			break
@@ -800,6 +812,22 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "equality operands must have the same type")
 			}
 			t = TBool
+			break
+		}
+		if e.Op == BITAND || e.Op == BITXOR || e.Op == PIPE {
+			if !isUInt(lt) || !typeEqual(lt, rt) {
+				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "bitwise operands must have matching UInt types")
+			} else {
+				t = lt
+			}
+			break
+		}
+		if e.Op == SHL || e.Op == SHR {
+			if !isUInt(lt) || !typeEqual(rt, TInt) {
+				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "shift expects a UInt left operand and an Int count")
+			} else {
+				t = lt
+			}
 			break
 		}
 		if e.Op == LESS || e.Op == LEQ || e.Op == GREATER || e.Op == GEQ {
@@ -840,8 +868,8 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				d = Diag(CatType, key.Tok.Source, key.Tok.Line, key.Tok.Column, "map keys must have one homogeneous type")
 				break
 			}
-			if kt.Kind != TyInt && kt.Kind != TyBool && kt.Kind != TyString {
-				d = Diag(CatType, key.Tok.Source, key.Tok.Line, key.Tok.Column, "map keys must be Int, Bool, or String")
+			if kt.Kind != TyInt && kt.Kind != TyUInt && kt.Kind != TyBool && kt.Kind != TyString {
+				d = Diag(CatType, key.Tok.Source, key.Tok.Line, key.Tok.Column, "map keys must be Int, UInt, Bool, or String")
 				break
 			}
 			got, dd = c.checkExpr(sc, e.Values[i], vt)
@@ -1176,7 +1204,7 @@ func satisfiesConstraint(t *Type, constraint string) bool {
 	case "Numeric":
 		return numeric(t)
 	case "Comparable":
-		return t != nil && (t.Kind == TyNil || t.Kind == TyInt || t.Kind == TyFloat || t.Kind == TyBool || t.Kind == TyString || t.Kind == TyBytes || t.Kind == TyEnum)
+		return t != nil && (t.Kind == TyNil || t.Kind == TyInt || t.Kind == TyUInt || t.Kind == TyFloat || t.Kind == TyBool || t.Kind == TyString || t.Kind == TyBytes || t.Kind == TyEnum)
 	default:
 		return false
 	}

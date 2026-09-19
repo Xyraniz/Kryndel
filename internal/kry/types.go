@@ -10,6 +10,7 @@ const (
 	TyVoid
 	TyNil
 	TyInt
+	TyUInt
 	TyFloat
 	TyBool
 	TyString
@@ -43,6 +44,7 @@ const (
 type Type struct {
 	Kind   TypeKind
 	Name   string
+	Bits   uint8
 	A, B   *Type
 	Struct *StructDecl
 	Enum   *EnumDecl
@@ -54,12 +56,38 @@ var (
 	TVoid    = &Type{Kind: TyVoid, Name: "Void"}
 	TNil     = &Type{Kind: TyNil, Name: "Nil"}
 	TInt     = &Type{Kind: TyInt, Name: "Int"}
+	TUInt8   = UInt(8)
+	TUInt16  = UInt(16)
+	TUInt32  = UInt(32)
+	TUInt64  = UInt(64)
 	TFloat   = &Type{Kind: TyFloat, Name: "Float"}
 	TBool    = &Type{Kind: TyBool, Name: "Bool"}
 	TString  = &Type{Kind: TyString, Name: "String"}
 	TBytes   = &Type{Kind: TyBytes, Name: "Bytes"}
 	TJSON    = &Type{Kind: TyJSON, Name: "Json"}
 )
+
+func UInt(bits uint8) *Type {
+	name := fmt.Sprintf("UInt%d", bits)
+	return &Type{Kind: TyUInt, Name: name, Bits: bits}
+}
+
+func isUInt(t *Type) bool { return t != nil && t.Kind == TyUInt }
+
+func uintType(bits uint8) *Type {
+	switch bits {
+	case 8:
+		return TUInt8
+	case 16:
+		return TUInt16
+	case 32:
+		return TUInt32
+	case 64:
+		return TUInt64
+	default:
+		return UInt(bits)
+	}
+}
 
 func Arr(t *Type) *Type        { return &Type{Kind: TyArray, Name: "Array", A: t} }
 func Opt(t *Type) *Type        { return &Type{Kind: TyOption, Name: "Option", A: t} }
@@ -145,6 +173,9 @@ func typeEqual(a, b *Type) bool {
 		if x.Kind != y.Kind {
 			return false
 		}
+		if x.Kind == TyUInt {
+			return x.Bits == y.Bits
+		}
 		if x.Kind == TyStruct {
 			return x.Struct == y.Struct
 		}
@@ -181,7 +212,9 @@ func typeKnown(t *Type) bool {
 	}
 	return true
 }
-func numeric(t *Type) bool { return t != nil && (t.Kind == TyInt || t.Kind == TyFloat) }
+func numeric(t *Type) bool {
+	return t != nil && (t.Kind == TyInt || t.Kind == TyUInt || t.Kind == TyFloat)
+}
 
 type copyState uint8
 
@@ -209,7 +242,7 @@ func TypeCopyable(root *Type) bool {
 		states[t] = copyVisiting
 		ok := false
 		switch t.Kind {
-		case TyNil, TyInt, TyFloat, TyBool, TyString, TyBytes, TyEnum, TyJSON:
+		case TyNil, TyInt, TyUInt, TyFloat, TyBool, TyString, TyBytes, TyEnum, TyJSON:
 			ok = true
 		case TyGeneric:
 			ok = t.B != nil && t.B.Name == "Copy"
@@ -260,7 +293,7 @@ func TypeConstSafe(root *Type) bool {
 		}
 		seen[t] = true
 		switch t.Kind {
-		case TyNil, TyInt, TyFloat, TyBool, TyString, TyBytes, TyEnum:
+		case TyNil, TyInt, TyUInt, TyFloat, TyBool, TyString, TyBytes, TyEnum:
 			return true
 		case TyArray, TyOption, TySet:
 			return visit(t.A, depth+1)
@@ -315,6 +348,14 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 			return TNil, nil
 		case "Int":
 			return TInt, nil
+		case "UInt8":
+			return TUInt8, nil
+		case "UInt16":
+			return TUInt16, nil
+		case "UInt32":
+			return TUInt32, nil
+		case "UInt64":
+			return TUInt64, nil
 		case "Float":
 			return TFloat, nil
 		case "Bool":

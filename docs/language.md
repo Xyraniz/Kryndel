@@ -33,7 +33,8 @@ Supported statements are `let`, `let mut`, expression statements, assignment, `f
 
 | Type | Examples | Rules |
 | --- | --- | --- |
-| `Int` | `0`, `-7` | Signed 64-bit integer with checked arithmetic. |
+| `Int` | `0`, `-7` | Signed 64-bit integer with checked arithmetic; it never wraps. |
+| `UInt8`, `UInt16`, `UInt32`, `UInt64` | `u8(255)`, `u64(1)` | Fixed-width unsigned integers with explicit modulo-`2^N` arithmetic. |
 | `Float` | `3.14` | Finite IEEE floating-point value; conversions are explicit. |
 | `Bool` | `true`, `false` | Required by `if`, `while`, `!`, `&&`, `||`, and `assert`. |
 | `String` | `"Kryndel"` | Valid UTF-8 text; `+`, `len`, and code-point indexing. |
@@ -47,7 +48,7 @@ Supported statements are `let`, `let mut`, expression statements, assignment, `f
 | `Struct` | `Point{ x: 1, y: 2 }` | Named fields checked against a declaration. |
 | `Enum` | `Color::Red` | Tagged variant checked against a declaration. |
 
-Numeric operators require matching numeric types. `Int + Float` is rejected; use `float(integer)` explicitly. `+` also concatenates two strings, two arrays with compatible element types, or two byte sequences. Remainder is defined only for `Int`. Equality requires the same type. There is no implicit truthiness: `if 1`, `if "text"`, and `while [1]` are type errors. `bool(value)` is the explicit conversion when a program needs a convenient predicate.
+Numeric operators require matching numeric types. `Int + Float` and mixed-width unsigned arithmetic are rejected; use an explicit conversion such as `u32(integer)` when a width change is intended. `+` also concatenates two strings, two arrays with compatible element types, or two byte sequences. `UInt` arithmetic wraps modulo its declared width, while `Int` arithmetic remains checked. `&`, `|`, and `^` require matching `UInt` widths; `<<` and `>>` require an `Int` count in `0..width-1`; `~` preserves the unsigned width. Equality requires the same type. There is no implicit truthiness: `if 1`, `if "text"`, and `while [1]` are type errors. `bool(value)` is the explicit conversion when a program needs a convenient predicate.
 
 Operator precedence, from low to high, is `||`, `&&`, equality, ordered comparison, addition/subtraction, and multiplication/division/remainder. Parentheses group expressions. `&&` and `||` are short-circuiting, and both operands must be `Bool`.
 

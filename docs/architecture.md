@@ -39,7 +39,7 @@ Lexical scopes are represented by parent-linked environments. A declaration is l
 
 ## Numeric behavior
 
-`Int` is a signed 64-bit value. Addition, subtraction, multiplication, unary negation, division, remainder, and `abs` use explicit boundary checks. Division and remainder by zero, `Int` minimum negation, `Int` minimum absolute value, and the `Int` minimum divided by `-1` are deterministic errors. Float literals and results must be finite; float division by positive or negative zero is rejected. Allocation byte counts are checked before multiplication or addition.
+`Int` is a signed 64-bit value. Addition, subtraction, multiplication, unary negation, division, remainder, and `abs` use explicit boundary checks. `UInt8`, `UInt16`, `UInt32`, and `UInt64` are separate fixed-width values: arithmetic and bitwise operations mask results to the declared width, and no implicit signed/unsigned conversion occurs. Division and remainder by zero, `Int` minimum negation, `Int` minimum absolute value, and the `Int` minimum divided by `-1` are deterministic errors. Unsigned shifts reject negative or out-of-width counts. Float literals and results must be finite; float division by positive or negative zero is rejected. Allocation byte counts are checked before multiplication or addition.
 
 ## Artifact format
 

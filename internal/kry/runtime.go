@@ -35,6 +35,7 @@ type ValueKind int
 const (
 	VNil ValueKind = iota
 	VInt
+	VUInt
 	VFloat
 	VBool
 	VString
@@ -123,6 +124,8 @@ var ffiBuffers = struct {
 type Value struct {
 	Kind    ValueKind
 	I       int64
+	U       uint64
+	UBits   uint8
 	F       float64
 	Bool    bool
 	S       string
@@ -157,8 +160,14 @@ type Value struct {
 
 type MapEntry struct{ Key, Value Value }
 
-func nilVal() Value            { return Value{Kind: VNil} }
-func intVal(v int64) Value     { return Value{Kind: VInt, I: v} }
+func nilVal() Value        { return Value{Kind: VNil} }
+func intVal(v int64) Value { return Value{Kind: VInt, I: v} }
+func uintVal(bits uint8, v uint64) Value {
+	if bits < 64 {
+		v &= (uint64(1) << bits) - 1
+	}
+	return Value{Kind: VUInt, U: v, UBits: bits}
+}
 func floatVal(v float64) Value { return Value{Kind: VFloat, F: v} }
 func boolVal(v bool) Value     { return Value{Kind: VBool, Bool: v} }
 func stringVal(v string) Value { return Value{Kind: VString, S: v} }
@@ -182,6 +191,8 @@ func display(v Value) string {
 		return "nil"
 	case VInt:
 		return strconv.FormatInt(v.I, 10)
+	case VUInt:
+		return strconv.FormatUint(v.U, 10)
 	case VFloat:
 		return strconv.FormatFloat(v.F, 'g', -1, 64)
 	case VBool:
@@ -365,6 +376,8 @@ func lessValue(a, b Value) bool {
 		return float64(a.I) < b.F
 	case a.Kind == VFloat && b.Kind == VInt:
 		return a.F < float64(b.I)
+	case a.Kind == VUInt && b.Kind == VUInt:
+		return a.U < b.U
 	case a.Kind == VString && b.Kind == VString:
 		return a.S < b.S
 	default:
@@ -381,6 +394,8 @@ func equalValue(a, b Value) bool {
 		return true
 	case VInt:
 		return a.I == b.I
+	case VUInt:
+		return a.UBits == b.UBits && a.U == b.U
 	case VFloat:
 		return a.F == b.F
 	case VBool:
@@ -480,7 +495,7 @@ func copyableValue(v Value, depth int) bool {
 		return false
 	}
 	switch v.Kind {
-	case VNil, VInt, VFloat, VBool, VString, VBytes, VEnum, VJSON:
+	case VNil, VInt, VUInt, VFloat, VBool, VString, VBytes, VEnum, VJSON:
 		return true
 	case VArray:
 		for _, x := range v.Array {
@@ -1129,6 +1144,15 @@ func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 			}
 			return intVal(-v.I), nil
 		}
+		if v.Kind == VUInt {
+			if e.Op == PLUS {
+				return v, nil
+			}
+			if e.Op == BITNOT {
+				return uintVal(v.UBits, ^v.U), nil
+			}
+			return nilVal(), r.fail(e, "unary '-' is not defined for UInt")
+		}
 		if v.Kind == VFloat {
 			z := -v.F
 			if !isFinite(z) {
@@ -1312,6 +1336,65 @@ func (r *Runtime) evalBinary(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 			return nilVal(), r.fail(e, "checked integer arithmetic overflow")
 		}
 		return intVal(z), nil
+	}
+	if l.Kind == VUInt && rr.Kind == VUInt {
+		if l.UBits != rr.UBits {
+			return nilVal(), r.fail(e, "bitwise and unsigned arithmetic operands must have matching UInt widths")
+		}
+		bits := l.UBits
+		if e.Op == PIPE {
+			return uintVal(bits, l.U|rr.U), nil
+		}
+		if e.Op == BITAND {
+			return uintVal(bits, l.U&rr.U), nil
+		}
+		if e.Op == BITXOR {
+			return uintVal(bits, l.U^rr.U), nil
+		}
+		var z uint64
+		switch e.Op {
+		case PLUS:
+			z = l.U + rr.U
+		case MINUS:
+			z = l.U - rr.U
+		case STAR:
+			z = l.U * rr.U
+		case SLASH:
+			if rr.U == 0 {
+				return nilVal(), r.fail(e, "division by zero")
+			}
+			z = l.U / rr.U
+		case PERCENT:
+			if rr.U == 0 {
+				return nilVal(), r.fail(e, "remainder by zero")
+			}
+			z = l.U % rr.U
+		case LESS:
+			return boolVal(l.U < rr.U), nil
+		case LEQ:
+			return boolVal(l.U <= rr.U), nil
+		case GREATER:
+			return boolVal(l.U > rr.U), nil
+		case GEQ:
+			return boolVal(l.U >= rr.U), nil
+		default:
+			return nilVal(), r.fail(e, "operator operands have incompatible types")
+		}
+		return uintVal(bits, z), nil
+	}
+	if l.Kind == VUInt && rr.Kind == VInt {
+		if rr.I < 0 || uint64(rr.I) >= uint64(l.UBits) {
+			return nilVal(), r.fail(e, "shift count must be between 0 and UInt width minus one")
+		}
+		shift := uint(rr.I)
+		switch e.Op {
+		case SHL:
+			return uintVal(l.UBits, l.U<<shift), nil
+		case SHR:
+			return uintVal(l.UBits, l.U>>shift), nil
+		default:
+			return nilVal(), r.fail(e, "operator operands have incompatible types")
+		}
 	}
 	if l.Kind == VFloat && rr.Kind == VFloat {
 		if e.Op == LESS {
@@ -1569,6 +1652,21 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			out[i] = byte(v.I)
 		}
 		return bytesVal(out), nil
+	case "bytes_from_u8":
+		out := make([]byte, len(a[0].Array))
+		for i, v := range a[0].Array {
+			if v.Kind != VUInt || v.UBits != 8 {
+				return bad("bytes_from_u8 element must be UInt8")
+			}
+			out[i] = byte(v.U)
+		}
+		return bytesVal(out), nil
+	case "u8_array":
+		out := make([]Value, len(a[0].Bytes))
+		for i, v := range a[0].Bytes {
+			out[i] = uintVal(8, uint64(v))
+		}
+		return arrVal(out), nil
 	case "string_to_bytes":
 		return bytesVal([]byte(a[0].S)), nil
 	case "bytes_to_string":
@@ -1583,6 +1681,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return arrVal(append(append([]Value{}, a[0].Array...), a[1])), nil
 	case "int":
 		return r.toInt(e, a[0])
+	case "u8", "u16", "u32", "u64":
+		bits := map[string]uint8{"u8": 8, "u16": 16, "u32": 32, "u64": 64}[b.Name]
+		return r.toUInt(e, a[0], bits)
 	case "float":
 		return r.toFloat(e, a[0])
 	case "str":
@@ -1609,6 +1710,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			}
 			return a[0], nil
 		}
+		if a[0].Kind == VUInt {
+			return a[0], nil
+		}
 		z := math.Abs(a[0].F)
 		if !isFinite(z) {
 			return bad("absolute value must be finite")
@@ -1627,6 +1731,12 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	case "min", "max":
 		if a[0].Kind == VInt {
 			if b.Name == "min" && a[0].I < a[1].I || b.Name == "max" && a[0].I > a[1].I {
+				return a[0], nil
+			}
+			return a[1], nil
+		}
+		if a[0].Kind == VUInt {
+			if b.Name == "min" && a[0].U < a[1].U || b.Name == "max" && a[0].U > a[1].U {
 				return a[0], nil
 			}
 			return a[1], nil
@@ -3175,6 +3285,9 @@ func numericFloat(v Value) float64 {
 	if v.Kind == VInt {
 		return float64(v.I)
 	}
+	if v.Kind == VUInt {
+		return float64(v.U)
+	}
 	return v.F
 }
 func isFinite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
@@ -3192,6 +3305,8 @@ func toBool(v Value) bool {
 		return v.Bool
 	case VInt:
 		return v.I != 0
+	case VUInt:
+		return v.U != 0
 	case VFloat:
 		return v.F != 0 && !math.IsNaN(v.F)
 	case VString:
@@ -3211,6 +3326,11 @@ func (r *Runtime) toInt(e *Expr, v Value) (Value, *Diagnostic) {
 	switch v.Kind {
 	case VInt:
 		return v, nil
+	case VUInt:
+		if v.U > math.MaxInt64 {
+			return nilVal(), r.fail(e, "UInt is outside Int range")
+		}
+		return intVal(int64(v.U)), nil
 	case VBool:
 		if v.Bool {
 			return intVal(1), nil
@@ -3230,10 +3350,36 @@ func (r *Runtime) toInt(e *Expr, v Value) (Value, *Diagnostic) {
 	}
 	return nilVal(), r.fail(e, "int conversion is unsupported")
 }
+
+func (r *Runtime) toUInt(e *Expr, v Value, bits uint8) (Value, *Diagnostic) {
+	var n uint64
+	switch v.Kind {
+	case VUInt:
+		n = v.U
+	case VInt:
+		if v.I < 0 {
+			return nilVal(), r.fail(e, "Int is outside unsigned range")
+		}
+		n = uint64(v.I)
+	default:
+		return nilVal(), r.fail(e, "unsigned conversion is unsupported")
+	}
+	if bits < 64 && n >= uint64(1)<<bits {
+		return nilVal(), r.fail(e, "value is outside unsigned range")
+	}
+	return uintVal(bits, n), nil
+}
+
 func (r *Runtime) toFloat(e *Expr, v Value) (Value, *Diagnostic) {
 	switch v.Kind {
 	case VInt:
 		z := float64(v.I)
+		if !isFinite(z) {
+			return nilVal(), r.fail(e, "conversion produced non-finite Float")
+		}
+		return floatVal(z), nil
+	case VUInt:
+		z := float64(v.U)
 		if !isFinite(z) {
 			return nilVal(), r.fail(e, "conversion produced non-finite Float")
 		}

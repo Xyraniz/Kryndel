@@ -406,6 +406,18 @@ func opText(k TokenKind) string {
 		return "&&"
 	case OR:
 		return "||"
+	case PIPE:
+		return "|"
+	case BITAND:
+		return "&"
+	case BITXOR:
+		return "^"
+	case SHL:
+		return "<<"
+	case SHR:
+		return ">>"
+	case BITNOT:
+		return "~"
 	case QUESTION:
 		return "?"
 

@@ -50,6 +50,14 @@ func constantValue(e *Expr) (Value, bool) {
 			}
 			return intVal(-v.I), true
 		}
+		if v.Kind == VUInt {
+			if e.Op == PLUS {
+				return v, true
+			}
+			if e.Op == BITNOT {
+				return uintVal(v.UBits, ^v.U), true
+			}
+		}
 		if v.Kind == VFloat {
 			if e.Op == PLUS {
 				return v, true
@@ -104,6 +112,60 @@ func constantValue(e *Expr) (Value, bool) {
 			}
 			if ok {
 				return intVal(value), true
+			}
+		}
+		if left.Kind == VUInt && right.Kind == VUInt && left.UBits == right.UBits {
+			if e.Op == PIPE {
+				return uintVal(left.UBits, left.U|right.U), true
+			}
+			if e.Op == BITAND {
+				return uintVal(left.UBits, left.U&right.U), true
+			}
+			if e.Op == BITXOR {
+				return uintVal(left.UBits, left.U^right.U), true
+			}
+			var value uint64
+			ok := true
+			switch e.Op {
+			case PLUS:
+				value = left.U + right.U
+			case MINUS:
+				value = left.U - right.U
+			case STAR:
+				value = left.U * right.U
+			case SLASH:
+				if right.U == 0 {
+					ok = false
+				} else {
+					value = left.U / right.U
+				}
+			case PERCENT:
+				if right.U == 0 {
+					ok = false
+				} else {
+					value = left.U % right.U
+				}
+			case LESS:
+				return boolVal(left.U < right.U), true
+			case LEQ:
+				return boolVal(left.U <= right.U), true
+			case GREATER:
+				return boolVal(left.U > right.U), true
+			case GEQ:
+				return boolVal(left.U >= right.U), true
+			default:
+				ok = false
+			}
+			if ok {
+				return uintVal(left.UBits, value), true
+			}
+		}
+		if left.Kind == VUInt && right.Kind == VInt && right.I >= 0 && uint64(right.I) < uint64(left.UBits) {
+			if e.Op == SHL {
+				return uintVal(left.UBits, left.U<<uint(right.I)), true
+			}
+			if e.Op == SHR {
+				return uintVal(left.UBits, left.U>>uint(right.I)), true
 			}
 		}
 		if left.Kind == VFloat && right.Kind == VFloat {

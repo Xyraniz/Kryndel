@@ -419,16 +419,24 @@ func precedence(k TokenKind) int {
 	switch k {
 	case OR:
 		return 1
-	case AND:
+	case PIPE:
 		return 2
-	case EQEQ, NEQ:
+	case BITXOR:
 		return 3
-	case LESS, LEQ, GREATER, GEQ:
+	case BITAND:
 		return 4
-	case PLUS, MINUS:
+	case AND:
 		return 5
-	case STAR, SLASH, PERCENT:
+	case EQEQ, NEQ:
 		return 6
+	case LESS, LEQ, GREATER, GEQ:
+		return 7
+	case SHL, SHR:
+		return 8
+	case PLUS, MINUS:
+		return 9
+	case STAR, SLASH, PERCENT:
+		return 10
 	}
 	return 0
 }
@@ -446,7 +454,7 @@ func (p *Parser) precedence(min int) *Expr {
 	return left
 }
 func (p *Parser) unary() *Expr {
-	if p.match(BANG) || p.match(MINUS) || p.match(PLUS) {
+	if p.match(BANG) || p.match(MINUS) || p.match(PLUS) || p.match(BITNOT) {
 		t := p.prev()
 		if t.Kind == MINUS && p.check(INT) && p.peek().Text() == "9223372036854775808" {
 			lit := p.advance()

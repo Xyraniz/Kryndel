@@ -29,6 +29,24 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("bytes expects Array[Int]")
 		}
 		return TBytes, nil
+	case "bytes_from_u8":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray || !typeEqual(t.A, TUInt8) {
+			return bad("bytes_from_u8 expects Array[UInt8]")
+		}
+		return TBytes, nil
+	case "u8_array":
+		t, d := arg(0, TBytes)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(t, TBytes) {
+			return bad("u8_array expects Bytes")
+		}
+		return Arr(TUInt8), nil
 	case "string_to_bytes":
 		t, d := arg(0, TString)
 		if d != nil {
@@ -71,10 +89,20 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		if d != nil {
 			return TError, d
 		}
-		if t.Kind != TyInt && t.Kind != TyFloat && t.Kind != TyBool && t.Kind != TyString {
-			return bad("int accepts Int, Float, Bool, or String")
+		if t.Kind != TyInt && t.Kind != TyUInt && t.Kind != TyFloat && t.Kind != TyBool && t.Kind != TyString {
+			return bad("int accepts Int, UInt, Float, Bool, or String")
 		}
 		return TInt, nil
+	case "u8", "u16", "u32", "u64":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyInt && t.Kind != TyUInt {
+			return bad("unsigned conversion accepts Int or UInt")
+		}
+		bits := map[string]uint8{"u8": 8, "u16": 16, "u32": 32, "u64": 64}[b.Name]
+		return uintType(bits), nil
 	case "float":
 		t, d := arg(0, nil)
 		if d != nil {
@@ -1349,8 +1377,8 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		if d != nil {
 			return TError, d
 		}
-		if t.Kind != TyArray || (t.A.Kind != TyInt && t.A.Kind != TyFloat && t.A.Kind != TyString) {
-			return bad("array_sort expects Array[Int], Array[Float], or Array[String]")
+		if t.Kind != TyArray || (t.A.Kind != TyInt && t.A.Kind != TyUInt && t.A.Kind != TyFloat && t.A.Kind != TyString) {
+			return bad("array_sort expects Array[Int], Array[UInt], Array[Float], or Array[String]")
 		}
 		return t, nil
 	case "array_index_of":

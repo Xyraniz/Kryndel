@@ -5,6 +5,7 @@ Kryndel checks every program before evaluation. A declaration with an initialize
 | Type family | Static policy |
 | --- | --- |
 | `Int` | Signed 64-bit integer. Arithmetic is checked and never wraps. |
+| `UInt8`, `UInt16`, `UInt32`, `UInt64` | Fixed-width unsigned integer. Arithmetic wraps modulo `2^N`; bitwise operands must have the same width. |
 | `Float` | Finite floating-point value. It does not implicitly combine with `Int`. |
 | `Bool` | The only type accepted by conditions and boolean operators. |
 | `String` | Valid UTF-8 text with concatenation and code-point indexing. |
@@ -17,7 +18,7 @@ Kryndel checks every program before evaluation. A declaration with an initialize
 | `Thread[T]` | OS-backed worker handle with result type `T`. |
 | Struct and enum | Nominal declarations with checked fields or finite variants. |
 
-Numeric conversion is explicit. `float(3)` produces a `Float`, and `int(3.5)` truncates toward zero only when the result is representable. String conversions require a complete decimal input; `int("12xyz")` is rejected. There are no implicit `Int`/`Float` conversions and no implicit condition conversions. `thread_send` requires a recursively Copy type: primitives, strings, bytes, enums, arrays, options, results, and structs whose every field is Copy-safe. Channels and thread handles do not satisfy Copy.
+Numeric conversion is explicit. `float(3)` produces a `Float`, `int(3.5)` truncates toward zero only when the result is representable, and `u8/u16/u32/u64` perform checked conversions from `Int` or another `UInt`. String conversions require a complete decimal input; `int("12xyz")` is rejected. There are no implicit `Int`/`Float` or unsigned-width conversions and no implicit condition conversions. `thread_send` requires a recursively Copy type: primitives, strings, bytes, enums, arrays, options, results, and structs whose every field is Copy-safe. Channels and thread handles do not satisfy Copy.
 
 Bare `Array` is retained as a compatibility form for existing examples. Its initializer must still be homogeneous, and new code should use `Array[T]`. `array_push` checks the element type and returns a new collection. Collection values are not mutable through indexing or field assignment.
 
