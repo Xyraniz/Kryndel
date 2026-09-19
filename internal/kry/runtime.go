@@ -2287,6 +2287,18 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return bad(err.Error())
 		}
 		return nilVal(), nil
+	case "process_list":
+		value, err := processListJSON(r.Ctx.Ctx, r.Lim.MaxArrayElements)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VJSON, S: value}), nil
+	case "process_info":
+		value, err := processInfoJSON(r.Ctx.Ctx, a[0].I)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VJSON, S: value}), nil
 	case "shared_new":
 		return Value{Kind: VShared, Shared: &SharedCell{value: cloneValue(a[0])}}, nil
 	case "shared_read":

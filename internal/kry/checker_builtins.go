@@ -1859,6 +1859,13 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("ffi_library_close expects FFILibrary")
 		}
 		return TNil, nil
+	case "process_list":
+		return Res(TJSON, TString), nil
+	case "process_info":
+		if _, d := arg(0, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TJSON, TString), nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not implemented", b.Name)
 }
