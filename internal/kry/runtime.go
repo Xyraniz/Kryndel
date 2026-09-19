@@ -1950,6 +1950,12 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return stringVal(platformArch()), nil
 	case "platform_runtime":
 		return stringVal(platformRuntime()), nil
+	case "platform_os_version":
+		value, err := platformOSVersion()
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, stringVal(value)), nil
 	case "platform_hostname":
 		host, err := os.Hostname()
 		if err != nil {

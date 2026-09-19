@@ -1507,6 +1507,8 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		return TBool, nil
 	case "platform_os", "platform_arch", "platform_runtime":
 		return TString, nil
+	case "platform_os_version":
+		return Res(TString, TString), nil
 	case "platform_hostname":
 		return Res(TString, TString), nil
 	case "dotenv_load":

@@ -23,6 +23,10 @@ func TestUtilityBuiltinsInterpreter(t *testing.T) {
     println(platform_os())
     println(platform_arch())
     println(platform_runtime())
+    match platform_os_version() {
+        ok(value) => { println(str(len(value) > 0)) }
+        err(problem) => { println("version err") }
+    }
     match platform_hostname() {
         ok(value) => { println(str(len(value) > 0)) }
         err(problem) => { println("hostname err") }
@@ -77,10 +81,10 @@ func TestUtilityBuiltinsInterpreter(t *testing.T) {
 `
 	got := runInterp(t, src)
 	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
-	if len(lines) != 18 {
+	if len(lines) != 19 {
 		t.Fatalf("unexpected utility output (%d lines): %q", len(lines), got)
 	}
-	if lines[0] != "true" || lines[2] != "true" || lines[3] != "windows" || lines[6] != "true" || lines[7] != lines[8] || lines[9] != "true" || lines[11] != "abc" || lines[15] != "2024-01-02" || lines[16] != "some(hello Kryndel)" || lines[17] != "some(a b)" {
+	if lines[0] != "true" || lines[2] != "true" || lines[3] != "windows" || lines[6] != "true" || lines[7] != "true" || lines[8] != lines[9] || lines[10] != "true" || lines[12] != "abc" || lines[16] != "2024-01-02" || lines[17] != "some(hello Kryndel)" || lines[18] != "some(a b)" {
 		t.Fatalf("unexpected utility output: %q", got)
 	}
 }

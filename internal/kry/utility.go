@@ -151,20 +151,31 @@ func randomInt(h *randomHandle, min, max int64) (int64, error) {
 	if min > max {
 		return 0, fmt.Errorf("random_int requires min <= max")
 	}
-	// Avoid max-min+1 overflow by drawing from the full signed range only
-	// through a rejection-free fallback for the one impossible interval.
+	// An inclusive Int range can cover the complete signed domain, whose size
+	// is 2^64 and therefore cannot be represented in an Int or uint64.
 	if min == (-1<<63) && max == (1<<63-1) {
 		h.mu.Lock()
-		v := h.rng.Int63()
+		v := int64(h.rng.Uint64() ^ (uint64(1) << 63))
 		h.mu.Unlock()
 		return v, nil
 	}
-	span := max - min + 1
-	if span <= 0 {
-		return 0, fmt.Errorf("random_int range is too large")
-	}
 	h.mu.Lock()
-	v := min + h.rng.Int63n(span)
+	span := uint64(max) - uint64(min) + 1
+	if span <= uint64(1<<63) {
+		v := min + h.rng.Int63n(int64(span))
+		h.mu.Unlock()
+		return v, nil
+	}
+	// Rejection sampling removes modulo bias for ranges wider than Int63.
+	limit := ^uint64(0) - (^uint64(0) % span)
+	var sample uint64
+	for {
+		sample = h.rng.Uint64()
+		if sample < limit {
+			break
+		}
+	}
+	v := int64(uint64(min) + sample%span)
 	h.mu.Unlock()
 	return v, nil
 }

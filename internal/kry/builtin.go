@@ -115,6 +115,7 @@ func init() {
 		Builtin{"platform_os", "platform_os() -> String", "platform", "copy", "none", "Return the host operating system name.", "2.0.0", 0, "platform_os"},
 		Builtin{"platform_arch", "platform_arch() -> String", "platform", "copy", "none", "Return the host architecture.", "2.0.0", 0, "platform_arch"},
 		Builtin{"platform_runtime", "platform_runtime() -> String", "platform", "copy", "none", "Return the host runtime version.", "2.0.0", 0, "platform_runtime"},
+		Builtin{"platform_os_version", "platform_os_version() -> Result[String,String]", "platform", "copy", "host failure", "Return the operating system or kernel version.", "2.8.0", 0, "platform_os_version"},
 		Builtin{"platform_hostname", "platform_hostname() -> Result[String,String]", "platform", "copy", "host failure", "Return the local host name.", "2.0.0", 0, "platform_hostname"},
 		Builtin{"dotenv_load", "dotenv_load(path: String) -> Result[Map[String,String],String]", "filesystem", "copy", "parse/I/O failure", "Read and parse a dotenv file without mutating the process environment.", "2.0.0", 1, "dotenv_load"},
 		Builtin{"datetime_now", "datetime_now() -> String", "time", "copy", "none", "Return the current UTC time in RFC 3339 format.", "2.0.0", 0, "datetime_now"},
