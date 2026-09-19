@@ -1,0 +1,15 @@
+let mut index: Int = 0
+let message: String = "loop"
+let mut signed: Int = -42
+println(signed)
+while index < 3 {
+    println(message)
+    println(index)
+    index = index + 1
+}
+if index == 3 {
+    println("done")
+} else {
+    println("wrong")
+}
+println("after")
