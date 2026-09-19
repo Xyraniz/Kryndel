@@ -1,0 +1,14 @@
+fn greet() -> Nil {
+    println("hello")
+    return nil
+}
+
+fn report() -> Nil {
+    println("world")
+}
+
+fn main() -> Nil {
+    greet()
+    report()
+    return nil
+}

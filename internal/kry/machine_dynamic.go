@@ -6,24 +6,27 @@ import (
 )
 
 // directMachine is the second direct-ELF slice. It lowers checked Int/Bool
-// state, assignments, comparisons, if/while control flow, and static or
-// dynamic integer output to x86-64 instructions. It intentionally has no
-// runtime or C dependency.
+// state, assignments, comparisons, if/while control flow, zero-argument Nil
+// functions, and static or dynamic integer output to x86-64 instructions. It
+// intentionally has no runtime or C dependency.
 // Unsupported values fail during compilation instead of silently changing
 // Kryndel semantics.
 type directMachine struct {
-	code         []byte
-	data         []byte
-	dataByText   map[string]int
-	dataRefs     []machineDataRef
-	labels       []machineLabel
-	slots        map[string]machineSlot
-	nextSlot     int32
-	loops        []machineLoop
-	endLabel     int
-	trapLabel    int
-	staticEnv    map[string]Value
-	bufferOffset int32
+	code           []byte
+	data           []byte
+	dataByText     map[string]int
+	dataRefs       []machineDataRef
+	labels         []machineLabel
+	slots          map[string]machineSlot
+	nextSlot       int32
+	loops          []machineLoop
+	endLabel       int
+	trapLabel      int
+	staticEnv      map[string]Value
+	bufferOffset   int32
+	functionLabels map[string]int
+	functionOrder  []*Function
+	inFunction     bool
 }
 
 type machineSlot struct {
@@ -49,9 +52,10 @@ type machineDataRef struct {
 
 func newDirectMachine() *directMachine {
 	m := &directMachine{
-		dataByText: map[string]int{},
-		slots:      map[string]machineSlot{},
-		staticEnv:  map[string]Value{},
+		dataByText:     map[string]int{},
+		slots:          map[string]machineSlot{},
+		staticEnv:      map[string]Value{},
+		functionLabels: map[string]int{},
 	}
 	m.endLabel = m.newLabel()
 	m.trapLabel = m.newLabel()
@@ -80,6 +84,15 @@ func (m *directMachine) bind(label int) error {
 
 func (m *directMachine) emitJump(label int) error {
 	m.code = append(m.code, 0xe9)
+	return m.emitLabelDisplacement(label)
+}
+
+func (m *directMachine) emitCall(name string) error {
+	label, ok := m.functionLabels[name]
+	if !ok {
+		return fmt.Errorf("direct ELF backend has no function '%s'", name)
+	}
+	m.code = append(m.code, 0xe8)
 	return m.emitLabelDisplacement(label)
 }
 
@@ -313,6 +326,9 @@ func (m *directMachine) emitExpr(e *Expr) error {
 	case ExBinary:
 		return m.emitBinary(e)
 	case ExCall:
+		if e.Function != nil {
+			return fmt.Errorf("direct ELF backend does not support using function '%s' as a value", e.Function.Name)
+		}
 		if e.Receiver != nil || len(e.Args) != 1 {
 			return fmt.Errorf("direct ELF backend supports only one-argument numeric conversions")
 		}
@@ -494,6 +510,15 @@ func directHasDynamicControl(stmts []*Stmt) bool {
 	return false
 }
 
+func directHasUserFunctions(p *Program) bool {
+	for _, f := range p.Functions {
+		if f != nil && f.Name != "main" {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *directMachine) collect(stmts []*Stmt) error {
 	for _, s := range stmts {
 		if s == nil {
@@ -522,6 +547,60 @@ func (m *directMachine) collect(stmts []*Stmt) error {
 			}
 		case StFor, StMatch, StDefer, StUnsafe:
 			return fmt.Errorf("direct ELF backend does not support statement kind %s", stmtName(s.Kind))
+		}
+	}
+	return nil
+}
+
+func (m *directMachine) collectFunction(stmts []*Stmt) error {
+	for _, s := range stmts {
+		if s == nil {
+			continue
+		}
+		switch s.Kind {
+		case StLet, StConst, StAssign:
+			return fmt.Errorf("direct ELF backend function locals and assignment are not supported yet")
+		case StIf:
+			if err := m.collectFunction(s.Then); err != nil {
+				return err
+			}
+			if err := m.collectFunction(s.Else); err != nil {
+				return err
+			}
+		case StWhile:
+			if err := m.collectFunction(s.Body); err != nil {
+				return err
+			}
+		case StExpr, StReturn, StBreak, StContinue:
+			// Call targets, return forms, and loop nesting are checked while
+			// emitting the body.
+		default:
+			return fmt.Errorf("direct ELF backend does not support function statement kind %s", stmtName(s.Kind))
+		}
+	}
+	return nil
+}
+
+func (m *directMachine) prepareFunctions(p *Program) error {
+	for _, f := range p.Functions {
+		if f == nil || f.Name == "main" {
+			continue
+		}
+		if len(f.Params) != 0 {
+			return fmt.Errorf("direct ELF backend function '%s' requires zero parameters", f.Name)
+		}
+		if f.Return == nil || f.Return.Name != "Nil" {
+			return fmt.Errorf("direct ELF backend function '%s' must return Nil", f.Name)
+		}
+		if _, exists := m.functionLabels[f.Name]; exists {
+			return fmt.Errorf("direct ELF backend has duplicate function '%s'", f.Name)
+		}
+		m.functionLabels[f.Name] = m.newLabel()
+		m.functionOrder = append(m.functionOrder, f)
+	}
+	for _, f := range m.functionOrder {
+		if err := m.collectFunction(f.Body); err != nil {
+			return fmt.Errorf("function '%s': %w", f.Name, err)
 		}
 	}
 	return nil
@@ -593,8 +672,20 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 			m.emitStoreSlot(slot)
 			delete(m.staticEnv, s.Target.Name)
 		case StExpr:
-			if s.Expr == nil || s.Expr.Kind != ExCall || s.Expr.Receiver != nil || len(s.Expr.Args) != 1 || (s.Expr.Name != "print" && s.Expr.Name != "println") {
-				return fmt.Errorf("direct ELF backend supports only print/println expressions")
+			if s.Expr == nil || s.Expr.Kind != ExCall || s.Expr.Receiver != nil {
+				return fmt.Errorf("direct ELF backend supports only calls without receivers")
+			}
+			if s.Expr.Function != nil {
+				if len(s.Expr.Args) != 0 {
+					return fmt.Errorf("direct ELF backend function '%s' requires zero arguments", s.Expr.Function.Name)
+				}
+				if err := m.emitCall(s.Expr.Function.Name); err != nil {
+					return err
+				}
+				continue
+			}
+			if len(s.Expr.Args) != 1 || (s.Expr.Name != "print" && s.Expr.Name != "println") {
+				return fmt.Errorf("direct ELF backend supports only print/println or zero-argument user calls")
 			}
 			if err := m.emitStaticOutput(s.Expr, s.Expr.Name); err != nil {
 				return err
@@ -665,6 +756,13 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 				return err
 			}
 		case StReturn:
+			if m.inFunction {
+				if s.Return != nil && s.Return.Kind != ExNil {
+					return fmt.Errorf("direct ELF backend function return values are not supported yet")
+				}
+				m.code = append(m.code, 0xc3)
+				continue
+			}
 			if err := m.emitJump(m.endLabel); err != nil {
 				return err
 			}
@@ -693,6 +791,22 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
+	if len(m.functionOrder) > 0 {
+		if err := m.emitJump(m.endLabel); err != nil {
+			return nil, err
+		}
+		for _, f := range m.functionOrder {
+			if err := m.bind(m.functionLabels[f.Name]); err != nil {
+				return nil, err
+			}
+			m.inFunction = true
+			if err := m.emitStatements(f.Body); err != nil {
+				return nil, fmt.Errorf("function '%s': %w", f.Name, err)
+			}
+			m.inFunction = false
+			m.code = append(m.code, 0xc3)
+		}
+	}
 	if err := m.bind(m.endLabel); err != nil {
 		return nil, err
 	}
@@ -718,7 +832,11 @@ func buildDirectDynamicELF(p *Program) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newDirectMachine().build(stmts)
+	machine := newDirectMachine()
+	if err := machine.prepareFunctions(p); err != nil {
+		return nil, err
+	}
+	return machine.build(stmts)
 }
 
 func emitELF64CodeData(code, data []byte) []byte {

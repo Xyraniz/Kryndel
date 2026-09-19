@@ -13,9 +13,9 @@ The KIR stage accepts:
 - string literals, static variable references, `str(...)`, and string concatenation;
 - top-level `print(...)` and `println(...)` calls.
 
-The dynamic KIR stage additionally accepts top-level and nested `let`/`const`, mutable Int/Bool/UInt slots, assignments, checked signed arithmetic, wrapping fixed-width unsigned arithmetic, comparisons, bitwise operations, `if`/`else`, `while`, `break`, `continue`, static display values, and dynamic `Int`/`UInt` values inside `print`/`println`. It emits stack loads/stores, decimal integer conversion, relative branches, RIP-relative data references, overflow traps, and Linux syscalls directly from Kryndel. Functions, `for`, `match`, heap values, and non-Linux targets remain explicit rejection points.
+The dynamic KIR stage additionally accepts top-level and nested `let`/`const`, mutable Int/Bool/UInt slots, assignments, checked signed arithmetic, wrapping fixed-width unsigned arithmetic, comparisons, bitwise operations, `if`/`else`, `while`, `break`, `continue`, zero-argument `Nil` functions, static display values, and dynamic `Int`/`UInt` values inside `print`/`println`. It emits stack loads/stores, decimal integer conversion, relative branches, calls/returns, RIP-relative data references, overflow traps, and Linux syscalls directly from Kryndel. Function parameters, return values, function-local slots, `for`, `match`, heap values, and non-Linux targets remain explicit rejection points.
 
-Dynamic bindings, arbitrary calls, control flow, functions, and non-Linux targets are rejected with explicit errors. This restriction is intentional while the lowering is being expanded.
+Unsupported arbitrary calls, function parameters/return values/locals, heap values, and non-Linux targets are rejected with explicit errors. This restriction is intentional while the lowering is being expanded.
 
 The original source stage has the static output subset and performs its own lexical and syntactic validation instead of recognizing complete source lines by prefix. `source_kir_compiler.kry` owns the dynamic source subset; both frontends reject unsupported constructs explicitly rather than guessing.
 

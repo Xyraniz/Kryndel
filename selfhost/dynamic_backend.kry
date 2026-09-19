@@ -30,12 +30,14 @@ struct Assembler {
 struct CompileEnv {
     slots: Map[String, Int],
     static_values: Map[String, String],
+    function_labels: Map[String, Int],
     next_slot: Int,
     breaks: Array[Int],
     continues: Array[Int],
     end_label: Int,
     trap_label: Int,
     buffer_offset: Int,
+    in_function: Bool,
 }
 
 struct EmitState {
@@ -190,6 +192,14 @@ fn emit_jump(state: EmitState, label: Int, conditional: Bool, condition: UInt8) 
     instruction = array_concat(instruction, [u8(0), u8(0), u8(0), u8(0)])
     let updated: EmitState = append_code(state, instruction)
     return state_with_jumps(updated, array_push(updated.assembler.jumps, JumpPatch{ label: label, position: position }))
+}
+
+fn emit_call(state: EmitState, name: String) -> Result[EmitState, String] {
+    let label: Option[Int] = map_get(state.env.function_labels, name)
+    if is_none(label) { return err("dynamic backend: unknown function '" + name + "'") }
+    let position: Int = len(state.assembler.code) + 1
+    let updated: EmitState = append_code(state, [u8(232), u8(0), u8(0), u8(0), u8(0)])
+    return ok(state_with_jumps(updated, array_push(updated.assembler.jumps, JumpPatch{ label: unwrap_or(label, -1), position: position })))
 }
 
 fn emit_prologue(state: EmitState) -> EmitState {
@@ -434,13 +444,14 @@ fn compile_error(value: Result[EmitState, String]) -> String {
 fn allocate_slot(state: EmitState, name: String) -> Result[EmitState, String] {
     if map_contains_key(state.env.slots, name) { return err("dynamic backend: shadowed slot '" + name + "'") }
     let offset: Int = state.env.next_slot + 8
-    let env: CompileEnv = CompileEnv{ slots: map_insert(state.env.slots, name, offset), static_values: state.env.static_values, next_slot: offset, breaks: state.env.breaks, continues: state.env.continues, end_label: state.env.end_label, trap_label: state.env.trap_label, buffer_offset: state.env.buffer_offset }
+    let env: CompileEnv = CompileEnv{ slots: map_insert(state.env.slots, name, offset), static_values: state.env.static_values, function_labels: state.env.function_labels, next_slot: offset, breaks: state.env.breaks, continues: state.env.continues, end_label: state.env.end_label, trap_label: state.env.trap_label, buffer_offset: state.env.buffer_offset, in_function: state.env.in_function }
     return ok(state_with_env(state, env))
 }
 
 fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, String] {
     let kind: String = text(field(statement, "kind"))
     if kind == "let" || kind == "const" {
+        if state.env.in_function { return err("dynamic backend: function locals are not supported yet") }
         let name: String = text(field(statement, "name"))
         let allocated: Result[EmitState, String] = allocate_slot(state, name)
         if is_err(allocated) { return err(compile_error(allocated)) }
@@ -459,13 +470,14 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         if !mutable {
             let display_value: Result[String, String] = eval_display(init, stored.env.static_values)
             if is_ok(display_value) {
-                let env: CompileEnv = CompileEnv{ slots: stored.env.slots, static_values: map_insert(stored.env.static_values, name, result_unwrap(display_value)), next_slot: stored.env.next_slot, breaks: stored.env.breaks, continues: stored.env.continues, end_label: stored.env.end_label, trap_label: stored.env.trap_label, buffer_offset: stored.env.buffer_offset }
+                let env: CompileEnv = CompileEnv{ slots: stored.env.slots, static_values: map_insert(stored.env.static_values, name, result_unwrap(display_value)), function_labels: stored.env.function_labels, next_slot: stored.env.next_slot, breaks: stored.env.breaks, continues: stored.env.continues, end_label: stored.env.end_label, trap_label: stored.env.trap_label, buffer_offset: stored.env.buffer_offset, in_function: stored.env.in_function }
                 return ok(state_with_env(stored, env))
             }
         }
         return ok(stored)
     }
     if kind == "assign" {
+        if state.env.in_function { return err("dynamic backend: function assignment is not supported yet") }
         let target: Json = field(statement, "target")
         let name: String = text(field(target, "name"))
         let slot: Option[Int] = map_get(state.env.slots, name)
@@ -473,12 +485,18 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         let value: Result[EmitState, String] = emit_expression(state, field(statement, "value"))
         if is_err(value) { return err(expression_error(value)) }
         let stored: EmitState = emit_store_slot(result_unwrap(value), unwrap_or(slot, -1))
-        return ok(state_with_env(stored, CompileEnv{ slots: stored.env.slots, static_values: map_remove(stored.env.static_values, name), next_slot: stored.env.next_slot, breaks: stored.env.breaks, continues: stored.env.continues, end_label: stored.env.end_label, trap_label: stored.env.trap_label, buffer_offset: stored.env.buffer_offset }))
+        return ok(state_with_env(stored, CompileEnv{ slots: stored.env.slots, static_values: map_remove(stored.env.static_values, name), function_labels: stored.env.function_labels, next_slot: stored.env.next_slot, breaks: stored.env.breaks, continues: stored.env.continues, end_label: stored.env.end_label, trap_label: stored.env.trap_label, buffer_offset: stored.env.buffer_offset, in_function: stored.env.in_function }))
     }
     if kind == "expr" {
         let expression: Json = field(statement, "expr")
         let target: String = text(field(expression, "call_target"))
-        if target != "builtin:print" && target != "builtin:println" { return err("dynamic backend: only print and println are supported") }
+        if starts_with(target, "function:") {
+            if result_unwrap(json_array_len(field(expression, "args"))) != 0 { return err("dynamic backend: function calls require zero arguments") }
+            let called: Result[EmitState, String] = emit_call(state, text(field(expression, "name")))
+            if is_err(called) { return err(unwrap_or(result_error(called), "dynamic backend: function call failed")) }
+            return ok(result_unwrap(called))
+        }
+        if target != "builtin:print" && target != "builtin:println" { return err("dynamic backend: only print, println, and zero-argument functions are supported") }
         let argument: Json = result_unwrap(json_array_get(field(expression, "args"), 0))
         let display_value: Result[String, String] = eval_display(argument, state.env.static_values)
         if is_ok(display_value) {
@@ -522,11 +540,11 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         if is_err(condition) { return err(expression_error(condition)) }
         let tested: EmitState = append_code(result_unwrap(condition), [u8(72), u8(133), u8(192)])
         let guarded: EmitState = emit_jump(tested, end_label.label, true, u8(132))
-        let env: CompileEnv = CompileEnv{ slots: guarded.env.slots, static_values: guarded.env.static_values, next_slot: guarded.env.next_slot, breaks: array_push(guarded.env.breaks, end_label.label), continues: array_push(guarded.env.continues, condition_label.label), end_label: guarded.env.end_label, trap_label: guarded.env.trap_label, buffer_offset: guarded.env.buffer_offset }
+        let env: CompileEnv = CompileEnv{ slots: guarded.env.slots, static_values: guarded.env.static_values, function_labels: guarded.env.function_labels, next_slot: guarded.env.next_slot, breaks: array_push(guarded.env.breaks, end_label.label), continues: array_push(guarded.env.continues, condition_label.label), end_label: guarded.env.end_label, trap_label: guarded.env.trap_label, buffer_offset: guarded.env.buffer_offset, in_function: guarded.env.in_function }
         let body: Result[EmitState, String] = compile_statements(state_with_env(guarded, env), field(statement, "body"))
         if is_err(body) { return err(compile_error(body)) }
         let body_state: EmitState = result_unwrap(body)
-        let restored: EmitState = state_with_env(body_state, CompileEnv{ slots: body_state.env.slots, static_values: body_state.env.static_values, next_slot: body_state.env.next_slot, breaks: array_slice(body_state.env.breaks, 0, len(body_state.env.breaks) - 1), continues: array_slice(body_state.env.continues, 0, len(body_state.env.continues) - 1), end_label: body_state.env.end_label, trap_label: body_state.env.trap_label, buffer_offset: body_state.env.buffer_offset })
+        let restored: EmitState = state_with_env(body_state, CompileEnv{ slots: body_state.env.slots, static_values: body_state.env.static_values, function_labels: body_state.env.function_labels, next_slot: body_state.env.next_slot, breaks: array_slice(body_state.env.breaks, 0, len(body_state.env.breaks) - 1), continues: array_slice(body_state.env.continues, 0, len(body_state.env.continues) - 1), end_label: body_state.env.end_label, trap_label: body_state.env.trap_label, buffer_offset: body_state.env.buffer_offset, in_function: body_state.env.in_function })
         let looped: EmitState = emit_jump(restored, condition_label.label, false, u8(0))
         let bound_end: Result[EmitState, String] = bind_label(looped, end_label.label)
         if is_err(bound_end) { return err(unwrap_or(result_error(bound_end), "dynamic backend: cannot bind loop end")) }
@@ -542,6 +560,7 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         return ok(emit_jump(state, label, false, u8(0)))
     }
     if kind == "return" {
+        if state.env.in_function { return ok(append_code(state, [u8(195)])) }
         return ok(emit_jump(state, state.env.end_label, false, u8(0)))
     }
     return err("dynamic backend: unsupported statement kind '" + kind + "'")
@@ -636,7 +655,7 @@ fn emit_dynamic_elf(code: Array[UInt8], data: Array[UInt8]) -> Bytes {
 
 fn new_dynamic_state() -> EmitState {
     let assembler: Assembler = Assembler{ code: [], data: [], data_by_text: {}, labels: [], jumps: [], data_patches: [], frame_patch: -1 }
-    let env: CompileEnv = CompileEnv{ slots: {}, static_values: {}, next_slot: 0, breaks: [], continues: [], end_label: -1, trap_label: -1, buffer_offset: 1 }
+    let env: CompileEnv = CompileEnv{ slots: {}, static_values: {}, function_labels: {}, next_slot: 0, breaks: [], continues: [], end_label: -1, trap_label: -1, buffer_offset: 1, in_function: false }
     return EmitState{ assembler: assembler, env: env }
 }
 
@@ -662,17 +681,87 @@ fn count_slots(statements: Json) -> Int {
     return total
 }
 
+fn entry_statements(document: Json) -> Json {
+    let statements: Json = field(document, "statements")
+    if result_unwrap(json_array_len(statements)) > 0 {
+        return statements
+    }
+    let functions: Json = field(document, "functions")
+    let count: Int = result_unwrap(json_array_len(functions))
+    let mut index: Int = 0
+    while index < count {
+        let function: Json = result_unwrap(json_array_get(functions, index))
+        if text(field(function, "name")) == "main" {
+            return field(function, "body")
+        }
+        index = index + 1
+    }
+    return result_unwrap(json_parse("[]"))
+}
+
+fn prepare_function_labels(state: EmitState, functions: Json) -> Result[EmitState, String] {
+    let count: Int = result_unwrap(json_array_len(functions))
+    let mut index: Int = 0
+    let mut current: EmitState = state
+    while index < count {
+        let function: Json = result_unwrap(json_array_get(functions, index))
+        let name: String = text(field(function, "name"))
+        if name != "main" {
+            if map_contains_key(current.env.function_labels, name) { return err("dynamic backend: duplicate function '" + name + "'") }
+            if result_unwrap(json_array_len(field(function, "params"))) != 0 { return err("dynamic backend: function '" + name + "' requires zero parameters") }
+            if text(field(function, "return")) != "Nil" { return err("dynamic backend: function '" + name + "' must return Nil") }
+            let created: LabelState = new_label(current)
+            let env: CompileEnv = CompileEnv{ slots: created.state.env.slots, static_values: created.state.env.static_values, function_labels: map_insert(created.state.env.function_labels, name, created.label), next_slot: created.state.env.next_slot, breaks: created.state.env.breaks, continues: created.state.env.continues, end_label: created.state.env.end_label, trap_label: created.state.env.trap_label, buffer_offset: created.state.env.buffer_offset, in_function: created.state.env.in_function }
+            current = state_with_env(created.state, env)
+        }
+        index = index + 1
+    }
+    return ok(current)
+}
+
+fn emit_function_bodies(state: EmitState, functions: Json, index: Int, base_env: CompileEnv) -> Result[EmitState, String] {
+    let count: Int = result_unwrap(json_array_len(functions))
+    if index >= count { return ok(state_with_env(state, base_env)) }
+    let function: Json = result_unwrap(json_array_get(functions, index))
+    let name: String = text(field(function, "name"))
+    if name == "main" {
+        return emit_function_bodies(state, functions, index + 1, base_env)
+    }
+    let label: Int = unwrap_or(map_get(base_env.function_labels, name), -1)
+    let bound: Result[EmitState, String] = bind_label(state, label)
+    if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind function label")) }
+    let function_env: CompileEnv = CompileEnv{ slots: {}, static_values: {}, function_labels: base_env.function_labels, next_slot: 0, breaks: [], continues: [], end_label: base_env.end_label, trap_label: base_env.trap_label, buffer_offset: base_env.buffer_offset, in_function: true }
+    let body: Result[EmitState, String] = compile_statements(state_with_env(result_unwrap(bound), function_env), field(function, "body"))
+    if is_err(body) { return err(compile_error(body)) }
+    let returned: EmitState = append_code(result_unwrap(body), [u8(195)])
+    return emit_function_bodies(returned, functions, index + 1, base_env)
+}
+
 fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     let target: Json = field(document, "target")
     if text(field(target, "os")) != "linux" || text(field(target, "arch")) != "amd64" { return err("dynamic backend supports only linux-amd64") }
+    let functions: Json = field(document, "functions")
+    let statements: Json = entry_statements(document)
     let mut state: EmitState = emit_prologue(new_dynamic_state())
     let end_label: LabelState = new_label(state)
     let trap_label: LabelState = new_label(end_label.state)
-    let slot_count: Int = count_slots(field(document, "statements"))
-    state = state_with_env(trap_label.state, CompileEnv{ slots: {}, static_values: {}, next_slot: 0, breaks: [], continues: [], end_label: end_label.label, trap_label: trap_label.label, buffer_offset: slot_count * 8 + 1 })
-    let compiled: Result[EmitState, String] = compile_statements(state, field(document, "statements"))
+    let slot_count: Int = count_slots(statements)
+    state = state_with_env(trap_label.state, CompileEnv{ slots: {}, static_values: {}, function_labels: {}, next_slot: 0, breaks: [], continues: [], end_label: end_label.label, trap_label: trap_label.label, buffer_offset: slot_count * 8 + 1, in_function: false })
+    let prepared: Result[EmitState, String] = prepare_function_labels(state, functions)
+    if is_err(prepared) { return err(unwrap_or(result_error(prepared), "dynamic backend: function preparation failed")) }
+    state = result_unwrap(prepared)
+    let compiled: Result[EmitState, String] = compile_statements(state, statements)
     if is_err(compiled) { return err(compile_error(compiled)) }
-    let ended: Result[EmitState, String] = bind_label(result_unwrap(compiled), end_label.label)
+    let main_state: EmitState = result_unwrap(compiled)
+    let mut lowered: EmitState = main_state
+    let function_count: Int = result_unwrap(json_array_len(functions))
+    if function_count > 0 {
+        lowered = emit_jump(lowered, end_label.label, false, u8(0))
+        let emitted: Result[EmitState, String] = emit_function_bodies(lowered, functions, 0, main_state.env)
+        if is_err(emitted) { return err(unwrap_or(result_error(emitted), "dynamic backend: function lowering failed")) }
+        lowered = result_unwrap(emitted)
+    }
+    let ended: Result[EmitState, String] = bind_label(lowered, end_label.label)
     if is_err(ended) { return err(unwrap_or(result_error(ended), "dynamic backend: cannot bind end")) }
     let normal: EmitState = emit_exit(result_unwrap(ended), u8(0))
     let trapped: Result[EmitState, String] = bind_label(normal, trap_label.label)
@@ -704,6 +793,7 @@ fn has_dynamic(statements: Json) -> Bool {
 }
 
 pub fn compile_document(document: Json) -> Result[Bytes, String] {
+    if result_unwrap(json_array_len(field(document, "functions"))) > 0 { return compile_dynamic(document) }
     if has_dynamic(field(document, "statements")) { return compile_dynamic(document) }
     return compile_kir(document)
 }

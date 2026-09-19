@@ -16,8 +16,9 @@ const (
 // The static path preserves the first byte-stable bootstrap slice; programs
 // containing assignments or control flow use the second machine-code slice.
 // Both paths emit genuine x86-64 instructions and reject unsupported language
-// constructs before bytes are returned. The general lowering grows in later
-// bootstrap milestones.
+// constructs before bytes are returned. The current dynamic slice also
+// supports zero-argument Nil functions; the general ABI and runtime lowering
+// grows in later bootstrap milestones.
 func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	if target.OS != "linux" || target.Arch != "amd64" {
 		return nil, fmt.Errorf("direct ELF backend currently supports only linux-amd64")
@@ -39,7 +40,7 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 		return emitELF64WriteExit(output), nil
 	}
 	stmts, stmtErr := directDynamicStatements(p)
-	if stmtErr == nil && directHasDynamicControl(stmts) {
+	if stmtErr == nil && (directHasDynamicControl(stmts) || directHasUserFunctions(p)) {
 		return buildDirectDynamicELF(p)
 	}
 	return nil, err
