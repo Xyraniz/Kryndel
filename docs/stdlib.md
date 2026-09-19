@@ -93,6 +93,7 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `screen_display_count`, `screen_display_bounds` | Display enumeration helpers. | Use the desktop API through `kbinani/screenshot`; bounds include virtual-desktop coordinates and dimensions. |
 | `screen_capture`, `screen_capture_display` | Screen capture helpers. | Capture a region or an active display as PNG `Bytes`, subject to the output limit; API/display errors are returned rather than fabricated images. |
 | `camera_capture` | `camera_capture(device: String,width: Int,height: Int) -> Result[Bytes,String]` | Captures one webcam frame as PNG. Windows uses the installed `ffmpeg` DirectShow backend (`KRYNDEL_FFMPEG` can select its path); Linux uses V4L2 directly. Device/capability errors are returned. |
+| `win_input_read` | `win_input_read(kind: String,timeout_ms: Int) -> Result[Json,String]` | Installs a bounded Windows low-level keyboard or mouse hook, pumps the Win32 message queue, returns the first event as JSON, and unhooks it on timeout or event. Non-Windows targets return an explicit platform error. |
 | `process_info` | `process_info(pid: Int) -> Result[Json,String]` | Looks up one positive 32-bit PID and returns the same metadata shape; missing or inaccessible processes return `err`. |
 
 String-to-number conversion rejects whitespace-dependent partial parses and inputs such as `"12xyz"`. Float values and results must be finite. Integer arithmetic and `abs(Int minimum)` are checked. `Bytes` conversion never applies an implicit text encoding to arbitrary values.

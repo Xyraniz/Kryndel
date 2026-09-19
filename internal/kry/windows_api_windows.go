@@ -33,7 +33,11 @@ func windowsEventLogWriteNative(source, message string) error {
 	return err
 }
 func windowsRawInputReadNative() ([]byte, error) {
-	return nil, fmt.Errorf("Raw Input requires a GUI window message pump; use the Windows host integration")
+	value, err := windowsInputReadNative("keyboard", 1000)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(value), nil
 }
 
 func windowsDeviceIoControlNative(device string, code int64, input []byte) ([]byte, error) {

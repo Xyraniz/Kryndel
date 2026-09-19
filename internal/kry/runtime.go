@@ -2335,6 +2335,12 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, bytesVal(value)), nil
+	case "win_input_read":
+		value, err := windowsInputRead(a[0].S, a[1].I)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VJSON, S: value}), nil
 	case "shared_new":
 		return Value{Kind: VShared, Shared: &SharedCell{value: cloneValue(a[0])}}, nil
 	case "shared_read":

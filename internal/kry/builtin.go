@@ -164,5 +164,6 @@ func init() {
 		Builtin{"screen_capture", "screen_capture(x: Int,y: Int,width: Int,height: Int) -> Result[Bytes,String]", "graphics", "copy", "capture/encoding/limit failure", "Capture a desktop region as bounded PNG bytes.", "2.5.0", 4, "screen_capture"},
 		Builtin{"screen_capture_display", "screen_capture_display(display: Int) -> Result[Bytes,String]", "graphics", "copy", "capture/encoding/limit failure", "Capture one active display as bounded PNG bytes.", "2.5.0", 1, "screen_capture_display"},
 		Builtin{"camera_capture", "camera_capture(device: String,width: Int,height: Int) -> Result[Bytes,String]", "graphics", "copy", "device/capture/encoding/limit failure", "Capture one webcam frame as bounded PNG bytes.", "2.6.0", 3, "camera_capture"},
+		Builtin{"win_input_read", "win_input_read(kind: String,timeout_ms: Int) -> Result[Json,String]", "windows", "handle", "hook/timeout/permission failure", "Read one bounded low-level keyboard or mouse event on Windows.", "2.7.0", 2, "win_input_read"},
 	)
 }

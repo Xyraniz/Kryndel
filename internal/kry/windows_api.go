@@ -29,6 +29,12 @@ func windowsRawInputRead() ([]byte, error) {
 	}
 	return windowsRawInputReadNative()
 }
+func windowsInputRead(kind string, timeoutMS int64) (string, error) {
+	if runtime.GOOS != "windows" {
+		return "", fmt.Errorf("low-level input hooks are available only on Windows")
+	}
+	return windowsInputReadNative(kind, timeoutMS)
+}
 func windowsDeviceIoControl(device string, code int64, input []byte) ([]byte, error) {
 	if runtime.GOOS != "windows" {
 		return nil, fmt.Errorf("DeviceIoControl is available only on Windows")
