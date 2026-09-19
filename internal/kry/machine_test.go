@@ -46,6 +46,44 @@ func TestDirectELFRejectsDynamicConstructs(t *testing.T) {
 	}
 }
 
+func TestDirectELFLowersAssignmentsAndControlFlow(t *testing.T) {
+	p, c := testProgram(t, `
+let mut index: Int = 0
+let message: String = "loop"
+while index < 3 {
+    println(message)
+    index = index + 1
+}
+if index == 3 {
+    println("done")
+} else {
+    println("wrong")
+}
+println("after")
+`)
+	data, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectNative(data); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return
+	}
+	path := filepath.Join(t.TempDir(), "control-flow-program")
+	if err := os.WriteFile(path, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(path).Output()
+	if err != nil {
+		t.Fatalf("dynamic direct ELF failed to execute: %v", err)
+	}
+	if string(out) != "loop\nloop\nloop\ndone\nafter\n" {
+		t.Fatalf("unexpected dynamic direct ELF output %q", out)
+	}
+}
+
 func TestRuntimeReceivesExplicitProgramArguments(t *testing.T) {
 	p, c := testProgram(t, `let args: Array[String] = process_args()
 assert_eq(args[0], "input.kir")

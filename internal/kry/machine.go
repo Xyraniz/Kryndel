@@ -13,10 +13,11 @@ const (
 )
 
 // BuildDirectELF emits a small, dependency-free ELF64 executable directly.
-// This first vertical slice intentionally supports only statically known
-// print/println calls. It is an executable machine-code backend, not a fake
-// header: unsupported language constructs are rejected before bytes are
-// returned. The general lowering grows in later bootstrap milestones.
+// The static path preserves the first byte-stable bootstrap slice; programs
+// containing assignments or control flow use the second machine-code slice.
+// Both paths emit genuine x86-64 instructions and reject unsupported language
+// constructs before bytes are returned. The general lowering grows in later
+// bootstrap milestones.
 func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	if target.OS != "linux" || target.Arch != "amd64" {
 		return nil, fmt.Errorf("direct ELF backend currently supports only linux-amd64")
@@ -34,10 +35,14 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 		return nil, fmt.Errorf("direct backend rejected KIR: %w", err)
 	}
 	output, err := directStaticOutput(p, c)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		return emitELF64WriteExit(output), nil
 	}
-	return emitELF64WriteExit(output), nil
+	stmts, stmtErr := directDynamicStatements(p)
+	if stmtErr == nil && directHasDynamicControl(stmts) {
+		return buildDirectDynamicELF(p)
+	}
+	return nil, err
 }
 
 func directStaticOutput(p *Program, c *Checker) ([]byte, error) {
