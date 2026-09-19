@@ -1,0 +1,8 @@
+fn main() -> Nil {
+    let chars: Array[String] = string_chars("aé🙂")
+    println(len(chars))
+    println(chars[0])
+    println(chars[1])
+    println(chars[2])
+    return nil
+}

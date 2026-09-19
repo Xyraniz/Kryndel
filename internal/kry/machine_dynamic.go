@@ -46,6 +46,8 @@ type directMachine struct {
 	structAllocLabel    int
 	structRuntimeUsed   bool
 	stringAllocLabel    int
+	stringCharsLabel    int
+	stringCharsUsed     bool
 	bytesFromArrayLabel int
 	processArgsLabel    int
 	fsReadTextLabel     int
@@ -99,6 +101,7 @@ func newDirectMachine() *directMachine {
 	m.boxAllocLabel = m.newLabel()
 	m.structAllocLabel = m.newLabel()
 	m.stringAllocLabel = m.newLabel()
+	m.stringCharsLabel = m.newLabel()
 	m.bytesFromArrayLabel = m.newLabel()
 	m.processArgsLabel = m.newLabel()
 	m.fsReadTextLabel = m.newLabel()
@@ -804,6 +807,158 @@ func (m *directMachine) emitStringAllocRuntime() error {
 		0x4c, 0x89, 0xe0,
 		0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3,
 	)
+	return nil
+}
+
+func (m *directMachine) emitStringCharsRuntime() error {
+	if err := m.bind(m.stringCharsLabel); err != nil {
+		return err
+	}
+	// rdi points to a String object. Build an Array[String] of UTF-8 code-point
+	// slices using the existing mmap-backed String and Array allocators.
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=source object
+		0x4d, 0x8b, 0x2c, 0x24, // r13=source byte length
+		0x4d, 0x31, 0xf6, // r14=byte index
+		0x4d, 0x31, 0xff, // r15=code-point count
+	)
+	countLoop := m.newLabel()
+	countOne := m.newLabel()
+	countTwo := m.newLabel()
+	countThree := m.newLabel()
+	countAdvance := m.newLabel()
+	allocate := m.newLabel()
+	if err := m.bind(countLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)                     // cmp r14, r13
+	if err := m.emitConditionalJump(0x83, allocate); err != nil { // jae: all source bytes consumed
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08, 0x3c, 0x80)
+	if err := m.emitConditionalJump(0x82, countOne); err != nil { // jb: ASCII
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0xe0)
+	if err := m.emitConditionalJump(0x82, countTwo); err != nil { // jb: two-byte sequence
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0xf0)
+	if err := m.emitConditionalJump(0x82, countThree); err != nil { // jb: three-byte sequence
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x83, 0xc6, 0x04)
+	if err := m.emitJump(countAdvance); err != nil {
+		return err
+	}
+	if err := m.bind(countThree); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x83, 0xc6, 0x03)
+	if err := m.emitJump(countAdvance); err != nil {
+		return err
+	}
+	if err := m.bind(countTwo); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x83, 0xc6, 0x02)
+	if err := m.emitJump(countAdvance); err != nil {
+		return err
+	}
+	if err := m.bind(countOne); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x83, 0xc6, 0x01)
+	if err := m.bind(countAdvance); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc7)
+	if err := m.emitJump(countLoop); err != nil {
+		return err
+	}
+	if err := m.bind(allocate); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf8, 0x48, 0x89, 0xc7)
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc3, 0x4d, 0x31, 0xf6, 0x4d, 0x31, 0xff)
+
+	fillLoop := m.newLabel()
+	fillOne := m.newLabel()
+	fillTwo := m.newLabel()
+	fillThree := m.newLabel()
+	fillCopy := m.newLabel()
+	done := m.newLabel()
+	if err := m.bind(fillLoop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x39, 0xee)
+	if err := m.emitConditionalJump(0x83, done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08, 0x3c, 0x80)
+	if err := m.emitConditionalJump(0x82, fillOne); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0xe0)
+	if err := m.emitConditionalJump(0x82, fillTwo); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3c, 0xf0)
+	if err := m.emitConditionalJump(0x82, fillThree); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc2, 0x04, 0x00, 0x00, 0x00)
+	if err := m.emitJump(fillCopy); err != nil {
+		return err
+	}
+	if err := m.bind(fillThree); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc2, 0x03, 0x00, 0x00, 0x00)
+	if err := m.emitJump(fillCopy); err != nil {
+		return err
+	}
+	if err := m.bind(fillTwo); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc2, 0x02, 0x00, 0x00, 0x00)
+	if err := m.emitJump(fillCopy); err != nil {
+		return err
+	}
+	if err := m.bind(fillOne); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xc7, 0xc2, 0x01, 0x00, 0x00, 0x00)
+	if err := m.bind(fillCopy); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xe7, // rdi=source byte base
+		0x48, 0x83, 0xc7, 0x08,
+		0x4c, 0x01, 0xf7, // add rdi, r14
+		0x48, 0x89, 0xd6, // rsi=code-point byte length
+		0x52, // preserve length across string allocation
+	)
+	if err := m.emitLabelCall(m.stringAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x5a,
+		0x4a, 0x89, 0x44, 0xfb, 0x08, // output[r15]=new String
+		0x49, 0x01, 0xd6, // r14 += code-point byte length
+		0x49, 0xff, 0xc7,
+	)
+	if err := m.emitJump(fillLoop); err != nil {
+		return err
+	}
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xd8, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
 	return nil
 }
 
@@ -1587,7 +1742,7 @@ func (m *directMachine) emitStringPredicate(e *Expr, mode string) error {
 	foundLabel := m.newLabel()
 	doneLabel := m.newLabel()
 	if mode == "contains" || mode == "starts_with" || mode == "ends_with" {
-		m.code = append(m.code, 0x4d, 0x39, 0xda) // cmp r10, r11
+		m.code = append(m.code, 0x4d, 0x39, 0xda)                       // cmp r10, r11
 		if err := m.emitConditionalJump(0x82, falseLabel); err != nil { // jb: needle longer than haystack
 			return err
 		}
@@ -1606,7 +1761,7 @@ func (m *directMachine) emitStringPredicate(e *Expr, mode string) error {
 			return err
 		}
 		m.code = append(m.code, 0x4c, 0x89, 0xd0, 0x4c, 0x29, 0xd8, 0x48, 0x39, 0xc2) // compare index with last valid start
-		if err := m.emitConditionalJump(0x87, falseLabel); err != nil { // ja: index beyond last valid start
+		if err := m.emitConditionalJump(0x87, falseLabel); err != nil {               // ja: index beyond last valid start
 			return err
 		}
 	}
@@ -1614,7 +1769,7 @@ func (m *directMachine) emitStringPredicate(e *Expr, mode string) error {
 	if err := m.bind(innerLabel); err != nil {
 		return err
 	}
-	m.code = append(m.code, 0x4c, 0x39, 0xde) // compare with needle length
+	m.code = append(m.code, 0x4c, 0x39, 0xde)                       // compare with needle length
 	if err := m.emitConditionalJump(0x84, foundLabel); err != nil { // je: all bytes matched
 		return err
 	}
@@ -1751,6 +1906,18 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			return m.emitAssert(e, true)
 		case "contains", "starts_with", "ends_with":
 			return m.emitStringPredicate(e, e.Name)
+		case "string_chars":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyString {
+				return fmt.Errorf("direct ELF string_chars expects one String argument")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7) // rdi=String
+			m.hostRuntimeUsed = true
+			m.arrayRuntimeUsed = true
+			m.stringCharsUsed = true
+			return m.emitLabelCall(m.stringCharsLabel)
 		case "len":
 			if len(e.Args) != 1 || e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyArray && e.Args[0].Type.Kind != TyBytes) {
 				return fmt.Errorf("direct ELF backend supports len(Array[T]) and len(Bytes)")
@@ -2567,7 +2734,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
-	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed || m.structRuntimeUsed || m.hostRuntimeUsed {
+	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed || m.structRuntimeUsed || m.hostRuntimeUsed || m.stringCharsUsed {
 		if err := m.emitJump(m.endLabel); err != nil {
 			return nil, err
 		}
@@ -2616,6 +2783,11 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if m.hostRuntimeUsed {
 		if err := m.emitStringAllocRuntime(); err != nil {
 			return nil, err
+		}
+		if m.stringCharsUsed {
+			if err := m.emitStringCharsRuntime(); err != nil {
+				return nil, err
+			}
 		}
 		if err := m.emitBytesFromArrayRuntime(); err != nil {
 			return nil, err
