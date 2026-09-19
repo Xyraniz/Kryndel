@@ -21,6 +21,7 @@ struct Assembler {
     code: Array[UInt8],
     data: Array[UInt8],
     data_by_text: Map[String, Int],
+    string_data_by_text: Map[String, Int],
     labels: Array[Int],
     jumps: Array[JumpPatch],
     data_patches: Array[DataPatch],
@@ -110,49 +111,56 @@ fn dyn_u64_bytes(value: UInt64) -> Array[UInt8] {
 
 fn state_with_code(state: EmitState, code: Array[UInt8]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_data(state: EmitState, data: Array[UInt8]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: state.assembler.data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_data_index(state: EmitState, data: Array[UInt8], data_by_text: Map[String, Int]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        env: state.env,
+    }
+}
+
+fn state_with_string_data_index(state: EmitState, data: Array[UInt8], string_data_by_text: Map[String, Int]) -> EmitState {
+    return EmitState{
+        assembler: Assembler{ code: state.assembler.code, data: data, data_by_text: state.assembler.data_by_text, string_data_by_text: string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_labels(state: EmitState, labels: Array[Int]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, labels: labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_jumps(state: EmitState, jumps: Array[JumpPatch]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, labels: state.assembler.labels, jumps: jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_data_patches(state: EmitState, patches: Array[DataPatch]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: patches, frame_patch: state.assembler.frame_patch },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: patches, frame_patch: state.assembler.frame_patch },
         env: state.env,
     }
 }
 
 fn state_with_frame_patch(state: EmitState, position: Int) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: position },
+        assembler: Assembler{ code: state.assembler.code, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: position },
         env: state.env,
     }
 }
@@ -308,6 +316,32 @@ fn emit_write(state: EmitState, value: String) -> EmitState {
     return state_with_data_patches(with_code, array_push(with_code.assembler.data_patches, patch))
 }
 
+fn emit_string(state: EmitState, value: String) -> EmitState {
+    let known_offset: Option[Int] = map_get(state.assembler.string_data_by_text, value)
+    let mut data_offset: Int = 0
+    let mut with_data: EmitState = state
+    if is_some(known_offset) {
+        data_offset = unwrap_or(known_offset, 0)
+    } else {
+        let bytes: Array[UInt8] = u8_array(string_to_bytes(value))
+        let object: Array[UInt8] = array_concat(dyn_u64_bytes(u64(len(bytes))), bytes)
+        data_offset = len(state.assembler.data)
+        with_data = state_with_string_data_index(
+            state,
+            array_concat(state.assembler.data, object),
+            map_insert(state.assembler.string_data_by_text, value, data_offset)
+        )
+    }
+    let start: Int = len(with_data.assembler.code)
+    let with_code: EmitState = append_code(with_data, [u8(72), u8(141), u8(5), u8(0), u8(0), u8(0), u8(0)])
+    let patch: DataPatch = DataPatch{ displacement: start + 3, instruction_end: start + 7, data_offset: data_offset }
+    return state_with_data_patches(with_code, array_push(with_code.assembler.data_patches, patch))
+}
+
+fn emit_string_write(state: EmitState) -> EmitState {
+    return append_code(state, [u8(72), u8(139), u8(16), u8(72), u8(141), u8(112), u8(8), u8(184), u8(1), u8(0), u8(0), u8(0), u8(191), u8(1), u8(0), u8(0), u8(0), u8(15), u8(5)])
+}
+
 fn emit_integer(state: EmitState, unsigned: Bool) -> Result[EmitState, String] {
     let mut current: EmitState = append_code(state, array_concat([u8(76), u8(141), u8(133)], i32_bytes(0 - state.env.buffer_offset)))
     current = append_code(current, array_concat([u8(73), u8(185)], dyn_u64_bytes(u64(10))))
@@ -420,6 +454,7 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
             if result_unwrap(json_bool(field(constant, "bool"))) { return ok(emit_int(state, 1)) }
             return ok(emit_int(state, 0))
         }
+        if constant_kind == "string" { return ok(emit_string(state, text(field(constant, "string")))) }
     }
     let kind: String = text(field(expression, "kind"))
     if kind == "int" {
@@ -427,6 +462,9 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
     }
     if kind == "uint" {
         return ok(emit_uint(state, result_unwrap(json_uint(field(expression, "uint"))), result_unwrap(json_int(field(expression, "uint_bits")))))
+    }
+    if kind == "string" {
+        return ok(emit_string(state, text(field(expression, "string"))))
     }
     if kind == "call" {
         let target: String = text(field(expression, "call_target"))
@@ -471,6 +509,7 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
     let combined: EmitState = append_code(result_unwrap(right), [u8(72), u8(137), u8(193), u8(88)])
     let operator: String = text(field(expression, "operator"))
     let expression_type: String = expr_type(expression)
+    if expression_type == "String" { return err("dynamic backend: dynamic String concatenation is not supported yet") }
     let unsigned: Bool = is_unsigned(expression_type)
     let bits: Int = uint_bits(expression_type)
     if operator == "+" {
@@ -530,11 +569,7 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         let type_name: String = expr_type(init)
         if state.env.in_function && !is_scalar_type(type_name) { return err("dynamic backend: function local has unsupported type '" + type_name + "'") }
         let mut generated: Result[EmitState, String] = err("dynamic backend: initializer was not lowered")
-        if type_name == "String" {
-            generated = ok(emit_int(updated, 0))
-        } else {
-            generated = emit_expression(updated, init)
-        }
+        generated = emit_expression(updated, init)
         if is_err(generated) { return err(expression_error(generated)) }
         let stored: EmitState = emit_store_slot(result_unwrap(generated), unwrap_or(map_get(updated.env.slots, name), -1))
         let mutable: Bool = result_unwrap(json_bool(field(statement, "mutable")))
@@ -572,6 +607,13 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
             return ok(emit_write(state, output))
         }
         let type_name: String = expr_type(argument)
+        if type_name == "String" {
+            let emitted_string: Result[EmitState, String] = emit_expression(state, argument)
+            if is_err(emitted_string) { return err(expression_error(emitted_string)) }
+            let written_string: EmitState = emit_string_write(result_unwrap(emitted_string))
+            if target == "builtin:println" { return ok(emit_write(written_string, "\n")) }
+            return ok(written_string)
+        }
         if type_name != "Int" && !starts_with(type_name, "UInt") { return err(unwrap_or(result_error(display_value), "dynamic backend: print value is not static")) }
         let generated: Result[EmitState, String] = emit_expression(state, argument)
         if is_err(generated) { return err(expression_error(generated)) }
@@ -738,7 +780,7 @@ fn emit_dynamic_elf(code: Array[UInt8], data: Array[UInt8]) -> Bytes {
 }
 
 fn new_dynamic_state() -> EmitState {
-    let assembler: Assembler = Assembler{ code: [], data: [], data_by_text: {}, labels: [], jumps: [], data_patches: [], frame_patch: -1 }
+    let assembler: Assembler = Assembler{ code: [], data: [], data_by_text: {}, string_data_by_text: {}, labels: [], jumps: [], data_patches: [], frame_patch: -1 }
     let env: CompileEnv = CompileEnv{ slots: {}, static_values: {}, function_labels: {}, function_returns: {}, next_slot: 0, breaks: [], continues: [], end_label: -1, trap_label: -1, buffer_offset: 1, in_function: false, current_function: "" }
     return EmitState{ assembler: assembler, env: env }
 }
@@ -814,7 +856,7 @@ fn entry_statements(document: Json) -> Json {
 }
 
 fn is_scalar_type(type_name: String) -> Bool {
-    return type_name == "Int" || type_name == "Bool" || starts_with(type_name, "UInt")
+    return type_name == "Int" || type_name == "Bool" || type_name == "String" || starts_with(type_name, "UInt")
 }
 
 fn prepare_function_labels(state: EmitState, functions: Json) -> Result[EmitState, String] {

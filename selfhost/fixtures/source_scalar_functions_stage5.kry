@@ -10,6 +10,14 @@ fn increment(value: UInt64) -> UInt64 {
     return value + u64(1)
 }
 
+fn label(value: Int) -> String {
+    if value > 0 {
+        return "positive-value"
+    } else {
+        return "zero-value"
+    }
+}
+
 fn mask(value: UInt8) -> UInt8 {
     let mut masked: UInt8 = value & u8(15)
     masked = ((((masked << 1) >> 1) | u8(1)) ^ u8(2))
@@ -25,4 +33,5 @@ fn main() -> Nil {
     }
     println(increment(u64(0)))
     println(mask(u8(16)))
+    println(label(1))
 }

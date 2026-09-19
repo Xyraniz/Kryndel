@@ -15,6 +15,7 @@ type directMachine struct {
 	code             []byte
 	data             []byte
 	dataByText       map[string]int
+	stringObjects    map[string]int
 	dataRefs         []machineDataRef
 	labels           []machineLabel
 	slots            map[string]machineSlot
@@ -57,6 +58,7 @@ type machineDataRef struct {
 func newDirectMachine() *directMachine {
 	m := &directMachine{
 		dataByText:       map[string]int{},
+		stringObjects:    map[string]int{},
 		slots:            map[string]machineSlot{},
 		staticEnv:        map[string]Value{},
 		functionLabels:   map[string]int{},
@@ -131,6 +133,33 @@ func (m *directMachine) addData(text string) int {
 	m.data = append(m.data, []byte(text)...)
 	m.dataByText[text] = offset
 	return offset
+}
+
+func (m *directMachine) addStringObject(text string) int {
+	if offset, ok := m.stringObjects[text]; ok {
+		return offset
+	}
+	offset := len(m.data)
+	var length [8]byte
+	binary.LittleEndian.PutUint64(length[:], uint64(len(text)))
+	m.data = append(m.data, length[:]...)
+	m.data = append(m.data, []byte(text)...)
+	m.stringObjects[text] = offset
+	return offset
+}
+
+func (m *directMachine) emitStringAddress(text string) {
+	offset := m.addStringObject(text)
+	start := len(m.code)
+	m.code = append(m.code, 0x48, 0x8d, 0x05, 0, 0, 0, 0) // lea rax, [rip+disp32]
+	m.dataRefs = append(m.dataRefs, machineDataRef{displacement: start + 3, instructionEnd: start + 7, dataOffset: offset})
+}
+
+func (m *directMachine) emitStringWrite() {
+	// rax points to {u64 length, u8 bytes[length]}.
+	m.code = append(m.code, 0x48, 0x8b, 0x10) // mov rdx, [rax]
+	m.code = append(m.code, 0x48, 0x8d, 0x70, 0x08)
+	m.code = append(m.code, 0xb8, 0x01, 0, 0, 0, 0xbf, 0x01, 0, 0, 0, 0x0f, 0x05)
 }
 
 func (m *directMachine) emitWrite(text string) {
@@ -274,6 +303,8 @@ func machineScalarType(name string) (*Type, bool) {
 		return TUInt32, true
 	case "UInt64":
 		return TUInt64, true
+	case "String":
+		return TString, true
 	case "Nil":
 		return TNil, true
 	default:
@@ -362,6 +393,9 @@ func (m *directMachine) emitExpr(e *Expr) error {
 				m.emitMoveImmediate(0)
 			}
 			return nil
+		case VString:
+			m.emitStringAddress(e.ConstValue.S)
+			return nil
 		}
 	}
 	switch e.Kind {
@@ -374,6 +408,9 @@ func (m *directMachine) emitExpr(e *Expr) error {
 		} else {
 			m.emitMoveImmediate(0)
 		}
+		return nil
+	case ExString:
+		m.emitStringAddress(e.Str)
 		return nil
 	case ExVar:
 		slot, ok := m.slots[e.Name]
@@ -436,6 +473,9 @@ func (m *directMachine) emitExpr(e *Expr) error {
 }
 
 func (m *directMachine) emitBinary(e *Expr) error {
+	if e.Type != nil && e.Type.Kind == TyString {
+		return fmt.Errorf("direct ELF backend does not support dynamic String concatenation yet")
+	}
 	if err := m.emitExpr(e.Left); err != nil {
 		return err
 	}
@@ -725,6 +765,16 @@ func (m *directMachine) emitStaticOutput(e *Expr, name string) error {
 	}
 	v, ok := directStaticValue(e.Args[0], m.staticEnv)
 	if !ok || (v.Kind != VString && v.Kind != VInt && v.Kind != VBool && v.Kind != VUInt) {
+		if e.Args[0].Type != nil && e.Args[0].Type.Kind == TyString {
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.emitStringWrite()
+			if name == "println" {
+				m.emitWrite("\n")
+			}
+			return nil
+		}
 		if e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyInt && e.Args[0].Type.Kind != TyUInt) {
 			return fmt.Errorf("direct ELF backend supports only statically displayable print values")
 		}
@@ -754,14 +804,7 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 		}
 		switch s.Kind {
 		case StLet, StConst:
-			if s.Init.Type != nil && s.Init.Type.Kind == TyString {
-				if _, ok := directStaticValue(s.Init, m.staticEnv); !ok {
-					return fmt.Errorf("direct ELF backend requires a static String initializer for '%s'", s.Name)
-				}
-				// String storage is not yet a native pointer value in this slice;
-				// immutable static strings stay in staticEnv for print lowering.
-				m.emitMoveImmediate(0)
-			} else if err := m.emitExpr(s.Init); err != nil {
+			if err := m.emitExpr(s.Init); err != nil {
 				return err
 			}
 			slot := m.slots[s.Name]

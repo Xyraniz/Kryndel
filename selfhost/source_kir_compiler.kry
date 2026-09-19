@@ -248,7 +248,7 @@ fn bool_text(value: Bool) -> String {
 }
 
 fn source_is_scalar_type(type_name: String) -> Bool {
-    return type_name == "Int" || type_name == "Bool" || starts_with(type_name, "UInt")
+    return type_name == "Int" || type_name == "Bool" || type_name == "String" || starts_with(type_name, "UInt")
 }
 
 fn const_json(type_name: String, display: String) -> String {

@@ -23,7 +23,7 @@ On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` when it is on `
 | `build source.kry` | Check and write a deterministic `KRYNATIVE3` bundle. | `0` |
 | `build source.kry --format=exe --target=windows-x64` | Check and write a real PE32+ entrypoint for the selected target. | `0` |
 | `build source.kry --format=elf --target=linux-x64` | Check and write a real ELF64 entrypoint for the selected target. | `0` |
-| `build source.kry --format=elf-direct --target=linux-x64` | Use the dependency-free direct machine backend for the documented scalar-output, Int/Bool/UInt assignment/control-flow, and scalar-function slice; no C compiler is invoked. | `0` |
+| `build source.kry --format=elf-direct --target=linux-x64` | Use the dependency-free direct machine backend for the documented scalar-output, immutable String-pointer, Int/Bool/UInt assignment/control-flow, and scalar-function slice; no C compiler is invoked. | `0` |
 | `build source.kry --format=c` | Check and emit the generated C source without compiling. | `0` |
 | `emit source.kry --format=kry-ir [--target=TARGET]` | Emit deterministic, versioned checked KIR JSON without executing source; `TARGET` defaults to the host. | `0` |
 | `inspect binary` | Inspect PE/ELF headers and reject unknown binary formats. | `0` |
