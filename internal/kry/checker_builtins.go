@@ -1015,6 +1015,145 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return TError, d
 		}
 		return Res(TBytes, TString), nil
+	case "crypto_sha512", "crypto_sha384", "crypto_sha1", "crypto_md5":
+		if _, d := arg(0, TBytes); d != nil {
+			return TError, d
+		}
+		return TBytes, nil
+	case "crypto_aes_gcm_encrypt", "crypto_aes_gcm_decrypt":
+		if _, d := arg(0, TBytes); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TBytes); d != nil {
+			return TError, d
+		}
+		if _, d := arg(2, TBytes); d != nil {
+			return TError, d
+		}
+		return Res(TBytes, TString), nil
+	case "crypto_pbkdf2_sha256":
+		if _, d := arg(0, TBytes); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TBytes); d != nil {
+			return TError, d
+		}
+		if _, d := arg(2, TInt); d != nil {
+			return TError, d
+		}
+		if _, d := arg(3, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TBytes, TString), nil
+	case "crypto_hkdf_sha256":
+		if _, d := arg(0, TBytes); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TBytes); d != nil {
+			return TError, d
+		}
+		if _, d := arg(2, TBytes); d != nil {
+			return TError, d
+		}
+		if _, d := arg(3, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TBytes, TString), nil
+	case "crypto_constant_time_equal":
+		if _, d := arg(0, TBytes); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TBytes); d != nil {
+			return TError, d
+		}
+		return TBool, nil
+	case "crypto_xor":
+		if _, d := arg(0, TBytes); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TBytes); d != nil {
+			return TError, d
+		}
+		return Res(TBytes, TString), nil
+	case "base64url_encode":
+		if _, d := arg(0, TBytes); d != nil {
+			return TError, d
+		}
+		return TString, nil
+	case "base64url_decode":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return Res(TBytes, TString), nil
+	case "string_slice":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		if _, d := arg(2, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TString, TString), nil
+	case "array_slice_range":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray {
+			return bad("array_slice_range expects Array[T] as its first argument")
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		if _, d := arg(2, TInt); d != nil {
+			return TError, d
+		}
+		return t, nil
+	case "string_format":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		t, d := arg(1, Arr(TString))
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray || !typeEqual(t.A, TString) {
+			return bad("string_format expects Array[String] as its second argument")
+		}
+		return TString, nil
+	case "array_indices":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray {
+			return bad("array_indices expects Array[T]")
+		}
+		return Arr(TInt), nil
+	case "array_zip":
+		t, d := arg(0, nil)
+		if d != nil {
+			return TError, d
+		}
+		if t.Kind != TyArray {
+			return bad("array_zip expects Array[T] as its first argument")
+		}
+		u, d := arg(1, t)
+		if d != nil {
+			return TError, d
+		}
+		if u.Kind != TyArray {
+			return bad("array_zip expects Array[T] as its second argument")
+		}
+		if t.A.Kind == TyUnknown {
+			return Arr(Arr(u.A)), nil
+		}
+		if !compatible(t.A, u.A) {
+			return bad("array_zip element types must match")
+		}
+		return Arr(Arr(t.A)), nil
 	case "fs_read_dir":
 		_, d := arg(0, TString)
 		if d != nil {

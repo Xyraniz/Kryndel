@@ -1319,6 +1319,17 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		}
 		args[i] = v
 	}
+	// Fill omitted trailing arguments from their declared defaults.
+	for i := len(args); i < len(f.Params); i++ {
+		if f.Params[i].Default == nil {
+			break
+		}
+		v, d := r.evalExpr(sc, f.Params[i].Default)
+		if d != nil {
+			return nilVal(), d
+		}
+		args = append(args, v)
+	}
 	if e.Tail {
 		return Value{Kind: VTailCall, Tail: &TailCall{Function: f, Receiver: receiver, Args: args}}, nil
 	}
@@ -2133,6 +2144,75 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, bytesVal(buf)), nil
+	case "crypto_sha512", "crypto_sha384", "crypto_sha1", "crypto_md5":
+		digest, err := cryptoHash(b.Name, a[0].Bytes)
+		if err != nil {
+			return bad(err.Error())
+		}
+		return bytesVal(digest), nil
+	case "crypto_aes_gcm_encrypt":
+		out, err := cryptoAESGCMEncrypt(a[0].Bytes, a[1].Bytes, a[2].Bytes)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(out)), nil
+	case "crypto_aes_gcm_decrypt":
+		out, err := cryptoAESGCMDecrypt(a[0].Bytes, a[1].Bytes, a[2].Bytes)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(out)), nil
+	case "crypto_pbkdf2_sha256":
+		out, err := cryptoPBKDF2SHA256(a[0].Bytes, a[1].Bytes, int(a[2].I), int(a[3].I))
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(out)), nil
+	case "crypto_hkdf_sha256":
+		out, err := cryptoHKDFSHA256(a[0].Bytes, a[1].Bytes, a[2].Bytes, int(a[3].I))
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(out)), nil
+	case "crypto_constant_time_equal":
+		return boolVal(cryptoConstantTimeEqual(a[0].Bytes, a[1].Bytes)), nil
+	case "crypto_xor":
+		out, err := cryptoXOR(a[0].Bytes, a[1].Bytes)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(out)), nil
+	case "base64url_encode":
+		return stringVal(base64URLEncode(a[0].Bytes)), nil
+	case "base64url_decode":
+		out, err := base64URLDecode(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal("invalid base64url input")), nil
+		}
+		return resVal(true, bytesVal(out)), nil
+	case "string_slice":
+		return r.stringSlice(a), nil
+	case "array_slice_range":
+		return r.arraySliceRange(a), nil
+	case "string_format":
+		return stringVal(formatTemplate(a[0].S, a[1].Array)), nil
+	case "array_indices":
+		idx := make([]Value, len(a[0].Array))
+		for i := range idx {
+			idx[i] = intVal(int64(i))
+		}
+		return arrVal(idx), nil
+	case "array_zip":
+		left, right := a[0].Array, a[1].Array
+		n := len(left)
+		if len(right) < n {
+			n = len(right)
+		}
+		pairs := make([]Value, n)
+		for i := 0; i < n; i++ {
+			pairs[i] = arrVal([]Value{left[i], right[i]})
+		}
+		return arrVal(pairs), nil
 	case "fs_read_dir":
 		entries, err := r.Sandbox.ReadDir(a[0].S)
 		if err != nil {
@@ -2634,6 +2714,84 @@ func (r *Runtime) toFloat(e *Expr, v Value) (Value, *Diagnostic) {
 	}
 	return nilVal(), r.fail(e, "float conversion is unsupported")
 }
+// normalizeSliceIndex maps a Python-style index (which may be negative) onto
+// the range [0, length]. Indices outside the range are clamped, matching the
+// forgiving behaviour Python programmers expect from slicing.
+func normalizeSliceIndex(i, length int64) int64 {
+	if i < 0 {
+		i += length
+	}
+	if i < 0 {
+		return 0
+	}
+	if i > length {
+		return length
+	}
+	return i
+}
+
+// stringSlice implements string_slice with Python semantics: negative indices
+// count from the end and out-of-range bounds are clamped rather than failing.
+func (r *Runtime) stringSlice(a []Value) Value {
+	rs := []rune(a[0].S)
+	n := int64(len(rs))
+	start := normalizeSliceIndex(a[1].I, n)
+	end := normalizeSliceIndex(a[2].I, n)
+	if end < start {
+		end = start
+	}
+	return resVal(true, stringVal(string(rs[start:end])))
+}
+
+// arraySliceRange implements array_slice_range with the same Python semantics.
+func (r *Runtime) arraySliceRange(a []Value) Value {
+	items := a[0].Array
+	n := int64(len(items))
+	start := normalizeSliceIndex(a[1].I, n)
+	end := normalizeSliceIndex(a[2].I, n)
+	if end < start {
+		end = start
+	}
+	out := make([]Value, end-start)
+	copy(out, items[start:end])
+	return arrVal(out)
+}
+
+// formatTemplate substitutes {} placeholders in order. {{ and }} are literal
+// braces, and a missing argument leaves the placeholder untouched so mistakes
+// are visible rather than silently dropped.
+func formatTemplate(tmpl string, args []Value) string {
+	var b strings.Builder
+	next := 0
+	for i := 0; i < len(tmpl); i++ {
+		c := tmpl[i]
+		if c == '{' {
+			if i+1 < len(tmpl) && tmpl[i+1] == '{' {
+				b.WriteByte('{')
+				i++
+				continue
+			}
+			if i+1 < len(tmpl) && tmpl[i+1] == '}' {
+				if next < len(args) {
+					b.WriteString(display(args[next]))
+					next++
+				} else {
+					b.WriteString("{}")
+				}
+				i++
+				continue
+			}
+		}
+		if c == '}' && i+1 < len(tmpl) && tmpl[i+1] == '}' {
+			b.WriteByte('}')
+			i++
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
 func (r *Runtime) substring(e *Expr, a []Value) (Value, *Diagnostic) {
 	rs := []rune(a[0].S)
 	start, n := a[1].I, a[2].I

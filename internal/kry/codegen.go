@@ -48,22 +48,36 @@ type cgen struct {
 	locals []map[string]bool
 	// topLevel is true while emitting the top-level statement list.
 	topLevel bool
+	// obfuscate masks string literals so their plaintext does not appear in the
+	// produced executable.
+	obfuscate bool
 }
 
 // GenerateC lowers a checked program to C source. It returns an error when the
 // program uses a construct the native backend does not support, so callers can
 // surface an honest diagnostic rather than emitting a broken binary.
 func GenerateC(p *Program, c *Checker) (string, error) {
+	return generateC(p, c, false)
+}
+
+// GenerateCObfuscated lowers a checked program to C with string literals masked
+// so their plaintext is not recoverable from the produced executable.
+func GenerateCObfuscated(p *Program, c *Checker) (string, error) {
+	return generateC(p, c, true)
+}
+
+func generateC(p *Program, c *Checker, obfuscate bool) (string, error) {
 	if p == nil || c == nil {
 		return "", fmt.Errorf("missing checked program")
 	}
 	g := &cgen{
-		prog:     p,
-		env:      c.Env,
-		structID: map[string]int{},
-		enumID:   map[string]int{},
-		fnName:   map[*Function]string{},
-		globals:  map[string]bool{},
+		prog:      p,
+		env:       c.Env,
+		structID:  map[string]int{},
+		enumID:    map[string]int{},
+		fnName:    map[*Function]string{},
+		globals:   map[string]bool{},
+		obfuscate: obfuscate,
 	}
 	g.structs = append(g.structs, p.Structs...)
 	g.enums = append(g.enums, p.Enums...)
@@ -214,6 +228,7 @@ func (g *cgen) emitRuntime() {
 	g.buf.WriteString(cRuntimeDisplay)
 	g.buf.WriteString(cRuntimeBuiltins)
 	g.buf.WriteString(cRuntimeExtra)
+	g.buf.WriteString(cRuntimeCrypto)
 	g.buf.WriteString("\n/* ---- generated program ------------------------------------------------ */\n")
 }
 
@@ -562,6 +577,9 @@ func (g *cgen) expr(e *Expr) string {
 	case ExNil:
 		return "kv_nil()"
 	case ExString:
+		if g.obfuscate {
+			return fmt.Sprintf("k_obf_str((const unsigned char*)%s, %d)", cObfString(e.Str), len(e.Str))
+		}
 		return fmt.Sprintf("kv_strn(%s, %d)", cString(e.Str), len(e.Str))
 	case ExVar:
 		return sanitize(e.Name)
@@ -803,7 +821,16 @@ func (g *cgen) functionCall(f *Function, receiver *Expr, args []*Expr) string {
 	for i, a := range args {
 		fmt.Fprintf(&b, " _frame[%d] = %s;", i+off, g.expr(a))
 	}
-	fmt.Fprintf(&b, " memcpy(k_args, _frame, sizeof(KValue)*%d); %s(); })", off+len(args), name)
+	// Fill omitted trailing arguments from their declared defaults.
+	total := len(args)
+	for i := len(args); i < len(f.Params); i++ {
+		if f.Params[i].Default == nil {
+			break
+		}
+		fmt.Fprintf(&b, " _frame[%d] = %s;", i+off, g.expr(f.Params[i].Default))
+		total = i + 1
+	}
+	fmt.Fprintf(&b, " memcpy(k_args, _frame, sizeof(KValue)*%d); %s(); })", off+total, name)
 	return b.String()
 }
 
@@ -956,6 +983,40 @@ func (g *cgen) builtinCall(e *Expr, b Builtin) string {
 		return fmt.Sprintf("k_crypto_hmac_sha256(%s, %s)", arg(0), arg(1))
 	case "crypto_random_bytes":
 		return fmt.Sprintf("k_crypto_random_bytes(%s)", arg(0))
+	case "crypto_sha512":
+		return fmt.Sprintf("k_crypto_sha512(%s)", arg(0))
+	case "crypto_sha384":
+		return fmt.Sprintf("k_crypto_sha384(%s)", arg(0))
+	case "crypto_sha1":
+		return fmt.Sprintf("k_crypto_sha1(%s)", arg(0))
+	case "crypto_md5":
+		return fmt.Sprintf("k_crypto_md5(%s)", arg(0))
+	case "crypto_aes_gcm_encrypt":
+		return fmt.Sprintf("k_crypto_aes_gcm_encrypt(%s, %s, %s)", arg(0), arg(1), arg(2))
+	case "crypto_aes_gcm_decrypt":
+		return fmt.Sprintf("k_crypto_aes_gcm_decrypt(%s, %s, %s)", arg(0), arg(1), arg(2))
+	case "crypto_pbkdf2_sha256":
+		return fmt.Sprintf("k_crypto_pbkdf2_sha256(%s, %s, %s, %s)", arg(0), arg(1), arg(2), arg(3))
+	case "crypto_hkdf_sha256":
+		return fmt.Sprintf("k_crypto_hkdf_sha256(%s, %s, %s, %s)", arg(0), arg(1), arg(2), arg(3))
+	case "crypto_constant_time_equal":
+		return fmt.Sprintf("k_crypto_constant_time_equal(%s, %s)", arg(0), arg(1))
+	case "crypto_xor":
+		return fmt.Sprintf("k_crypto_xor(%s, %s)", arg(0), arg(1))
+	case "base64url_encode":
+		return fmt.Sprintf("k_base64url_encode(%s)", arg(0))
+	case "base64url_decode":
+		return fmt.Sprintf("k_base64url_decode(%s)", arg(0))
+	case "string_slice":
+		return fmt.Sprintf("k_string_slice(%s, %s, %s)", arg(0), arg(1), arg(2))
+	case "array_slice_range":
+		return fmt.Sprintf("k_array_slice_range(%s, %s, %s)", arg(0), arg(1), arg(2))
+	case "string_format":
+		return fmt.Sprintf("k_string_format(%s, %s)", arg(0), arg(1))
+	case "array_indices":
+		return fmt.Sprintf("k_array_indices(%s)", arg(0))
+	case "array_zip":
+		return fmt.Sprintf("k_array_zip(%s, %s)", arg(0), arg(1))
 	case "fs_read_dir":
 		return fmt.Sprintf("k_fs_read_dir(%s)", arg(0))
 	case "fs_create_dir":
@@ -1159,6 +1220,22 @@ func cString(s string) string {
 				b.WriteByte(c)
 			}
 		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// cObfString renders a string as a C literal whose bytes are XOR-masked with
+// the same mask k_obf_str reverses at runtime. The mask depends only on the
+// length and index, so no key is embedded and the plaintext never appears in
+// the binary.
+func cObfString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	n := len(s)
+	for i := 0; i < n; i++ {
+		c := s[i] ^ byte(0x5a+(i*31)+(n*7))
+		fmt.Fprintf(&b, "\\x%02x", c)
 	}
 	b.WriteByte('"')
 	return b.String()
