@@ -573,6 +573,86 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("json_stringify expects Json")
 		}
 		return TString, nil
+	case "json_kind":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_kind expects Json")
+		}
+		return TString, nil
+	case "json_object_get":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_object_get expects Json")
+		}
+		if t, d := arg(1, TString); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TString) {
+			return bad("json_object_get expects a String key")
+		}
+		return Res(TJSON, TString), nil
+	case "json_array_len":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_array_len expects Json")
+		}
+		return Res(TInt, TString), nil
+	case "json_array_get":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_array_get expects Json")
+		}
+		if t, d := arg(1, TInt); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TInt) {
+			return bad("json_array_get expects an Int index")
+		}
+		return Res(TJSON, TString), nil
+	case "json_string":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_string expects Json")
+		}
+		return Res(TString, TString), nil
+	case "json_int":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_int expects Json")
+		}
+		return Res(TInt, TString), nil
+	case "json_uint":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_uint expects Json")
+		}
+		return Res(TUInt64, TString), nil
+	case "json_float":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_float expects Json")
+		}
+		return Res(TFloat, TString), nil
+	case "json_bool":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_bool expects Json")
+		}
+		return Res(TBool, TString), nil
+	case "json_is_null":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_is_null expects Json")
+		}
+		return TBool, nil
 	case "http_get":
 		t, d := arg(0, TString)
 		if d != nil {

@@ -1957,6 +1957,101 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return resVal(true, Value{Kind: VJSON, S: string(canon)}), nil
 	case "json_stringify":
 		return stringVal(a[0].S), nil
+	case "json_kind":
+		raw, err := decodeJSONNode(a[0].S)
+		if err != nil {
+			return nilVal(), r.fail(e, "invalid Json value: %v", err)
+		}
+		return stringVal(jsonNodeKind(raw)), nil
+	case "json_object_get":
+		raw, err := decodeJSONNode(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		obj, ok := raw.(map[string]any)
+		if !ok {
+			return resVal(false, stringVal("JSON value is not an object")), nil
+		}
+		child, ok := obj[a[1].S]
+		if !ok {
+			return resVal(false, stringVal("JSON object key not found")), nil
+		}
+		data, err := json.Marshal(child)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VJSON, S: string(data)}), nil
+	case "json_array_len":
+		raw, err := decodeJSONNode(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		items, ok := raw.([]any)
+		if !ok {
+			return resVal(false, stringVal("JSON value is not an array")), nil
+		}
+		return resVal(true, intVal(int64(len(items)))), nil
+	case "json_array_get":
+		raw, err := decodeJSONNode(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		items, ok := raw.([]any)
+		if !ok {
+			return resVal(false, stringVal("JSON value is not an array")), nil
+		}
+		if a[1].I < 0 || a[1].I >= int64(len(items)) {
+			return resVal(false, stringVal("JSON array index out of range")), nil
+		}
+		data, err := json.Marshal(items[a[1].I])
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VJSON, S: string(data)}), nil
+	case "json_string":
+		var value string
+		if err := json.Unmarshal([]byte(a[0].S), &value); err != nil {
+			return resVal(false, stringVal("JSON value is not a string")), nil
+		}
+		return resVal(true, stringVal(value)), nil
+	case "json_int":
+		n, err := jsonNumberNode(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		value, err := n.Int64()
+		if err != nil {
+			return resVal(false, stringVal("JSON number is not a signed Int")), nil
+		}
+		return resVal(true, intVal(value)), nil
+	case "json_uint":
+		n, err := jsonNumberNode(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		value, err := strconv.ParseUint(n.String(), 10, 64)
+		if err != nil {
+			return resVal(false, stringVal("JSON number is not a UInt64")), nil
+		}
+		return resVal(true, uintVal(64, value)), nil
+	case "json_float":
+		n, err := jsonNumberNode(a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		value, err := n.Float64()
+		if err != nil || !isFinite(value) {
+			return resVal(false, stringVal("JSON number is not a finite Float")), nil
+		}
+		return resVal(true, floatVal(value)), nil
+	case "json_bool":
+		var value bool
+		if err := json.Unmarshal([]byte(a[0].S), &value); err != nil {
+			return resVal(false, stringVal("JSON value is not a Bool")), nil
+		}
+		return resVal(true, boolVal(value)), nil
+	case "json_is_null":
+		return boolVal(strings.TrimSpace(a[0].S) == "null"), nil
 	case "http_get":
 		return r.httpRequest(e, "GET", a[0].S, "")
 	case "http_request":
@@ -3216,6 +3311,12 @@ func normalizeJSON(v any) any {
 		if i, err := t.Int64(); err == nil {
 			return i
 		}
+		// Preserve integral values outside Int64 exactly. JSON accessors such
+		// as json_uint can then decode the original UInt64 instead of seeing a
+		// rounded float64.
+		if !strings.ContainsAny(t.String(), ".eE") {
+			return t
+		}
 		if f, err := t.Float64(); err == nil {
 			return f
 		}
@@ -3232,6 +3333,54 @@ func normalizeJSON(v any) any {
 		return t
 	default:
 		return v
+	}
+}
+
+func decodeJSONNode(text string) (any, error) {
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.UseNumber()
+	var raw any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("trailing JSON")
+		}
+		return nil, err
+	}
+	return raw, nil
+}
+
+func jsonNumberNode(text string) (json.Number, error) {
+	raw, err := decodeJSONNode(text)
+	if err != nil {
+		return "", err
+	}
+	n, ok := raw.(json.Number)
+	if !ok {
+		return "", fmt.Errorf("JSON value is not a number")
+	}
+	return n, nil
+}
+
+func jsonNodeKind(v any) string {
+	switch v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "bool"
+	case json.Number:
+		return "number"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return "unknown"
 	}
 }
 

@@ -58,6 +58,9 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `set_contains`, `set_insert`, `set_len` | `Set[T]` operations. | Sets deduplicate by recursive value equality and return new values on insertion. |
 | `json_parse` | `json_parse(value: String) -> Result[Json,String]` | Validates and canonicalizes JSON under the source-size limit. |
 | `json_stringify` | `json_stringify(value: Json) -> String` | Returns the canonical validated JSON text. |
+| `json_kind`, `json_is_null` | `json_kind(value: Json) -> String`, `json_is_null(value: Json) -> Bool` | Inspect a JSON node without converting it to an untyped string. |
+| `json_object_get`, `json_array_len`, `json_array_get` | Typed object/array accessors returning `Result[...,String]`. | Traverse nested JSON while preserving number spelling and bounds errors. |
+| `json_string`, `json_int`, `json_uint`, `json_float`, `json_bool` | Typed scalar accessors returning `Result[...,String]`. | Decode only the requested scalar type; `json_uint` preserves the full UInt64 range. |
 | `thread_channel` | `thread_channel() -> Channel[T]` | Creates an unbounded queue by default; a `Channel[T]` context is required. |
 | `thread_channel_with_capacity` | `thread_channel_with_capacity(capacity: Int) -> Channel[T]` | Creates a bounded queue with positive capacity. |
 | `thread_spawn` | `thread_spawn(name: String) -> Thread[T]` | Starts a zero-argument named worker; unknown workers and startup failures are rejected. |
