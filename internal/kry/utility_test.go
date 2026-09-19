@@ -1,6 +1,7 @@
 package kry
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -84,7 +85,7 @@ func TestUtilityBuiltinsInterpreter(t *testing.T) {
 	if len(lines) != 19 {
 		t.Fatalf("unexpected utility output (%d lines): %q", len(lines), got)
 	}
-	if lines[0] != "true" || lines[2] != "true" || lines[3] != "windows" || lines[6] != "true" || lines[7] != "true" || lines[8] != lines[9] || lines[10] != "true" || lines[12] != "abc" || lines[16] != "2024-01-02" || lines[17] != "some(hello Kryndel)" || lines[18] != "some(a b)" {
+	if lines[0] != "true" || lines[2] != "true" || lines[3] != runtime.GOOS || lines[6] != "true" || lines[7] != "true" || lines[8] != lines[9] || lines[10] != "true" || lines[12] != "abc" || lines[16] != "2024-01-02" || lines[17] != "some(hello Kryndel)" || lines[18] != "some(a b)" {
 		t.Fatalf("unexpected utility output: %q", got)
 	}
 }

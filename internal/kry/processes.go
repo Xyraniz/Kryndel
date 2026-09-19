@@ -9,7 +9,15 @@ import (
 	psutil "github.com/shirou/gopsutil/v3/process"
 )
 
+func processContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
 func processDetails(ctx context.Context, p *psutil.Process) map[string]any {
+	ctx = processContext(ctx)
 	value := map[string]any{
 		"pid":            p.Pid,
 		"name":           "",
@@ -37,6 +45,7 @@ func processDetails(ctx context.Context, p *psutil.Process) map[string]any {
 }
 
 func processInfoJSON(ctx context.Context, pid int64) (string, error) {
+	ctx = processContext(ctx)
 	if pid <= 0 || pid > int64(^uint32(0)>>1) {
 		return "", fmt.Errorf("pid must be a positive 32-bit integer")
 	}
@@ -52,6 +61,7 @@ func processInfoJSON(ctx context.Context, pid int64) (string, error) {
 }
 
 func processListJSON(ctx context.Context, max int) (string, error) {
+	ctx = processContext(ctx)
 	if max < 1 {
 		return "", fmt.Errorf("process list limit must be positive")
 	}

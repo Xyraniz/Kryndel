@@ -171,15 +171,23 @@ func TestNativeBackendHeaders(t *testing.T) {
 	if d != nil {
 		t.Fatal(d)
 	}
-	pe, err := BuildNative(p, c, NativeTarget{OS: "windows", Arch: "amd64"}, "exe")
-	if err != nil {
-		t.Fatal(err)
+	compiler := os.Getenv("KRY_CC")
+	if compiler == "" {
+		compiler = "x86_64-w64-mingw32-gcc"
 	}
-	if len(pe) < 64 || pe[0] != 'M' || pe[1] != 'Z' {
-		t.Fatal("missing MZ signature")
-	}
-	if _, err := InspectNative(pe); err != nil {
-		t.Fatal(err)
+	if _, err := exec.LookPath(compiler); err != nil {
+		t.Logf("skipping Windows PE header assertion: compiler %q is unavailable: %v", compiler, err)
+	} else {
+		pe, err := BuildNative(p, c, NativeTarget{OS: "windows", Arch: "amd64"}, "exe")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pe) < 64 || pe[0] != 'M' || pe[1] != 'Z' {
+			t.Fatal("missing MZ signature")
+		}
+		if _, err := InspectNative(pe); err != nil {
+			t.Fatal(err)
+		}
 	}
 	elf, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf")
 	if err != nil {
