@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,12 @@ type NativeTarget struct {
 	OS   string
 	Arch string
 	GUI  bool
+}
+
+type cCompiler struct {
+	program string
+	prefix  []string
+	wsl     bool
 }
 
 func ParseNativeTarget(raw string) (NativeTarget, error) {
@@ -90,44 +97,68 @@ func BuildNativeOpts(p *Program, c *Checker, target NativeTarget, format string,
 func EmitC(p *Program, c *Checker) (string, error) { return GenerateC(p, c) }
 
 // compilerFor selects the C compiler and its target flags for a build.
-func compilerFor(target NativeTarget) (string, []string, error) {
+func compilerFor(target NativeTarget) (cCompiler, error) {
 	if override := os.Getenv("KRY_CC"); override != "" {
-		return override, nil, nil
+		return cCompiler{program: override}, nil
 	}
 	hostOS, hostArch := runtime.GOOS, runtime.GOARCH
 	switch target.OS {
 	case "windows":
 		if target.Arch != "amd64" {
-			return "", nil, fmt.Errorf("no cross compiler configured for windows-%s", target.Arch)
+			return cCompiler{}, fmt.Errorf("no cross compiler configured for windows-%s", target.Arch)
 		}
 		if hostOS == "windows" {
-			return "gcc", nil, nil
+			return cCompiler{program: "gcc"}, nil
 		}
-		return "x86_64-w64-mingw32-gcc", nil, nil
+		return cCompiler{program: "x86_64-w64-mingw32-gcc"}, nil
 	case "linux":
 		if target.Arch == hostArch && hostOS == "linux" {
-			return "cc", nil, nil
+			return cCompiler{program: "cc"}, nil
 		}
 		if target.Arch == "amd64" {
-			return "x86_64-linux-gnu-gcc", nil, nil
+			return linuxCrossCompiler("x86_64-linux-gnu-gcc")
 		}
 		if target.Arch == "arm64" {
-			return "aarch64-linux-gnu-gcc", nil, nil
+			return linuxCrossCompiler("aarch64-linux-gnu-gcc")
 		}
-		return "", nil, fmt.Errorf("no cross compiler configured for linux-%s", target.Arch)
+		return cCompiler{}, fmt.Errorf("no cross compiler configured for linux-%s", target.Arch)
 	case "darwin":
-		return "", nil, fmt.Errorf("no cross compiler configured for darwin-%s", target.Arch)
+		return cCompiler{}, fmt.Errorf("no cross compiler configured for darwin-%s", target.Arch)
 	}
-	return "", nil, fmt.Errorf("unsupported target %s-%s", target.OS, target.Arch)
+	return cCompiler{}, fmt.Errorf("unsupported target %s-%s", target.OS, target.Arch)
+}
+
+func linuxCrossCompiler(name string) (cCompiler, error) {
+	if _, err := exec.LookPath(name); err == nil {
+		return cCompiler{program: name}, nil
+	}
+	if runtime.GOOS != "windows" {
+		return cCompiler{program: name}, nil
+	}
+	wsl, err := exec.LookPath("wsl.exe")
+	if err != nil {
+		return cCompiler{program: name}, nil
+	}
+	distro := os.Getenv("KRY_WSL_DISTRO")
+	if distro == "" {
+		distro = "Ubuntu"
+	}
+	probe := exec.Command(wsl, "-d", distro, "--", name, "--version")
+	probe.Stdout = io.Discard
+	probe.Stderr = io.Discard
+	if err := probe.Run(); err != nil {
+		return cCompiler{program: name}, nil
+	}
+	return cCompiler{program: wsl, prefix: []string{"-d", distro, "--", name}, wsl: true}, nil
 }
 
 func compileC(src string, target NativeTarget) ([]byte, error) {
-	cc, extra, err := compilerFor(target)
+	compiler, err := compilerFor(target)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := exec.LookPath(cc); err != nil {
-		return nil, fmt.Errorf("C compiler %q not found; install it or set KRY_CC", cc)
+	if _, err := exec.LookPath(compiler.program); err != nil {
+		return nil, fmt.Errorf("C compiler %q not found; install it, configure WSL, or set KRY_CC", compiler.program)
 	}
 	dir, err := os.MkdirTemp("", "kry-native-")
 	if err != nil {
@@ -144,8 +175,12 @@ func compileC(src string, target NativeTarget) ([]byte, error) {
 	}
 	out := filepath.Join(dir, "program"+ext)
 	args := []string{"-O2", "-std=c11", "-w", "-o", out, cpath, "-lm"}
-	args = append(extra, args...)
-	cmd := exec.Command(cc, args...)
+	if compiler.wsl {
+		args[len(args)-2] = wslPath(cpath)
+		args[4] = wslPath(out)
+	}
+	args = append(append([]string{}, compiler.prefix...), args...)
+	cmd := exec.Command(compiler.program, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -160,6 +195,19 @@ func compileC(src string, target NativeTarget) ([]byte, error) {
 		return nil, err
 	}
 	return data, nil
+}
+
+func wslPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	volume := filepath.VolumeName(abs)
+	if len(volume) == 2 && volume[1] == ':' {
+		rest := strings.TrimPrefix(abs, volume)
+		return "/mnt/" + strings.ToLower(volume[:1]) + strings.ReplaceAll(filepath.ToSlash(rest), "\\", "/")
+	}
+	return filepath.ToSlash(abs)
 }
 
 func EmitLLVMIR(p *Program, target NativeTarget) []byte {
