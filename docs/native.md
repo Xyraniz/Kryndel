@@ -92,6 +92,38 @@ that are not yet supported (HTTP, WebSockets, Windows APIs) are rejected with a
 categorized diagnostic instead of silently degrading; output is never
 mislabeled as native merely because a file has a native-looking suffix.
 
+### Cryptography in the native runtime
+
+The C runtime implements the full crypto surface so native executables do not
+depend on the interpreter: SHA-256/384/512/1, MD5, HMAC-SHA-256, AES-256-GCM,
+PBKDF2-HMAC-SHA-256, HKDF-SHA-256, constant-time comparison, XOR and
+base64/base64url. Each primitive is verified against published vectors and
+against the Go implementation, and the test suite asserts byte-for-byte parity
+between the interpreter, the Linux ELF and the Windows PE for the whole crypto
+surface. Two subtle bugs were found and fixed during this work: the SHA-1 block
+used a right-rotation where the algorithm requires a left-rotation, and the GCM
+counter started at `IV||1` instead of `IV||2` (the first data block must use
+`J0 + 1`). Both are now covered by regression tests.
+
+### String-literal obfuscation
+
+`kry build --obfuscate` lowers string literals through `k_obf_str`, which
+reverses a position-dependent XOR mask at startup. The plaintext literal never
+appears in the binary, so a `strings` scan does not reveal messages or secrets,
+while the program's observable output is unchanged. Obfuscation complements
+encryption; it does not replace it.
+
+### Sealed artifacts
+
+A sealed artifact (`KRYSEAL1`) is the plain `KRYNATIVE3` byte stream wrapped in
+AES-256-GCM with a PBKDF2-HMAC-SHA-256 key derived from a passphrase. The
+container is self-describing (magic, version, iteration count, salt, nonce,
+length) so the KDF or cipher can be revised without breaking old files. The
+engine decrypts a sealed artifact in memory before decoding it, so the plaintext
+artifact is never written to disk. A wrong passphrase, a truncated file, or any
+tampering fails the GCM tag check and is reported as a categorized artifact
+diagnostic.
+
 ## Portability
 
 The implementation uses Go fixed-width arithmetic helpers, explicit bounds checks, standard-library filesystem and process APIs, and deterministic locale-independent output. The release workflow cross-builds Linux amd64/arm64, macOS amd64/arm64, and Windows amd64 binaries with `CGO_ENABLED=0`; each artifact receives a SHA-256 manifest.

@@ -79,6 +79,31 @@ Project dependencies are managed with `kry install PACKAGE` and removed with `kr
 
 The public registry includes expanded `async`, `crypto`, and `fs` libraries plus the new `json` library. These expose cancellation-aware sleep and structured groups, SHA-256/HMAC/random bytes, sandboxed text/byte filesystem operations, and safe JSON parse/stringify helpers.
 
+## Cryptography and executable protection
+
+The cryptography library covers hashing (`crypto_sha256`, `crypto_sha512`, `crypto_sha384`, `crypto_sha1`, `crypto_md5`), message authentication (`crypto_hmac_sha256`), authenticated encryption (`crypto_aes_gcm_encrypt`/`crypto_aes_gcm_decrypt`), key derivation (`crypto_pbkdf2_sha256`, `crypto_hkdf_sha256`), constant-time comparison (`crypto_constant_time_equal`), byte-wise `crypto_xor`, and `base64url_encode`/`base64url_decode`. Every primitive is implemented in both the interpreter and the native C backend, verified against published vectors (RFC 5869, RFC 6070, NIST GCM), and held to byte-for-byte parity across the interpreter, the Linux ELF, and the Windows PE.
+
+Built artifacts can be protected. `kry build --encrypt` wraps an artifact in the authenticated `KRYSEAL1` container — AES-256-GCM under a PBKDF2-HMAC-SHA-256 key derived from a passphrase — and the plaintext artifact never touches disk. A wrong passphrase, a truncated file, or any tampering fails the GCM tag check and is reported as a categorized artifact diagnostic. Supply the secret with `--passphrase` or `--passphrase-file`; running a sealed `.kexe` interactively prompts for it. `kry build --obfuscate` masks string literals in the native binary so a `strings` scan does not reveal messages or secrets, without changing observable output.
+
+```sh
+kry build app.kry --format=elf --encrypt --passphrase-file secret.txt --obfuscate
+kry run app.kexe --passphrase-file secret.txt
+```
+
+## Python-style ergonomics
+
+Functions may declare default parameter values, so callers can omit trailing arguments:
+
+```kryndel
+fn greet(name: String, greeting: String = "Hello") -> String {
+    return greeting + ", " + name
+}
+println(greet("Ada"))          // Hello, Ada
+println(greet("Ada", "Hi"))    // Hi, Ada
+```
+
+The checker rejects a required parameter that follows a defaulted one and a default value of the wrong type. New helpers close common Python gaps: `string_slice` and `array_slice_range` provide negative-index slicing with clamped bounds, `string_format` substitutes `{}` placeholders with `{{`/`}}` escapes, and `array_indices`/`array_zip` support enumeration and pairing. All are available in the interpreter and the native backend with verified parity.
+
 Functions are collected before the top-level program runs, so a function can be called before its declaration in the source file. The checker still validates the whole program before execution.
 
 ## Runtime polymorphism

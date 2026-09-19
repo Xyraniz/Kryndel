@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — Crypto hardening, executable protection, and Python ergonomics
+
+The cryptography library is substantially expanded and now covers both the
+interpreter and the native C backend with byte-for-byte parity. New primitives:
+`crypto_sha512`, `crypto_sha384`, `crypto_sha1`, `crypto_md5`,
+`crypto_aes_gcm_encrypt`, `crypto_aes_gcm_decrypt`, `crypto_pbkdf2_sha256`,
+`crypto_hkdf_sha256`, `crypto_constant_time_equal`, `crypto_xor`,
+`base64url_encode` and `base64url_decode`. Every primitive is verified against
+published vectors (RFC 5869, RFC 6070, NIST GCM) and against the Go
+implementation, and the test suite asserts identical output from the
+interpreter, the Linux ELF and the Windows PE.
+
+Two correctness bugs in the native crypto runtime were found and fixed rather
+than hidden: the SHA-1 compression block used a right-rotation where the
+algorithm requires a left-rotation, and the AES-GCM counter started at `IV||1`
+instead of `IV||2` (the first data block must use `J0 + 1`). Both are now
+covered by regression tests.
+
+Built executables and artifacts can now be protected. `kry build --encrypt`
+wraps an artifact in the authenticated `KRYSEAL1` container — AES-256-GCM under
+a PBKDF2-HMAC-SHA-256 key derived from a passphrase — and the plaintext artifact
+never touches disk. A wrong passphrase, a truncated file, or any tampering fails
+the GCM tag check and is reported as a categorized artifact diagnostic.
+`--passphrase` and `--passphrase-file` supply the secret, and running a sealed
+`.kexe` interactively prompts for it. `kry build --obfuscate` masks string
+literals in the native binary so a `strings` scan does not reveal messages or
+secrets, without changing observable output.
+
+Several Python-style ergonomics gaps are closed. Functions may declare default
+parameter values (`fn greet(name: String, greeting: String = "Hello")`), with
+the checker rejecting a required parameter that follows a defaulted one and a
+default of the wrong type. New helpers `string_slice` and `array_slice_range`
+provide negative-index slicing with clamped bounds, `string_format` substitutes
+`{}` placeholders with `{{`/`}}` escapes, and `array_indices`/`array_zip`
+support enumeration and pairing. All are available in the interpreter and the
+native backend with verified parity.
+
 ## Unreleased — Real native executables
 
 `kry build --format=elf` and `--format=exe` now produce genuine, runnable

@@ -35,6 +35,20 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `byte_at` | `byte_at(text: String, index: Int) -> Result[Int, String]` | Reads a byte with a checked index. |
 | `hex_encode`, `base64_encode` | `Bytes -> String` | Encode raw bytes deterministically. |
 | `hex_decode`, `base64_decode` | `String -> Result[Bytes, String]` | Reject malformed encodings. |
+| `base64url_encode` | `base64url_encode(value: Bytes) -> String` | URL-safe base64 without padding, for tokens and filenames. |
+| `base64url_decode` | `base64url_decode(value: String) -> Result[Bytes, String]` | Decode URL-safe base64; malformed input is rejected. |
+| `crypto_sha512`, `crypto_sha384`, `crypto_sha1`, `crypto_md5` | `crypto_sha512(data: Bytes) -> Bytes` (and siblings) | Additional hash digests. SHA-1 and MD5 are provided for legacy compatibility only and must not be used for new security work. |
+| `crypto_aes_gcm_encrypt` | `crypto_aes_gcm_encrypt(key: Bytes, nonce: Bytes, plaintext: Bytes) -> Result[Bytes, String]` | Authenticated AES-256-GCM encryption; the key must be 32 bytes and the nonce 12 bytes. The result is ciphertext followed by the 16-byte tag. |
+| `crypto_aes_gcm_decrypt` | `crypto_aes_gcm_decrypt(key: Bytes, nonce: Bytes, ciphertext: Bytes) -> Result[Bytes, String]` | Authenticated decryption; a wrong key, wrong nonce, or any tampering fails the tag check and returns `err`. |
+| `crypto_pbkdf2_sha256` | `crypto_pbkdf2_sha256(password: Bytes, salt: Bytes, iterations: Int, length: Int) -> Result[Bytes, String]` | Derive a key with PBKDF2-HMAC-SHA-256; iterations and length must be positive. |
+| `crypto_hkdf_sha256` | `crypto_hkdf_sha256(ikm: Bytes, salt: Bytes, info: Bytes, length: Int) -> Result[Bytes, String]` | Expand key material with HKDF-SHA-256 (RFC 5869). |
+| `crypto_constant_time_equal` | `crypto_constant_time_equal(left: Bytes, right: Bytes) -> Bool` | Compare two byte sequences without leaking timing; use it for MAC and token checks. |
+| `crypto_xor` | `crypto_xor(left: Bytes, right: Bytes) -> Result[Bytes, String]` | Byte-wise XOR of two equal-length sequences; mismatched lengths are rejected. |
+| `string_slice` | `string_slice(value: String, start: Int, end: Int) -> Result[String, String]` | Python-style code-point slice with negative indices and clamped bounds. |
+| `array_slice_range` | `array_slice_range(value: Array[T], start: Int, end: Int) -> Array[T]` | Python-style array slice with negative indices and clamped bounds. |
+| `string_format` | `string_format(template: String, args: Array[String]) -> String` | Substitute `{}` placeholders in order; `{{` and `}}` are literal braces and a missing argument leaves the placeholder visible. |
+| `array_indices` | `array_indices(value: Array[T]) -> Array[Int]` | Return `0..len-1` for enumeration alongside `array_get`. |
+| `array_zip` | `array_zip(left: Array[T], right: Array[T]) -> Array[Array[T]]` | Pair two arrays element-wise up to the shorter length. |
 | `array_pop`, `array_get` | `Array[T] -> Option[T]` | Return `none` for out-of-range or empty access. |
 | `array_concat`, `array_slice`, `array_reverse`, `array_contains`, `array_join` | Collection operations. | Require homogeneous element types and checked indexes. |
 | `map_get`, `map_insert`, `map_keys` | `Map[K,V]` operations. | Maps preserve deterministic insertion order; insertion returns a new map and missing reads return `none`. |
@@ -64,6 +78,33 @@ Kryndel keeps its standard library small and explicit. The current release provi
 String-to-number conversion rejects whitespace-dependent partial parses and inputs such as `"12xyz"`. Float values and results must be finite. Integer arithmetic and `abs(Int minimum)` are checked. `Bytes` conversion never applies an implicit text encoding to arbitrary values.
 
 The Go registry is the authoritative list. The CLI help renders its signatures and descriptions. Adding a builtin requires a registry entry, checker behavior, runtime behavior, documentation, and positive and negative tests. Package authors should use the typed wrappers in `std/env.kry`, `std/json.kry`, and `std/http.kry`; the official `packages/discord` package uses the same bounded primitives and never prints bot tokens.
+
+## Cryptography
+
+The crypto builtins are implemented twice — once in Go for the interpreter and once in the C runtime for the native backend — and the two implementations are held to byte-for-byte parity by the test suite. The primitives are checked against published vectors (RFC 5869 for HKDF, RFC 6070 for PBKDF2, and NIST GCM vectors for AES-256-GCM) so a regression is caught immediately.
+
+The recommended building blocks are `crypto_sha256`/`crypto_sha512` for hashing, `crypto_hmac_sha256` for message authentication, `crypto_aes_gcm_encrypt`/`crypto_aes_gcm_decrypt` for authenticated encryption, `crypto_pbkdf2_sha256` for password-based key derivation, `crypto_hkdf_sha256` for key expansion, and `crypto_constant_time_equal` for comparing secrets. `crypto_random_bytes` draws from the operating system CSPRNG. SHA-1 and MD5 exist only so legacy formats can be read; they are not safe for new designs.
+
+```kryndel
+import "crypto"
+
+let key: Bytes = crypto_random_bytes(32)?
+let nonce: Bytes = crypto_random_bytes(12)?
+let sealed: Bytes = crypto_aes_gcm_encrypt(key, nonce, string_to_bytes("secret"))?
+let opened: Bytes = crypto_aes_gcm_decrypt(key, nonce, sealed)?
+println(bytes_to_string(opened))
+```
+
+## Executable and artifact protection
+
+`kry build --encrypt` wraps a built artifact in an authenticated, passphrase-protected container (the `KRYSEAL1` format). The inner artifact is encrypted with AES-256-GCM under a key derived from the passphrase with PBKDF2-HMAC-SHA-256, and the plaintext artifact never touches disk. Because GCM is authenticated, a wrong passphrase or any tampering is detected before a single byte of the inner artifact is trusted. Supply the passphrase with `--passphrase` or `--passphrase-file`; when a sealed `.kexe` is run interactively the CLI prompts for it.
+
+`kry build --obfuscate` masks string literals in the generated native binary so secrets and messages are not visible to a simple `strings` scan. Obfuscation is a defence-in-depth measure, not a substitute for encryption: it raises the cost of casual inspection but does not make a binary tamper-proof.
+
+```sh
+kry build app.kry --format=elf --encrypt --passphrase-file secret.txt --obfuscate
+kry run app.kexe --passphrase-file secret.txt
+```
 
 ## Source wrappers
 
