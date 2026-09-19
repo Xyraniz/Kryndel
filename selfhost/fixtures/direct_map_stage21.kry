@@ -1,0 +1,9 @@
+fn main() -> Nil {
+    let values: Map[String, String] = { "a": "one", "b": "two" }
+    assert_eq(map_contains_key(values, "a"), true)
+    assert_eq(map_contains_key(values, "missing"), false)
+    let updated: Map[String, String] = map_insert(values, "b", "dos")
+    println(unwrap_or(map_get(updated, "b"), "missing"))
+    println(unwrap_or(map_get(updated, "missing"), "fallback"))
+    return nil
+}

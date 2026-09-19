@@ -56,3 +56,5 @@ Stage 18 extends `source_kir_compiler.kry` across that same aggregate boundary. 
 Stage 19 adds native direct-ELF lowering for `assert`, `assert_eq`, `contains`, `starts_with`, and `ends_with`. Assertions compare actual scalar values and branch to the checked trap path; string predicates scan the immutable `{length, bytes}` representation without libc. The source frontend recognizes these builtins so the next bootstrap probe reports the next unsupported operation precisely.
 
 Stage 20 adds the direct-ELF `string_chars` runtime. It counts UTF-8 leading-byte sequences, allocates the result array through the existing checked `mmap` allocator, and creates each code-point string through the existing string allocator. The regression exercises ASCII plus multibyte `é` and `🙂` values and verifies their exact output on Linux amd64.
+
+Stage 21 adds immutable direct-ELF maps backed by alternating key/value words. `map_get` and `map_contains_key` perform typed scalar or UTF-8 string lookup, while `map_insert` copies the map and replaces or appends without mutation. The regression covers replacement, missing-key fallback, and assertion paths.

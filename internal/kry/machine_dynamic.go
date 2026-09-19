@@ -47,6 +47,10 @@ type directMachine struct {
 	structRuntimeUsed   bool
 	stringAllocLabel    int
 	stringCharsLabel    int
+	stringEqualLabel    int
+	mapFindLabel        int
+	mapInsertLabel      int
+	mapRuntimeUsed      bool
 	stringCharsUsed     bool
 	bytesFromArrayLabel int
 	processArgsLabel    int
@@ -102,6 +106,9 @@ func newDirectMachine() *directMachine {
 	m.structAllocLabel = m.newLabel()
 	m.stringAllocLabel = m.newLabel()
 	m.stringCharsLabel = m.newLabel()
+	m.stringEqualLabel = m.newLabel()
+	m.mapFindLabel = m.newLabel()
+	m.mapInsertLabel = m.newLabel()
 	m.bytesFromArrayLabel = m.newLabel()
 	m.processArgsLabel = m.newLabel()
 	m.fsReadTextLabel = m.newLabel()
@@ -962,6 +969,234 @@ func (m *directMachine) emitStringCharsRuntime() error {
 	return nil
 }
 
+func (m *directMachine) emitStringEqualRuntime() error {
+	if err := m.bind(m.stringEqualLabel); err != nil {
+		return err
+	}
+	// rdi and rsi point to immutable {length, bytes} String objects. Return
+	// one when the byte sequences are identical and zero otherwise.
+	pointerEqual := m.newLabel()
+	falseLabel := m.newLabel()
+	loop := m.newLabel()
+	done := m.newLabel()
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+		0x49, 0x89, 0xfc, // r12=left
+		0x49, 0x89, 0xf5, // r13=right
+		0x4d, 0x39, 0xec,
+	)
+	if err := m.emitConditionalJump(0x84, pointerEqual); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x8b, 0x04, 0x24, 0x49, 0x3b, 0x45, 0x00)
+	if err := m.emitConditionalJump(0x85, falseLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x31, 0xf6) // r14=byte index
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x3b, 0x34, 0x24)
+	if err := m.emitConditionalJump(0x83, pointerEqual); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4b, 0x0f, 0xb6, 0x44, 0x34, 0x08,
+		0x4b, 0x0f, 0xb6, 0x54, 0x35, 0x08,
+		0x48, 0x39, 0xd0,
+	)
+	if err := m.emitConditionalJump(0x85, falseLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc6)
+	if err := m.emitJump(loop); err != nil {
+		return err
+	}
+	if err := m.bind(pointerEqual); err != nil {
+		return err
+	}
+	m.emitMoveImmediate(1)
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(falseLabel); err != nil {
+		return err
+	}
+	m.emitMoveImmediate(0)
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitMapFindRuntime() error {
+	if err := m.bind(m.mapFindLabel); err != nil {
+		return err
+	}
+	// rdi=map, rsi=key, rdx=key kind (0=scalar, 1=String). Maps use the
+	// same immutable qword storage as arrays, with alternating key/value
+	// words and a word count in the first slot. Return the address of the
+	// matching value word, or nil when the key is absent.
+	stringKey := m.newLabel()
+	scalarKey := m.newLabel()
+	found := m.newLabel()
+	notFound := m.newLabel()
+	done := m.newLabel()
+	loop := m.newLabel()
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=map
+		0x49, 0x89, 0xf5, // r13=key
+		0x49, 0x89, 0xd6, // r14=key kind
+		0x4d, 0x31, 0xff, // r15=word index
+	)
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4d, 0x3b, 0x3c, 0x24)
+	if err := m.emitConditionalJump(0x83, notFound); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x4c, 0x89, 0xfb, // rbx=r15
+		0x48, 0xc1, 0xe3, 0x03,
+		0x4c, 0x01, 0xe3, // rbx += r12
+		0x48, 0x83, 0xc3, 0x08,
+		0x48, 0x8b, 0x03, // rax=stored key
+		0x49, 0x83, 0xfe, 0x01,
+	)
+	if err := m.emitConditionalJump(0x84, stringKey); err != nil {
+		return err
+	}
+	if err := m.emitJump(scalarKey); err != nil {
+		return err
+	}
+	if err := m.bind(stringKey); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc7, 0x4c, 0x89, 0xee)
+	if err := m.emitLabelCall(m.stringEqualLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x85, found); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x83, 0xc7, 0x02)
+	if err := m.emitJump(loop); err != nil {
+		return err
+	}
+	if err := m.bind(scalarKey); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x39, 0xe8)
+	if err := m.emitConditionalJump(0x84, found); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x83, 0xc7, 0x02)
+	if err := m.emitJump(loop); err != nil {
+		return err
+	}
+	if err := m.bind(found); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8d, 0x43, 0x08)
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(notFound); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x31, 0xc0)
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
+func (m *directMachine) emitMapInsertRuntime() error {
+	if err := m.bind(m.mapInsertLabel); err != nil {
+		return err
+	}
+	// rdi=map, rsi=key, rdx=key kind, rcx=value. Copy the immutable map and
+	// replace the existing value or append a new key/value pair.
+	notFound := m.newLabel()
+	found := m.newLabel()
+	done := m.newLabel()
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc, // r12=map
+		0x49, 0x89, 0xf5, // r13=key
+		0x49, 0x89, 0xce, // r14=value
+		0x49, 0x89, 0xd7, // r15=key kind
+		0x4c, 0x89, 0xe7, 0x4c, 0x89, 0xee, 0x4c, 0x89, 0xfa,
+	)
+	if err := m.emitLabelCall(m.mapFindLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x84, notFound); err != nil {
+		return err
+	}
+	if err := m.bind(found); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x50,
+		0x49, 0x8b, 0x3c, 0x24,
+	)
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x89, 0xc5,
+		0x5b,
+		0x49, 0x8b, 0x0c, 0x24,
+		0x49, 0x8d, 0x74, 0x24, 0x08,
+		0x48, 0x8d, 0x7d, 0x08,
+		0xf3, 0x48, 0xa5,
+		0x48, 0x89, 0xd8,
+		0x4c, 0x29, 0xe0,
+		0x48, 0x01, 0xe8,
+		0x4c, 0x89, 0x30,
+	)
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(notFound); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x49, 0x8b, 0x1c, 0x24,
+		0x48, 0x89, 0xdf,
+		0x48, 0x83, 0xc7, 0x02,
+	)
+	m.emitTrapOnOverflow()
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x89, 0xc5,
+		0x49, 0x8b, 0x0c, 0x24,
+		0x49, 0x8d, 0x74, 0x24, 0x08,
+		0x48, 0x8d, 0x7d, 0x08,
+		0xf3, 0x48, 0xa5,
+		0x48, 0x89, 0xda,
+		0x48, 0xc1, 0xe2, 0x03,
+		0x48, 0x01, 0xea,
+		0x48, 0x83, 0xc2, 0x08,
+		0x4c, 0x89, 0x2a,
+		0x4c, 0x89, 0x72, 0x08,
+	)
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xe8, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
 func (m *directMachine) emitBytesFromArrayRuntime() error {
 	if err := m.bind(m.bytesFromArrayLabel); err != nil {
 		return err
@@ -1813,6 +2048,168 @@ func (m *directMachine) emitStringPredicate(e *Expr, mode string) error {
 	return m.bind(doneLabel)
 }
 
+func directMapKeyKind(t *Type) (uint64, error) {
+	if t == nil {
+		return 0, fmt.Errorf("direct ELF map key has no checked type")
+	}
+	switch t.Kind {
+	case TyString:
+		return 1, nil
+	case TyInt, TyUInt, TyBool, TyEnum:
+		return 0, nil
+	default:
+		return 0, fmt.Errorf("direct ELF backend supports Map keys of String, Int, UInt, Bool, or enum type")
+	}
+}
+
+func (m *directMachine) emitMapLiteral(e *Expr) error {
+	if e.Type == nil || e.Type.Kind != TyMap {
+		return fmt.Errorf("direct ELF backend map literal has no checked map type")
+	}
+	if len(e.MapKeys) != len(e.Values) {
+		return fmt.Errorf("direct ELF backend map literal has mismatched key/value counts")
+	}
+	if _, err := directMapKeyKind(e.Type.A); err != nil {
+		return err
+	}
+	m.emitMoveImmediate(uint64(len(e.MapKeys) * 2))
+	m.arrayRuntimeUsed = true
+	m.mapRuntimeUsed = true
+	if err := m.emitArrayAllocCall(); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50) // keep map pointer while evaluating entries
+	for index := range e.MapKeys {
+		if err := m.emitExpr(e.MapKeys[index]); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x50) // key
+		if err := m.emitExpr(e.Values[index]); err != nil {
+			return err
+		}
+		m.code = append(m.code,
+			0x49, 0x89, 0xc0, // r8=value
+			0x58,                   // rax=key
+			0x48, 0x8b, 0x0c, 0x24, // rcx=map
+			0x48, 0xba,
+		)
+		var offset [8]byte
+		binary.LittleEndian.PutUint64(offset[:], uint64(8+index*16))
+		m.code = append(m.code, offset[:]...)
+		m.code = append(m.code,
+			0x48, 0x01, 0xca, // rdx += map
+			0x48, 0x89, 0x02, // map[key]
+			0x48, 0x83, 0xc2, 0x08,
+			0x4c, 0x89, 0x02, // map[value]
+		)
+	}
+	m.code = append(m.code, 0x58)
+	return nil
+}
+
+func (m *directMachine) emitMapKeyImmediate(kind uint64) {
+	m.code = append(m.code, 0x48, 0xba)
+	var value [8]byte
+	binary.LittleEndian.PutUint64(value[:], kind)
+	m.code = append(m.code, value[:]...)
+}
+
+func (m *directMachine) emitMapGet(e *Expr) error {
+	if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyMap {
+		return fmt.Errorf("direct ELF backend map_get expects Map[K,V] and K")
+	}
+	kind, err := directMapKeyKind(e.Args[0].Type.A)
+	if err != nil {
+		return err
+	}
+	if err := m.emitExpr(e.Args[0]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50)
+	if err := m.emitExpr(e.Args[1]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc6, 0x5f) // rsi=key; rdi=map
+	m.emitMapKeyImmediate(kind)
+	m.mapRuntimeUsed = true
+	if err := m.emitLabelCall(m.mapFindLabel); err != nil {
+		return err
+	}
+	none := m.newLabel()
+	done := m.newLabel()
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x84, none); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8b, 0x00)
+	if err := m.emitBoxCall(1); err != nil {
+		return err
+	}
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(none); err != nil {
+		return err
+	}
+	m.emitMoveImmediate(0)
+	return m.bind(done)
+}
+
+func (m *directMachine) emitMapContains(e *Expr) error {
+	if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyMap {
+		return fmt.Errorf("direct ELF backend map_contains_key expects Map[K,V] and K")
+	}
+	kind, err := directMapKeyKind(e.Args[0].Type.A)
+	if err != nil {
+		return err
+	}
+	if err := m.emitExpr(e.Args[0]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50)
+	if err := m.emitExpr(e.Args[1]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0xc6, 0x5f)
+	m.emitMapKeyImmediate(kind)
+	m.mapRuntimeUsed = true
+	if err := m.emitLabelCall(m.mapFindLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x48, 0x0f, 0xb6, 0xc0)
+	return nil
+}
+
+func (m *directMachine) emitMapInsert(e *Expr) error {
+	if len(e.Args) != 3 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyMap {
+		return fmt.Errorf("direct ELF backend map_insert expects Map[K,V], K, and V")
+	}
+	kind, err := directMapKeyKind(e.Args[0].Type.A)
+	if err != nil {
+		return err
+	}
+	if err := m.emitExpr(e.Args[0]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50)
+	if err := m.emitExpr(e.Args[1]); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x50)
+	if err := m.emitExpr(e.Args[2]); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x89, 0xc1, // rcx=value
+		0x5e, // rsi=key
+		0x5f, // rdi=map
+	)
+	m.emitMapKeyImmediate(kind)
+	m.arrayRuntimeUsed = true
+	m.mapRuntimeUsed = true
+	return m.emitLabelCall(m.mapInsertLabel)
+}
+
 func (m *directMachine) emitExpr(e *Expr) error {
 	if e == nil {
 		return fmt.Errorf("direct ELF backend cannot lower a missing expression")
@@ -1856,6 +2253,8 @@ func (m *directMachine) emitExpr(e *Expr) error {
 		return m.emitStructLiteral(e)
 	case ExArray:
 		return m.emitArrayLiteral(e)
+	case ExMap:
+		return m.emitMapLiteral(e)
 	case ExVar:
 		slot, ok := m.lookupSlot(e.Name)
 		if !ok {
@@ -1937,6 +2336,12 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			m.code = append(m.code, 0x48, 0x89, 0xc7) // mov rdi, rax
 			m.hostRuntimeUsed = true
 			return m.emitLabelCall(m.bytesFromArrayLabel)
+		case "map_get":
+			return m.emitMapGet(e)
+		case "map_contains_key":
+			return m.emitMapContains(e)
+		case "map_insert":
+			return m.emitMapInsert(e)
 		case "array_push":
 			return m.emitArrayPushCall(e)
 		case "array_concat":
@@ -2734,7 +3139,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
-	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed || m.structRuntimeUsed || m.hostRuntimeUsed || m.stringCharsUsed {
+	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed || m.structRuntimeUsed || m.hostRuntimeUsed || m.stringCharsUsed || m.mapRuntimeUsed {
 		if err := m.emitJump(m.endLabel); err != nil {
 			return nil, err
 		}
@@ -2815,6 +3220,17 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			return nil, err
 		}
 		if err := m.emitArrayConcatRuntime(); err != nil {
+			return nil, err
+		}
+	}
+	if m.mapRuntimeUsed {
+		if err := m.emitStringEqualRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitMapFindRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitMapInsertRuntime(); err != nil {
 			return nil, err
 		}
 	}

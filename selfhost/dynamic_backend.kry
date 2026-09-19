@@ -232,20 +232,32 @@ fn host_string_chars_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 3
 }
 
-fn host_bytes_from_array_label(state: EmitState) -> Int {
+fn host_string_equal_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 4
 }
 
-fn host_process_args_label(state: EmitState) -> Int {
+fn host_map_find_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 5
 }
 
-fn host_fs_read_text_label(state: EmitState) -> Int {
+fn host_map_insert_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 6
 }
 
-fn host_fs_write_bytes_label(state: EmitState) -> Int {
+fn host_bytes_from_array_label(state: EmitState) -> Int {
     return state.assembler.box_alloc_label + 7
+}
+
+fn host_process_args_label(state: EmitState) -> Int {
+    return state.assembler.box_alloc_label + 8
+}
+
+fn host_fs_read_text_label(state: EmitState) -> Int {
+    return state.assembler.box_alloc_label + 9
+}
+
+fn host_fs_write_bytes_label(state: EmitState) -> Int {
+    return state.assembler.box_alloc_label + 10
 }
 
 fn state_with_env(state: EmitState, env: CompileEnv) -> EmitState {
@@ -1852,7 +1864,10 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     let struct_reserved_label: LabelState = new_label(box_alloc_label.state)
     let host_string_label: LabelState = new_label(struct_reserved_label.state)
     let host_chars_label: LabelState = new_label(host_string_label.state)
-    let host_bytes_label: LabelState = new_label(host_chars_label.state)
+    let host_equal_label: LabelState = new_label(host_chars_label.state)
+    let host_map_find_label: LabelState = new_label(host_equal_label.state)
+    let host_map_insert_label: LabelState = new_label(host_map_find_label.state)
+    let host_bytes_label: LabelState = new_label(host_map_insert_label.state)
     let host_process_label: LabelState = new_label(host_bytes_label.state)
     let host_read_label: LabelState = new_label(host_process_label.state)
     let host_write_label: LabelState = new_label(host_read_label.state)
