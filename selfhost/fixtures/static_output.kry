@@ -1,1 +1,2 @@
-println("hello from self-hosted backend")
+let prefix: String = "hello from self-hosted backend: "
+println(prefix + str(40 + 2))

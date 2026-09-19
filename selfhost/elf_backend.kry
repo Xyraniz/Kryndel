@@ -50,6 +50,91 @@ fn json_text(value: Json) -> String {
     return result_unwrap(json_string(value))
 }
 
+fn eval_int(expression: Json, bindings: Map[String, String]) -> Result[Int, String] {
+    let kind: String = json_text(json_field(expression, "kind"))
+    if kind == "int" {
+        return ok(result_unwrap(json_int(json_field(expression, "int"))))
+    }
+    if kind == "var" {
+        let name: String = json_text(json_field(expression, "name"))
+        if is_none(map_get(bindings, name)) {
+            return err("unknown static binding: " + name)
+        }
+        return ok(int(unwrap_or(map_get(bindings, name), "")))
+    }
+    if kind == "binary" {
+        let operator: String = json_text(json_field(expression, "operator"))
+        let left: Int = result_unwrap(eval_int(json_field(expression, "left"), bindings))
+        let right: Int = result_unwrap(eval_int(json_field(expression, "right"), bindings))
+        if operator == "+" {
+            return ok(left + right)
+        }
+        if operator == "-" {
+            return ok(left - right)
+        }
+        if operator == "*" {
+            return ok(left * right)
+        }
+        if operator == "/" {
+            return ok(left / right)
+        }
+        if operator == "%" {
+            return ok(left % right)
+        }
+        return err("unsupported static integer operator: " + operator)
+    }
+    return err("expression is not a static Int")
+}
+
+fn eval_display(expression: Json, bindings: Map[String, String]) -> Result[String, String] {
+    let kind: String = json_text(json_field(expression, "kind"))
+    if kind == "string" {
+        return ok(json_text(json_field(expression, "string")))
+    }
+    if kind == "int" {
+        return ok(str(result_unwrap(eval_int(expression, bindings))))
+    }
+    if kind == "float" {
+        return ok(str(result_unwrap(json_float(json_field(expression, "float")))))
+    }
+    if kind == "bool" {
+        if result_unwrap(json_bool(json_field(expression, "bool"))) {
+            return ok("true")
+        }
+        return ok("false")
+    }
+    if kind == "var" {
+        let name: String = json_text(json_field(expression, "name"))
+        if is_none(map_get(bindings, name)) {
+            return err("unknown static binding: " + name)
+        }
+        return ok(unwrap_or(map_get(bindings, name), ""))
+    }
+    if kind == "binary" {
+        let operator: String = json_text(json_field(expression, "operator"))
+        let typ: String = json_text(json_field(expression, "type"))
+        if typ == "Int" {
+            return ok(str(result_unwrap(eval_int(expression, bindings))))
+        }
+        if operator == "+" {
+            let left: String = result_unwrap(eval_display(json_field(expression, "left"), bindings))
+            let right: String = result_unwrap(eval_display(json_field(expression, "right"), bindings))
+            return ok(left + right)
+        }
+        return err("unsupported static binary expression")
+    }
+    if kind == "call" {
+        let target: String = json_text(json_field(expression, "call_target"))
+        if target == "builtin:str" {
+            let arguments: Json = json_field(expression, "args")
+            let argument: Json = result_unwrap(json_array_get(arguments, 0))
+            return eval_display(argument, bindings)
+        }
+        return err("unsupported static call: " + target)
+    }
+    return err("expression is not statically displayable")
+}
+
 fn emit_elf(payload: Array[UInt8]) -> Bytes {
     // ELF header (64 bytes), program header (56 bytes), code (33 bytes), data.
     let file_size: Int = 153 + len(payload)
@@ -95,6 +180,7 @@ fn emit_elf(payload: Array[UInt8]) -> Bytes {
 fn compile_kir(document: Json) -> Result[Bytes, String] {
     let statements: Json = json_field(document, "statements")
     let mut payload: Array[UInt8] = []
+    let mut bindings: Map[String, String] = {}
     // The first implementation uses a bounded index loop. KIR v1 always
     // exposes a JSON array length, and the empty case is handled explicitly.
     let count: Int = result_unwrap(json_array_len(statements))
@@ -102,6 +188,13 @@ fn compile_kir(document: Json) -> Result[Bytes, String] {
     while index < count {
         let statement: Json = result_unwrap(json_array_get(statements, index))
         let kind: String = json_text(json_field(statement, "kind"))
+		if kind == "let" || kind == "const" {
+			let name: String = json_text(json_field(statement, "name"))
+			let value: String = result_unwrap(eval_display(json_field(statement, "init"), bindings))
+			bindings = map_insert(bindings, name, value)
+			index = index + 1
+			continue
+		}
         if kind != "expr" {
             return err("stage1 ELF backend accepts only expression statements")
         }
@@ -112,11 +205,7 @@ fn compile_kir(document: Json) -> Result[Bytes, String] {
         }
         let arguments: Json = json_field(expression, "args")
         let argument: Json = result_unwrap(json_array_get(arguments, 0))
-        let argument_kind: String = json_text(json_field(argument, "kind"))
-        if argument_kind != "string" {
-            return err("stage1 ELF backend accepts only string literals")
-        }
-        let value: String = json_text(json_field(argument, "string"))
+        let value: String = result_unwrap(eval_display(argument, bindings))
         payload = append_bytes(payload, u8_array(string_to_bytes(value)))
         if target == "builtin:println" {
             payload = append_u8(payload, u8(10))
