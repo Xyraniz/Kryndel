@@ -167,10 +167,11 @@ func TestNativeBackendHeaders(t *testing.T) {
 	if d != nil {
 		t.Fatal(d)
 	}
-	if _, d = Check(p, DefaultLimits()); d != nil {
+	c, d := Check(p, DefaultLimits())
+	if d != nil {
 		t.Fatal(d)
 	}
-	pe, err := BuildNative(p, NativeTarget{OS: "windows", Arch: "amd64"}, "exe")
+	pe, err := BuildNative(p, c, NativeTarget{OS: "windows", Arch: "amd64"}, "exe")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +181,7 @@ func TestNativeBackendHeaders(t *testing.T) {
 	if _, err := InspectNative(pe); err != nil {
 		t.Fatal(err)
 	}
-	elf, err := BuildNative(p, NativeTarget{OS: "linux", Arch: "amd64"}, "elf")
+	elf, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,14 +201,63 @@ func TestNativeBackendHeaders(t *testing.T) {
 			t.Fatalf("unexpected AOT output %q", out)
 		}
 	}
-	unsupported, d := Parse(&Source{Name: "unsupported.kry", Text: "fn value() -> Int { return 1 }\nvalue()\n"}, DefaultLimits())
+}
+
+// TestNativeBackendFunctions verifies that the C-based AOT backend now compiles
+// real functions, recursion, control flow and structs into runnable native code
+// (previously such programs were rejected outright).
+func TestNativeBackendFunctions(t *testing.T) {
+	src := `struct Point { x: Int, y: Int }
+fn fib(n: Int) -> Int {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+fn main() -> Nil {
+    let p: Point = Point{ x: 3, y: 4 }
+    println(str(fib(10)) + ":" + str(p.x + p.y))
+    return nil
+}
+`
+	p, d := Parse(&Source{Name: "main.kry", Text: src}, DefaultLimits())
 	if d != nil {
 		t.Fatal(d)
 	}
-	if _, d = Check(unsupported, DefaultLimits()); d != nil {
+	c, d := Check(p, DefaultLimits())
+	if d != nil {
 		t.Fatal(d)
 	}
-	if _, err := BuildNative(unsupported, NativeTarget{OS: "linux", Arch: "amd64"}, "elf"); err == nil {
+	elf, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf")
+	if err != nil {
+		t.Fatalf("functions must be supported by the native backend: %v", err)
+	}
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		path := filepath.Join(t.TempDir(), "program")
+		if err := os.WriteFile(path, elf, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(path).Output()
+		if err != nil {
+			t.Fatalf("AOT executable failed: %v", err)
+		}
+		if string(out) != "55:7\n" {
+			t.Fatalf("unexpected AOT output %q", out)
+		}
+	}
+}
+
+// TestNativeBackendRejectsUnsupported ensures unsupported builtins fail loudly
+// instead of silently degrading to a stub.
+func TestNativeBackendRejectsUnsupported(t *testing.T) {
+	src := "fn main() -> Nil { websocket_connect(\"ws://x\"); return nil }\n"
+	p, d := Parse(&Source{Name: "unsupported.kry", Text: src}, DefaultLimits())
+	if d != nil {
+		t.Fatal(d)
+	}
+	c, d := Check(p, DefaultLimits())
+	if d != nil {
+		t.Fatal(d)
+	}
+	if _, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf"); err == nil {
 		t.Fatal("unsupported program was silently emitted as AOT")
 	}
 }

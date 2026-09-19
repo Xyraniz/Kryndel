@@ -1,0 +1,130 @@
+// Comprehensive feature coverage for the native backend.
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+enum Shape {
+    Circle,
+    Square,
+    Triangle,
+}
+
+fn add(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+fn factorial(n: Int) -> Int {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+fn classify(n: Int) -> String {
+    if n < 0 {
+        return "negative"
+    } else if n == 0 {
+        return "zero"
+    }
+    return "positive"
+}
+
+fn safe_div(a: Int, b: Int) -> Result[Int, String] {
+    if b == 0 {
+        return err("division by zero")
+    }
+    return ok(a / b)
+}
+
+fn maybe_head(items: Array[Int]) -> Option[Int] {
+    if len(items) == 0 {
+        return none()
+    }
+    return some(items[0])
+}
+
+fn sum_list(items: Array[Int]) -> Int {
+    let mut total: Int = 0
+    for item in items {
+        total = total + item
+    }
+    return total
+}
+
+fn describe(shape: Shape) -> String {
+    match shape {
+        Shape::Circle => { return "round" }
+        Shape::Square => { return "boxy" }
+        Shape::Triangle => { return "pointy" }
+    }
+}
+
+fn main() -> Nil {
+    println("add = " + str(add(2, 3)))
+    println("factorial = " + str(factorial(6)))
+    println("classify = " + classify(-5) + "," + classify(0) + "," + classify(9))
+
+    let p: Point = Point{ x: 4, y: 7 }
+    println("point = " + str(p.x + p.y))
+
+    println("shape = " + describe(Shape::Triangle))
+
+    match safe_div(10, 2) {
+        ok(value) => { println("div ok = " + str(value)) }
+        err(problem) => { println("div err = " + problem) }
+    }
+    match safe_div(10, 0) {
+        ok(value) => { println("div ok = " + str(value)) }
+        err(problem) => { println("div err = " + problem) }
+    }
+
+    match maybe_head([9, 8, 7]) {
+        some(value) => { println("head = " + str(value)) }
+        none => { println("head = empty") }
+    }
+    match maybe_head([]) {
+        some(value) => { println("head = " + str(value)) }
+        none => { println("head = empty") }
+    }
+
+    println("sum = " + str(sum_list([1, 2, 3, 4, 5])))
+
+    let mut i: Int = 0
+    let mut acc: Int = 0
+    while i < 5 {
+        i = i + 1
+        if i == 3 {
+            continue
+        }
+        if i == 5 {
+            break
+        }
+        acc = acc + i
+    }
+    println("loop acc = " + str(acc))
+
+    let m: Map[String, Int] = {"a": 1, "b": 2}
+    println("map = " + str(m["a"] + m["b"]))
+    println("map_get = " + str(unwrap_or(map_get(m, "z"), -1)))
+
+    let s: Set[Int] = |{1, 2, 2, 3, 3, 3}|
+    println("set = " + str(set_len(s)))
+
+    println("str ops = " + trim("  hi  ") + "|" + str(contains("hello", "ell")))
+    println("split = " + str(split("a,b,c", ",")))
+    println("float = " + str(3.5 * 2.0))
+    println("math = " + str(abs(-9)) + "," + str(max(3, 8)) + "," + str(min(3, 8)))
+    println("bytes = " + str(len(string_to_bytes("abc"))))
+    println("hex = " + hex_encode(string_to_bytes("AB")))
+    println("base64 = " + base64_encode(string_to_bytes("hello")))
+
+    let mut counter: Int = 0
+    defer {
+        println("deferred = " + str(counter))
+    }
+    counter = counter + 1
+    counter = counter + 1
+    println("counter = " + str(counter))
+    return nil
+}
