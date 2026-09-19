@@ -16,6 +16,8 @@ fn main() -> Result[Json, String] {
     assert_eq(is_ok(json_uint(doc)), false)
     assert_eq(is_ok(json_bool(doc)), false)
     assert_eq(json_is_null(doc), false)
+    let kind: String = result_unwrap(json_string(result_unwrap(json_object_get(doc, "kind"))))
+    assert_eq(kind, "array")
     return ok(doc)
 }
 main()

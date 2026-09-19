@@ -64,6 +64,12 @@ func BuildNativeOpts(p *Program, c *Checker, target NativeTarget, format string,
 	if p == nil || c == nil {
 		return nil, fmt.Errorf("missing checked program")
 	}
+	if format == "elf-direct" {
+		if obfuscate {
+			return nil, fmt.Errorf("direct ELF backend does not support C obfuscation flags")
+		}
+		return BuildDirectELF(p, c, target)
+	}
 	var src string
 	var err error
 	if obfuscate {
