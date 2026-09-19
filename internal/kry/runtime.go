@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"io"
 	"math"
 	mrand "math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -53,6 +55,10 @@ const (
 	VTaskGroup
 	VRegex
 	VRandom
+	VSQLite
+	VTCP
+	VTCPListener
+	VUDP
 	VTailCall
 )
 
@@ -61,6 +67,30 @@ type regexHandle struct{ re *regexp.Regexp }
 type randomHandle struct {
 	mu  sync.Mutex
 	rng *mrand.Rand
+}
+
+type sqliteHandle struct {
+	mu     sync.Mutex
+	db     *sql.DB
+	closed bool
+}
+
+type tcpSocketHandle struct {
+	mu     sync.Mutex
+	conn   net.Conn
+	closed bool
+}
+
+type tcpListenerHandle struct {
+	mu       sync.Mutex
+	listener net.Listener
+	closed   bool
+}
+
+type udpSocketHandle struct {
+	mu     sync.Mutex
+	conn   *net.UDPConn
+	closed bool
 }
 
 type Value struct {
@@ -88,6 +118,10 @@ type Value struct {
 	Group   *TaskGroup
 	Regex   *regexHandle
 	Random  *randomHandle
+	SQLite  *sqliteHandle
+	TCP     *tcpSocketHandle
+	TCPList *tcpListenerHandle
+	UDP     *udpSocketHandle
 	Tail    *TailCall
 }
 
@@ -182,6 +216,14 @@ func display(v Value) string {
 		return "<Regex>"
 	case VRandom:
 		return "<Random>"
+	case VSQLite:
+		return "<SQLite>"
+	case VTCP:
+		return "<TcpSocket>"
+	case VTCPListener:
+		return "<TcpListener>"
+	case VUDP:
+		return "<UdpSocket>"
 	case VTailCall:
 		return "<tail-call>"
 	case VMap:
@@ -229,6 +271,8 @@ func cloneValue(v Value) Value {
 	case VRegex:
 		return v
 	case VRandom:
+		return v
+	case VSQLite, VTCP, VTCPListener, VUDP:
 		return v
 	case VTailCall:
 		return v
@@ -362,6 +406,14 @@ func equalValue(a, b Value) bool {
 		return a.Regex == b.Regex
 	case VRandom:
 		return a.Random == b.Random
+	case VSQLite:
+		return a.SQLite == b.SQLite
+	case VTCP:
+		return a.TCP == b.TCP
+	case VTCPListener:
+		return a.TCPList == b.TCPList
+	case VUDP:
+		return a.UDP == b.UDP
 	case VTailCall:
 		return a.Tail == b.Tail
 	case VSet:
@@ -1963,6 +2015,192 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			out[i] = stringVal(part)
 		}
 		return arrVal(out), nil
+	case "sqlite_open":
+		db, err := sqliteOpen(r.Sandbox, a[0].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VSQLite, SQLite: db}), nil
+	case "sqlite_exec":
+		count, err := sqliteExec(a[0].SQLite, a[1].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, intVal(count)), nil
+	case "sqlite_query":
+		rows, err := sqliteQuery(a[0].SQLite, a[1].S, r.Lim.MaxArrayElements)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		result := make([]Value, len(rows))
+		for i, row := range rows {
+			cells := make([]Value, len(row))
+			for j, cell := range row {
+				cells[j] = stringVal(cell)
+			}
+			result[i] = arrVal(cells)
+		}
+		return resVal(true, arrVal(result)), nil
+	case "sqlite_close":
+		if err := sqliteClose(a[0].SQLite); err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "tcp_connect":
+		socket, err := tcpConnect(a[0].S, a[1].I, time.Duration(r.Lim.MaxWallTimeMS)*time.Millisecond)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VTCP, TCP: socket}), nil
+	case "tcp_listen":
+		listener, err := tcpListen(a[0].S, a[1].I)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VTCPListener, TCPList: listener}), nil
+	case "tcp_accept":
+		listener := a[0].TCPList
+		if listener == nil {
+			return bad("invalid TcpListener handle")
+		}
+		listener.mu.Lock()
+		if listener.closed {
+			listener.mu.Unlock()
+			return resVal(false, stringVal("TcpListener handle is closed")), nil
+		}
+		if tcp, ok := listener.listener.(*net.TCPListener); ok {
+			_ = tcp.SetDeadline(socketDeadline(r.Lim.MaxWallTimeMS))
+		}
+		conn, err := listener.listener.Accept()
+		listener.mu.Unlock()
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VTCP, TCP: &tcpSocketHandle{conn: conn}}), nil
+	case "tcp_send":
+		socket := a[0].TCP
+		if socket == nil {
+			return bad("invalid TcpSocket handle")
+		}
+		socket.mu.Lock()
+		defer socket.mu.Unlock()
+		if socket.closed {
+			return resVal(false, stringVal("TcpSocket handle is closed")), nil
+		}
+		if err := socket.conn.SetWriteDeadline(socketDeadline(r.Lim.MaxWallTimeMS)); err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		written := 0
+		for written < len(a[1].Bytes) {
+			n, err := socket.conn.Write(a[1].Bytes[written:])
+			written += n
+			if err != nil {
+				return resVal(false, stringVal(err.Error())), nil
+			}
+			if n == 0 {
+				return resVal(false, stringVal("TCP write made no progress")), nil
+			}
+		}
+		return resVal(true, intVal(int64(written))), nil
+	case "tcp_receive":
+		socket := a[0].TCP
+		if socket == nil {
+			return bad("invalid TcpSocket handle")
+		}
+		if a[1].I < 1 || a[1].I > int64(r.Lim.MaxSourceBytes) {
+			return resVal(false, stringVal("receive size is outside configured limits")), nil
+		}
+		socket.mu.Lock()
+		defer socket.mu.Unlock()
+		if socket.closed {
+			return resVal(false, stringVal("TcpSocket handle is closed")), nil
+		}
+		if err := socket.conn.SetReadDeadline(socketDeadline(r.Lim.MaxWallTimeMS)); err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		data := make([]byte, int(a[1].I))
+		n, err := socket.conn.Read(data)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(data[:n])), nil
+	case "tcp_local_port":
+		listener := a[0].TCPList
+		if listener == nil {
+			return bad("invalid TcpListener handle")
+		}
+		listener.mu.Lock()
+		defer listener.mu.Unlock()
+		if listener.closed {
+			return resVal(false, stringVal("TcpListener handle is closed")), nil
+		}
+		addr, ok := listener.listener.Addr().(*net.TCPAddr)
+		if !ok {
+			return resVal(false, stringVal("listener does not expose a TCP port")), nil
+		}
+		return resVal(true, intVal(int64(addr.Port))), nil
+	case "tcp_close":
+		if err := tcpClose(a[0].TCP); err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "tcp_listener_close":
+		if err := tcpListenerClose(a[0].TCPList); err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
+	case "udp_bind":
+		socket, err := udpBind(a[0].S, a[1].I)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VUDP, UDP: socket}), nil
+	case "udp_send":
+		socket := a[0].UDP
+		if socket == nil {
+			return bad("invalid UdpSocket handle")
+		}
+		if err := validPort(a[2].I, false); err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(a[1].S, strconv.FormatInt(a[2].I, 10)))
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		socket.mu.Lock()
+		defer socket.mu.Unlock()
+		if socket.closed {
+			return resVal(false, stringVal("UdpSocket handle is closed")), nil
+		}
+		if err := socket.conn.SetWriteDeadline(socketDeadline(r.Lim.MaxWallTimeMS)); err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		n, err := socket.conn.WriteToUDP(a[3].Bytes, addr)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, intVal(int64(n))), nil
+	case "udp_receive", "udp_receive_from":
+		if a[1].I < 1 || a[1].I > int64(r.Lim.MaxSourceBytes) {
+			return resVal(false, stringVal("receive size is outside configured limits")), nil
+		}
+		data, addr, err := udpReceive(a[0].UDP, int(a[1].I), socketDeadline(r.Lim.MaxWallTimeMS))
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		if b.Name == "udp_receive" {
+			return resVal(true, bytesVal(data)), nil
+		}
+		value, err := udpSenderJSON(data, addr)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, Value{Kind: VJSON, S: value}), nil
+	case "udp_close":
+		if err := udpClose(a[0].UDP); err != nil {
+			return bad(err.Error())
+		}
+		return nilVal(), nil
 	case "shared_new":
 		return Value{Kind: VShared, Shared: &SharedCell{value: cloneValue(a[0])}}, nil
 	case "shared_read":

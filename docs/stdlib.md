@@ -81,6 +81,10 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `datetime_format`, `datetime_parse` | `Int` Unix milliseconds and Go time layouts. | Formatting and parsing are explicit and return `err` for invalid layouts or timestamps. |
 | `random_new`, `random_int`, `random_float`, `random_choice` | Seeded `Random` handle operations. | Each handle is isolated and mutex-protected; integer ranges are inclusive, and empty choices return `none`. |
 | `regex_compile`, `regex_is_match`, `regex_find`, `regex_find_all`, `regex_replace_all`, `regex_split` | RE2 regular-expression operations over UTF-8 strings. | Compilation errors are returned as `err`; the RE2 engine guarantees bounded, non-backtracking matching. |
+| `sqlite_open`, `sqlite_exec`, `sqlite_query`, `sqlite_close` | Embedded SQLite database handles. | The pure-Go SQLite engine runs inside the interpreter; paths are sandboxed, `:memory:` is supported, query rows are bounded, and cells are returned as text. |
+| `tcp_connect`, `tcp_send`, `tcp_receive`, `tcp_close` | Raw TCP client operations. | Connections use the runtime wall-clock deadline, reads are bounded, writes are completed or returned as errors, and handles must be closed. |
+| `tcp_listen`, `tcp_accept`, `tcp_local_port`, `tcp_listener_close` | Raw TCP server operations. | Binding port `0` selects an ephemeral port; `tcp_local_port` makes it discoverable without exposing a native pointer. |
+| `udp_bind`, `udp_send`, `udp_receive`, `udp_receive_from`, `udp_close` | Raw UDP datagram operations. | Datagram size and port values are checked; `udp_receive_from` returns canonical JSON with sender address, port, and base64 payload. |
 
 String-to-number conversion rejects whitespace-dependent partial parses and inputs such as `"12xyz"`. Float values and results must be finite. Integer arithmetic and `abs(Int minimum)` are checked. `Bytes` conversion never applies an implicit text encoding to arbitrary values.
 

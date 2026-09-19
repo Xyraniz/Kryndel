@@ -31,6 +31,10 @@ const (
 	TyTaskGroup
 	TyRegex
 	TyRandom
+	TySQLite
+	TyTCPSocket
+	TyTCPListener
+	TyUDPSocket
 )
 
 type Type struct {
@@ -98,6 +102,14 @@ func (t *Type) String() string {
 		return "Regex"
 	case TyRandom:
 		return "Random"
+	case TySQLite:
+		return "SQLite"
+	case TyTCPSocket:
+		return "TcpSocket"
+	case TyTCPListener:
+		return "TcpListener"
+	case TyUDPSocket:
+		return "UdpSocket"
 	case TyJSON:
 		return "Json"
 	case TyWebSocket:
@@ -310,6 +322,14 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 			return &Type{Kind: TyRegex, Name: "Regex"}, nil
 		case "Random":
 			return &Type{Kind: TyRandom, Name: "Random"}, nil
+		case "SQLite":
+			return &Type{Kind: TySQLite, Name: "SQLite"}, nil
+		case "TcpSocket":
+			return &Type{Kind: TyTCPSocket, Name: "TcpSocket"}, nil
+		case "TcpListener":
+			return &Type{Kind: TyTCPListener, Name: "TcpListener"}, nil
+		case "UdpSocket":
+			return &Type{Kind: TyUDPSocket, Name: "UdpSocket"}, nil
 		case "Array":
 			return Arr(TUnknown), nil
 		}

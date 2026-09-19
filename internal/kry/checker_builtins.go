@@ -1628,6 +1628,166 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			}
 		}
 		return TString, nil
+	case "sqlite_open":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		return Res(&Type{Kind: TySQLite, Name: "SQLite"}, TString), nil
+	case "sqlite_exec":
+		if db, d := arg(0, &Type{Kind: TySQLite, Name: "SQLite"}); d != nil || db.Kind != TySQLite {
+			if d != nil {
+				return TError, d
+			}
+			return bad("sqlite_exec expects SQLite")
+		}
+		if _, d := arg(1, TString); d != nil {
+			return TError, d
+		}
+		return Res(TInt, TString), nil
+	case "sqlite_query":
+		if db, d := arg(0, &Type{Kind: TySQLite, Name: "SQLite"}); d != nil || db.Kind != TySQLite {
+			if d != nil {
+				return TError, d
+			}
+			return bad("sqlite_query expects SQLite")
+		}
+		if _, d := arg(1, TString); d != nil {
+			return TError, d
+		}
+		return Res(Arr(Arr(TString)), TString), nil
+	case "sqlite_close":
+		if db, d := arg(0, &Type{Kind: TySQLite, Name: "SQLite"}); d != nil || db.Kind != TySQLite {
+			if d != nil {
+				return TError, d
+			}
+			return bad("sqlite_close expects SQLite")
+		}
+		return TNil, nil
+	case "tcp_connect":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		return Res(&Type{Kind: TyTCPSocket, Name: "TcpSocket"}, TString), nil
+	case "tcp_listen":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		return Res(&Type{Kind: TyTCPListener, Name: "TcpListener"}, TString), nil
+	case "tcp_accept":
+		if listener, d := arg(0, &Type{Kind: TyTCPListener, Name: "TcpListener"}); d != nil || listener.Kind != TyTCPListener {
+			if d != nil {
+				return TError, d
+			}
+			return bad("tcp_accept expects TcpListener")
+		}
+		return Res(&Type{Kind: TyTCPSocket, Name: "TcpSocket"}, TString), nil
+	case "tcp_send":
+		if socket, d := arg(0, &Type{Kind: TyTCPSocket, Name: "TcpSocket"}); d != nil || socket.Kind != TyTCPSocket {
+			if d != nil {
+				return TError, d
+			}
+			return bad("tcp_send expects TcpSocket")
+		}
+		if _, d := arg(1, TBytes); d != nil {
+			return TError, d
+		}
+		return Res(TInt, TString), nil
+	case "tcp_receive":
+		if socket, d := arg(0, &Type{Kind: TyTCPSocket, Name: "TcpSocket"}); d != nil || socket.Kind != TyTCPSocket {
+			if d != nil {
+				return TError, d
+			}
+			return bad("tcp_receive expects TcpSocket")
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TBytes, TString), nil
+	case "tcp_local_port":
+		if listener, d := arg(0, &Type{Kind: TyTCPListener, Name: "TcpListener"}); d != nil || listener.Kind != TyTCPListener {
+			if d != nil {
+				return TError, d
+			}
+			return bad("tcp_local_port expects TcpListener")
+		}
+		return Res(TInt, TString), nil
+	case "tcp_close":
+		if socket, d := arg(0, &Type{Kind: TyTCPSocket, Name: "TcpSocket"}); d != nil || socket.Kind != TyTCPSocket {
+			if d != nil {
+				return TError, d
+			}
+			return bad("tcp_close expects TcpSocket")
+		}
+		return TNil, nil
+	case "tcp_listener_close":
+		if listener, d := arg(0, &Type{Kind: TyTCPListener, Name: "TcpListener"}); d != nil || listener.Kind != TyTCPListener {
+			if d != nil {
+				return TError, d
+			}
+			return bad("tcp_listener_close expects TcpListener")
+		}
+		return TNil, nil
+	case "udp_bind":
+		if _, d := arg(0, TString); d != nil {
+			return TError, d
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		return Res(&Type{Kind: TyUDPSocket, Name: "UdpSocket"}, TString), nil
+	case "udp_send":
+		if socket, d := arg(0, &Type{Kind: TyUDPSocket, Name: "UdpSocket"}); d != nil || socket.Kind != TyUDPSocket {
+			if d != nil {
+				return TError, d
+			}
+			return bad("udp_send expects UdpSocket")
+		}
+		if _, d := arg(1, TString); d != nil {
+			return TError, d
+		}
+		if _, d := arg(2, TInt); d != nil {
+			return TError, d
+		}
+		if _, d := arg(3, TBytes); d != nil {
+			return TError, d
+		}
+		return Res(TInt, TString), nil
+	case "udp_receive":
+		if socket, d := arg(0, &Type{Kind: TyUDPSocket, Name: "UdpSocket"}); d != nil || socket.Kind != TyUDPSocket {
+			if d != nil {
+				return TError, d
+			}
+			return bad("udp_receive expects UdpSocket")
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TBytes, TString), nil
+	case "udp_receive_from":
+		if socket, d := arg(0, &Type{Kind: TyUDPSocket, Name: "UdpSocket"}); d != nil || socket.Kind != TyUDPSocket {
+			if d != nil {
+				return TError, d
+			}
+			return bad("udp_receive_from expects UdpSocket")
+		}
+		if _, d := arg(1, TInt); d != nil {
+			return TError, d
+		}
+		return Res(TJSON, TString), nil
+	case "udp_close":
+		if socket, d := arg(0, &Type{Kind: TyUDPSocket, Name: "UdpSocket"}); d != nil || socket.Kind != TyUDPSocket {
+			if d != nil {
+				return TError, d
+			}
+			return bad("udp_close expects UdpSocket")
+		}
+		return TNil, nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not implemented", b.Name)
 }
