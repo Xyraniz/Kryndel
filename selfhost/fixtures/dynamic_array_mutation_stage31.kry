@@ -1,0 +1,10 @@
+fn main() -> Nil {
+    let original: Array[Int] = [10, 20, 30, 40]
+    let updated: Array[Int] = result_unwrap(array_set(original, 1, 99))
+    let part: Array[Int] = array_slice(updated, 1, 2)
+    println(str(unwrap_or(array_get(original, 1), 0)))
+    println(str(unwrap_or(array_get(updated, 1), 0)))
+    println(str(len(part)))
+    println(str(unwrap_or(array_get(part, 0), 0)))
+    println(str(unwrap_or(array_get(part, 1), 0)))
+}

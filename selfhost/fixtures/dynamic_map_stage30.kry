@@ -1,0 +1,11 @@
+fn main() -> Nil {
+    let empty: Map[String, Int] = {}
+    let populated: Map[String, Int] = map_insert(empty, "answer", 42)
+    println(str(unwrap_or(map_get(populated, "answer"), 0)))
+    println(str(map_contains_key(populated, "answer")))
+    println(str(map_contains_key(populated, "missing")))
+    let removed: Map[String, Int] = map_remove(populated, "answer")
+    println(str(map_contains_key(removed, "answer")))
+    let unchanged: Map[String, Int] = map_remove(populated, "missing")
+    println(str(map_contains_key(unchanged, "answer")))
+}

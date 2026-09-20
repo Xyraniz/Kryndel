@@ -1,0 +1,29 @@
+fn main() -> Nil {
+    let parsed_string: Result[Json, String] = json_parse("\"hello\"")
+    let decoded_string: Result[String, String] = json_string(result_unwrap(parsed_string))
+    if is_ok(decoded_string) { println(result_unwrap(decoded_string)) }
+
+    let parsed_bool: Result[Json, String] = json_parse("true")
+    let decoded_bool: Result[Bool, String] = json_bool(result_unwrap(parsed_bool))
+    if is_ok(decoded_bool) { println(str(result_unwrap(decoded_bool))) }
+
+    let parsed_int: Result[Json, String] = json_parse("-42")
+    let decoded_int: Result[Int, String] = json_int(result_unwrap(parsed_int))
+    if is_ok(decoded_int) { println(str(result_unwrap(decoded_int))) }
+
+    let parsed_uint: Result[Json, String] = json_parse("42")
+    let decoded_uint: Result[UInt64, String] = json_uint(result_unwrap(parsed_uint))
+    if is_ok(decoded_uint) { println(str(result_unwrap(decoded_uint))) }
+
+    let bad_bool: Result[Bool, String] = json_bool(result_unwrap(json_parse("1")))
+    println(str(is_err(bad_bool)))
+    let bad_uint: Result[UInt64, String] = json_uint(result_unwrap(json_parse("-1")))
+    println(str(is_err(bad_uint)))
+
+    let unicode: Result[String, String] = substring("aé🙂z", 1, 2)
+    if is_ok(unicode) { println(result_unwrap(unicode)) }
+    println(str(is_err(substring("abc", -1, 1))))
+    println(str(is_err(substring("abc", 2, 2))))
+    println(str(contains("self-hosted", "host")))
+    println(str(contains("self-hosted", "compiler")))
+}

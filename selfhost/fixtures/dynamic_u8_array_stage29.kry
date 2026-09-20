@@ -1,0 +1,13 @@
+fn main() -> Nil {
+    let raw: Bytes = string_to_bytes("ABC")
+    let values: Array[UInt8] = u8_array(raw)
+    println(str(len(values)))
+    println(str(unwrap_or(array_get(values, 0), u8(0))))
+    println(str(unwrap_or(array_get(values, 2), u8(0))))
+    let raw_values: Array[UInt8] = [u8(68), u8(69), u8(70)]
+    let copied: Bytes = bytes_from_u8(raw_values)
+    let copied_values: Array[UInt8] = u8_array(copied)
+    println(str(len(copied_values)))
+    println(str(unwrap_or(array_get(copied_values, 0), u8(0))))
+    println(str(unwrap_or(array_get(copied_values, 2), u8(0))))
+}

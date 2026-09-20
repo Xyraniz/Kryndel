@@ -244,6 +244,321 @@ func TestStage2KryndelDynamicBackendMatchesDirectELFOracle(t *testing.T) {
 	assertNativeArtifact(t, want, "stage2 dynamic direct ELF oracle")
 }
 
+func TestStage29KryndelDynamicBackendU8Array(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "dynamic_u8_array_stage29.kry")
+	backend := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendProgram, d := LoadProgram(backend, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	kir, err := EmitKIR(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("dynamic backend ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "dynamic-u8-array.kir")
+	outputPath := filepath.Join(dir, "dynamic-u8-array")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backendLimits := DefaultLimits()
+	backendLimits.MaxWallTimeMS = 60_000
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, backendLimits, Sandbox{}, []string{kirPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage29 dynamic backend failed: %s", d.Message)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNativeArtifact(t, data, "stage29 dynamic u8_array output")
+	runnable := filepath.Join(dir, "dynamic-u8-array-runnable")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage29 dynamic u8_array ELF failed to execute: %v", err)
+	}
+	if string(output) != "3\n65\n67\n3\n68\n70\n" {
+		t.Fatalf("unexpected stage29 dynamic u8_array output %q", output)
+	}
+}
+
+func TestStage30KryndelDynamicBackendMapRuntime(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "dynamic_map_stage30.kry")
+	backend := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendProgram, d := LoadProgram(backend, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	kir, err := EmitKIR(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("dynamic backend ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "dynamic-map.kir")
+	outputPath := filepath.Join(dir, "dynamic-map")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backendLimits := DefaultLimits()
+	backendLimits.MaxWallTimeMS = 180_000
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, backendLimits, Sandbox{}, []string{kirPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage30 dynamic map backend failed: %s", d.Message)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNativeArtifact(t, data, "stage30 dynamic map output")
+	runnable := filepath.Join(dir, "dynamic-map-runnable")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage30 dynamic map ELF failed to execute: %v", err)
+	}
+	if string(output) != "42\ntrue\nfalse\nfalse\ntrue\n" {
+		t.Fatalf("unexpected stage30 dynamic map output %q", output)
+	}
+}
+
+func TestStage31KryndelDynamicBackendArrayMutation(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "dynamic_array_mutation_stage31.kry")
+	backend := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendProgram, d := LoadProgram(backend, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	kir, err := EmitKIR(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("dynamic backend ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "dynamic-array-mutation.kir")
+	outputPath := filepath.Join(dir, "dynamic-array-mutation")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backendLimits := DefaultLimits()
+	backendLimits.MaxWallTimeMS = 60_000
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, backendLimits, Sandbox{}, []string{kirPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage31 dynamic backend failed: %s", d.Message)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNativeArtifact(t, data, "stage31 dynamic array mutation output")
+	runnable := filepath.Join(dir, "dynamic-array-mutation-runnable")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage31 dynamic array mutation ELF failed to execute: %v", err)
+	}
+	if string(output) != "20\n99\n2\n99\n30\n" {
+		t.Fatalf("unexpected stage31 dynamic array mutation output %q", output)
+	}
+}
+
+func TestStage32KryndelDynamicBackendJSONParseKind(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "dynamic_json_stage32.kry")
+	backend := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendProgram, d := LoadProgram(backend, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	kir, err := EmitKIR(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("dynamic backend ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "dynamic-json.kir")
+	outputPath := filepath.Join(dir, "dynamic-json")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backendLimits := DefaultLimits()
+	backendLimits.MaxWallTimeMS = 180_000
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, backendLimits, Sandbox{}, []string{kirPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage32 dynamic backend failed: %s", d.Message)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNativeArtifact(t, data, "stage32 dynamic JSON output")
+	runnable := filepath.Join(dir, "dynamic-json-runnable")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage32 dynamic JSON ELF failed to execute: %v", err)
+	}
+	if string(output) != "true\nobject\ntrue\nnumber\ntrue\ntrue\ntrue\n3\ntrue\nbool\ntrue\n" {
+		t.Fatalf("unexpected stage32 dynamic JSON output %q", output)
+	}
+}
+
+func TestStage33KryndelDynamicBackendJSONScalarAccessors(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "dynamic_json_scalars_stage33.kry")
+	backend := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendProgram, d := LoadProgram(backend, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	kir, err := EmitKIR(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("dynamic backend ELF execution requires linux-amd64")
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "dynamic-json-scalars.kir")
+	outputPath := filepath.Join(dir, "dynamic-json-scalars")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backendLimits := DefaultLimits()
+	backendLimits.MaxWallTimeMS = 180_000
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, backendLimits, Sandbox{}, []string{kirPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage33 dynamic JSON scalar backend failed: %s", d.Message)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNativeArtifact(t, data, "stage33 dynamic JSON scalar output")
+	runnable := filepath.Join(dir, "dynamic-json-scalars-runnable")
+	if err := os.WriteFile(runnable, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).Output()
+	if err != nil {
+		t.Fatalf("stage33 dynamic JSON scalar ELF failed to execute: %v", err)
+	}
+	if string(output) != "hello\ntrue\n-42\n42\ntrue\ntrue\né🙂\ntrue\ntrue\ntrue\nfalse\n" {
+		t.Fatalf("unexpected stage33 dynamic JSON scalar output %q", output)
+	}
+}
+
 func TestStage3SourceKIRCompilerMatchesDirectELFOracle(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {

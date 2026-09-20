@@ -115,6 +115,29 @@ type ffiBufferHandle struct {
 	closed bool
 }
 
+// persistentArray is the backing store for arrays produced by array_set and
+// array_push. Kryndel arrays are immutable values, so a replacement may
+// safely share all chunks except the one containing the changed element. The
+// chunk tree makes the chunk index persistent too; copying a slice of every
+// chunk pointer on each update would merely move the same O(n^2) problem up a
+// level for large compiler state arrays.
+const persistentArrayChunkSize = 256
+
+type persistentArrayTree struct {
+	left  *persistentArrayTree
+	right *persistentArrayTree
+	chunk []Value
+}
+
+type persistentArray struct {
+	once       sync.Once
+	root       *persistentArrayTree
+	height     int
+	chunkCount int
+	flat       []Value
+	length     int
+}
+
 var ffiBuffers = struct {
 	sync.RWMutex
 	next int64
@@ -122,40 +145,43 @@ var ffiBuffers = struct {
 }{next: -1, byID: make(map[int64]*ffiBufferHandle)}
 
 type Value struct {
-	Kind    ValueKind
-	I       int64
-	U       uint64
-	UBits   uint8
-	F       float64
-	Bool    bool
-	S       string
-	Bytes   []byte
-	Array   []Value
-	Struct  *StructDecl
-	Fields  []Value
-	Enum    *EnumDecl
-	Variant string
-	Present bool
-	OK      bool
-	Inner   *Value
-	Ch      *Channel
-	Th      *Thread
-	Map     []MapEntry
-	Set     []Value
-	WS      *websocketConn
-	Actor   *Actor
-	Shared  *SharedCell
-	Group   *TaskGroup
-	Regex   *regexHandle
-	Random  *randomHandle
-	SQLite  *sqliteHandle
-	TCP     *tcpSocketHandle
-	TCPList *tcpListenerHandle
-	UDP     *udpSocketHandle
-	FFILib  *ffiLibraryHandle
-	FFISym  *ffiSymbolHandle
-	FFIBuf  *ffiBufferHandle
-	Tail    *TailCall
+	Kind       ValueKind
+	I          int64
+	U          uint64
+	UBits      uint8
+	F          float64
+	Bool       bool
+	S          string
+	JSON       any
+	JSONReady  bool
+	Bytes      []byte
+	Array      []Value
+	ArrayStore *persistentArray
+	Struct     *StructDecl
+	Fields     []Value
+	Enum       *EnumDecl
+	Variant    string
+	Present    bool
+	OK         bool
+	Inner      *Value
+	Ch         *Channel
+	Th         *Thread
+	Map        []MapEntry
+	Set        []Value
+	WS         *websocketConn
+	Actor      *Actor
+	Shared     *SharedCell
+	Group      *TaskGroup
+	Regex      *regexHandle
+	Random     *randomHandle
+	SQLite     *sqliteHandle
+	TCP        *tcpSocketHandle
+	TCPList    *tcpListenerHandle
+	UDP        *udpSocketHandle
+	FFILib     *ffiLibraryHandle
+	FFISym     *ffiSymbolHandle
+	FFIBuf     *ffiBufferHandle
+	Tail       *TailCall
 }
 
 type MapEntry struct{ Key, Value Value }
@@ -172,17 +198,188 @@ func floatVal(v float64) Value { return Value{Kind: VFloat, F: v} }
 func boolVal(v bool) Value     { return Value{Kind: VBool, Bool: v} }
 func stringVal(v string) Value { return Value{Kind: VString, S: v} }
 func bytesVal(v []byte) Value  { p := append([]byte(nil), v...); return Value{Kind: VBytes, Bytes: p} }
-func arrVal(v []Value) Value   { return Value{Kind: VArray, Array: append([]Value(nil), v...)} }
+
+// Arrays, structs, maps, and sets are persistent values in Kryndel: the
+// language exposes no operation that mutates their backing storage in place.
+// Keep the slice supplied by the caller instead of copying it here. Producers
+// that change a collection already allocate a fresh slice before calling the
+// constructor, while reads and function argument passing can share immutable
+// storage safely. This is important for compiler workloads, where assembler
+// states contain large byte arrays and are passed through many pure helpers.
+func arrVal(v []Value) Value { return Value{Kind: VArray, Array: v} }
+
+func arrayLength(v Value) int {
+	if v.ArrayStore != nil {
+		return v.ArrayStore.length
+	}
+	return len(v.Array)
+}
+
+func arrayValues(v Value) []Value {
+	if v.ArrayStore == nil {
+		return v.Array
+	}
+	store := v.ArrayStore
+	store.once.Do(func() {
+		if store.length == 0 {
+			store.flat = []Value{}
+			return
+		}
+		out := make([]Value, store.length)
+		at := 0
+		for i := 0; i < store.chunkCount; i++ {
+			at += copy(out[at:], arrayTreeChunk(store.root, store.height, i))
+		}
+		store.flat = out
+	})
+	return store.flat
+}
+
+func arrayAt(v Value, index int) Value {
+	if v.ArrayStore == nil {
+		return v.Array[index]
+	}
+	store := v.ArrayStore
+	chunk := index / persistentArrayChunkSize
+	offset := index % persistentArrayChunkSize
+	return arrayTreeChunk(store.root, store.height, chunk)[offset]
+}
+
+func arrayTreeChunk(root *persistentArrayTree, height, index int) []Value {
+	node := root
+	for level := height; level > 0; level-- {
+		if index&(1<<(level-1)) == 0 {
+			node = node.left
+		} else {
+			node = node.right
+		}
+	}
+	return node.chunk
+}
+
+func arrayTreeSet(root *persistentArrayTree, height, index int, chunk []Value) *persistentArrayTree {
+	if height == 0 {
+		return &persistentArrayTree{chunk: chunk}
+	}
+	if root == nil {
+		root = &persistentArrayTree{}
+	}
+	if index&(1<<(height-1)) == 0 {
+		return &persistentArrayTree{left: arrayTreeSet(root.left, height-1, index, chunk), right: root.right}
+	}
+	return &persistentArrayTree{left: root.left, right: arrayTreeSet(root.right, height-1, index, chunk)}
+}
+
+func arrayTreeHeight(chunkCount int) int {
+	height := 0
+	capacity := 1
+	for capacity < chunkCount {
+		capacity <<= 1
+		height++
+	}
+	return height
+}
+
+func arrayTreeBuild(chunks [][]Value, start, height int) *persistentArrayTree {
+	if height == 0 {
+		if start >= len(chunks) {
+			return nil
+		}
+		return &persistentArrayTree{chunk: chunks[start]}
+	}
+	half := 1 << (height - 1)
+	left := arrayTreeBuild(chunks, start, height-1)
+	right := arrayTreeBuild(chunks, start+half, height-1)
+	if left == nil && right == nil {
+		return nil
+	}
+	return &persistentArrayTree{left: left, right: right}
+}
+
+func persistentArrayFor(v Value) *persistentArray {
+	if v.ArrayStore != nil {
+		return v.ArrayStore
+	}
+	values := v.Array
+	chunks := make([][]Value, 0, (len(values)+persistentArrayChunkSize-1)/persistentArrayChunkSize)
+	for start := 0; start < len(values); start += persistentArrayChunkSize {
+		end := start + persistentArrayChunkSize
+		if end > len(values) {
+			end = len(values)
+		}
+		chunks = append(chunks, values[start:end])
+	}
+	height := arrayTreeHeight(len(chunks))
+	return &persistentArray{root: arrayTreeBuild(chunks, 0, height), height: height, chunkCount: len(chunks), length: len(values), flat: values}
+}
+
+func persistentArraySet(v Value, index int, replacement Value) Value {
+	base := persistentArrayFor(v)
+	chunkIndex := index / persistentArrayChunkSize
+	chunk := append([]Value(nil), arrayTreeChunk(base.root, base.height, chunkIndex)...)
+	chunk[index%persistentArrayChunkSize] = replacement
+	return Value{Kind: VArray, ArrayStore: &persistentArray{
+		root:       arrayTreeSet(base.root, base.height, chunkIndex, chunk),
+		height:     base.height,
+		chunkCount: base.chunkCount,
+		length:     base.length,
+	}}
+}
+
+func persistentArrayAppend(v Value, item Value) Value {
+	base := persistentArrayFor(v)
+	if base.chunkCount == 0 {
+		return Value{Kind: VArray, ArrayStore: &persistentArray{
+			root:       &persistentArrayTree{chunk: []Value{item}},
+			height:     0,
+			chunkCount: 1,
+			length:     1,
+		}}
+	}
+	chunkIndex := base.chunkCount - 1
+	var root *persistentArrayTree
+	height := base.height
+	chunkCount := base.chunkCount
+	last := arrayTreeChunk(base.root, base.height, chunkIndex)
+	if len(last) < persistentArrayChunkSize {
+		updated := append([]Value(nil), last...)
+		updated = append(updated, item)
+		root = arrayTreeSet(base.root, base.height, chunkIndex, updated)
+	} else {
+		chunkIndex = base.chunkCount
+		if base.chunkCount >= 1<<base.height {
+			root = &persistentArrayTree{left: base.root}
+			height++
+		} else {
+			root = base.root
+		}
+		root = arrayTreeSet(root, height, chunkIndex, []Value{item})
+		chunkCount++
+	}
+	return Value{Kind: VArray, ArrayStore: &persistentArray{
+		root:       root,
+		height:     height,
+		chunkCount: chunkCount,
+		length:     base.length + 1,
+	}}
+}
+
 func optVal(p bool, v Value) Value {
 	r := Value{Kind: VOption, Present: p}
 	if p {
-		x := cloneValue(v)
+		// Option payloads are immutable language values. Keep the payload
+		// shallow here; recursively cloning nested Results/Options makes every
+		// parser helper copy the entire compiler state graph.
+		x := v
 		r.Inner = &x
 	}
 	return r
 }
 func resVal(ok bool, v Value) Value {
-	x := cloneValue(v)
+	// Result payloads are immutable language values. Collection-producing
+	// operations already allocate their replacement collection, so a shallow
+	// payload copy preserves value semantics without an O(n) graph clone.
+	x := v
 	return Value{Kind: VResult, OK: ok, Inner: &x}
 }
 func display(v Value) string {
@@ -207,7 +404,7 @@ func display(v Value) string {
 	case VArray:
 		var b strings.Builder
 		b.WriteByte('[')
-		for i, x := range v.Array {
+		for i, x := range arrayValues(v) {
 			if i > 0 {
 				b.WriteString(", ")
 			}
@@ -306,7 +503,7 @@ func cloneValue(v Value) Value {
 	case VString:
 		return stringVal(v.S)
 	case VJSON:
-		return Value{Kind: VJSON, S: v.S}
+		return Value{Kind: VJSON, S: v.S, JSON: v.JSON, JSONReady: v.JSONReady}
 	case VWebSocket:
 		return v
 	case VActor:
@@ -328,36 +525,17 @@ func cloneValue(v Value) Value {
 	case VBytes:
 		return bytesVal(v.Bytes)
 	case VArray:
-		a := make([]Value, len(v.Array))
-		for i, x := range v.Array {
-			a[i] = cloneValue(x)
-		}
-		return arrVal(a)
+		return Value{Kind: VArray, Array: v.Array, ArrayStore: v.ArrayStore}
 	case VStruct:
-		r := Value{Kind: VStruct, Struct: v.Struct, Fields: make([]Value, len(v.Fields))}
-		for i, x := range v.Fields {
-			r.Fields[i] = cloneValue(x)
-		}
-		return r
+		return Value{Kind: VStruct, Struct: v.Struct, Fields: v.Fields}
 	case VOption:
-		if !v.Present {
-			return optVal(false, nilVal())
-		}
-		return optVal(true, cloneValue(*v.Inner))
+		return v
 	case VResult:
-		return resVal(v.OK, cloneValue(*v.Inner))
+		return v
 	case VMap:
-		m := make([]MapEntry, len(v.Map))
-		for i, x := range v.Map {
-			m[i] = MapEntry{Key: cloneValue(x.Key), Value: cloneValue(x.Value)}
-		}
-		return Value{Kind: VMap, Map: m}
+		return Value{Kind: VMap, Map: v.Map}
 	case VSet:
-		s := make([]Value, len(v.Set))
-		for i, x := range v.Set {
-			s[i] = cloneValue(x)
-		}
-		return Value{Kind: VSet, Set: s}
+		return Value{Kind: VSet, Set: v.Set}
 	default:
 
 		return v
@@ -405,11 +583,11 @@ func equalValue(a, b Value) bool {
 	case VBytes:
 		return string(a.Bytes) == string(b.Bytes)
 	case VArray:
-		if len(a.Array) != len(b.Array) {
+		if arrayLength(a) != arrayLength(b) {
 			return false
 		}
-		for i := range a.Array {
-			if !equalValue(a.Array[i], b.Array[i]) {
+		for i := 0; i < arrayLength(a); i++ {
+			if !equalValue(arrayAt(a, i), arrayAt(b, i)) {
 				return false
 			}
 		}
@@ -498,7 +676,7 @@ func copyableValue(v Value, depth int) bool {
 	case VNil, VInt, VUInt, VFloat, VBool, VString, VBytes, VEnum, VJSON:
 		return true
 	case VArray:
-		for _, x := range v.Array {
+		for _, x := range arrayValues(v) {
 			if !copyableValue(x, depth+1) {
 				return false
 			}
@@ -918,7 +1096,7 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 		var items []Value
 		switch iter.Kind {
 		case VArray:
-			items = iter.Array
+			items = arrayValues(iter)
 		case VSet:
 			items = iter.Set
 		case VString:
@@ -1190,10 +1368,10 @@ func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		}
 		i := ix.I
 		if base.Kind == VArray {
-			if i >= int64(len(base.Array)) {
+			if i >= int64(arrayLength(base)) {
 				return nilVal(), r.fail(e, "array index out of range")
 			}
-			return cloneValue(base.Array[i]), nil
+			return cloneValue(arrayAt(base, int(i))), nil
 		}
 		if base.Kind == VString {
 			runes := []rune(base.S)
@@ -1303,10 +1481,11 @@ func (r *Runtime) evalBinary(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		return bytesVal(append(append([]byte{}, l.Bytes...), rr.Bytes...)), nil
 	}
 	if e.Op == PLUS && (l.Kind == VArray && rr.Kind == VArray) {
-		if len(l.Array) > r.Lim.MaxArrayElements-len(rr.Array) {
+		left, right := arrayValues(l), arrayValues(rr)
+		if len(left) > r.Lim.MaxArrayElements-len(right) {
 			return nilVal(), r.fail(e, "array size limit exceeded")
 		}
-		return arrVal(append(append([]Value{}, l.Array...), rr.Array...)), nil
+		return arrVal(append(append([]Value{}, left...), right...)), nil
 	}
 	if l.Kind == VInt && rr.Kind == VInt {
 		var z int64
@@ -1639,7 +1818,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		case VString:
 			return intVal(int64(utf8.RuneCountInString(a[0].S))), nil
 		case VArray:
-			return intVal(int64(len(a[0].Array))), nil
+			return intVal(int64(arrayLength(a[0]))), nil
 		case VBytes:
 			return intVal(int64(len(a[0].Bytes))), nil
 		case VMap:
@@ -1649,8 +1828,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return bad("len expects String, Array, or Bytes")
 	case "bytes":
-		out := make([]byte, len(a[0].Array))
-		for i, v := range a[0].Array {
+		items := arrayValues(a[0])
+		out := make([]byte, len(items))
+		for i, v := range items {
 			if v.Kind != VInt || v.I < 0 || v.I > 255 {
 				return bad("bytes element must be in range 0..255")
 			}
@@ -1658,8 +1838,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return bytesVal(out), nil
 	case "bytes_from_u8":
-		out := make([]byte, len(a[0].Array))
-		for i, v := range a[0].Array {
+		items := arrayValues(a[0])
+		out := make([]byte, len(items))
+		for i, v := range items {
 			if v.Kind != VUInt || v.UBits != 8 {
 				return bad("bytes_from_u8 element must be UInt8")
 			}
@@ -1680,10 +1861,10 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return stringVal(string(a[0].Bytes)), nil
 	case "array_push":
-		if len(a[0].Array) >= r.Lim.MaxArrayElements {
+		if arrayLength(a[0]) >= r.Lim.MaxArrayElements {
 			return bad("array size limit exceeded")
 		}
-		return arrVal(append(append([]Value{}, a[0].Array...), a[1])), nil
+		return persistentArrayAppend(a[0], a[1]), nil
 	case "int":
 		return r.toInt(e, a[0])
 	case "u8", "u16", "u32", "u64":
@@ -1858,32 +2039,28 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return resVal(true, bytesVal(v)), nil
 	case "array_pop":
-		if len(a[0].Array) == 0 {
+		if arrayLength(a[0]) == 0 {
 			return optVal(false, nilVal()), nil
 		}
-		return optVal(true, a[0].Array[len(a[0].Array)-1]), nil
+		return optVal(true, arrayAt(a[0], arrayLength(a[0])-1)), nil
 	case "array_get":
-		if a[1].I < 0 || a[1].I >= int64(len(a[0].Array)) {
+		if a[1].I < 0 || a[1].I >= int64(arrayLength(a[0])) {
 			return optVal(false, nilVal()), nil
 		}
-		return optVal(true, a[0].Array[a[1].I]), nil
+		return optVal(true, arrayAt(a[0], int(a[1].I))), nil
 	case "array_set":
-		if a[1].I < 0 || a[1].I >= int64(len(a[0].Array)) {
+		if a[1].I < 0 || a[1].I >= int64(arrayLength(a[0])) {
 			return resVal(false, stringVal("array index out of range")), nil
 		}
-		items := make([]Value, len(a[0].Array))
-		for i, item := range a[0].Array {
-			items[i] = cloneValue(item)
-		}
-		items[a[1].I] = cloneValue(a[2])
-		return resVal(true, arrVal(items)), nil
+		return resVal(true, persistentArraySet(a[0], int(a[1].I), a[2])), nil
 	case "array_concat":
-		if len(a[0].Array) > r.Lim.MaxArrayElements-len(a[1].Array) {
+		left, right := arrayValues(a[0]), arrayValues(a[1])
+		if len(left) > r.Lim.MaxArrayElements-len(right) {
 			return bad("array size limit exceeded")
 		}
-		return arrVal(append(append([]Value{}, a[0].Array...), a[1].Array...)), nil
+		return arrVal(append(append([]Value{}, left...), right...)), nil
 	case "array_contains":
-		for _, v := range a[0].Array {
+		for _, v := range arrayValues(a[0]) {
 			if equalValue(v, a[1]) {
 				return boolVal(true), nil
 			}
@@ -1891,19 +2068,21 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return boolVal(false), nil
 	case "array_slice":
 		start, n := a[1].I, a[2].I
-		if start < 0 || n < 0 || start > int64(len(a[0].Array)) || n > int64(len(a[0].Array))-start {
+		if start < 0 || n < 0 || start > int64(arrayLength(a[0])) || n > int64(arrayLength(a[0]))-start {
 			return bad("array slice range is out of bounds")
 		}
-		return arrVal(a[0].Array[start : start+n]), nil
+		items := arrayValues(a[0])
+		return arrVal(items[start : start+n]), nil
 	case "array_reverse":
-		v := append([]Value{}, a[0].Array...)
+		v := append([]Value{}, arrayValues(a[0])...)
 		for i, j := 0, len(v)-1; i < j; i, j = i+1, j-1 {
 			v[i], v[j] = v[j], v[i]
 		}
 		return arrVal(v), nil
 	case "array_join":
-		ss := make([]string, len(a[0].Array))
-		for i, v := range a[0].Array {
+		items := arrayValues(a[0])
+		ss := make([]string, len(items))
+		for i, v := range items {
 			ss[i] = v.S
 		}
 		return stringVal(strings.Join(ss, a[1].S)), nil
@@ -1918,9 +2097,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		m := make([]MapEntry, len(a[0].Map))
 		found := false
 		for i, x := range a[0].Map {
-			m[i] = MapEntry{Key: cloneValue(x.Key), Value: cloneValue(x.Value)}
+			m[i] = x
 			if equalValue(x.Key, a[1]) {
-				m[i].Value = cloneValue(a[2])
+				m[i].Value = a[2]
 				found = true
 			}
 		}
@@ -1928,13 +2107,13 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			if len(m) >= r.Lim.MaxArrayElements {
 				return bad("map size limit exceeded")
 			}
-			m = append(m, MapEntry{Key: cloneValue(a[1]), Value: cloneValue(a[2])})
+			m = append(m, MapEntry{Key: a[1], Value: a[2]})
 		}
 		return Value{Kind: VMap, Map: m}, nil
 	case "map_keys":
 		keys := make([]Value, len(a[0].Map))
 		for i, x := range a[0].Map {
-			keys[i] = cloneValue(x.Key)
+			keys[i] = x.Key
 		}
 		return arrVal(keys), nil
 	case "set_contains":
@@ -1954,10 +2133,8 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return bad("set size limit exceeded")
 		}
 		s := make([]Value, len(a[0].Set), len(a[0].Set)+1)
-		for i, x := range a[0].Set {
-			s[i] = cloneValue(x)
-		}
-		s = append(s, cloneValue(a[1]))
+		copy(s, a[0].Set)
+		s = append(s, a[1])
 		return Value{Kind: VSet, Set: s}, nil
 	case "set_len":
 		return intVal(int64(len(a[0].Set))), nil
@@ -1975,21 +2152,22 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if err := dec.Decode(&raw); err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
-		canon, err := json.Marshal(normalizeJSON(raw))
+		normalized := normalizeJSON(raw)
+		canon, err := json.Marshal(normalized)
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
-		return resVal(true, Value{Kind: VJSON, S: string(canon)}), nil
+		return resVal(true, jsonValue(string(canon), normalized)), nil
 	case "json_stringify":
 		return stringVal(a[0].S), nil
 	case "json_kind":
-		raw, err := decodeJSONNode(a[0].S)
+		raw, err := jsonRawValue(a[0])
 		if err != nil {
 			return nilVal(), r.fail(e, "invalid Json value: %v", err)
 		}
 		return stringVal(jsonNodeKind(raw)), nil
 	case "json_object_get":
-		raw, err := decodeJSONNode(a[0].S)
+		raw, err := jsonRawValue(a[0])
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
@@ -2005,9 +2183,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
-		return resVal(true, Value{Kind: VJSON, S: string(data)}), nil
+		return resVal(true, jsonValue(string(data), child)), nil
 	case "json_array_len":
-		raw, err := decodeJSONNode(a[0].S)
+		raw, err := jsonRawValue(a[0])
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
@@ -2017,7 +2195,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return resVal(true, intVal(int64(len(items)))), nil
 	case "json_array_get":
-		raw, err := decodeJSONNode(a[0].S)
+		raw, err := jsonRawValue(a[0])
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
@@ -2032,50 +2210,90 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
-		return resVal(true, Value{Kind: VJSON, S: string(data)}), nil
+		return resVal(true, jsonValue(string(data), items[a[1].I])), nil
 	case "json_string":
 		var value string
-		if err := json.Unmarshal([]byte(a[0].S), &value); err != nil {
+		if a[0].JSONReady {
+			var ok bool
+			value, ok = a[0].JSON.(string)
+			if !ok {
+				return resVal(false, stringVal("JSON value is not a string")), nil
+			}
+		} else if err := json.Unmarshal([]byte(a[0].S), &value); err != nil {
 			return resVal(false, stringVal("JSON value is not a string")), nil
 		}
 		return resVal(true, stringVal(value)), nil
 	case "json_int":
-		n, err := jsonNumberNode(a[0].S)
+		raw, err := jsonRawValue(a[0])
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
-		value, err := n.Int64()
-		if err != nil {
-			return resVal(false, stringVal("JSON number is not a signed Int")), nil
+		var value int64
+		switch n := raw.(type) {
+		case int64:
+			value = n
+		case json.Number:
+			value, err = n.Int64()
+			if err != nil {
+				return resVal(false, stringVal("JSON number is not a signed Int")), nil
+			}
+		default:
+			return resVal(false, stringVal("JSON value is not a number")), nil
 		}
 		return resVal(true, intVal(value)), nil
 	case "json_uint":
-		n, err := jsonNumberNode(a[0].S)
+		raw, err := jsonRawValue(a[0])
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
-		value, err := strconv.ParseUint(n.String(), 10, 64)
+		var numberText string
+		switch n := raw.(type) {
+		case int64:
+			numberText = strconv.FormatInt(n, 10)
+		case json.Number:
+			numberText = n.String()
+		default:
+			return resVal(false, stringVal("JSON value is not a number")), nil
+		}
+		value, err := strconv.ParseUint(numberText, 10, 64)
 		if err != nil {
 			return resVal(false, stringVal("JSON number is not a UInt64")), nil
 		}
 		return resVal(true, uintVal(64, value)), nil
 	case "json_float":
-		n, err := jsonNumberNode(a[0].S)
+		raw, err := jsonRawValue(a[0])
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
-		value, err := n.Float64()
+		var value float64
+		switch n := raw.(type) {
+		case float64:
+			value = n
+		case json.Number:
+			value, err = n.Float64()
+		default:
+			return resVal(false, stringVal("JSON value is not a number")), nil
+		}
 		if err != nil || !isFinite(value) {
 			return resVal(false, stringVal("JSON number is not a finite Float")), nil
 		}
 		return resVal(true, floatVal(value)), nil
 	case "json_bool":
 		var value bool
-		if err := json.Unmarshal([]byte(a[0].S), &value); err != nil {
+		if a[0].JSONReady {
+			var ok bool
+			value, ok = a[0].JSON.(bool)
+			if !ok {
+				return resVal(false, stringVal("JSON value is not a Bool")), nil
+			}
+		} else if err := json.Unmarshal([]byte(a[0].S), &value); err != nil {
 			return resVal(false, stringVal("JSON value is not a Bool")), nil
 		}
 		return resVal(true, boolVal(value)), nil
 	case "json_is_null":
+		if a[0].JSONReady {
+			return boolVal(a[0].JSON == nil), nil
+		}
 		return boolVal(strings.TrimSpace(a[0].S) == "null"), nil
 	case "http_get":
 		return r.httpRequest(e, "GET", a[0].S, "")
@@ -2141,8 +2359,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return nilVal(), nil
 	case "process_run":
-		args := make([]string, len(a[1].Array))
-		for i, x := range a[1].Array {
+		argValues := arrayValues(a[1])
+		args := make([]string, len(argValues))
+		for i, x := range argValues {
 			if x.Kind != VString {
 				return bad("process_run arguments must be String")
 			}
@@ -2248,14 +2467,14 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if a[0].Random == nil {
 			return bad("invalid Random handle")
 		}
-		if len(a[1].Array) == 0 {
+		if arrayLength(a[1]) == 0 {
 			return optVal(false, nilVal()), nil
 		}
-		index, err := randomInt(a[0].Random, 0, int64(len(a[1].Array)-1))
+		index, err := randomInt(a[0].Random, 0, int64(arrayLength(a[1])-1))
 		if err != nil {
 			return bad(err.Error())
 		}
-		return optVal(true, a[1].Array[index]), nil
+		return optVal(true, arrayAt(a[1], int(index))), nil
 	case "regex_compile":
 		re, err := regexp.Compile(a[0].S)
 		if err != nil {
@@ -2500,7 +2719,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return resVal(true, Value{Kind: VFFISymbol, FFISym: symbol}), nil
 	case "ffi_call":
-		result, err := ffiCall(a[0].FFISym, a[1].S, a[2].Array)
+		result, err := ffiCall(a[0].FFISym, a[1].S, arrayValues(a[2]))
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
@@ -2969,15 +3188,15 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	case "array_slice_range":
 		return r.arraySliceRange(a), nil
 	case "string_format":
-		return stringVal(formatTemplate(a[0].S, a[1].Array)), nil
+		return stringVal(formatTemplate(a[0].S, arrayValues(a[1]))), nil
 	case "array_indices":
-		idx := make([]Value, len(a[0].Array))
+		idx := make([]Value, arrayLength(a[0]))
 		for i := range idx {
 			idx[i] = intVal(int64(i))
 		}
 		return arrVal(idx), nil
 	case "array_zip":
-		left, right := a[0].Array, a[1].Array
+		left, right := arrayValues(a[0]), arrayValues(a[1])
 		n := len(left)
 		if len(right) < n {
 			n = len(right)
@@ -3063,7 +3282,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return resVal(true, intVal(info.ModTime().Unix())), nil
 	case "fs_join_path":
 		base := a[0].S
-		parts := a[1].Array
+		parts := arrayValues(a[1])
 		partStrs := make([]string, len(parts))
 		for i, p := range parts {
 			partStrs[i] = p.S
@@ -3179,11 +3398,11 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	case "string_to_lower":
 		return stringVal(strings.ToLower(a[0].S)), nil
 	case "array_sort":
-		v := append([]Value{}, a[0].Array...)
+		v := append([]Value{}, arrayValues(a[0])...)
 		sort.SliceStable(v, func(i, j int) bool { return lessValue(v[i], v[j]) })
 		return arrVal(v), nil
 	case "array_index_of":
-		for i, x := range a[0].Array {
+		for i, x := range arrayValues(a[0]) {
 			if equalValue(x, a[1]) {
 				return optVal(true, intVal(int64(i))), nil
 			}
@@ -3191,7 +3410,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return optVal(false, nilVal()), nil
 	case "array_sum":
 		var total int64
-		for _, x := range a[0].Array {
+		for _, x := range arrayValues(a[0]) {
 			sum, ok := addI(total, x.I)
 			if !ok {
 				return bad("array_sum overflow")
@@ -3200,11 +3419,12 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return intVal(total), nil
 	case "array_min", "array_max":
-		if len(a[0].Array) == 0 {
+		items := arrayValues(a[0])
+		if len(items) == 0 {
 			return optVal(false, nilVal()), nil
 		}
-		best := a[0].Array[0].I
-		for _, x := range a[0].Array[1:] {
+		best := items[0].I
+		for _, x := range items[1:] {
 			if (b.Name == "array_min" && x.I < best) || (b.Name == "array_max" && x.I > best) {
 				best = x.I
 			}
@@ -3212,13 +3432,14 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return optVal(true, intVal(best)), nil
 	case "array_take", "array_drop":
 		n := a[1].I
-		if n < 0 || n > int64(len(a[0].Array)) {
+		if n < 0 || n > int64(arrayLength(a[0])) {
 			return bad("array_take/array_drop count out of range")
 		}
+		items := arrayValues(a[0])
 		if b.Name == "array_take" {
-			return arrVal(append([]Value{}, a[0].Array[:n]...)), nil
+			return arrVal(append([]Value{}, items[:n]...)), nil
 		}
-		return arrVal(append([]Value{}, a[0].Array[n:]...)), nil
+		return arrVal(append([]Value{}, items[n:]...)), nil
 	case "map_contains_key":
 		for _, x := range a[0].Map {
 			if equalValue(x.Key, a[1]) {
@@ -3384,6 +3605,17 @@ func decodeJSONNode(text string) (any, error) {
 	return raw, nil
 }
 
+func jsonValue(text string, raw any) Value {
+	return Value{Kind: VJSON, S: text, JSON: raw, JSONReady: true}
+}
+
+func jsonRawValue(v Value) (any, error) {
+	if v.JSONReady {
+		return v.JSON, nil
+	}
+	return decodeJSONNode(v.S)
+}
+
 func jsonNumberNode(text string) (json.Number, error) {
 	raw, err := decodeJSONNode(text)
 	if err != nil {
@@ -3494,7 +3726,7 @@ func toBool(v Value) bool {
 	case VBytes:
 		return len(v.Bytes) > 0
 	case VArray:
-		return len(v.Array) > 0
+		return arrayLength(v) > 0
 	case VOption:
 		return v.Present
 	case VResult:
@@ -3610,7 +3842,7 @@ func (r *Runtime) stringSlice(a []Value) Value {
 
 // arraySliceRange implements array_slice_range with the same Python semantics.
 func (r *Runtime) arraySliceRange(a []Value) Value {
-	items := a[0].Array
+	items := arrayValues(a[0])
 	n := int64(len(items))
 	start := normalizeSliceIndex(a[1].I, n)
 	end := normalizeSliceIndex(a[2].I, n)

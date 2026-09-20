@@ -302,8 +302,9 @@ func kirExpr(e *Expr, c *Checker) *KIRExpr {
 }
 
 func kirValue(v Value) *KIRValue {
-	k := &KIRValue{Kind: valueName(v.Kind), Int: v.I, UInt: v.U, UIntBits: v.UBits, Float: v.F, Bool: v.Bool, String: v.S, Bytes: append([]byte(nil), v.Bytes...), Present: v.Present, OK: v.OK, Array: make([]*KIRValue, 0, len(v.Array))}
-	for _, x := range v.Array {
+	items := arrayValues(v)
+	k := &KIRValue{Kind: valueName(v.Kind), Int: v.I, UInt: v.U, UIntBits: v.UBits, Float: v.F, Bool: v.Bool, String: v.S, Bytes: append([]byte(nil), v.Bytes...), Present: v.Present, OK: v.OK, Array: make([]*KIRValue, 0, len(items))}
+	for _, x := range items {
 		k.Array = append(k.Array, kirValue(x))
 	}
 	if v.Inner != nil {

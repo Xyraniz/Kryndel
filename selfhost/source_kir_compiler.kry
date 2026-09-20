@@ -215,7 +215,7 @@ fn parser_error(value: Result[SourceParser, String]) -> String {
     return unwrap_or(result_error(value), "parser error")
 }
 
-fn expression_error(value: Result[ParsedExpr, String]) -> String {
+fn source_expression_error(value: Result[ParsedExpr, String]) -> String {
     return unwrap_or(result_error(value), "expression parser error")
 }
 
@@ -596,7 +596,7 @@ fn parse_struct_literal(parser: SourceParser, type_name: String) -> Result[Parse
         let colon: Result[SourceParser, String] = expect(advance(current), ":")
         if is_err(colon) { return err(parser_error(colon)) }
         let parsed_value: Result[ParsedExpr, String] = parse_expression(result_unwrap(colon))
-        if is_err(parsed_value) { return err(expression_error(parsed_value)) }
+        if is_err(parsed_value) { return err(source_expression_error(parsed_value)) }
         let value: ParsedExpr = result_unwrap(parsed_value)
         let expected: String = unwrap_or(map_get(shape.fields, field_name.text), "")
         if value.expression.type_name != expected { return err("parser: struct field '" + field_name.text + "' expects " + expected) }
@@ -645,7 +645,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
     }
     if token.text == "(" {
         let nested: Result[ParsedExpr, String] = parse_expression(advance(parser))
-        if is_err(nested) { return err(expression_error(nested)) }
+        if is_err(nested) { return err(source_expression_error(nested)) }
         let parsed: ParsedExpr = result_unwrap(nested)
         let closed: Result[SourceParser, String] = expect(parsed.parser, ")")
         if is_err(closed) { return err(parser_error(closed)) }
@@ -684,7 +684,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             let mut argument_index: Int = 0
             while current_token(current).text != ")" {
                 let argument: Result[ParsedExpr, String] = parse_expression(current)
-                if is_err(argument) { return err(expression_error(argument)) }
+                if is_err(argument) { return err(source_expression_error(argument)) }
                 let parsed_argument: ParsedExpr = result_unwrap(argument)
                 if !builtin_generic && !builtin_unsigned_conversion {
                     if argument_index >= len(expected) { return err("parser: too many function arguments") }
@@ -799,7 +799,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
         let mut element_type: String = ""
         while current_token(current).text != "]" {
             let item: Result[ParsedExpr, String] = parse_expression(current)
-            if is_err(item) { return err(expression_error(item)) }
+        if is_err(item) { return err(source_expression_error(item)) }
             let parsed_item: ParsedExpr = result_unwrap(item)
             if element_type == "" {
                 element_type = parsed_item.expression.type_name
@@ -829,7 +829,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
 
 fn parse_postfix(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_primary(parser)
-    if is_err(first) { return err(expression_error(first)) }
+    if is_err(first) { return err(source_expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "[" || current_token(parsed.parser).text == "." {
         if current_token(parsed.parser).text == "." {
@@ -842,7 +842,7 @@ fn parse_postfix(parser: SourceParser) -> Result[ParsedExpr, String] {
             continue
         }
         let index: Result[ParsedExpr, String] = parse_expression(advance(parsed.parser))
-        if is_err(index) { return err(expression_error(index)) }
+        if is_err(index) { return err(source_expression_error(index)) }
         let parsed_index: ParsedExpr = result_unwrap(index)
         if parsed_index.expression.type_name != "Int" { return err("parser: array index must be Int") }
         let closed: Result[SourceParser, String] = expect(parsed_index.parser, "]")
@@ -861,7 +861,7 @@ fn parse_unary(parser: SourceParser) -> Result[ParsedExpr, String] {
         return parse_postfix(parser)
     }
     let nested: Result[ParsedExpr, String] = parse_unary(advance(parser))
-    if is_err(nested) { return err(expression_error(nested)) }
+    if is_err(nested) { return err(source_expression_error(nested)) }
     let parsed: ParsedExpr = result_unwrap(nested)
     if token.text == "-" && parsed.expression.type_name != "Int" {
         return err("parser: unary '-' expects Int")
@@ -884,12 +884,12 @@ fn parse_unary(parser: SourceParser) -> Result[ParsedExpr, String] {
 
 fn parse_multiplication(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_unary(parser)
-    if is_err(first) { return err(expression_error(first)) }
+    if is_err(first) { return err(source_expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "*" || current_token(parsed.parser).text == "/" || current_token(parsed.parser).text == "%" {
         let operator: String = current_token(parsed.parser).text
         let right_result: Result[ParsedExpr, String] = parse_unary(advance(parsed.parser))
-        if is_err(right_result) { return err(expression_error(right_result)) }
+        if is_err(right_result) { return err(source_expression_error(right_result)) }
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, operator, right.expression)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: binary expression failed")) }
@@ -900,12 +900,12 @@ fn parse_multiplication(parser: SourceParser) -> Result[ParsedExpr, String] {
 
 fn parse_addition(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_multiplication(parser)
-    if is_err(first) { return err(expression_error(first)) }
+    if is_err(first) { return err(source_expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "+" || current_token(parsed.parser).text == "-" {
         let operator: String = current_token(parsed.parser).text
         let right_result: Result[ParsedExpr, String] = parse_multiplication(advance(parsed.parser))
-        if is_err(right_result) { return err(expression_error(right_result)) }
+        if is_err(right_result) { return err(source_expression_error(right_result)) }
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, operator, right.expression)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: binary expression failed")) }
@@ -916,12 +916,12 @@ fn parse_addition(parser: SourceParser) -> Result[ParsedExpr, String] {
 
 fn parse_shift(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_addition(parser)
-    if is_err(first) { return err(expression_error(first)) }
+    if is_err(first) { return err(source_expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "<<" || current_token(parsed.parser).text == ">>" {
         let operator: String = current_token(parsed.parser).text
         let right_result: Result[ParsedExpr, String] = parse_addition(advance(parsed.parser))
-        if is_err(right_result) { return err(expression_error(right_result)) }
+        if is_err(right_result) { return err(source_expression_error(right_result)) }
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, operator, right.expression)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: comparison failed")) }
@@ -932,11 +932,11 @@ fn parse_shift(parser: SourceParser) -> Result[ParsedExpr, String] {
 
 fn parse_bitand(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_shift(parser)
-    if is_err(first) { return err(expression_error(first)) }
+    if is_err(first) { return err(source_expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "&" {
         let right_result: Result[ParsedExpr, String] = parse_shift(advance(parsed.parser))
-        if is_err(right_result) { return err(expression_error(right_result)) }
+        if is_err(right_result) { return err(source_expression_error(right_result)) }
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "&", right.expression)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: bitwise expression failed")) }
@@ -947,11 +947,11 @@ fn parse_bitand(parser: SourceParser) -> Result[ParsedExpr, String] {
 
 fn parse_bitxor(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_bitand(parser)
-    if is_err(first) { return err(expression_error(first)) }
+    if is_err(first) { return err(source_expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "^" {
         let right_result: Result[ParsedExpr, String] = parse_bitand(advance(parsed.parser))
-        if is_err(right_result) { return err(expression_error(right_result)) }
+        if is_err(right_result) { return err(source_expression_error(right_result)) }
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "^", right.expression)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: bitwise expression failed")) }
@@ -962,11 +962,11 @@ fn parse_bitxor(parser: SourceParser) -> Result[ParsedExpr, String] {
 
 fn parse_bitor(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_bitxor(parser)
-    if is_err(first) { return err(expression_error(first)) }
+    if is_err(first) { return err(source_expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "|" {
         let right_result: Result[ParsedExpr, String] = parse_bitxor(advance(parsed.parser))
-        if is_err(right_result) { return err(expression_error(right_result)) }
+        if is_err(right_result) { return err(source_expression_error(right_result)) }
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "|", right.expression)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: bitwise expression failed")) }
@@ -977,12 +977,12 @@ fn parse_bitor(parser: SourceParser) -> Result[ParsedExpr, String] {
 
 fn parse_comparison(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_bitor(parser)
-    if is_err(first) { return err(expression_error(first)) }
+    if is_err(first) { return err(source_expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "==" || current_token(parsed.parser).text == "!=" || current_token(parsed.parser).text == "<" || current_token(parsed.parser).text == "<=" || current_token(parsed.parser).text == ">" || current_token(parsed.parser).text == ">=" {
         let operator: String = current_token(parsed.parser).text
         let right_result: Result[ParsedExpr, String] = parse_bitor(advance(parsed.parser))
-        if is_err(right_result) { return err(expression_error(right_result)) }
+        if is_err(right_result) { return err(source_expression_error(right_result)) }
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, operator, right.expression)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: comparison failed")) }
@@ -993,11 +993,11 @@ fn parse_comparison(parser: SourceParser) -> Result[ParsedExpr, String] {
 
 fn parse_logical_and(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_comparison(parser)
-    if is_err(first) { return err(expression_error(first)) }
+        if is_err(first) { return err(source_expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "&&" {
         let right_result: Result[ParsedExpr, String] = parse_comparison(advance(parsed.parser))
-        if is_err(right_result) { return err(expression_error(right_result)) }
+        if is_err(right_result) { return err(source_expression_error(right_result)) }
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "&&", right.expression)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: logical expression failed")) }
@@ -1008,11 +1008,11 @@ fn parse_logical_and(parser: SourceParser) -> Result[ParsedExpr, String] {
 
 fn parse_expression(parser: SourceParser) -> Result[ParsedExpr, String] {
     let first: Result[ParsedExpr, String] = parse_logical_and(parser)
-    if is_err(first) { return err(expression_error(first)) }
+        if is_err(first) { return err(source_expression_error(first)) }
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "||" {
         let right_result: Result[ParsedExpr, String] = parse_logical_and(advance(parsed.parser))
-        if is_err(right_result) { return err(expression_error(right_result)) }
+        if is_err(right_result) { return err(source_expression_error(right_result)) }
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "||", right.expression)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: logical expression failed")) }
@@ -1049,7 +1049,7 @@ fn parse_output(parser: SourceParser) -> Result[ParsedStatements, String] {
     let opened: Result[SourceParser, String] = expect(advance(parser), "(")
     if is_err(opened) { return err(parser_error(opened)) }
     let value: Result[ParsedExpr, String] = parse_expression(result_unwrap(opened))
-    if is_err(value) { return err(expression_error(value)) }
+        if is_err(value) { return err(source_expression_error(value)) }
     let parsed: ParsedExpr = result_unwrap(value)
     let closed: Result[SourceParser, String] = expect(parsed.parser, ")")
     if is_err(closed) { return err(parser_error(closed)) }
@@ -1080,7 +1080,7 @@ fn parse_binding(parser: SourceParser) -> Result[ParsedStatements, String] {
     let equals: Result[SourceParser, String] = expect(after_name, "=")
     if is_err(equals) { return err(parser_error(equals)) }
     let value: Result[ParsedExpr, String] = parse_expression(result_unwrap(equals))
-    if is_err(value) { return err(expression_error(value)) }
+        if is_err(value) { return err(source_expression_error(value)) }
     let parsed: ParsedExpr = result_unwrap(value)
     if annotation != "" && annotation != parsed.expression.type_name {
         return err("parser: annotation for '" + name.text + "' does not match the initializer")
@@ -1106,7 +1106,7 @@ fn parse_assignment(parser: SourceParser) -> Result[ParsedStatements, String] {
     let equals: Result[SourceParser, String] = expect(advance(parser), "=")
     if is_err(equals) { return err(parser_error(equals)) }
     let value: Result[ParsedExpr, String] = parse_expression(result_unwrap(equals))
-    if is_err(value) { return err(expression_error(value)) }
+        if is_err(value) { return err(source_expression_error(value)) }
     let parsed: ParsedExpr = result_unwrap(value)
     if parsed.expression.type_name != info.type_name { return err("parser: assignment type does not match target") }
     let separated: Result[SourceParser, String] = finish_statement(parsed.parser)
@@ -1120,7 +1120,7 @@ fn parse_assignment(parser: SourceParser) -> Result[ParsedStatements, String] {
 
 fn parse_call_statement(parser: SourceParser) -> Result[ParsedStatements, String] {
     let value: Result[ParsedExpr, String] = parse_expression(parser)
-    if is_err(value) { return err(expression_error(value)) }
+    if is_err(value) { return err(source_expression_error(value)) }
     let parsed: ParsedExpr = result_unwrap(value)
     if parsed.expression.type_name != "Nil" { return err("parser: scalar call result must be used in an expression") }
     let separated: Result[SourceParser, String] = finish_statement(parsed.parser)
@@ -1133,7 +1133,7 @@ fn parse_return(parser: SourceParser) -> Result[ParsedStatements, String] {
     let mut value: SourceExpr = SourceExpr{ json: "{\"kind\":\"nil\",\"type\":\"Nil\",\"const\":null}", type_name: "Nil", known: true, display: "" }
     if current_token(current).text != ";" && current_token(current).text != "}" && current_token(current).kind != "eof" {
         let parsed: Result[ParsedExpr, String] = parse_expression(current)
-        if is_err(parsed) { return err(expression_error(parsed)) }
+        if is_err(parsed) { return err(source_expression_error(parsed)) }
         let result: ParsedExpr = result_unwrap(parsed)
         value = result.expression
         current = result.parser
@@ -1218,7 +1218,7 @@ fn parse_function(parser: SourceParser, public: Bool) -> Result[ParsedFunction, 
 
 fn parse_if(parser: SourceParser) -> Result[ParsedStatements, String] {
     let condition: Result[ParsedExpr, String] = parse_expression(advance(parser))
-    if is_err(condition) { return err(expression_error(condition)) }
+    if is_err(condition) { return err(source_expression_error(condition)) }
     let parsed_condition: ParsedExpr = result_unwrap(condition)
     if parsed_condition.expression.type_name != "Bool" { return err("parser: if condition must be Bool") }
     let then_block: Result[ParsedStatements, String] = parse_block(parsed_condition.parser)
@@ -1239,7 +1239,7 @@ fn parse_if(parser: SourceParser) -> Result[ParsedStatements, String] {
 
 fn parse_while(parser: SourceParser) -> Result[ParsedStatements, String] {
     let condition: Result[ParsedExpr, String] = parse_expression(advance(parser))
-    if is_err(condition) { return err(expression_error(condition)) }
+    if is_err(condition) { return err(source_expression_error(condition)) }
     let parsed_condition: ParsedExpr = result_unwrap(condition)
     if parsed_condition.expression.type_name != "Bool" { return err("parser: while condition must be Bool") }
     let body: Result[ParsedStatements, String] = parse_block(parsed_condition.parser)
@@ -1254,7 +1254,7 @@ fn parse_for(parser: SourceParser) -> Result[ParsedStatements, String] {
     let in_token: Result[SourceParser, String] = expect(advance(advance(parser)), "in")
     if is_err(in_token) { return err(parser_error(in_token)) }
     let iterator: Result[ParsedExpr, String] = parse_expression(result_unwrap(in_token))
-    if is_err(iterator) { return err(expression_error(iterator)) }
+    if is_err(iterator) { return err(source_expression_error(iterator)) }
     let parsed_iterator: ParsedExpr = result_unwrap(iterator)
     if !is_array_type(parsed_iterator.expression.type_name) { return err("parser: for iterator must be Array[T]") }
     let item_type: String = array_inner(parsed_iterator.expression.type_name)
@@ -1351,6 +1351,7 @@ fn compile_source(source: String) -> Result[Bytes, String] {
 }
 
 fn fail_compilation(message: String) -> Nil {
+	println(message)
     let failure: Result[Nil, String] = err(message)
     result_unwrap(failure)
     return nil

@@ -3767,7 +3767,7 @@ func (m *directMachine) emitArraySetRuntime() error {
 	if err := m.emitConditionalJump(0x83, failure); err != nil {
 		return err
 	}
-	m.code = append(m.code, 0x4c, 0x89, 0xef) // rdi=length
+	m.code = append(m.code, 0x48, 0x89, 0xef) // rdi=length
 	m.arrayRuntimeUsed = true
 	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
 		return err
@@ -6174,6 +6174,11 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 				}
 				m.code = append(m.code, 0xc9, 0xc3)
 				continue
+			}
+			if s.Return != nil && s.Return.Kind != ExNil {
+				if err := m.emitExpr(s.Return); err != nil {
+					return err
+				}
 			}
 			if err := m.emitJump(m.endLabel); err != nil {
 				return err

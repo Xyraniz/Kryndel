@@ -1,0 +1,30 @@
+fn main() -> Nil {
+    let object_value: Result[Json, String] = json_parse("{\"kind\":1}")
+    println(str(is_ok(object_value)))
+    if is_ok(object_value) {
+        println(json_kind(result_unwrap(object_value)))
+        let selected: Result[Json, String] = json_object_get(result_unwrap(object_value), "kind")
+        println(str(is_ok(selected)))
+        if is_ok(selected) {
+            println(json_kind(result_unwrap(selected)))
+        }
+        let missing: Result[Json, String] = json_object_get(result_unwrap(object_value), "missing")
+        println(str(is_err(missing)))
+    }
+    let array_value: Result[Json, String] = json_parse("[1,true,null]")
+    println(str(is_ok(array_value)))
+    if is_ok(array_value) {
+        let count: Result[Int, String] = json_array_len(result_unwrap(array_value))
+        println(str(is_ok(count)))
+        if is_ok(count) {
+            println(str(result_unwrap(count)))
+        }
+        let selected_array: Result[Json, String] = json_array_get(result_unwrap(array_value), 1)
+        println(str(is_ok(selected_array)))
+        if is_ok(selected_array) {
+            println(json_kind(result_unwrap(selected_array)))
+        }
+        let missing: Result[Json, String] = json_array_get(result_unwrap(array_value), 9)
+        println(str(is_err(missing)))
+    }
+}
