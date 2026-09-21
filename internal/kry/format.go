@@ -390,6 +390,8 @@ func opText(k TokenKind) string {
 		return "/"
 	case PERCENT:
 		return "%"
+	case BANG:
+		return "!"
 	case EQEQ:
 		return "=="
 	case NEQ:

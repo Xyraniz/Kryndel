@@ -72,3 +72,13 @@ Stage 26 adds native `json_string`. It validates a JSON string node in two passe
 Stage 27 adds native `json_int`. It parses a complete JSON integer token directly from the immutable `Json` text, accepts JSON whitespace around the value, accumulates negatively so both signed 64-bit limits remain exact, and returns typed errors for non-numbers, fractions, exponents, leading-zero forms, and overflow. The direct-ELF regression covers signs, limits, whitespace, and rejection cases.
 
 Stage 28 fixes the native `u8_array` runtime's loop bound, which previously compared against an uninitialized callee-saved register and returned a correctly sized array filled with zero values. The regression round-trips `Bytes` through `u8_array`, and the bootstrap regression now compiles a Kryndel source program with the generated source compiler, validates the resulting ELF, and executes it to verify its static string data.
+
+Stage 34 fixes KIR emission for unary Boolean negation: `!` is now serialized as `!` instead of the fallback operator text `?`. Its regression lowers a small KIR program through `kir_backend.kry`, checks byte parity with the Go direct backend, and executes the ELF on Linux amd64. KIR documents also have a separate `MaxJSONBytes` limit (64 MiB by default); this is distinct from the 16 MiB limit for ordinary Kryndel strings.
+
+Stage 35 exercises the dynamic compiler bootstrap from the checked Go frontend: it emits KIR for `source_kir_compiler.kry`, runs `kir_backend.kry` under the host interpreter, validates the generated Linux amd64 ELF, then runs that compiler on a fixture and an invalid source file on Linux amd64. All artifacts are created in `t.TempDir()`. The source compiler KIR is about 56 MB, so the test raises only its host interpreter instruction and wall-time budgets. Reproduce it with:
+
+```text
+go test ./internal/kry -run '^TestStage35KryndelDynamicCompilerBootstrap$' -count=1 -timeout=12m -v
+```
+
+On non-Linux hosts, this test still parses the full KIR and generates and validates the compiler ELF, then skips only the Linux executable checks. A Windows run therefore does not establish that the generated compiler can compile its fixture; that leg must pass on Linux amd64 before this stage is considered complete.

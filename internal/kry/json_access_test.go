@@ -53,6 +53,28 @@ main()
 	}
 }
 
+func TestJSONParseUsesDedicatedDocumentLimit(t *testing.T) {
+	src := `
+fn main() -> Nil {
+    let parsed: Result[Json, String] = json_parse("{\"a\":1}")
+    assert_eq(is_err(parsed), true)
+    assert_eq(unwrap_or(result_error(parsed), "missing error"), "JSON input exceeds configured limit")
+    return nil
+}
+main()
+`
+	p, c := testProgram(t, src)
+	limits := DefaultLimits()
+	limits.MaxJSONBytes = 4
+	r, d := NewRuntime(p, c, limits, Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("JSON document limit was not reported explicitly: %s", d.Message)
+	}
+}
+
 func TestResultErrorReadsFailuresWithoutUnwrapping(t *testing.T) {
 	src := `
 fn main() -> Result[Nil, String] {

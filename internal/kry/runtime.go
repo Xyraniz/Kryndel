@@ -2139,7 +2139,10 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	case "set_len":
 		return intVal(int64(len(a[0].Set))), nil
 	case "json_parse":
-		if len(a[0].S) > r.Lim.MaxStringBytes || !json.Valid([]byte(a[0].S)) {
+		if len(a[0].S) > r.Lim.MaxJSONBytes {
+			return resVal(false, stringVal("JSON input exceeds configured limit")), nil
+		}
+		if !json.Valid([]byte(a[0].S)) {
 			return resVal(false, stringVal("invalid JSON")), nil
 		}
 		// Use a number-preserving decoder so large integers keep their exact

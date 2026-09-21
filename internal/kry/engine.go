@@ -153,5 +153,5 @@ func (e *Engine) FormatPath(path string, write, check bool) (string, *Diagnostic
 }
 func WriteTextAtomic(path string, data []byte) error { return WriteArtifact(path, data) }
 func (e *Engine) Doctor() bool {
-	return len(Builtins()) == len(builtinList) && e.Limits.MaxSourceBytes > 0 && e.Limits.MaxArtifactBytes > 0
+	return len(Builtins()) == len(builtinList) && e.Limits.MaxSourceBytes > 0 && e.Limits.MaxArtifactBytes > 0 && e.Limits.MaxJSONBytes > 0
 }

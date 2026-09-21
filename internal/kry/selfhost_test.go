@@ -1,6 +1,9 @@
 package kry
 
 import (
+	"bytes"
+	"encoding/binary"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +16,20 @@ func assertNativeArtifact(t *testing.T, data []byte, label string) {
 	t.Helper()
 	if _, err := InspectNative(data); err != nil {
 		t.Fatalf("%s is not a valid native artifact: %v", label, err)
+	}
+}
+
+func assertLinuxAMD64ELF(t *testing.T, data []byte, label string) {
+	t.Helper()
+	assertNativeArtifact(t, data, label)
+	if len(data) < 20 || !bytes.Equal(data[:4], []byte{0x7f, 'E', 'L', 'F'}) {
+		t.Fatalf("%s is not an ELF executable", label)
+	}
+	if data[4] != 2 || data[5] != 1 {
+		t.Fatalf("%s is not little-endian ELF64: class=%d data=%d", label, data[4], data[5])
+	}
+	if machine := binary.LittleEndian.Uint16(data[18:20]); machine != 62 {
+		t.Fatalf("%s has ELF machine %#x, want x86-64 (62)", label, machine)
 	}
 }
 
@@ -556,6 +573,182 @@ func TestStage33KryndelDynamicBackendJSONScalarAccessors(t *testing.T) {
 	}
 	if string(output) != "hello\ntrue\n-42\n42\ntrue\ntrue\né🙂\ntrue\ntrue\ntrue\nfalse\n" {
 		t.Fatalf("unexpected stage33 dynamic JSON scalar output %q", output)
+	}
+}
+
+func TestStage34KryndelDynamicBackendUnaryNot(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &Source{Name: "dynamic-unary-not-stage34.kry", Text: "fn negate(value: Bool) -> Bool { return !value }\nfn main() -> Nil { println(negate(false)); println(negate(true)) }\n"}
+	program, d := Parse(source, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	kir, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendPath := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	backendProgram, d := LoadProgram(backendPath, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "dynamic-unary-not.kir")
+	outputPath := filepath.Join(dir, "dynamic-unary-not")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, DefaultLimits(), Sandbox{}, []string{kirPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage34 dynamic unary-not backend failed: %s", d.Message)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNativeArtifact(t, got, "stage34 dynamic unary-not output")
+	if !bytes.Equal(got, oracle) {
+		t.Fatal("stage34 dynamic unary-not ELF differs from direct backend")
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("dynamic backend ELF execution requires linux-amd64")
+	}
+	runnable := filepath.Join(dir, "dynamic-unary-not-runnable")
+	if err := os.WriteFile(runnable, got, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(runnable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage34 dynamic unary-not ELF failed: %v; output: %s", err, output)
+	}
+	if string(output) != "true\nfalse\n" {
+		t.Fatalf("unexpected stage34 dynamic unary-not output %q", output)
+	}
+}
+
+func TestStage35KryndelDynamicCompilerBootstrap(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	selfhost := filepath.Join(root, "..", "..", "selfhost")
+	compilerPath := filepath.Join(selfhost, "source_kir_compiler.kry")
+	backendPath := filepath.Join(selfhost, "kir_backend.kry")
+	fixturePath := filepath.Join(selfhost, "fixtures", "bootstrap_hello_stage27.kry")
+	invalidPath := filepath.Join(t.TempDir(), "invalid-source.kry")
+
+	compilerProgram, d := LoadProgram(compilerPath, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	kir, err := EmitKIR(compilerProgram, compilerChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var header struct {
+		Format  string `json:"format"`
+		Version int    `json:"version"`
+		Target  struct {
+			OS   string `json:"os"`
+			Arch string `json:"arch"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(kir, &header); err != nil {
+		t.Fatalf("source compiler KIR is not valid JSON: %v", err)
+	}
+	if header.Format != KIRFormat || header.Version != KIRVersion || header.Target.OS != "linux" || header.Target.Arch != "amd64" {
+		t.Fatalf("unexpected source compiler KIR header: %#v", header)
+	}
+	if len(kir) > DefaultLimits().MaxJSONBytes {
+		t.Fatalf("source compiler KIR is %d bytes, exceeding MaxJSONBytes=%d", len(kir), DefaultLimits().MaxJSONBytes)
+	}
+
+	backendProgram, d := LoadProgram(backendPath, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	kirFile := filepath.Join(dir, "source-compiler.kir")
+	generatedCompiler := filepath.Join(dir, "source-kir-compiler")
+	if err := os.WriteFile(kirFile, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backendLimits := DefaultLimits()
+	backendLimits.MaxWallTimeMS = 12 * 60 * 1000
+	backendLimits.MaxInstructions = 100_000_000
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, backendLimits, Sandbox{}, []string{kirFile, generatedCompiler})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage35 dynamic backend failed to compile source compiler KIR: %s", d.Message)
+	}
+	compilerELF, err := os.ReadFile(generatedCompiler)
+	if err != nil {
+		t.Fatalf("stage35 dynamic backend did not write compiler ELF: %v", err)
+	}
+	assertLinuxAMD64ELF(t, compilerELF, "stage35 generated source compiler")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("generated compiler execution requires linux-amd64; KIR parsing and ELF generation passed")
+	}
+	if err := os.Chmod(generatedCompiler, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	generatedProgram := filepath.Join(dir, "bootstrap-program")
+	compilerOutput, err := exec.Command(generatedCompiler, fixturePath, generatedProgram).CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage35 generated compiler failed to compile fixture: %v; output: %s", err, compilerOutput)
+	}
+	programELF, err := os.ReadFile(generatedProgram)
+	if err != nil {
+		t.Fatalf("stage35 generated compiler did not write fixture ELF: %v", err)
+	}
+	assertLinuxAMD64ELF(t, programELF, "stage35 generated fixture")
+	if err := os.Chmod(generatedProgram, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	programOutput, err := exec.Command(generatedProgram).CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage35 generated fixture ELF failed: %v; output: %s", err, programOutput)
+	}
+	if string(programOutput) != "hello from bootstrap\n" {
+		t.Fatalf("unexpected stage35 generated fixture output %q", programOutput)
+	}
+	if err := os.WriteFile(invalidPath, []byte("match value { }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	invalidOutput, invalidErr := exec.Command(generatedCompiler, invalidPath, filepath.Join(dir, "invalid-output")).CombinedOutput()
+	if invalidErr == nil {
+		t.Fatalf("stage35 generated compiler accepted invalid source: %s", invalidOutput)
+	}
+	if !strings.Contains(string(invalidOutput), "unsupported statement") {
+		t.Fatalf("stage35 generated compiler returned an unexpected invalid-source diagnostic (exit %v): %s", invalidErr, invalidOutput)
 	}
 }
 

@@ -59,6 +59,21 @@ func TestKIRRejectsWrongVersionAndTrailingData(t *testing.T) {
 	}
 }
 
+func TestKIRPreservesUnaryNotOperator(t *testing.T) {
+	p, c := testProgram(t, "let negated: Bool = !false\n")
+	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := DecodeKIR(data, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Statements) != 1 || doc.Statements[0].Init == nil || doc.Statements[0].Init.Kind != "unary" || doc.Statements[0].Init.Operator != "!" {
+		t.Fatalf("unary not was not preserved in KIR: %#v", doc.Statements)
+	}
+}
+
 func TestLLVMEmissionDoesNotReturnFakeIR(t *testing.T) {
 	if data, err := EmitLLVMIR(nil, NativeTarget{}); err == nil || data != nil || !strings.Contains(err.Error(), "not implemented") {
 		t.Fatalf("LLVM emitter must fail honestly, data=%q err=%v", data, err)
