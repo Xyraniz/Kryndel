@@ -2929,8 +2929,9 @@ fn emit_map_remove_runtime(state: EmitState) -> Result[EmitState, String] {
 fn emit_string_chars_runtime(state: EmitState) -> Result[EmitState, String] {
     let bound: Result[EmitState, String] = bind_label(state, host_string_chars_label(state))
     if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind string_chars runtime")) }
-    // rdi=String. Count UTF-8 code points, allocate Array[String], then copy
-    // each one-to-four-byte sequence through the shared String allocator.
+    // rdi=String. Count UTF-8 code points, then put each String header and its
+    // one-to-four bytes in a compact arena instead of mmaping one page per
+    // character. This matters when the source compiler tokenizes large files.
     let mut current: EmitState = append_code(result_unwrap(bound), [
         u8(83), u8(85), u8(65), u8(84), u8(65), u8(85), u8(65), u8(86), u8(65), u8(87),
         u8(73), u8(137), u8(252), u8(77), u8(139), u8(44), u8(36), u8(77), u8(49), u8(246), u8(77), u8(49), u8(255)
@@ -2973,7 +2974,14 @@ fn emit_string_chars_runtime(state: EmitState) -> Result[EmitState, String] {
     if is_err(bound_allocate) { return err(unwrap_or(result_error(bound_allocate), "dynamic backend: cannot bind string_chars allocation")) }
     current = append_code(result_unwrap(bound_allocate), [u8(76), u8(137), u8(248), u8(72), u8(137), u8(199)])
     current = emit_label_call(current, current.assembler.array_alloc_label)
-    current = append_code(current, [u8(72), u8(137), u8(195), u8(77), u8(49), u8(246), u8(77), u8(49), u8(255)])
+    current = append_code(current, [
+        u8(72), u8(137), u8(195), u8(76), u8(137), u8(254), u8(72), u8(193), u8(230), u8(4), u8(72), u8(255), u8(198),
+        u8(72), u8(49), u8(255), u8(186), u8(3), u8(0), u8(0), u8(0), u8(65), u8(186), u8(34), u8(0), u8(0), u8(0),
+        u8(65), u8(184), u8(255), u8(255), u8(255), u8(255), u8(69), u8(49), u8(201), u8(184), u8(9), u8(0), u8(0), u8(0),
+        u8(15), u8(5), u8(72), u8(133), u8(192)
+    ])
+    current = emit_jump(current, current.env.trap_label, true, u8(136))
+    current = append_code(current, [u8(72), u8(137), u8(197), u8(73), u8(137), u8(232), u8(77), u8(49), u8(246), u8(77), u8(49), u8(255)])
     let fill_loop: LabelState = new_label(current)
     let fill_one: LabelState = new_label(fill_loop.state)
     let fill_two: LabelState = new_label(fill_one.state)
@@ -3006,10 +3014,10 @@ fn emit_string_chars_runtime(state: EmitState) -> Result[EmitState, String] {
     let bound_fill_copy: Result[EmitState, String] = bind_label(current, fill_copy.label)
     if is_err(bound_fill_copy) { return err(unwrap_or(result_error(bound_fill_copy), "dynamic backend: cannot bind string_chars copy path")) }
     current = append_code(result_unwrap(bound_fill_copy), [
-        u8(76), u8(137), u8(231), u8(72), u8(131), u8(199), u8(8), u8(76), u8(1), u8(247), u8(72), u8(137), u8(214), u8(82)
+        u8(73), u8(137), u8(16), u8(76), u8(137), u8(230), u8(72), u8(131), u8(198), u8(8), u8(76), u8(1), u8(246),
+        u8(76), u8(137), u8(199), u8(72), u8(131), u8(199), u8(8), u8(72), u8(137), u8(209), u8(243), u8(164),
+        u8(78), u8(137), u8(68), u8(251), u8(8), u8(73), u8(131), u8(192), u8(16), u8(73), u8(1), u8(214), u8(73), u8(255), u8(199)
     ])
-    current = emit_label_call(current, host_string_alloc_label(current))
-    current = append_code(current, [u8(90), u8(74), u8(137), u8(68), u8(251), u8(8), u8(73), u8(1), u8(214), u8(73), u8(255), u8(199)])
     current = emit_jump(current, fill_loop.label, false, u8(0))
     let bound_done: Result[EmitState, String] = bind_label(current, done.label)
     if is_err(bound_done) { return err(unwrap_or(result_error(bound_done), "dynamic backend: cannot bind string_chars completion")) }
@@ -4371,18 +4379,31 @@ fn statements_use_runtime(statements: Json, target: String) -> Bool {
     while index < count {
         let statement: Json = result_unwrap(json_array_get(statements, index))
         let kind: String = text(field(statement, "kind"))
-        if (kind == "let" || kind == "const") && expression_uses_runtime(field(statement, "init"), target) { return true }
-        if kind == "expr" && expression_uses_runtime(field(statement, "expr"), target) { return true }
-        if kind == "assign" && (expression_uses_runtime(field(statement, "target"), target) || expression_uses_runtime(field(statement, "value"), target)) { return true }
+        if kind == "let" || kind == "const" {
+            if expression_uses_runtime(field(statement, "init"), target) { return true }
+        }
+        if kind == "expr" {
+            if expression_uses_runtime(field(statement, "expr"), target) { return true }
+        }
+        if kind == "assign" {
+            if expression_uses_runtime(field(statement, "target"), target) { return true }
+            if expression_uses_runtime(field(statement, "value"), target) { return true }
+        }
         if kind == "if" {
-            if expression_uses_runtime(field(statement, "cond"), target) || statements_use_runtime(field(statement, "then"), target) || statements_use_runtime(field(statement, "else"), target) { return true }
+            if expression_uses_runtime(field(statement, "cond"), target) { return true }
+            if statements_use_runtime(field(statement, "then"), target) { return true }
+            if statements_use_runtime(field(statement, "else"), target) { return true }
         }
         if kind == "while" {
-            if expression_uses_runtime(field(statement, "cond"), target) || statements_use_runtime(field(statement, "body"), target) { return true }
+            if expression_uses_runtime(field(statement, "cond"), target) { return true }
+            if statements_use_runtime(field(statement, "body"), target) { return true }
         }
-        if kind == "return" && expression_uses_runtime(field(statement, "return"), target) { return true }
+        if kind == "return" {
+            if expression_uses_runtime(field(statement, "return"), target) { return true }
+        }
         if kind == "for" {
-            if expression_uses_runtime(field(statement, "iter"), target) || statements_use_runtime(field(statement, "body"), target) { return true }
+            if expression_uses_runtime(field(statement, "iter"), target) { return true }
+            if statements_use_runtime(field(statement, "body"), target) { return true }
         }
         if kind == "match" {
             if expression_uses_runtime(field(statement, "scrutinee"), target) { return true }
@@ -4395,8 +4416,12 @@ fn statements_use_runtime(statements: Json, target: String) -> Bool {
                 arm_index = arm_index + 1
             }
         }
-        if kind == "defer" && expression_uses_runtime(field(statement, "expr"), target) { return true }
-        if kind == "unsafe" && statements_use_runtime(field(statement, "body"), target) { return true }
+        if kind == "defer" {
+            if expression_uses_runtime(field(statement, "expr"), target) { return true }
+        }
+        if kind == "unsafe" {
+            if statements_use_runtime(field(statement, "body"), target) { return true }
+        }
         index = index + 1
     }
     return false

@@ -1797,6 +1797,62 @@ func TestStage20DirectStringChars(t *testing.T) {
 	}
 }
 
+func TestStage20DynamicStringCharsArena(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	selfhost := filepath.Join(root, "..", "..", "selfhost")
+	fixture := filepath.Join(selfhost, "fixtures", "direct_string_chars_stage20.kry")
+	backend := filepath.Join(selfhost, "kir_backend.kry")
+	program, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	checker, d := Check(program, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	kir, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendProgram, d := LoadProgram(backend, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	backendChecker, d := Check(backendProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "string-chars.kir")
+	outputPath := filepath.Join(dir, "dynamic-string-chars")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, DefaultLimits(), Sandbox{}, []string{kirPath, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("dynamic string_chars backend failed: %s", d.Message)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("dynamic string_chars execution requires linux-amd64")
+	}
+	if err := os.Chmod(outputPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(outputPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("dynamic string_chars ELF failed: %v; output: %s", err, output)
+	}
+	if string(output) != "3\na\né\n🙂\n" {
+		t.Fatalf("unexpected dynamic string_chars output %q", output)
+	}
+}
+
 func TestStage21DirectMapRuntime(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {
