@@ -18,6 +18,32 @@ struct DataPatch {
     data_offset: Int,
 }
 
+struct ChunkedInts {
+    pages: Array[Array[Array[Int]]],
+    length: Int,
+}
+
+struct ChunkedJumpPatches {
+    pages: Array[Array[Array[JumpPatch]]],
+    length: Int,
+}
+
+struct CodePatch {
+    position: Int,
+    bytes: Array[UInt8],
+}
+
+struct ChunkedCodePatches {
+    pages: Array[Array[Array[CodePatch]]],
+    length: Int,
+}
+
+struct ChunkedCode {
+    pages: Array[Array[Array[UInt8]]],
+    chunk_count: Int,
+    length: Int,
+}
+
 struct Assembler {
     code: Array[UInt8],
     code_chunks: Array[Array[UInt8]],
@@ -25,8 +51,8 @@ struct Assembler {
     data: Array[UInt8],
     data_by_text: Map[String, Int],
     string_data_by_text: Map[String, Int],
-    labels: Array[Int],
-    jumps: Array[JumpPatch],
+    labels: ChunkedInts,
+    jumps: ChunkedJumpPatches,
     data_patches: Array[DataPatch],
     frame_patch: Int,
     string_concat_label: Int,
@@ -59,6 +85,8 @@ struct CompileEnv {
 struct EmitState {
     assembler: Assembler,
     env: CompileEnv,
+    code_patches: ChunkedCodePatches,
+    code_pages: ChunkedCode,
 }
 
 struct LabelState {
@@ -126,6 +154,8 @@ fn state_with_code(state: EmitState, code: Array[UInt8]) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: code, code_chunks: [], code_length: len(code), data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: ChunkedCode{ pages: [], chunk_count: 0, length: 0 },
     }
 }
 
@@ -133,6 +163,8 @@ fn state_with_data(state: EmitState, data: Array[UInt8]) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -140,6 +172,8 @@ fn state_with_data_index(state: EmitState, data: Array[UInt8], data_by_text: Map
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: data, data_by_text: data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -147,20 +181,26 @@ fn state_with_string_data_index(state: EmitState, data: Array[UInt8], string_dat
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: data, data_by_text: state.assembler.data_by_text, string_data_by_text: string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
-fn state_with_labels(state: EmitState, labels: Array[Int]) -> EmitState {
+fn state_with_labels(state: EmitState, labels: ChunkedInts) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
-fn state_with_jumps(state: EmitState, jumps: Array[JumpPatch]) -> EmitState {
+fn state_with_jumps(state: EmitState, jumps: ChunkedJumpPatches) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -168,6 +208,8 @@ fn state_with_data_patches(state: EmitState, patches: Array[DataPatch]) -> EmitS
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -175,6 +217,8 @@ fn state_with_frame_patch(state: EmitState, position: Int) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: position, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -182,6 +226,8 @@ fn state_with_string_concat_label(state: EmitState, label: Int) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -189,6 +235,8 @@ fn state_with_string_concat_used(state: EmitState) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: true, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -196,6 +244,8 @@ fn state_with_array_labels(state: EmitState, alloc_label: Int, push_label: Int, 
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: alloc_label, array_push_label: push_label, array_concat_label: concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -203,6 +253,8 @@ fn state_with_array_used(state: EmitState) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: true, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -210,6 +262,8 @@ fn state_with_box_label(state: EmitState, label: Int) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -217,6 +271,8 @@ fn state_with_box_used(state: EmitState) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: true, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -224,6 +280,8 @@ fn state_with_host_used(state: EmitState) -> EmitState {
     return EmitState{
         assembler: Assembler{ code: state.assembler.code, code_chunks: state.assembler.code_chunks, code_length: state.assembler.code_length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: true },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -332,13 +390,17 @@ fn host_map_remove_label(state: EmitState) -> Int {
 }
 
 fn state_with_env(state: EmitState, env: CompileEnv) -> EmitState {
-    return EmitState{ assembler: state.assembler, env: env }
+    return EmitState{ assembler: state.assembler, env: env, code_patches: state.code_patches, code_pages: state.code_pages }
 }
 
 fn state_with_code_chunks(state: EmitState, chunks: Array[Array[UInt8]], length: Int) -> EmitState {
+    let mut code: Array[UInt8] = state.assembler.code
+    if len(chunks) == 0 { code = [] }
     return EmitState{
-        assembler: Assembler{ code: state.assembler.code, code_chunks: chunks, code_length: length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
+        assembler: Assembler{ code: code, code_chunks: chunks, code_length: length, data: state.assembler.data, data_by_text: state.assembler.data_by_text, string_data_by_text: state.assembler.string_data_by_text, labels: state.assembler.labels, jumps: state.assembler.jumps, data_patches: state.assembler.data_patches, frame_patch: state.assembler.frame_patch, string_concat_label: state.assembler.string_concat_label, string_concat_used: state.assembler.string_concat_used, array_alloc_label: state.assembler.array_alloc_label, array_push_label: state.assembler.array_push_label, array_concat_label: state.assembler.array_concat_label, array_runtime_used: state.assembler.array_runtime_used, box_alloc_label: state.assembler.box_alloc_label, box_runtime_used: state.assembler.box_runtime_used, host_runtime_used: state.assembler.host_runtime_used },
         env: state.env,
+        code_patches: state.code_patches,
+        code_pages: state.code_pages,
     }
 }
 
@@ -367,30 +429,231 @@ fn append_code(state: EmitState, bytes: Array[UInt8]) -> EmitState {
 fn materialize_code(state: EmitState) -> EmitState {
     if len(state.assembler.code_chunks) == 0 { return state }
     let mut code: Array[UInt8] = []
+    let mut batch: Array[UInt8] = []
     for chunk in state.assembler.code_chunks {
-        code = array_concat(code, chunk)
+        if len(batch) > 0 && len(batch) + len(chunk) > 65536 {
+            code = array_concat(code, batch)
+            batch = []
+        }
+        batch = array_concat(batch, chunk)
     }
+    code = array_concat(code, batch)
     return state_with_code(state, code)
 }
 
+fn prepare_code_pages(state: EmitState) -> Result[EmitState, String] {
+    let flattened: EmitState = materialize_code(state)
+    let code: Array[UInt8] = flattened.assembler.code
+    let code_length: Int = len(code)
+    let chunk_count: Int = (code_length + 255) / 256
+    let mut pages: Array[Array[Array[UInt8]]] = []
+    let mut page: Array[Array[UInt8]] = []
+    let mut index: Int = 0
+    while index < chunk_count {
+        let start: Int = index * 256
+        let remaining: Int = code_length - start
+        let mut chunk_length: Int = 256
+        if remaining < chunk_length { chunk_length = remaining }
+        let chunk: Array[UInt8] = array_slice(code, start, chunk_length)
+        page = array_push(page, chunk)
+        if len(page) == 128 || index + 1 == chunk_count {
+            pages = array_push(pages, page)
+            page = []
+        }
+        index = index + 1
+    }
+    let empty_chunks: Array[Array[UInt8]] = []
+    let cleared: EmitState = state_with_code_chunks(flattened, empty_chunks, code_length)
+    return ok(EmitState{
+        assembler: cleared.assembler,
+        env: cleared.env,
+        code_patches: cleared.code_patches,
+        code_pages: ChunkedCode{ pages: pages, chunk_count: chunk_count, length: code_length },
+    })
+}
+
+fn flatten_code_pages(state: EmitState) -> EmitState {
+    let mut code: Array[UInt8] = []
+    let mut batch: Array[UInt8] = []
+    for page in state.code_pages.pages {
+        for chunk in page {
+            if len(batch) > 0 && len(batch) + len(chunk) > 65536 {
+                code = array_concat(code, batch)
+                batch = []
+            }
+            batch = array_concat(batch, chunk)
+        }
+    }
+    code = array_concat(code, batch)
+    let flattened: EmitState = state_with_code(state, code)
+    return EmitState{
+        assembler: flattened.assembler,
+        env: flattened.env,
+        code_patches: ChunkedCodePatches{ pages: [], length: 0 },
+        code_pages: ChunkedCode{ pages: [], chunk_count: 0, length: 0 },
+    }
+}
+
+fn chunked_int_get(values: ChunkedInts, index: Int) -> Int {
+    if index < 0 || index >= values.length { return -1 }
+    let page_index: Int = index / 16384
+    let chunk_index: Int = (index / 128) % 128
+    let item_index: Int = index % 128
+    let page: Array[Array[Int]] = unwrap_or(array_get(values.pages, page_index), [])
+    let chunk: Array[Int] = unwrap_or(array_get(page, chunk_index), [])
+    return unwrap_or(array_get(chunk, item_index), -1)
+}
+
+fn chunked_int_set(values: ChunkedInts, index: Int, value: Int) -> Result[ChunkedInts, String] {
+    if index < 0 || index >= values.length { return err("dynamic backend: chunked label index is out of range") }
+    let page_index: Int = index / 16384
+    let chunk_index: Int = (index / 128) % 128
+    let item_index: Int = index % 128
+    let page: Array[Array[Int]] = unwrap_or(array_get(values.pages, page_index), [])
+    let chunk: Array[Int] = unwrap_or(array_get(page, chunk_index), [])
+    let updated_chunk: Result[Array[Int], String] = array_set(chunk, item_index, value)
+    if is_err(updated_chunk) { return err(unwrap_or(result_error(updated_chunk), "dynamic backend: cannot update label chunk")) }
+    let updated_page: Result[Array[Array[Int]], String] = array_set(page, chunk_index, result_unwrap(updated_chunk))
+    if is_err(updated_page) { return err(unwrap_or(result_error(updated_page), "dynamic backend: cannot update label page")) }
+    let updated_pages: Result[Array[Array[Array[Int]]], String] = array_set(values.pages, page_index, result_unwrap(updated_page))
+    if is_err(updated_pages) { return err(unwrap_or(result_error(updated_pages), "dynamic backend: cannot update label pages")) }
+    return ok(ChunkedInts{ pages: result_unwrap(updated_pages), length: values.length })
+}
+
+fn chunked_int_push(values: ChunkedInts, value: Int) -> ChunkedInts {
+    if values.length == 0 {
+        let chunk: Array[Int] = [value]
+        let page: Array[Array[Int]] = [chunk]
+        return ChunkedInts{ pages: [page], length: 1 }
+    }
+    let page_index: Int = (values.length - 1) / 16384
+    let chunk_index: Int = ((values.length - 1) / 128) % 128
+    let page: Array[Array[Int]] = unwrap_or(array_get(values.pages, page_index), [])
+    if values.length % 128 == 0 {
+        let chunk: Array[Int] = [value]
+        if values.length % 16384 == 0 {
+            let new_page: Array[Array[Int]] = [chunk]
+            return ChunkedInts{ pages: array_push(values.pages, new_page), length: values.length + 1 }
+        }
+        let new_page: Array[Array[Int]] = array_push(page, chunk)
+        let pages: Result[Array[Array[Array[Int]]], String] = array_set(values.pages, page_index, new_page)
+        return ChunkedInts{ pages: result_unwrap(pages), length: values.length + 1 }
+    }
+    let last_chunk: Array[Int] = unwrap_or(array_get(page, chunk_index), [])
+    let new_chunk: Array[Int] = array_push(last_chunk, value)
+    let updated_page: Result[Array[Array[Int]], String] = array_set(page, chunk_index, new_chunk)
+    let pages: Result[Array[Array[Array[Int]]], String] = array_set(values.pages, page_index, result_unwrap(updated_page))
+    return ChunkedInts{ pages: result_unwrap(pages), length: values.length + 1 }
+}
+
+fn chunked_jump_get(values: ChunkedJumpPatches, index: Int) -> Option[JumpPatch] {
+    if index < 0 || index >= values.length { return none() }
+    let page_index: Int = index / 16384
+    let chunk_index: Int = (index / 128) % 128
+    let item_index: Int = index % 128
+    let page: Array[Array[JumpPatch]] = unwrap_or(array_get(values.pages, page_index), [])
+    let chunk: Array[JumpPatch] = unwrap_or(array_get(page, chunk_index), [])
+    return array_get(chunk, item_index)
+}
+
+fn chunked_jump_push(values: ChunkedJumpPatches, value: JumpPatch) -> ChunkedJumpPatches {
+    if values.length == 0 {
+        let chunk: Array[JumpPatch] = [value]
+        let page: Array[Array[JumpPatch]] = [chunk]
+        return ChunkedJumpPatches{ pages: [page], length: 1 }
+    }
+    let page_index: Int = (values.length - 1) / 16384
+    let chunk_index: Int = ((values.length - 1) / 128) % 128
+    let page: Array[Array[JumpPatch]] = unwrap_or(array_get(values.pages, page_index), [])
+    if values.length % 128 == 0 {
+        let chunk: Array[JumpPatch] = [value]
+        if values.length % 16384 == 0 {
+            let new_page: Array[Array[JumpPatch]] = [chunk]
+            return ChunkedJumpPatches{ pages: array_push(values.pages, new_page), length: values.length + 1 }
+        }
+        let new_page: Array[Array[JumpPatch]] = array_push(page, chunk)
+        let pages: Result[Array[Array[Array[JumpPatch]]], String] = array_set(values.pages, page_index, new_page)
+        return ChunkedJumpPatches{ pages: result_unwrap(pages), length: values.length + 1 }
+    }
+    let last_chunk: Array[JumpPatch] = unwrap_or(array_get(page, chunk_index), [])
+    let new_chunk: Array[JumpPatch] = array_push(last_chunk, value)
+    let updated_page: Result[Array[Array[JumpPatch]], String] = array_set(page, chunk_index, new_chunk)
+    let pages: Result[Array[Array[Array[JumpPatch]]], String] = array_set(values.pages, page_index, result_unwrap(updated_page))
+    return ChunkedJumpPatches{ pages: result_unwrap(pages), length: values.length + 1 }
+}
+
+fn chunked_code_patch_get(values: ChunkedCodePatches, index: Int) -> Option[CodePatch] {
+    if index < 0 || index >= values.length { return none() }
+    let page_index: Int = index / 16384
+    let chunk_index: Int = (index / 128) % 128
+    let item_index: Int = index % 128
+    let page: Array[Array[CodePatch]] = unwrap_or(array_get(values.pages, page_index), [])
+    let chunk: Array[CodePatch] = unwrap_or(array_get(page, chunk_index), [])
+    return array_get(chunk, item_index)
+}
+
+fn chunked_code_patch_push(values: ChunkedCodePatches, value: CodePatch) -> ChunkedCodePatches {
+    if values.length == 0 {
+        let chunk: Array[CodePatch] = [value]
+        let page: Array[Array[CodePatch]] = [chunk]
+        return ChunkedCodePatches{ pages: [page], length: 1 }
+    }
+    let page_index: Int = (values.length - 1) / 16384
+    let chunk_index: Int = ((values.length - 1) / 128) % 128
+    let page: Array[Array[CodePatch]] = unwrap_or(array_get(values.pages, page_index), [])
+    if values.length % 128 == 0 {
+        let chunk: Array[CodePatch] = [value]
+        if values.length % 16384 == 0 {
+            let new_page: Array[Array[CodePatch]] = [chunk]
+            return ChunkedCodePatches{ pages: array_push(values.pages, new_page), length: values.length + 1 }
+        }
+        let new_page: Array[Array[CodePatch]] = array_push(page, chunk)
+        let pages: Result[Array[Array[Array[CodePatch]]], String] = array_set(values.pages, page_index, new_page)
+        return ChunkedCodePatches{ pages: result_unwrap(pages), length: values.length + 1 }
+    }
+    let last_chunk: Array[CodePatch] = unwrap_or(array_get(page, chunk_index), [])
+    let new_chunk: Array[CodePatch] = array_push(last_chunk, value)
+    let updated_page: Result[Array[Array[CodePatch]], String] = array_set(page, chunk_index, new_chunk)
+    let pages: Result[Array[Array[Array[CodePatch]]], String] = array_set(values.pages, page_index, result_unwrap(updated_page))
+    return ChunkedCodePatches{ pages: result_unwrap(pages), length: values.length + 1 }
+}
+
+fn code_chunk_get(values: ChunkedCode, index: Int) -> Array[UInt8] {
+    if index < 0 || index >= values.chunk_count { return [] }
+    let page_index: Int = index / 128
+    let chunk_index: Int = index % 128
+    let page: Array[Array[UInt8]] = unwrap_or(array_get(values.pages, page_index), [])
+    return unwrap_or(array_get(page, chunk_index), [])
+}
+
+fn code_chunk_set(values: ChunkedCode, index: Int, chunk: Array[UInt8]) -> Result[ChunkedCode, String] {
+    if index < 0 || index >= values.chunk_count { return err("dynamic backend: code chunk index is out of range") }
+    let page_index: Int = index / 128
+    let chunk_index: Int = index % 128
+    let page: Array[Array[UInt8]] = unwrap_or(array_get(values.pages, page_index), [])
+    let updated_page: Result[Array[Array[UInt8]], String] = array_set(page, chunk_index, chunk)
+    if is_err(updated_page) { return err(unwrap_or(result_error(updated_page), "dynamic backend: cannot update code page")) }
+    let updated_pages: Result[Array[Array[Array[UInt8]]], String] = array_set(values.pages, page_index, result_unwrap(updated_page))
+    if is_err(updated_pages) { return err(unwrap_or(result_error(updated_pages), "dynamic backend: cannot update code pages")) }
+    return ok(ChunkedCode{ pages: result_unwrap(updated_pages), chunk_count: values.chunk_count, length: values.length })
+}
+
 fn new_label(state: EmitState) -> LabelState {
-    let label: Int = len(state.assembler.labels)
-    let labels: Array[Int] = array_push(state.assembler.labels, -1)
+    let label: Int = state.assembler.labels.length
+    let labels: ChunkedInts = chunked_int_push(state.assembler.labels, -1)
     return LabelState{ state: state_with_labels(state, labels), label: label }
 }
 
 fn bind_label(state: EmitState, label: Int) -> Result[EmitState, String] {
-    if label < 0 || label >= len(state.assembler.labels) {
-        return err("dynamic backend: label " + str(label) + " was already bound or does not exist (position -2, count " + str(len(state.assembler.labels)) + ", code " + str(state.assembler.code_length) + ", function '" + state.env.current_function + "')")
+    if label < 0 || label >= state.assembler.labels.length {
+        return err("dynamic backend: label " + str(label) + " was already bound or does not exist (position -2, count " + str(state.assembler.labels.length) + ", code " + str(state.assembler.code_length) + ", function '" + state.env.current_function + "')")
     }
-    let position: Int = unwrap_or(array_get(state.assembler.labels, label), -2)
+    let position: Int = chunked_int_get(state.assembler.labels, label)
     if position != -1 {
-        return err("dynamic backend: label " + str(label) + " was already bound or does not exist (position " + str(position) + ", count " + str(len(state.assembler.labels)) + ")")
+        return err("dynamic backend: label " + str(label) + " was already bound or does not exist (position " + str(position) + ", count " + str(state.assembler.labels.length) + ")")
     }
-    let updated: Result[Array[Int], String] = array_set(state.assembler.labels, label, state.assembler.code_length)
-    if is_err(updated) {
-        return err(unwrap_or(result_error(updated), "dynamic backend: cannot bind label"))
-    }
+    let updated: Result[ChunkedInts, String] = chunked_int_set(state.assembler.labels, label, state.assembler.code_length)
+    if is_err(updated) { return err(unwrap_or(result_error(updated), "dynamic backend: cannot bind label")) }
     return ok(state_with_labels(state, result_unwrap(updated)))
 }
 
@@ -404,7 +667,7 @@ fn emit_jump(state: EmitState, label: Int, conditional: Bool, condition: UInt8) 
     let position: Int = state.assembler.code_length + len(instruction)
     instruction = array_concat(instruction, [u8(0), u8(0), u8(0), u8(0)])
     let updated: EmitState = append_code(state, instruction)
-    return state_with_jumps(updated, array_push(updated.assembler.jumps, JumpPatch{ label: label, position: position, function: state.env.current_function }))
+    return state_with_jumps(updated, chunked_jump_push(updated.assembler.jumps, JumpPatch{ label: label, position: position, function: state.env.current_function }))
 }
 
 fn emit_call(state: EmitState, name: String) -> Result[EmitState, String] {
@@ -412,13 +675,13 @@ fn emit_call(state: EmitState, name: String) -> Result[EmitState, String] {
     if is_none(label) { return err("dynamic backend: unknown function '" + name + "'") }
     let position: Int = state.assembler.code_length + 1
     let updated: EmitState = append_code(state, [u8(232), u8(0), u8(0), u8(0), u8(0)])
-    return ok(state_with_jumps(updated, array_push(updated.assembler.jumps, JumpPatch{ label: unwrap_or(label, -1), position: position, function: state.env.current_function })))
+    return ok(state_with_jumps(updated, chunked_jump_push(updated.assembler.jumps, JumpPatch{ label: unwrap_or(label, -1), position: position, function: state.env.current_function })))
 }
 
 fn emit_label_call(state: EmitState, label: Int) -> EmitState {
     let position: Int = state.assembler.code_length + 1
     let updated: EmitState = append_code(state, [u8(232), u8(0), u8(0), u8(0), u8(0)])
-    return state_with_jumps(updated, array_push(updated.assembler.jumps, JumpPatch{ label: label, position: position, function: state.env.current_function }))
+    return state_with_jumps(updated, chunked_jump_push(updated.assembler.jumps, JumpPatch{ label: label, position: position, function: state.env.current_function }))
 }
 
 fn emit_move_arg(state: EmitState, index: Int) -> Result[EmitState, String] {
@@ -575,6 +838,25 @@ fn emit_string_concat_call(state: EmitState) -> EmitState {
     return emit_label_call(state_with_string_concat_used(moved), moved.assembler.string_concat_label)
 }
 
+fn emit_heap_alloc(state: EmitState) -> EmitState {
+    // rdi=requested bytes; return a 16-byte-aligned block from the process
+    // break. A shared heap avoids one page mapping per small runtime object.
+    let mut current: EmitState = append_code(state, [
+        u8(72), u8(137), u8(254), u8(184), u8(12), u8(0), u8(0), u8(0), u8(72), u8(49), u8(255), u8(15), u8(5),
+        u8(72), u8(137), u8(194), u8(72), u8(131), u8(198), u8(15)
+    ])
+    current = emit_jump(current, current.env.trap_label, true, u8(130))
+    current = append_code(current, [
+        u8(72), u8(129), u8(230), u8(240), u8(255), u8(255), u8(255), u8(72), u8(1), u8(214)
+    ])
+    current = emit_jump(current, current.env.trap_label, true, u8(130))
+    current = append_code(current, [
+        u8(72), u8(137), u8(247), u8(184), u8(12), u8(0), u8(0), u8(0), u8(15), u8(5), u8(72), u8(57), u8(248)
+    ])
+    current = emit_jump(current, current.env.trap_label, true, u8(133))
+    return append_code(current, [u8(72), u8(137), u8(208)])
+}
+
 fn emit_string_concat_runtime(state: EmitState) -> Result[EmitState, String] {
     let bound: Result[EmitState, String] = bind_label(state, state.assembler.string_concat_label)
     if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind String runtime")) }
@@ -586,16 +868,8 @@ fn emit_string_concat_runtime(state: EmitState) -> Result[EmitState, String] {
         u8(76), u8(137), u8(245), u8(77), u8(1), u8(254)
     ])
     current = emit_jump(current, current.env.trap_label, true, u8(128))
-    current = append_code(current, [
-        u8(76), u8(137), u8(247), u8(72), u8(131), u8(199), u8(8),
-        u8(72), u8(137), u8(254), u8(72), u8(49), u8(255),
-        u8(184), u8(9), u8(0), u8(0), u8(0),
-        u8(186), u8(3), u8(0), u8(0), u8(0),
-        u8(65), u8(186), u8(34), u8(0), u8(0), u8(0),
-        u8(65), u8(184), u8(255), u8(255), u8(255), u8(255),
-        u8(69), u8(49), u8(201), u8(15), u8(5), u8(72), u8(133), u8(192)
-    ])
-    current = emit_jump(current, current.env.trap_label, true, u8(136))
+    current = append_code(current, [u8(76), u8(137), u8(247), u8(72), u8(131), u8(199), u8(8)])
+    current = emit_heap_alloc(current)
     current = append_code(current, [
         u8(72), u8(137), u8(195), u8(76), u8(137), u8(51),
         u8(77), u8(141), u8(100), u8(36), u8(8), u8(76), u8(137), u8(230), u8(72), u8(141), u8(123), u8(8),
@@ -730,13 +1004,8 @@ fn emit_array_alloc_runtime(state: EmitState) -> Result[EmitState, String] {
     current = emit_jump(current, current.env.trap_label, true, u8(128))
     current = append_code(current, [u8(72), u8(193), u8(224), u8(3)])
     current = emit_jump(current, current.env.trap_label, true, u8(128))
-    current = append_code(current, [
-        u8(72), u8(137), u8(199), u8(72), u8(137), u8(254), u8(72), u8(49), u8(255),
-        u8(186), u8(3), u8(0), u8(0), u8(0), u8(65), u8(186), u8(34), u8(0), u8(0), u8(0),
-        u8(65), u8(184), u8(255), u8(255), u8(255), u8(255), u8(69), u8(49), u8(201),
-        u8(184), u8(9), u8(0), u8(0), u8(0), u8(15), u8(5), u8(72), u8(133), u8(192)
-    ])
-    current = emit_jump(current, current.env.trap_label, true, u8(136))
+    current = append_code(current, [u8(72), u8(137), u8(199)])
+    current = emit_heap_alloc(current)
     return ok(append_code(current, [u8(72), u8(137), u8(40), u8(93), u8(91), u8(195)]))
 }
 
@@ -1053,12 +1322,9 @@ fn emit_box_alloc_runtime(state: EmitState) -> Result[EmitState, String] {
     if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind Option/Result allocator")) }
     let mut current: EmitState = append_code(result_unwrap(bound), [
         u8(83), u8(85), u8(72), u8(137), u8(253), u8(72), u8(137), u8(243),
-        u8(72), u8(49), u8(255), u8(72), u8(190), u8(16), u8(0), u8(0), u8(0), u8(0), u8(0), u8(0), u8(0),
-        u8(186), u8(3), u8(0), u8(0), u8(0), u8(65), u8(186), u8(34), u8(0), u8(0), u8(0),
-        u8(65), u8(184), u8(255), u8(255), u8(255), u8(255), u8(69), u8(49), u8(201),
-        u8(184), u8(9), u8(0), u8(0), u8(0), u8(15), u8(5), u8(72), u8(133), u8(192)
+        u8(72), u8(199), u8(199), u8(16), u8(0), u8(0), u8(0)
     ])
-    current = emit_jump(current, current.env.trap_label, true, u8(136))
+    current = emit_heap_alloc(current)
     return ok(append_code(current, [u8(72), u8(137), u8(24), u8(72), u8(137), u8(104), u8(8), u8(93), u8(91), u8(195)]))
 }
 
@@ -1071,13 +1337,8 @@ fn emit_string_alloc_runtime(state: EmitState) -> Result[EmitState, String] {
         u8(72), u8(137), u8(240), u8(72), u8(131), u8(192), u8(8)
     ])
     current = emit_jump(current, current.env.trap_label, true, u8(128))
-    current = append_code(current, [
-        u8(72), u8(137), u8(198), u8(72), u8(49), u8(255),
-        u8(186), u8(3), u8(0), u8(0), u8(0), u8(65), u8(186), u8(34), u8(0), u8(0), u8(0),
-        u8(65), u8(184), u8(255), u8(255), u8(255), u8(255), u8(69), u8(49), u8(201),
-        u8(184), u8(9), u8(0), u8(0), u8(0), u8(15), u8(5), u8(72), u8(133), u8(192)
-    ])
-    current = emit_jump(current, current.env.trap_label, true, u8(136))
+    current = append_code(current, [u8(72), u8(137), u8(199)])
+    current = emit_heap_alloc(current)
     current = append_code(current, [
         u8(73), u8(137), u8(196), u8(76), u8(137), u8(40),
         u8(72), u8(141), u8(120), u8(8), u8(76), u8(137), u8(246), u8(76), u8(137), u8(233), u8(243), u8(164),
@@ -1370,13 +1631,8 @@ fn emit_bytes_from_array_runtime(state: EmitState) -> Result[EmitState, String] 
         u8(72), u8(137), u8(232), u8(72), u8(131), u8(192), u8(8)
     ])
     current = emit_jump(current, current.env.trap_label, true, u8(128))
-    current = append_code(current, [
-        u8(72), u8(137), u8(198), u8(72), u8(49), u8(255),
-        u8(186), u8(3), u8(0), u8(0), u8(0), u8(65), u8(186), u8(34), u8(0), u8(0), u8(0),
-        u8(65), u8(184), u8(255), u8(255), u8(255), u8(255), u8(69), u8(49), u8(201),
-        u8(184), u8(9), u8(0), u8(0), u8(0), u8(15), u8(5), u8(72), u8(133), u8(192)
-    ])
-    current = emit_jump(current, current.env.trap_label, true, u8(136))
+    current = append_code(current, [u8(72), u8(137), u8(199)])
+    current = emit_heap_alloc(current)
     current = append_code(current, [u8(73), u8(137), u8(198), u8(76), u8(137), u8(40), u8(69), u8(49), u8(255)])
     let loop_label: LabelState = new_label(current)
     let done_label: LabelState = new_label(loop_label.state)
@@ -1742,7 +1998,7 @@ fn emit_json_string_runtime(state: EmitState) -> Result[EmitState, String] {
     current = emit_jump(current, leading_next.label, true, u8(132))
     current = append_code(current, [u8(60), u8(34)])
     current = emit_jump(current, failure.label, true, u8(133))
-    current = append_code(current, [u8(73), u8(255), u8(198), u8(69), u8(49), u8(255)])
+    current = append_code(current, [u8(73), u8(255), u8(198), u8(76), u8(137), u8(245), u8(77), u8(49), u8(255)])
     current = emit_jump(current, scan.label, false, u8(0))
     let bound_leading: Result[EmitState, String] = bind_label(current, leading_next.label)
     if is_err(bound_leading) { return err(unwrap_or(result_error(bound_leading), "dynamic backend: cannot bind JSON String leading whitespace")) }
@@ -1763,7 +2019,7 @@ fn emit_json_string_runtime(state: EmitState) -> Result[EmitState, String] {
     current = emit_jump(current, scan.label, false, u8(0))
     let bound_scan_escape: Result[EmitState, String] = bind_label(current, scan_escape.label)
     if is_err(bound_scan_escape) { return err(unwrap_or(result_error(bound_scan_escape), "dynamic backend: cannot bind JSON String escape scan")) }
-    current = append_code(result_unwrap(bound_scan_escape), [u8(73), u8(255), u8(199)])
+    current = append_code(result_unwrap(bound_scan_escape), [u8(73), u8(255), u8(198)])
     current = append_code(current, [u8(77), u8(57), u8(238)])
     current = emit_jump(current, failure.label, true, u8(131))
     current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8)])
@@ -1812,9 +2068,9 @@ fn emit_json_string_runtime(state: EmitState) -> Result[EmitState, String] {
     current = emit_jump(current, trailing.label, false, u8(0))
     let bound_allocate: Result[EmitState, String] = bind_label(current, allocate.label)
     if is_err(bound_allocate) { return err(unwrap_or(result_error(bound_allocate), "dynamic backend: cannot bind JSON String allocation")) }
-    current = append_code(result_unwrap(bound_allocate), [u8(76), u8(137), u8(231), u8(72), u8(131), u8(199), u8(8), u8(76), u8(137), u8(254)])
+    current = append_code(result_unwrap(bound_allocate), [u8(76), u8(137), u8(226), u8(72), u8(1), u8(234), u8(72), u8(141), u8(122), u8(8), u8(76), u8(137), u8(254)])
     current = emit_label_call(current, host_string_alloc_label(current))
-    current = append_code(current, [u8(72), u8(137), u8(195), u8(73), u8(199), u8(198), u8(1), u8(0), u8(0), u8(0), u8(69), u8(49), u8(255)])
+    current = append_code(current, [u8(72), u8(137), u8(195), u8(73), u8(137), u8(238), u8(77), u8(49), u8(255)])
     current = emit_jump(current, fill.label, false, u8(0))
     let bound_fill: Result[EmitState, String] = bind_label(current, fill.label)
     if is_err(bound_fill) { return err(unwrap_or(result_error(bound_fill), "dynamic backend: cannot bind JSON String fill")) }
@@ -2976,11 +3232,9 @@ fn emit_string_chars_runtime(state: EmitState) -> Result[EmitState, String] {
     current = emit_label_call(current, current.assembler.array_alloc_label)
     current = append_code(current, [
         u8(72), u8(137), u8(195), u8(76), u8(137), u8(254), u8(72), u8(193), u8(230), u8(4), u8(72), u8(255), u8(198),
-        u8(72), u8(49), u8(255), u8(186), u8(3), u8(0), u8(0), u8(0), u8(65), u8(186), u8(34), u8(0), u8(0), u8(0),
-        u8(65), u8(184), u8(255), u8(255), u8(255), u8(255), u8(69), u8(49), u8(201), u8(184), u8(9), u8(0), u8(0), u8(0),
-        u8(15), u8(5), u8(72), u8(133), u8(192)
+        u8(72), u8(137), u8(247)
     ])
-    current = emit_jump(current, current.env.trap_label, true, u8(136))
+    current = emit_heap_alloc(current)
     current = append_code(current, [u8(72), u8(137), u8(197), u8(73), u8(137), u8(232), u8(77), u8(49), u8(246), u8(77), u8(49), u8(255)])
     let fill_loop: LabelState = new_label(current)
     let fill_one: LabelState = new_label(fill_loop.state)
@@ -3438,7 +3692,10 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
             if result_unwrap(json_bool(field(constant, "bool"))) { return ok(emit_int(state, 1)) }
             return ok(emit_int(state, 0))
         }
-        if constant_kind == "string" { return ok(emit_string(state, text(field(constant, "string")))) }
+        if constant_kind == "string" {
+            let value: String = text(field(constant, "string"))
+            return ok(emit_string(state, value))
+        }
     }
     let kind: String = text(field(expression, "kind"))
     if kind == "int" {
@@ -3858,7 +4115,7 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         let updated: EmitState = result_unwrap(allocated)
         let init: Json = field(statement, "init")
         let type_name: String = expr_type(init)
-        if state.env.in_function && !is_supported_type(state.env, type_name) { return err("dynamic backend: function local has unsupported type '" + type_name + "'") }
+        if state.env.in_function && !is_supported_type(state.env, type_name) { return err("dynamic backend: function '" + state.env.current_function + "' local '" + name + "' has unsupported type '" + type_name + "'") }
         let mut generated: Result[EmitState, String] = err("dynamic backend: initializer was not lowered")
         generated = emit_expression(updated, init)
         if is_err(generated) { return err(expression_error(generated)) }
@@ -3929,7 +4186,9 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
     if kind == "if" {
         let else_label: LabelState = new_label(state)
         let condition: Result[EmitState, String] = emit_expression(else_label.state, field(statement, "cond"))
-        if is_err(condition) { return err(expression_error(condition)) }
+        if is_err(condition) {
+            return err(expression_error(condition))
+        }
         let tested: EmitState = append_code(result_unwrap(condition), [u8(72), u8(133), u8(192)])
         let guarded: EmitState = emit_jump(tested, else_label.label, true, u8(132))
         let then_state: Result[EmitState, String] = compile_statements(guarded, field(statement, "then"))
@@ -4072,25 +4331,56 @@ fn compile_statements(state: EmitState, statements: Json) -> Result[EmitState, S
 }
 
 fn patch_code(state: EmitState, position: Int, bytes: Array[UInt8]) -> Result[EmitState, String] {
+    if position < 0 || position + len(bytes) > state.code_pages.length { return err("dynamic backend: code patch out of bounds") }
+    let patches: ChunkedCodePatches = chunked_code_patch_push(state.code_patches, CodePatch{ position: position, bytes: bytes })
+    return ok(EmitState{ assembler: state.assembler, env: state.env, code_patches: patches, code_pages: state.code_pages })
+}
+
+fn apply_code_patches(state: EmitState) -> Result[EmitState, String] {
     let mut current: EmitState = state
-    for offset in array_indices(bytes) {
-        let replacement: UInt8 = unwrap_or(array_get(bytes, offset), u8(0))
-        let updated: Result[Array[UInt8], String] = array_set(current.assembler.code, position + offset, replacement)
-        if is_err(updated) { return err(unwrap_or(result_error(updated), "dynamic backend: code patch out of bounds")) }
-        current = state_with_code(current, result_unwrap(updated))
+    let patch_count: Int = current.code_patches.length
+    let mut patch_index: Int = 0
+    while patch_index < patch_count {
+        let patch: CodePatch = unwrap_or(chunked_code_patch_get(current.code_patches, patch_index), CodePatch{ position: -1, bytes: [] })
+        if patch.position < 0 || patch.position + len(patch.bytes) > current.code_pages.length { return err("dynamic backend: invalid deferred code patch") }
+        let mut offset: Int = 0
+        while offset < len(patch.bytes) {
+            let absolute_position: Int = patch.position + offset
+            let chunk_index: Int = absolute_position / 256
+            let local_position: Int = absolute_position % 256
+            let chunk: Array[UInt8] = code_chunk_get(current.code_pages, chunk_index)
+            if len(chunk) == 0 || local_position >= len(chunk) { return err("dynamic backend: deferred patch has no code chunk") }
+            let mut updated_chunk: Array[UInt8] = chunk
+            let mut segment_length: Int = 0
+            while offset + segment_length < len(patch.bytes) && local_position + segment_length < len(chunk) {
+                let replacement: UInt8 = unwrap_or(array_get(patch.bytes, offset + segment_length), u8(0))
+                let updated: Result[Array[UInt8], String] = array_set(updated_chunk, local_position + segment_length, replacement)
+                if is_err(updated) { return err(unwrap_or(result_error(updated), "dynamic backend: deferred code chunk patch failed")) }
+                updated_chunk = result_unwrap(updated)
+                segment_length = segment_length + 1
+            }
+            let pages: Result[ChunkedCode, String] = code_chunk_set(current.code_pages, chunk_index, updated_chunk)
+            if is_err(pages) { return err(unwrap_or(result_error(pages), "dynamic backend: cannot apply deferred code patch")) }
+            current = EmitState{ assembler: current.assembler, env: current.env, code_patches: current.code_patches, code_pages: result_unwrap(pages) }
+            offset = offset + segment_length
+        }
+        patch_index = patch_index + 1
     }
     return ok(current)
 }
 
 fn finalize_jumps(state: EmitState) -> Result[EmitState, String] {
     let mut current: EmitState = state
-    for index in array_indices(current.assembler.jumps) {
-        let patch: JumpPatch = unwrap_or(array_get(current.assembler.jumps, index), JumpPatch{ label: -1, position: -1, function: "" })
-        let target: Int = unwrap_or(array_get(current.assembler.labels, patch.label), -1)
-        if target < 0 { return err("dynamic backend: unresolved label " + str(patch.label) + " at patch " + str(patch.position) + " in function '" + patch.function + "' (label count " + str(len(current.assembler.labels)) + ")") }
+    let jump_count: Int = current.assembler.jumps.length
+    let mut index: Int = 0
+    while index < jump_count {
+        let patch: JumpPatch = unwrap_or(chunked_jump_get(current.assembler.jumps, index), JumpPatch{ label: -1, position: -1, function: "" })
+        let target: Int = chunked_int_get(current.assembler.labels, patch.label)
+        if target < 0 { return err("dynamic backend: unresolved label " + str(patch.label) + " at patch " + str(patch.position) + " in function '" + patch.function + "' (label count " + str(current.assembler.labels.length) + ")") }
         let updated: Result[EmitState, String] = patch_code(current, patch.position, i32_bytes(target - patch.position - 4))
         if is_err(updated) { return err(unwrap_or(result_error(updated), "dynamic backend: jump patch failed")) }
         current = result_unwrap(updated)
+        index = index + 1
     }
     return ok(current)
 }
@@ -4145,9 +4435,9 @@ fn emit_dynamic_elf(code: Array[UInt8], data: Array[UInt8]) -> Bytes {
 }
 
 fn new_dynamic_state() -> EmitState {
-    let assembler: Assembler = Assembler{ code: [], code_chunks: [], code_length: 0, data: [], data_by_text: {}, string_data_by_text: {}, labels: [], jumps: [], data_patches: [], frame_patch: -1, string_concat_label: -1, string_concat_used: false, array_alloc_label: -1, array_push_label: -1, array_concat_label: -1, array_runtime_used: false, box_alloc_label: -1, box_runtime_used: false, host_runtime_used: false }
+    let assembler: Assembler = Assembler{ code: [], code_chunks: [], code_length: 0, data: [], data_by_text: {}, string_data_by_text: {}, labels: ChunkedInts{ pages: [], length: 0 }, jumps: ChunkedJumpPatches{ pages: [], length: 0 }, data_patches: [], frame_patch: -1, string_concat_label: -1, string_concat_used: false, array_alloc_label: -1, array_push_label: -1, array_concat_label: -1, array_runtime_used: false, box_alloc_label: -1, box_runtime_used: false, host_runtime_used: false }
     let env: CompileEnv = CompileEnv{ slots: {}, static_values: {}, struct_fields: {}, function_labels: {}, function_returns: {}, next_slot: 0, breaks: [], continues: [], end_label: -1, trap_label: -1, buffer_offset: 1, in_function: false, current_function: "" }
-    return EmitState{ assembler: assembler, env: env }
+    return EmitState{ assembler: assembler, env: env, code_patches: ChunkedCodePatches{ pages: [], length: 0 }, code_pages: ChunkedCode{ pages: [], chunk_count: 0, length: 0 } }
 }
 
 fn count_slots(statements: Json) -> Int {
@@ -4184,7 +4474,7 @@ fn count_function_slots(statements: Json, struct_fields: Map[String, Json]) -> R
         let kind: String = text(field(statement, "kind"))
         if kind == "let" || kind == "const" {
             let type_name: String = expr_type(field(statement, "init"))
-            if !is_scalar_type(type_name) && !map_contains_key(struct_fields, type_name) { return err("dynamic backend: function local has unsupported type '" + type_name + "'") }
+            if !is_scalar_type(type_name) && !map_contains_key(struct_fields, type_name) { return err("dynamic backend: function local '" + text(field(statement, "name")) + "' has unsupported type '" + type_name + "'") }
             total = total + 1
         }
         if kind == "if" {
@@ -4276,37 +4566,40 @@ fn prepare_function_labels(state: EmitState, functions: Json) -> Result[EmitStat
 
 fn emit_function_bodies(state: EmitState, functions: Json, index: Int, base_env: CompileEnv) -> Result[EmitState, String] {
     let count: Int = result_unwrap(json_array_len(functions))
-    if index >= count { return ok(state_with_env(state, base_env)) }
-    let function: Json = result_unwrap(json_array_get(functions, index))
-    let name: String = text(field(function, "name"))
-    if name == "main" {
-        return emit_function_bodies(state, functions, index + 1, base_env)
+    let mut current: EmitState = state
+    let mut current_index: Int = index
+    while current_index < count {
+            let function: Json = result_unwrap(json_array_get(functions, current_index))
+            let name: String = text(field(function, "name"))
+        if name != "main" {
+            let label: Int = unwrap_or(map_get(base_env.function_labels, name), -1)
+            let bound: Result[EmitState, String] = bind_label(current, label)
+            if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind function label")) }
+            let parameters: Json = field(function, "params")
+            let parameter_count: Int = result_unwrap(json_array_len(parameters))
+            let locals: Result[Int, String] = count_function_slots(field(function, "body"), base_env.struct_fields)
+            if is_err(locals) { return err(unwrap_or(result_error(locals), "dynamic backend: function local scan failed")) }
+            let next_slot: Int = parameter_count * 8 + result_unwrap(locals) * 8
+            let buffer_offset: Int = next_slot + 1
+            let function_env: CompileEnv = CompileEnv{ slots: parameter_slots(parameters), static_values: {}, struct_fields: base_env.struct_fields, function_labels: base_env.function_labels, function_returns: base_env.function_returns, next_slot: parameter_count * 8, breaks: [], continues: [], end_label: base_env.end_label, trap_label: base_env.trap_label, buffer_offset: buffer_offset, in_function: true, current_function: name }
+            let framed: EmitState = emit_function_frame(state_with_env(result_unwrap(bound), function_env), align_frame(buffer_offset + 63))
+            let mut stored: Result[EmitState, String] = ok(framed)
+            let mut parameter_index: Int = 0
+            while parameter_index < parameter_count {
+                let parameter: Json = result_unwrap(json_array_get(parameters, parameter_index))
+                let slot: Int = unwrap_or(map_get(function_env.slots, text(field(parameter, "name"))), -1)
+                let next: Result[EmitState, String] = emit_store_arg(result_unwrap(stored), parameter_index, slot)
+                if is_err(next) { return err(unwrap_or(result_error(next), "dynamic backend: parameter storage failed")) }
+                stored = next
+                parameter_index = parameter_index + 1
+            }
+            let body: Result[EmitState, String] = compile_statements(result_unwrap(stored), field(function, "body"))
+            if is_err(body) { return err(compile_error(body)) }
+            current = append_code(result_unwrap(body), [u8(201), u8(195)])
+        }
+        current_index = current_index + 1
     }
-    let label: Int = unwrap_or(map_get(base_env.function_labels, name), -1)
-    let bound: Result[EmitState, String] = bind_label(state, label)
-    if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind function label")) }
-    let parameters: Json = field(function, "params")
-    let parameter_count: Int = result_unwrap(json_array_len(parameters))
-    let locals: Result[Int, String] = count_function_slots(field(function, "body"), base_env.struct_fields)
-    if is_err(locals) { return err(unwrap_or(result_error(locals), "dynamic backend: function local scan failed")) }
-    let next_slot: Int = parameter_count * 8 + result_unwrap(locals) * 8
-    let buffer_offset: Int = next_slot + 1
-    let function_env: CompileEnv = CompileEnv{ slots: parameter_slots(parameters), static_values: {}, struct_fields: base_env.struct_fields, function_labels: base_env.function_labels, function_returns: base_env.function_returns, next_slot: parameter_count * 8, breaks: [], continues: [], end_label: base_env.end_label, trap_label: base_env.trap_label, buffer_offset: buffer_offset, in_function: true, current_function: name }
-    let framed: EmitState = emit_function_frame(state_with_env(result_unwrap(bound), function_env), align_frame(buffer_offset + 63))
-    let mut stored: Result[EmitState, String] = ok(framed)
-    let mut parameter_index: Int = 0
-    while parameter_index < parameter_count {
-        let parameter: Json = result_unwrap(json_array_get(parameters, parameter_index))
-        let slot: Int = unwrap_or(map_get(function_env.slots, text(field(parameter, "name"))), -1)
-        let next: Result[EmitState, String] = emit_store_arg(result_unwrap(stored), parameter_index, slot)
-        if is_err(next) { return err(unwrap_or(result_error(next), "dynamic backend: parameter storage failed")) }
-        stored = next
-        parameter_index = parameter_index + 1
-    }
-    let body: Result[EmitState, String] = compile_statements(result_unwrap(stored), field(function, "body"))
-    if is_err(body) { return err(compile_error(body)) }
-    let returned: EmitState = append_code(result_unwrap(body), [u8(201), u8(195)])
-    return emit_function_bodies(returned, functions, index + 1, base_env)
+    return ok(state_with_env(current, base_env))
 }
 
 fn expression_uses_runtime(expression: Json, target: String) -> Bool {
@@ -4623,14 +4916,24 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     let trapped: Result[EmitState, String] = bind_label(normal, trap_label.label)
     if is_err(trapped) { return err(unwrap_or(result_error(trapped), "dynamic backend: cannot bind trap")) }
     let failed: EmitState = emit_exit(result_unwrap(trapped), u8(1))
-    let materialized: EmitState = materialize_code(failed)
-    let frame: Result[EmitState, String] = patch_code(materialized, materialized.assembler.frame_patch, i32_bytes(align_frame(materialized.env.buffer_offset + 63)))
+    let prepared_code: Result[EmitState, String] = prepare_code_pages(failed)
+    if is_err(prepared_code) { return err(unwrap_or(result_error(prepared_code), "dynamic backend: cannot prepare code chunks for patching")) }
+    let page_state: EmitState = result_unwrap(prepared_code)
+    let frame: Result[EmitState, String] = patch_code(page_state, page_state.assembler.frame_patch, i32_bytes(align_frame(page_state.env.buffer_offset + 63)))
     if is_err(frame) { return err(unwrap_or(result_error(frame), "dynamic backend: frame patch failed")) }
     let jumps: Result[EmitState, String] = finalize_jumps(result_unwrap(frame))
-    if is_err(jumps) { return err(unwrap_or(result_error(jumps), "dynamic backend: jump finalization failed")) }
+    if is_err(jumps) {
+        let message: String = unwrap_or(result_error(jumps), "dynamic backend: jump finalization failed")
+        return err(message)
+    }
     let data: Result[EmitState, String] = finalize_data(result_unwrap(jumps))
-    if is_err(data) { return err(unwrap_or(result_error(data), "dynamic backend: data finalization failed")) }
-    let result: EmitState = result_unwrap(data)
+    if is_err(data) {
+        let message: String = unwrap_or(result_error(data), "dynamic backend: data finalization failed")
+        return err(message)
+    }
+    let patched: Result[EmitState, String] = apply_code_patches(result_unwrap(data))
+    if is_err(patched) { return err(unwrap_or(result_error(patched), "dynamic backend: code patch application failed")) }
+    let result: EmitState = flatten_code_pages(result_unwrap(patched))
     return ok(emit_dynamic_elf(result.assembler.code, result.assembler.data))
 }
 

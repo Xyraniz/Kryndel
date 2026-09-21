@@ -644,7 +644,7 @@ func TestStage34KryndelDynamicBackendUnaryNot(t *testing.T) {
 	}
 }
 
-func TestStage35KryndelDynamicCompilerBootstrap(t *testing.T) {
+func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -709,6 +709,7 @@ func TestStage35KryndelDynamicCompilerBootstrap(t *testing.T) {
 	if d = r.run(); d != nil {
 		t.Fatalf("stage35 dynamic backend failed to compile source compiler KIR: %s", d.Message)
 	}
+	t.Logf("stage35 generated compiler ELF from %d-byte KIR", len(kir))
 	compilerELF, err := os.ReadFile(generatedCompiler)
 	if err != nil {
 		t.Fatalf("stage35 dynamic backend did not write compiler ELF: %v", err)
@@ -740,15 +741,82 @@ func TestStage35KryndelDynamicCompilerBootstrap(t *testing.T) {
 	if string(programOutput) != "hello from bootstrap\n" {
 		t.Fatalf("unexpected stage35 generated fixture output %q", programOutput)
 	}
+	t.Log("stage35 generated compiler compiled and ran the fixture")
+
+	frontendSource, err := os.ReadFile(compilerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frontendText := strings.ReplaceAll(string(frontendSource), "\r\n", "\n")
+	const backendImport = "import \"dynamic_backend\"\n"
+	if !strings.HasPrefix(frontendText, backendImport) {
+		t.Fatalf("source compiler no longer starts with expected backend import %q", backendImport)
+	}
+	backendSource, err := os.ReadFile(filepath.Join(selfhost, "dynamic_backend.kry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendText := strings.ReplaceAll(string(backendSource), "\r\n", "\n")
+	const elfImport = "import \"elf_backend\"\n"
+	if !strings.HasPrefix(backendText, elfImport) {
+		t.Fatalf("dynamic backend no longer starts with expected ELF backend import %q", elfImport)
+	}
+	elfSource, err := os.ReadFile(filepath.Join(selfhost, "elf_backend.kry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	elfText := strings.ReplaceAll(string(elfSource), "\r\n", "\n")
+	bundledCompilerSource := strings.TrimSuffix(elfText, "\n") + "\n\n" + strings.TrimPrefix(backendText, elfImport) + "\n\n" + strings.TrimPrefix(frontendText, backendImport)
+	bundledCompiler := filepath.Join(dir, "source-kir-compiler-bundle.kry")
+	if err := os.WriteFile(bundledCompiler, []byte(bundledCompilerSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("stage36 compiling %d-byte bundled compiler source", len(bundledCompilerSource))
+	secondCompiler := filepath.Join(dir, "second-source-kir-compiler")
+	secondCompilerOutput, err := exec.Command(generatedCompiler, bundledCompiler, secondCompiler).CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage36 generated compiler failed to compile the bundled frontend/backend source: %v; output: %s", err, secondCompilerOutput)
+	}
+	t.Log("stage36 generated second-level compiler ELF")
+	secondCompilerELF, err := os.ReadFile(secondCompiler)
+	if err != nil {
+		t.Fatalf("stage36 generated compiler did not write second-level compiler ELF: %v", err)
+	}
+	assertLinuxAMD64ELF(t, secondCompilerELF, "stage36 second-level source compiler")
+	if err := os.Chmod(secondCompiler, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secondProgram := filepath.Join(dir, "second-bootstrap-program")
+	secondOutput, err := exec.Command(secondCompiler, fixturePath, secondProgram).CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage36 second-level compiler failed to compile fixture: %v; output: %s", err, secondOutput)
+	}
+	secondProgramELF, err := os.ReadFile(secondProgram)
+	if err != nil {
+		t.Fatalf("stage36 second-level compiler did not write fixture ELF: %v", err)
+	}
+	assertLinuxAMD64ELF(t, secondProgramELF, "stage36 second-level generated fixture")
+	if err := os.Chmod(secondProgram, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secondProgramOutput, err := exec.Command(secondProgram).CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage36 second-level generated fixture failed: %v; output: %s", err, secondProgramOutput)
+	}
+	if string(secondProgramOutput) != "hello from bootstrap\n" {
+		t.Fatalf("unexpected stage36 second-level fixture output %q", secondProgramOutput)
+	}
+	t.Log("stage36 second-level compiler compiled and ran the fixture")
+
 	if err := os.WriteFile(invalidPath, []byte("match value { }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	invalidOutput, invalidErr := exec.Command(generatedCompiler, invalidPath, filepath.Join(dir, "invalid-output")).CombinedOutput()
+	invalidOutput, invalidErr := exec.Command(secondCompiler, invalidPath, filepath.Join(dir, "invalid-output")).CombinedOutput()
 	if invalidErr == nil {
-		t.Fatalf("stage35 generated compiler accepted invalid source: %s", invalidOutput)
+		t.Fatalf("stage36 second-level compiler accepted invalid source: %s", invalidOutput)
 	}
 	if !strings.Contains(string(invalidOutput), "unsupported statement") {
-		t.Fatalf("stage35 generated compiler returned an unexpected invalid-source diagnostic (exit %v): %s", invalidErr, invalidOutput)
+		t.Fatalf("stage36 second-level compiler returned an unexpected invalid-source diagnostic (exit %v): %s", invalidErr, invalidOutput)
 	}
 }
 

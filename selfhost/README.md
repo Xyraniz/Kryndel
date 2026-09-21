@@ -75,10 +75,12 @@ Stage 28 fixes the native `u8_array` runtime's loop bound, which previously comp
 
 Stage 34 fixes KIR emission for unary Boolean negation: `!` is now serialized as `!` instead of the fallback operator text `?`. Its regression lowers a small KIR program through `kir_backend.kry`, checks byte parity with the Go direct backend, and executes the ELF on Linux amd64. KIR documents also have a separate `MaxJSONBytes` limit (64 MiB by default); this is distinct from the 16 MiB limit for ordinary Kryndel strings.
 
-Stage 35 exercises the dynamic compiler bootstrap from the checked Go frontend: it emits KIR for `source_kir_compiler.kry`, runs `kir_backend.kry` under the host interpreter, validates the generated Linux amd64 ELF, then runs that compiler on a fixture and an invalid source file on Linux amd64. All artifacts are created in `t.TempDir()`. The source compiler KIR is about 56 MB, so the test raises only its host interpreter instruction and wall-time budgets. Reproduce it with:
+Stage 35 generates the first native source compiler from KIR emitted by the checked Go frontend. The host interpreter runs `kir_backend.kry` to produce a Linux amd64 ELF; that compiler then compiles and runs a fixture. This stage is exercised as the first half of the Stage 36 bootstrap regression. The source compiler KIR is about 63 MB, so the test raises only its host interpreter instruction and wall-time budgets.
+
+Stage 36 verifies a second compiler level. The generated Stage 35 compiler consumes a bundle containing `elf_backend.kry`, `dynamic_backend.kry`, and `source_kir_compiler.kry`, and emits a second Linux amd64 compiler ELF. That second compiler compiles and runs the fixture and rejects invalid source with the expected diagnostic. This proves that the generated compiler can compile a functional copy of its own frontend/backend without invoking the Go backend in that second-level compilation. It does not complete all self-hosting goals: module/import resolution and the other explicitly unsupported language and target features remain outstanding. Reproduce both levels on Linux amd64 with:
 
 ```text
-go test ./internal/kry -run '^TestStage35KryndelDynamicCompilerBootstrap$' -count=1 -timeout=12m -v
+go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v
 ```
 
-On non-Linux hosts, this test still parses the full KIR and generates and validates the compiler ELF, then skips only the Linux executable checks. A Windows run therefore does not establish that the generated compiler can compile its fixture; that leg must pass on Linux amd64 before this stage is considered complete.
+On non-Linux hosts, this test still emits KIR and validates the first compiler ELF, then skips Linux executable checks. A Windows run therefore does not establish either compiler's execution; both levels must pass on Linux amd64 before this stage is considered complete.
