@@ -14,7 +14,7 @@ Subnormal finite values are valid when produced by conversion or parsing, includ
 
 Maps and sets preserve insertion order. `map_keys`, `map_values`, `set_to_array`, display, and iteration return values in insertion order. Updating an existing map key does not move it. Removing and reinserting a key appends it at the new insertion point.
 
-Map and set membership uses the language equality relation recursively. Keys must be comparable and must not contain external handles. Float keys are not part of the stable key domain; use an integer or a canonical string for numeric keys. Duplicate map keys are rejected; duplicate set values are ignored.
+Map and set membership uses the language equality relation recursively. Keys must be comparable and must not contain external handles. Float keys are not part of the stable key domain; use an integer or a canonical string for numeric keys. Duplicate map keys update the earlier entry; duplicate set values are ignored.
 
 The implementation deliberately uses ordered persistent values instead of randomized hash-table iteration so output and compiler artifacts remain reproducible. This is a semantic guarantee, not an implementation accident.
 
@@ -27,3 +27,11 @@ A user-perceived grapheme such as `e\u0301`, `👩‍💻`, or `🇺🇳` may co
 Slicing and indexing never split the UTF-8 encoding of a code point. Invalid or out-of-range indices return the documented `Result`/`Option` error rather than producing malformed UTF-8. Case conversion follows the Unicode behavior of the standard library and may change the number of code points; it is not locale-sensitive. String comparison and equality compare valid UTF-8 code-point sequences by their binary UTF-8 representation, without normalization or locale collation.
 
 The differential tests in `internal/kry/float_unicode_differential_test.go` cover combining marks, emoji joined by zero-width joiners, regional indicators, embedded NULs, nested values, and native/interpreter parity.
+
+## Boundary contract
+
+The language accepts finite IEEE-754 binary64 values, including subnormals and both signed zeroes. NaN and infinities are rejected at conversion boundaries. Equality treats `-0` and `+0` as equal, display retains `-0`, and ordering is defined only for finite values. Conversion APIs report overflow and precision loss explicitly and never consult the process locale.
+
+Collections are insertion ordered: map updates retain the original key position, reinsertion appends, and sets retain the first occurrence order. Structural equality is type exact, duplicate map literals update an existing key, and Float is not a map or set key.
+
+String APIs use code-point indices. Bytes, code points, and grapheme clusters are separate concepts: `string_to_bytes` returns UTF-8 bytes, `string_chars` returns code-point strings, and `substring` accepts code-point boundaries. The runtime preserves unnormalized input, combining marks, emoji ZWJ sequences, and regional indicators without claiming grapheme-cluster semantics.

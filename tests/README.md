@@ -1,16 +1,20 @@
 # Kryndel test suite
 
-La cobertura funcional y de seguridad vive en `internal/kry/toolchain_test.go`, una suite nativa de Go que prueba lexer, parser, checker, control de flujo, Copy recursivo, módulos, sandbox, artefactos, formatter, REPL/runtime y límites. Esto evita depender de Bash, GNU coreutils, Python, C o un intérprete externo para validar el proyecto.
+Functional and security coverage lives in `internal/kry/toolchain_test.go`, a native Go suite covering the lexer, parser, checker, control flow, recursive `Copy`, modules, sandbox, artifacts, formatter, REPL/runtime, and limits. This avoids relying on Bash, GNU coreutils, Python, C, or an external interpreter to validate the project.
 
-Los comandos de verificación son:
+Verification commands are:
 
 ```text
-make test          # build, ejemplos y pruebas Go
-make test-static   # gofmt, go vet y pruebas limpias
-make test-race     # detector de races de Go
-make fuzz-smoke    # corpus determinista acotado
-make coverage      # perfil de cobertura
-make release       # binarios cruzados y SHA256SUMS
+make test          # build, examples, and Go tests
+make test-static   # gofmt, go vet, and clean tests
+make test-race     # Go race detector
+make fuzz-smoke    # bounded deterministic corpus
+make coverage      # coverage profile
+make benchmark     # Go benchmarks
+make verify-fast   # fast complete verification matrix
+make verify-full   # fast checks plus native, parity, race, coverage, and benchmarks
+make verify        # alias for verify-full
+make release       # cross-compiled binaries and SHA256SUMS
 ```
 
-Las pruebas de proceso siguen siendo deliberadamente pequeñas y se ejecutan desde la CLI sólo cuando prueban una frontera pública que no puede observarse de forma más precisa dentro del paquete. Los errores deben ser deterministas, acotados y acompañados por una aserción negativa; un timeout es un fallo, no un resultado esperado.
+Process tests remain deliberately small and run from the CLI only when they exercise a public boundary that cannot be observed more precisely inside the package. Errors must be deterministic, bounded, and accompanied by a negative assertion; a timeout is a failure, not an expected result.

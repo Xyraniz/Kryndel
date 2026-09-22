@@ -18,16 +18,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22.x'
-      - name: Build and run integration tests
-        run: make test
-      - name: Run static checks
-        run: make test-static
-      - name: Run bounded fuzz smoke checks
-        run: make fuzz-smoke
-      - name: Generate coverage report
-        run: make coverage
-      - name: Audit documentation
-        run: make check-docs
+      - name: Run complete verification matrix
+        run: make verify
+        timeout-minutes: 45
 
   race:
     name: Go race detector

@@ -145,3 +145,13 @@ match poly_dispatch("render", "hello") {
 ## Static checking
 
 `kry check file.kry` lexes, parses, resolves imports, and type-checks the complete program without executing user code. `kry run` and `kry build` perform the same validation before evaluation or artifact creation. Unknown type names, invalid annotations, immutable assignments, bad conditions, unsafe operators, invalid indexing expressions, and builtin signature errors therefore fail before user output can occur.
+
+## Numeric, collection, and Unicode contracts
+
+`Float` is an IEEE-754 binary64 value with a finite-value boundary. NaN and positive or negative infinity are rejected by parsing and conversion builtins with a typed error. Positive and negative zero compare equal, while formatting preserves the sign as `-0`; subnormal values are accepted and round-trip through the binary64 representation. Ordering is the IEEE numeric order for finite values, and every conversion that can overflow or lose precision is explicit. Formatting uses locale-independent decimal syntax.
+
+Maps preserve insertion order. Updating an existing key keeps its original position; removing and reinserting a key appends it. Sets preserve the insertion order of their first occurrence. Map and set equality is structural and type-exact, keys use the language equality contract, and duplicate map keys update the earlier entry. Float keys are rejected because non-finite values and signed-zero edge cases would make hashing ambiguous. Hashing is an implementation detail and never determines iteration order; programs that emit artifacts or stdout must use explicit sorting when they need a different order.
+
+String length, indexing, `string_chars`, and `substring` use Unicode code-point indices, not bytes or grapheme clusters. `string_to_bytes` exposes UTF-8 bytes explicitly. The runtime does not normalize strings, preserves combining marks and zero-width joiners, performs case conversion only through explicit builtins, rejects invalid indices, and never promises that a code point is a user-perceived character. Slicing is code-point safe and cannot split a UTF-8 encoding; grapheme-cluster segmentation remains the responsibility of a higher-level library.
+
+These contracts are covered by the Float boundary, ordered collection, Unicode combining-mark, emoji ZWJ, regional-indicator, and interpreter/native differential tests. The differential corpus compares stdout, exit code, and failure behavior across both execution backends and reduces a failing input to the smallest reproducible program.

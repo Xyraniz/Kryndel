@@ -306,4 +306,13 @@ func TestDocumentation(t *testing.T) {
 			t.Fatalf("stale implementation reference in %s", path)
 		}
 	}
+	for _, path := range []string{"docs/language.md", "docs/float-unicode.md", "docs/testing.md"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "TODO") || strings.Contains(string(data), "todo.md") {
+			t.Fatalf("unfinished documentation reference in %s", path)
+		}
+	}
 }

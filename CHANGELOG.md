@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Language contracts and verification matrix
+
+Float, map/set, and Unicode behavior is now documented as an explicit language contract: finite IEEE-754 values, signed-zero handling, subnormal preservation, insertion ordering, structural key equality, code-point indexing, and locale-independent formatting are covered by regression and interpreter/native differential tests. The differential capture path now uses the supported `io.ReadAll` API, and invalid test inputs were corrected to exercise the actual typed syntax.
+
+The Makefile now exposes `benchmark`, `verify-fast`, `verify-full`, and `verify`. Verification records native build logs, runs static, fuzz, documentation, executable smoke, parity, race, coverage, and benchmark checks, and applies bounded test timeouts. The expensive Stage 36 bootstrap retains race coverage with an explicit `KRY_RACE=1` budget rather than failing on race-instrumentation overhead. CI uses the complete `make verify` gate. Documentation is English-only for the package, Discord, Windows, and test guides, and stale or unfinished references are rejected by the documentation test.
+
 ## Unreleased — Crypto hardening, executable protection, and Python ergonomics
 
 The cryptography library is substantially expanded and now covers both the

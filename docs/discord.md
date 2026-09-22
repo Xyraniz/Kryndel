@@ -1,18 +1,18 @@
-# Discord en Kryndel
+# Discord integration
 
-El paquete `packages/discord` proporciona una integración pequeña y explícita para bots. `bot(token, intents)` valida el token localmente y construye un `Bot`; `Bot.run()` abre un WebSocket seguro hacia Discord Gateway v10, envía un payload Identify con el token y la máscara de intents, recibe el primer frame del Gateway y cierra la conexión de forma cooperativa. `Bot.on_message(command)` es el punto tipado para registrar comandos en la superficie inicial; la API no inventa eventos ni simula respuestas.
+The `packages/discord` package provides a small, explicit bot integration. `bot(token, intents)` validates the token locally and constructs a `Bot`; `Bot.run()` opens a secure WebSocket to Discord Gateway v10, sends an Identify payload with the token and intent mask, receives the first Gateway frame, and closes cooperatively. `Bot.on_message(command)` is the typed registration point for commands in the initial surface; the API does not invent events or simulate responses.
 
-| Elemento | Tipo | Semántica |
+| Element | Type | Semantics |
 | --- | --- | --- |
-| `Bot.token` | `String` | Se mantiene en memoria del programa y nunca se imprime. |
-| `Bot.intents` | `Array[String]` | `Guilds`, `GuildMembers`, `GuildMessages` y `MessageContent` se convierten a bits explícitos. |
-| `Bot.gateway` | `String` | URL WebSocket `wss://gateway.discord.gg/?v=10&encoding=json`. |
-| `bot(token, intents)` | `Result[Bot,String]` | Rechaza un token vacío. |
-| `Bot.run()` | `Result[Nil,String]` | Ejecuta handshake, Identify, lectura bounded y cierre. |
-| `Bot.on_message(command)` | `Result[Nil,String]` | Rechaza registros vacíos y mantiene un contrato determinista. |
+| `Bot.token` | `String` | Kept in the program memory and never printed. |
+| `Bot.intents` | `Array[String]` | `Guilds`, `GuildMembers`, `GuildMessages`, and `MessageContent` become explicit bits. |
+| `Bot.gateway` | `String` | WebSocket URL `wss://gateway.discord.gg/?v=10&encoding=json`. |
+| `bot(token, intents)` | `Result[Bot,String]` | Rejects an empty token. |
+| `Bot.run()` | `Result[Nil,String]` | Performs a bounded handshake, Identify, read, and close. |
+| `Bot.on_message(command)` | `Result[Nil,String]` | Rejects empty registrations and keeps a deterministic contract. |
 
-La capa WebSocket implementa el handshake RFC 6455, valida `Sec-WebSocket-Accept`, usa TLS 1.2 o superior para `wss`, enmascara frames de cliente, responde a ping con pong, rechaza frames mayores que el límite de entrada y trata el cierre remoto como error explícito. `WebSocket` es un tipo no-Copy, por lo que no puede cruzar canales ni duplicarse implícitamente.
+The WebSocket layer implements the RFC 6455 handshake, validates `Sec-WebSocket-Accept`, uses TLS 1.2 or newer for `wss`, masks client frames, answers ping with pong, rejects frames larger than the input limit, and treats remote closure as an explicit error. `WebSocket` is a non-`Copy` type, so it cannot cross channels or be implicitly duplicated.
 
-Las llamadas HTTP autenticadas se realizan con `http_request_auth`. El token solo se coloca en el encabezado `Authorization: Bearer ...`; los diagnósticos de estado y transporte no incluyen el valor secreto. En producción, el token debe llegar por una variable de entorno leída con `std/env.kry`, no escribirse en el código fuente ni almacenarse en el repositorio.
+Authenticated HTTP calls use `http_request_auth`. The token is placed only in the `Authorization: Bearer ...` header; status and transport diagnostics never include the secret. In production, the token must come from an environment variable read through `std/env.kry`, not be written into source code or stored in the repository.
 
-> La integración inicial cubre la conexión real al Gateway y la frontera API segura. No pretende ocultar la complejidad de reconexión, rate limits, sharding, persistencia de secuencias o callbacks asincrónicos; esas capacidades deben añadirse como contratos explícitos y pruebas contra un servidor de prueba controlado.
+> The initial integration covers a real Gateway connection and a secure API boundary. It does not hide the complexity of reconnection, rate limits, sharding, sequence persistence, or asynchronous callbacks; those capabilities must be added as explicit contracts and tests against a controlled test server.

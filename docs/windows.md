@@ -1,15 +1,15 @@
-# Capacidades Windows
+# Windows capabilities
 
-Kryndel conserva una frontera explícita entre el lenguaje portable y las APIs específicas de Windows. El módulo interno `windows_api.go` expone operaciones de registro, consulta de servicios, escritura de Event Log, lectura Raw Input y `DeviceIoControl`; en Windows los adaptadores llaman a herramientas o entry points Win32 reales, y en otros sistemas devuelven un error de plataforma en lugar de fingir compatibilidad.
+Kryndel keeps an explicit boundary between the portable language and Windows-specific APIs. The internal `windows_api.go` module exposes registry operations, service queries, Event Log writes, Raw Input reads, and `DeviceIoControl`; on Windows the adapters call real tools or Win32 entry points, while other systems return a platform error instead of pretending compatibility.
 
-| Capacidad | Adaptador Windows | Política fuera de Windows |
+| Capability | Windows adapter | Policy outside Windows |
 | --- | --- | --- |
-| Registro | `reg.exe query` con ruta y valor separados. | Error explícito de plataforma. |
-| Servicios | `sc.exe query`. | Error explícito de plataforma. |
-| Event Log | `eventcreate.exe` en el canal Application. | Error explícito de plataforma. |
-| Raw Input | Frontera reservada para un host con message pump GUI. | Error explícito de plataforma. |
-| `DeviceIoControl` | `CreateFileW`, `DeviceIoControl` y `CloseHandle` con buffers acotados. | Error explícito de plataforma. |
+| Registry | `reg.exe query` with path and value separated. | Explicit platform error. |
+| Services | `sc.exe query`. | Explicit platform error. |
+| Event Log | `eventcreate.exe` on the Application channel. | Explicit platform error. |
+| Raw Input | Boundary reserved for a host with a GUI message pump. | Explicit platform error. |
+| `DeviceIoControl` | `CreateFileW`, `DeviceIoControl`, and `CloseHandle` with bounded buffers. | Explicit platform error. |
 
-La ejecución de procesos en el lenguaje utiliza `exec.CommandContext` sin shell; esto evita que una cadena de entrada se interprete como comandos compuestos. Los adaptadores Windows también limitan la salida capturada. Las operaciones privilegiadas no se elevan automáticamente y los fallos de permisos se propagan como errores verificables.
+Process execution in the language uses `exec.CommandContext` without a shell; this prevents an input string from being interpreted as compound commands. Windows adapters also bound captured output. Privileged operations are never elevated automatically, and permission failures propagate as verifiable errors.
 
-El backend nativo acepta `windows-x64` y `windows-arm64` como targets de cabecera PE; el artefacto PE32+ contiene una entrada mínima real y una importación `ExitProcess`. `kry inspect` valida las firmas `MZ`/`PE\0\0`, arquitectura y número de secciones sin ejecutar el archivo. La generación de un ejecutable Kryndel completo con todas las funciones aún debe ampliar el lowering de IR y enlazar el runtime nativo; hasta entonces el bundle `KRYNATIVE3` sigue siendo la ruta portable completa.
+The native backend accepts `windows-x64` and `windows-arm64` as PE header targets; the PE32+ artifact contains a real minimal entry point and an `ExitProcess` import. `kry inspect` validates the `MZ`/`PE\0\0` signatures, architecture, and section count without executing the file. Generating a complete Kryndel executable with every feature still requires broader IR lowering and native runtime linking; until then, the `KRYNATIVE3` bundle remains the complete portable path.

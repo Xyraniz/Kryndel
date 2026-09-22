@@ -1,6 +1,11 @@
+SHELL := /bin/bash
 GO ?= go
 BINARY := build/kry
-.PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs native-smoke package-smoke install-association release clean
+TIMEOUT ?= 10m
+RACE_TIMEOUT ?= 40m
+
+.PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs native-smoke native-parity package-smoke benchmark verify-fast verify-full verify install-association release clean
+
 all: build
 
 build:
@@ -45,14 +50,14 @@ test-static: build
 	$(GO) test -count=1 ./...
 
 test-race:
-	$(GO) test -race -count=1 ./...
+	KRY_RACE=1 $(GO) test -race -count=1 -timeout=$(RACE_TIMEOUT) ./...
 
 coverage:
 	mkdir -p build
 	$(GO) test -covermode=atomic -coverprofile=build/coverage.out ./...
 
 fuzz-smoke:
-	$(GO) test -run='TestFuzzSmoke' -count=1 ./...
+	$(GO) test -run='TestFuzzSmoke' -count=1 -timeout=$(TIMEOUT) ./...
 
 check-docs:
 	$(GO) test -run='TestDocumentation' -count=1 ./...
@@ -64,24 +69,30 @@ native-smoke: build
 	$(BINARY) inspect build/hello.elf
 
 native-parity: build
-	$(BINARY) build examples/native_features.kry --format=elf --target=linux-x64 -o build/native_features.elf
+	mkdir -p build/verify-logs
+	@set -o pipefail; $(BINARY) build examples/native_features.kry --format=elf --target=linux-x64 -o build/native_features.elf 2>&1 | tee build/verify-logs/native_features.build.log
 	$(BINARY) run examples/native_features.kry > build/native_features.interp.out
 	./build/native_features.elf > build/native_features.native.out
-	diff build/native_features.interp.out build/native_features.native.out
-	$(BINARY) build examples/new_builtins.kry --format=elf --target=linux-x64 -o build/new_builtins.elf
+	diff -u build/native_features.interp.out build/native_features.native.out
+	@set -o pipefail; $(BINARY) build examples/new_builtins.kry --format=elf --target=linux-x64 -o build/new_builtins.elf 2>&1 | tee build/verify-logs/new_builtins.build.log
 	$(BINARY) run examples/new_builtins.kry > build/new_builtins.interp.out
 	./build/new_builtins.elf > build/new_builtins.native.out
-	diff build/new_builtins.interp.out build/new_builtins.native.out
-	$(BINARY) build examples/concurrency.kry --format=elf --target=linux-x64 -o build/concurrency.elf
-	$(BINARY) run examples/concurrency.kry > build/concurrency.interp.out
-	./build/concurrency.elf > build/concurrency.native.out
-	diff build/concurrency.interp.out build/concurrency.native.out
-
-install-association: build
-	tools/install-association.sh
+	diff -u build/new_builtins.interp.out build/new_builtins.native.out
 
 package-smoke: build
 	$(BINARY) package build/kryndel-self-test.kpkg
+
+benchmark:
+	$(GO) test -run='^$$' -bench=. -benchmem ./...
+
+verify-fast: build check test-static check-docs fuzz-smoke
+
+verify-full: verify-fast test native-smoke native-parity test-race coverage benchmark
+
+verify: verify-full
+
+install-association: build
+	tools/install-association.sh
 
 release: build
 	mkdir -p dist

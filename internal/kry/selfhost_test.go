@@ -699,9 +699,15 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if err := os.WriteFile(kirFile, kir, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	backendLimits := DefaultLimits()
-	backendLimits.MaxWallTimeMS = 12 * 60 * 1000
-	backendLimits.MaxInstructions = 100_000_000
+		backendLimits := DefaultLimits()
+		backendLimits.MaxWallTimeMS = 12 * 60 * 1000
+		backendLimits.MaxInstructions = 100_000_000
+		if os.Getenv("KRY_RACE") == "1" {
+			// The race instrumented interpreter is substantially slower during
+			// the large bootstrap, but it must still exercise the same checks.
+			backendLimits.MaxWallTimeMS = 30 * 60 * 1000
+			backendLimits.MaxInstructions = 250_000_000
+		}
 	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, backendLimits, Sandbox{}, []string{kirFile, generatedCompiler})
 	if d != nil {
 		t.Fatal(d.Message)
