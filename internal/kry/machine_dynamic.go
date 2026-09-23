@@ -4631,6 +4631,9 @@ func (m *directMachine) emitFunctionCall(e *Expr) error {
 	if e.Function == nil {
 		return fmt.Errorf("direct ELF backend has no resolved function call")
 	}
+	if len(e.Args) != len(e.Function.Params) {
+		return fmt.Errorf("direct ELF backend does not support omitted default arguments for function '%s'", e.Function.Name)
+	}
 	if len(e.Args) > 6 {
 		return fmt.Errorf("direct ELF backend function '%s' has too many arguments", e.Function.Name)
 	}

@@ -304,6 +304,8 @@ func calledFunctions(body []*Stmt) []string {
 func (c *Checker) checkFunction(f *Function) *Diagnostic {
 	sc := NewScope(c.Globals, f.Worker)
 	sc.Module = f.Module
+	defaultScope := NewScope(c.Globals, f.Worker)
+	defaultScope.Module = f.Module
 	c.currentFunction = f
 	previousParams := c.Env.TypeParams
 	c.Env.TypeParams = map[string]*Type{}
@@ -325,6 +327,7 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 			return d
 		}
 		sc.Values["self"] = Binding{Type: rt, Mutable: false}
+		defaultScope.Values["self"] = Binding{Type: rt, Mutable: false}
 	}
 	for _, p := range f.Params {
 		t, d := resolveSpec(c.Env, p.Type, 0)
@@ -337,17 +340,17 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 		sc.Values[p.Name] = Binding{Type: t, Mutable: false}
 	}
 	for _, p := range f.Params {
-		if p.Default == nil {
-			continue
-		}
 		t, _ := resolveSpec(c.Env, p.Type, 0)
-		dt, d := c.checkExpr(sc, p.Default, t)
-		if d != nil {
-			return d
+		if p.Default != nil {
+			dt, d := c.checkExpr(defaultScope, p.Default, t)
+			if d != nil {
+				return d
+			}
+			if !compatible(t, dt) {
+				return Diag(CatType, p.Default.Tok.Source, p.Default.Tok.Line, p.Default.Tok.Column, "default value for parameter '%s' expected %s, found %s", p.Name, t, dt)
+			}
 		}
-		if !compatible(t, dt) {
-			return Diag(CatType, p.Default.Tok.Source, p.Default.Tok.Line, p.Default.Tok.Column, "default value for parameter '%s' expected %s, found %s", p.Name, t, dt)
-		}
+		defaultScope.Values[p.Name] = Binding{Type: t, Mutable: false}
 	}
 	rt, d := resolveSpec(c.Env, f.Return, 0)
 	if d != nil {

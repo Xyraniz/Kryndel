@@ -80,9 +80,10 @@ functions are declarations rather than values. Generic struct declarations,
 type-associated items, and monomorphization controls are also not implemented.
 
 Explicit call arguments evaluate left to right. Omitted trailing defaults are
-evaluated at the call site in parameter order. `return` exits the current
-function. `break` and `continue` affect the innermost loop. `match` evaluates its
-scrutinee once, then selects the first matching arm; the checker rejects
+evaluated in declaration order in the function's lexical environment, with
+`self` and earlier parameters available. Caller-local names are not captured.
+`return` exits the current function. `break` and `continue` affect the innermost
+loop. `match` evaluates its scrutinee once, then selects the first matching arm; the checker rejects
 non-exhaustive alternatives for enums, `Option`, and `Result`, as well as
 duplicate alternatives.
 

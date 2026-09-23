@@ -132,6 +132,7 @@ static KEnumDesc *k_enums = 0;
 /* ---- call frame and defer stack ---------------------------------------- */
 #define K_MAX_ARGS 64
 static KValue k_args[K_MAX_ARGS];
+static int k_argc;
 #define K_MAX_DEFERS 512
 static void (*k_defers[K_MAX_DEFERS])(void);
 static int k_ndefers = 0;
@@ -1541,6 +1542,7 @@ static KValue k_poly_dispatch(KValue slot, KValue input) {
             int idx=k_poly_lookup(k_poly[i].handler);
             if (idx<0) return kv_res(0, kv_cstr("registered handler is missing"));
             k_args[0]=input;
+            k_argc=1;
             return kv_res(1, k_poly_fns[idx]());
         }
     }

@@ -1753,16 +1753,26 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		}
 		args[i] = v
 	}
+	// Defaults execute after explicit arguments in a scope containing the
+	// receiver and parameters whose values are already known.
+	defaultScope := newRunScope(r.Global)
+	if receiver != nil {
+		_ = defaultScope.define("self", *receiver, false)
+	}
+	for i, value := range args {
+		_ = defaultScope.define(f.Params[i].Name, value, false)
+	}
 	// Fill omitted trailing arguments from their declared defaults.
 	for i := len(args); i < len(f.Params); i++ {
 		if f.Params[i].Default == nil {
 			break
 		}
-		v, d := r.evalExpr(sc, f.Params[i].Default)
+		v, d := r.evalExpr(defaultScope, f.Params[i].Default)
 		if d != nil {
 			return nilVal(), d
 		}
 		args = append(args, v)
+		_ = defaultScope.define(f.Params[i].Name, v, false)
 	}
 	if e.Tail {
 		return Value{Kind: VTailCall, Tail: &TailCall{Function: f, Receiver: receiver, Args: args}}, nil

@@ -281,6 +281,20 @@ fn main() -> Nil {
 	}
 }
 
+func TestDefaultParameterSeesEarlierArgumentButNotCallerLocal(t *testing.T) {
+	src := `fn choose(first: Int, second: Int = first) -> Int {
+    return second
+}
+fn main() -> Nil {
+    let first: Int = 99
+    println(choose(4))
+    return nil
+}`
+	if got, want := runInterp(t, src), "4\n"; got != want {
+		t.Fatalf("default parameter scope mismatch: got %q want %q", got, want)
+	}
+}
+
 // TestDefaultParameterDiagnostics checks the checker rejects a required
 // parameter that follows a defaulted one and a default of the wrong type.
 func TestDefaultParameterDiagnostics(t *testing.T) {
@@ -299,6 +313,16 @@ fn main() -> Nil { return nil }
 	}
 	if _, d = Check(p, DefaultLimits()); d == nil {
 		t.Fatal("default value of the wrong type was accepted")
+	}
+	future := `fn f(a: Int = b, b: Int = 2) -> Int { return a + b }
+fn main() -> Nil { return nil }
+`
+	p, d = Parse(&Source{Name: "forward-default.kry", Text: future}, DefaultLimits())
+	if d != nil {
+		t.Fatalf("parse forward default: %s", d.Message)
+	}
+	if _, d = Check(p, DefaultLimits()); d == nil || !strings.Contains(d.Message, "unknown variable 'b'") {
+		t.Fatalf("default referencing a later parameter should fail, got %#v", d)
 	}
 }
 

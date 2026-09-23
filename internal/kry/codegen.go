@@ -290,19 +290,25 @@ func (g *cgen) emitFunction(f *Function) {
 	// Parameters are passed through a global argument frame so that the
 	// generated C stays simple and recursion works without prototypes.
 	fmt.Fprintf(&g.buf, "  int _fb = k_ndefers;\n")
+	fmt.Fprintf(&g.buf, "  int _argc = k_argc;\n")
 	g.fnBase = "_fb"
 	g.deferBases = nil
 	g.loopBases = nil
+	g.locals = append(g.locals, map[string]bool{})
 	if f.Receiver != nil {
 		fmt.Fprintf(&g.buf, "  KValue self = k_args[0];\n")
+		g.locals[len(g.locals)-1]["self"] = true
 	}
-	g.locals = append(g.locals, map[string]bool{})
 	for i, p := range f.Params {
 		off := i
 		if f.Receiver != nil {
 			off = i + 1
 		}
-		fmt.Fprintf(&g.buf, "  KValue %s = k_args[%d];\n", sanitize(p.Name), off)
+		if p.Default != nil {
+			fmt.Fprintf(&g.buf, "  KValue %s = (_argc > %d) ? k_args[%d] : %s;\n", sanitize(p.Name), off, off, g.expr(p.Default))
+		} else {
+			fmt.Fprintf(&g.buf, "  KValue %s = k_args[%d];\n", sanitize(p.Name), off)
+		}
 		g.locals[len(g.locals)-1][p.Name] = true
 	}
 	g.block(f.Body, "  ")
@@ -327,7 +333,7 @@ func (g *cgen) emitMain() {
 	g.topLevel = false
 	if len(g.prog.Statements) == 0 {
 		if f := g.env.Functions["main"]; f != nil {
-			fmt.Fprintf(&g.buf, "  { k_args[0] = kv_nil(); KValue _r = %s(); (void)_r; }\n", g.fnName[f])
+			fmt.Fprintf(&g.buf, "  { k_argc = 0; k_args[0] = kv_nil(); KValue _r = %s(); (void)_r; }\n", g.fnName[f])
 		}
 	}
 	g.buf.WriteString("  while (k_ndefers > _fb) k_defers[--k_ndefers]();\n")
@@ -821,16 +827,8 @@ func (g *cgen) functionCall(f *Function, receiver *Expr, args []*Expr) string {
 	for i, a := range args {
 		fmt.Fprintf(&b, " _frame[%d] = %s;", i+off, g.expr(a))
 	}
-	// Fill omitted trailing arguments from their declared defaults.
-	total := len(args)
-	for i := len(args); i < len(f.Params); i++ {
-		if f.Params[i].Default == nil {
-			break
-		}
-		fmt.Fprintf(&b, " _frame[%d] = %s;", i+off, g.expr(f.Params[i].Default))
-		total = i + 1
-	}
-	fmt.Fprintf(&b, " memcpy(k_args, _frame, sizeof(KValue)*%d); %s(); })", off+total, name)
+	argc := off + len(args)
+	fmt.Fprintf(&b, " k_argc = %d; memcpy(k_args, _frame, sizeof(KValue)*%d); %s(); })", argc, argc, name)
 	return b.String()
 }
 
