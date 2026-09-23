@@ -87,4 +87,11 @@ Stage 36 verifies a second compiler level. The generated Stage 35 compiler consu
 go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v
 ```
 
+The standalone Stage 1–3 bootstrap command is `./scripts/bootstrap-stage3.sh`.
+It requires Linux x86-64 and the Go version in `selfhost/bootstrap.lock.json`.
+The test checks SHA-256 values for the source KIR, bundled sources, fixture,
+and generated Stage 1, Stage 2, and Stage 3 compiler ELFs against that lock.
+Stage 2 and Stage 3 must also be byte-identical. This remains a bounded subset
+bootstrap rather than full self-hosting.
+
 On non-Linux hosts, this test still emits KIR and validates the first compiler ELF, then skips Linux executable checks. A Windows run therefore does not establish either compiler's execution; both levels must pass on Linux amd64 before this stage is considered complete.

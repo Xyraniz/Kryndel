@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_revision": "04348a136add6eff6b8d0ebb53b12c674bc55e80",
+  "target": "linux-amd64",
+  "host_go": "go1.26.0",
+  "command": "scripts/bootstrap-stage3.sh",
+  "sha256": {
+    "source-compiler.kir": "41cb7e17d1c99df2629b33931d9c0907d5fd735b73e5f2e02c4671f9c3c8ee63",
+    "stage1-source-kir-compiler.elf": "ffff12169d3b17ee859a2f744bc8084480c5249cdd534a8cbd67eee3dadcb3ed",
+    "source_kir_compiler.kry": "b89231e732bb5517e82ff7d266afe965720964520841106dba668c21f4e14ca9",
+    "dynamic_backend.kry": "a97054c4ebb18b90a38d039ecba98e9357f189761cd1628379f2e8af35633503",
+    "elf_backend.kry": "0348e0230050815a2d5c5d37ead0e3216f831e65f6ce00ddd49c98067a5eaf57",
+    "source-kir-compiler-bundle.kry": "1c6819ca4876ac2c552a3ef2a2700ae7a487fe74082f5038ec1720f4a35811f3",
+    "bootstrap-fixture.kry": "a17c9aebdaa15211826091cebcff4b5b2a6697b859c61c83309c5b6c36e88418",
+    "stage2-source-kir-compiler.elf": "7da6d2f2c95e7870e2d9d89183bb3b22b404629f7a50ff9dea095771b5482e7c",
+    "stage3-source-kir-compiler.elf": "7da6d2f2c95e7870e2d9d89183bb3b22b404629f7a50ff9dea095771b5482e7c"
+  }
+}

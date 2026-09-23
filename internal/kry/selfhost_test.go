@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,45 @@ func assertLinuxAMD64ELF(t *testing.T, data []byte, label string) {
 	if machine := binary.LittleEndian.Uint16(data[18:20]); machine != 62 {
 		t.Fatalf("%s has ELF machine %#x, want x86-64 (62)", label, machine)
 	}
+}
+
+type bootstrapLock struct {
+	SchemaVersion  int               `json:"schema_version"`
+	SourceRevision string            `json:"source_revision"`
+	Target         string            `json:"target"`
+	HostGo         string            `json:"host_go"`
+	Command        string            `json:"command"`
+	SHA256         map[string]string `json:"sha256"`
+}
+
+func loadBootstrapLock(t *testing.T, path string) bootstrapLock {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read bootstrap lock %q: %v", path, err)
+	}
+	var lock bootstrapLock
+	if err := json.Unmarshal(data, &lock); err != nil {
+		t.Fatalf("decode bootstrap lock %q: %v", path, err)
+	}
+	if lock.SchemaVersion != 1 || lock.Target != "linux-amd64" || lock.HostGo == "" || lock.SourceRevision == "" || lock.Command == "" {
+		t.Fatalf("invalid bootstrap lock metadata: %#v", lock)
+	}
+	return lock
+}
+
+func verifyBootstrapHash(t *testing.T, lock bootstrapLock, seen map[string]bool, name string, data []byte) {
+	t.Helper()
+	actual := fmt.Sprintf("%x", sha256.Sum256(data))
+	expected, ok := lock.SHA256[name]
+	if !ok {
+		t.Fatalf("bootstrap lock has no SHA-256 for %q", name)
+	}
+	if actual != expected {
+		t.Fatalf("bootstrap lock mismatch for %s: got %s, want %s", name, actual, expected)
+	}
+	seen[name] = true
+	t.Logf("bootstrap sha256 %s=%s", name, actual)
 }
 
 func TestStage1KryndelBackendMatchesDirectELFOracle(t *testing.T) {
@@ -646,11 +686,17 @@ func TestStage34KryndelDynamicBackendUnaryNot(t *testing.T) {
 }
 
 func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
+	t.Logf("bootstrap host Go version=%s target=linux-amd64", runtime.Version())
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	selfhost := filepath.Join(root, "..", "..", "selfhost")
+	lock := loadBootstrapLock(t, filepath.Join(selfhost, "bootstrap.lock.json"))
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" && runtime.Version() != lock.HostGo {
+		t.Fatalf("bootstrap lock requires host %s, got %s", lock.HostGo, runtime.Version())
+	}
+	verifiedHashes := make(map[string]bool, len(lock.SHA256))
 	compilerPath := filepath.Join(selfhost, "source_kir_compiler.kry")
 	backendPath := filepath.Join(selfhost, "kir_backend.kry")
 	fixturePath := filepath.Join(selfhost, "fixtures", "bootstrap_hello_stage27.kry")
@@ -686,6 +732,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if len(kir) > DefaultLimits().MaxJSONBytes {
 		t.Fatalf("source compiler KIR is %d bytes, exceeding MaxJSONBytes=%d", len(kir), DefaultLimits().MaxJSONBytes)
 	}
+	verifyBootstrapHash(t, lock, verifiedHashes, "source-compiler.kir", kir)
 
 	backendProgram, d := LoadProgram(backendPath, DefaultLimits(), "")
 	if d != nil {
@@ -723,6 +770,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatalf("stage35 dynamic backend did not write compiler ELF: %v", err)
 	}
 	assertLinuxAMD64ELF(t, compilerELF, "stage35 generated source compiler")
+	verifyBootstrapHash(t, lock, verifiedHashes, "stage1-source-kir-compiler.elf", compilerELF)
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("generated compiler execution requires linux-amd64; KIR parsing and ELF generation passed")
 	}
@@ -756,6 +804,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	frontendText := strings.ReplaceAll(string(frontendSource), "\r\n", "\n")
+	verifyBootstrapHash(t, lock, verifiedHashes, "source_kir_compiler.kry", []byte(frontendText))
 	const backendImport = "import \"dynamic_backend\"\n"
 	if !strings.HasPrefix(frontendText, backendImport) {
 		t.Fatalf("source compiler no longer starts with expected backend import %q", backendImport)
@@ -765,6 +814,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	backendText := strings.ReplaceAll(string(backendSource), "\r\n", "\n")
+	verifyBootstrapHash(t, lock, verifiedHashes, "dynamic_backend.kry", []byte(backendText))
 	const elfImport = "import \"elf_backend\"\n"
 	if !strings.HasPrefix(backendText, elfImport) {
 		t.Fatalf("dynamic backend no longer starts with expected ELF backend import %q", elfImport)
@@ -774,11 +824,18 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	elfText := strings.ReplaceAll(string(elfSource), "\r\n", "\n")
+	verifyBootstrapHash(t, lock, verifiedHashes, "elf_backend.kry", []byte(elfText))
 	bundledCompilerSource := strings.TrimSuffix(elfText, "\n") + "\n\n" + strings.TrimPrefix(backendText, elfImport) + "\n\n" + strings.TrimPrefix(frontendText, backendImport)
 	bundledCompiler := filepath.Join(dir, "source-kir-compiler-bundle.kry")
 	if err := os.WriteFile(bundledCompiler, []byte(bundledCompilerSource), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	verifyBootstrapHash(t, lock, verifiedHashes, "source-kir-compiler-bundle.kry", []byte(bundledCompilerSource))
+	fixtureSource, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyBootstrapHash(t, lock, verifiedHashes, "bootstrap-fixture.kry", fixtureSource)
 	t.Logf("stage36 compiling %d-byte bundled compiler source", len(bundledCompilerSource))
 	secondCompiler := filepath.Join(dir, "second-source-kir-compiler")
 	secondCompilerOutput, err := exec.Command(generatedCompiler, bundledCompiler, secondCompiler).CombinedOutput()
@@ -791,6 +848,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatalf("stage36 generated compiler did not write second-level compiler ELF: %v", err)
 	}
 	assertLinuxAMD64ELF(t, secondCompilerELF, "stage36 second-level source compiler")
+	verifyBootstrapHash(t, lock, verifiedHashes, "stage2-source-kir-compiler.elf", secondCompilerELF)
 	if err := os.Chmod(secondCompiler, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -837,8 +895,12 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatalf("stage3 compiler did not write its rebuilt ELF: %v", err)
 	}
 	assertLinuxAMD64ELF(t, thirdCompilerELF, "stage3 self-rebuilt source compiler")
+	verifyBootstrapHash(t, lock, verifiedHashes, "stage3-source-kir-compiler.elf", thirdCompilerELF)
 	if !bytes.Equal(secondCompilerELF, thirdCompilerELF) {
 		t.Fatalf("stage3 self-rebuild was not byte-reproducible: Stage 2 sha256=%x Stage 3 sha256=%x", sha256.Sum256(secondCompilerELF), sha256.Sum256(thirdCompilerELF))
+	}
+	if len(verifiedHashes) != len(lock.SHA256) {
+		t.Fatalf("verified %d bootstrap hashes, but lock contains %d", len(verifiedHashes), len(lock.SHA256))
 	}
 	t.Logf("stage3 second-level compiler rebuilt itself byte-for-byte; sha256=%x", sha256.Sum256(thirdCompilerELF))
 }
