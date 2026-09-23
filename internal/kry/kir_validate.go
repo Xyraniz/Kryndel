@@ -36,7 +36,8 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 	}
 	structs := make(map[string]*KIRStruct, len(document.Structs))
 	enums := make(map[string]*KIREnum, len(document.Enums))
-	functions := make(map[string]bool, len(document.Functions))
+	functionCounts := make(map[string]int, len(document.Functions))
+	functionTargets := make(map[string]string, len(document.Functions))
 	for _, decl := range document.Structs {
 		if decl == nil || decl.Name == "" {
 			return fmt.Errorf("struct declaration has no name")
@@ -85,7 +86,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if function == nil || function.Name == "" || function.Return == "" {
 			return fmt.Errorf("function declaration is incomplete")
 		}
-		functions[function.Name] = true
+		functionCounts[function.Name]++
 		if err := checkKIRCount("function parameters", len(function.Params), limits.MaxArrayElements); err != nil {
 			return err
 		}
@@ -107,6 +108,16 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if err := checkKIRCount("function body statements", len(function.Body), limits.MaxArrayElements); err != nil {
 			return err
 		}
+	}
+	for _, function := range document.Functions {
+		target := function.Name
+		if functionCounts[function.Name] > 1 {
+			target = kirFunctionTargetFromDocument(function)
+		}
+		if _, duplicate := functionTargets[target]; duplicate {
+			return fmt.Errorf("duplicate function target %q", target)
+		}
+		functionTargets[target] = function.Name
 	}
 	// Declarations count toward the same document-wide node budget as the
 	// recursive expression, statement, pattern, and constant trees below.
@@ -212,10 +223,10 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				return fmt.Errorf("call expression has an invalid name or target")
 			}
 			prefix, name, _ := strings.Cut(expression.CallTarget, ":")
-			if name != expression.Name {
-				return fmt.Errorf("call expression name does not match its target")
-			}
 			if prefix == "builtin" {
+				if name != expression.Name {
+					return fmt.Errorf("call expression name does not match its target")
+				}
 				builtin, ok := Builtins()[name]
 				if !ok {
 					return fmt.Errorf("call references unknown builtin %q", name)
@@ -223,8 +234,14 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				if expression.BuiltinID != "" && expression.BuiltinID != builtin.ID {
 					return fmt.Errorf("call to builtin %q has a mismatched builtin id", name)
 				}
-			} else if !functions[name] {
-				return fmt.Errorf("call references undeclared function %q", name)
+			} else {
+				resolvedName, ok := functionTargets[name]
+				if !ok {
+					return fmt.Errorf("call references undeclared function or unresolved overload %q", name)
+				}
+				if resolvedName != expression.Name {
+					return fmt.Errorf("call expression name does not match its target")
+				}
 			}
 		case "array", "set":
 		case "index":

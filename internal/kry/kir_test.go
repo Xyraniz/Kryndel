@@ -92,6 +92,33 @@ func TestKIRPreservesUnaryNotOperator(t *testing.T) {
 	}
 }
 
+func TestKIRCallTargetsPreserveResolvedOverloads(t *testing.T) {
+	source := `
+fn choose(value: Int) -> Int { return value }
+fn choose(value: String) -> Int { return 2 }
+let integer: Int = choose(1)
+let text: Int = choose("two")
+`
+	p, c := testProgram(t, source)
+	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := DecodeKIR(data, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := doc.Statements[0].Init.CallTarget
+	second := doc.Statements[1].Init.CallTarget
+	if first == second || !strings.HasPrefix(first, "function:choose@") || !strings.HasPrefix(second, "function:choose@") {
+		t.Fatalf("overload resolution was not preserved in distinct KIR targets: %q and %q", first, second)
+	}
+	doc.Statements[0].Init.CallTarget = "function:choose"
+	if err := validateKIRDocument(doc, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "unresolved overload") {
+		t.Fatalf("expected ambiguous legacy function target rejection, got %v", err)
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})

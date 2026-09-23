@@ -34,6 +34,7 @@ KIR v2 is intentionally typed and lossless for the checked frontend representati
 - Every expression contains `kind`, source coordinates, and its resolved `type`.
 - Binary and unary nodes contain the canonical operator spelling (`<<`, `&`, `|`, and so on).
 - Calls contain `call_target`; builtins additionally contain their stable registry `builtin_id`.
+- User calls to an overloaded name carry a deterministic signature-qualified target (`function:<name>@<sha256>`), derived from the module, receiver, name, and parameter types. A plain name remains the target when it identifies exactly one declaration. The decoder rejects a plain call target when that name is overloaded, so consumers can follow the checker's selection without resolving overloads again.
 - Function parameters, defaults, declarations, control-flow bodies, match patterns, and source names are preserved.
 - Constant-folded expressions contain a `const` value, including the width and value of `UInt8/16/32/64`.
 
