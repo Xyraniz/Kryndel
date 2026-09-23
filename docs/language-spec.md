@@ -151,8 +151,13 @@ alias. Copies can share immutable storage. Handle APIs are the explicit
 exception: copying a non-`Copy` handle is rejected by generic `Copy` constraints
 and cross-thread transfer checks, but the language does not yet have a general
 borrow checker or lifetime syntax. APIs that take resource handles must state
-whether they borrow or close them; runtime use-after-close and double-close
-diagnostics are not yet uniform across all handle types.
+whether they borrow or close them. SQLite, TCP, UDP, WebSocket, FFI library, and
+FFI buffer handles report use-after-close through their normal failure channel;
+an explicit second close reports a runtime diagnostic. At the end of a top-level
+invocation or worker, any still-open tracked handle produces a `resource`
+diagnostic at its acquisition site and the runtime closes it during cleanup.
+Channels and task-group shutdown remain idempotent synchronization operations,
+not owned external resources.
 
 ## Concurrency
 

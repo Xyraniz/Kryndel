@@ -45,10 +45,19 @@ func sqliteClose(h *sqliteHandle) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {
-		return nil
+		return fmt.Errorf("SQLite handle is already closed")
 	}
 	h.closed = true
 	return h.db.Close()
+}
+
+func (h *sqliteHandle) isClosed() bool {
+	if h == nil {
+		return true
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.closed
 }
 
 func sqliteExec(h *sqliteHandle, query string) (int64, error) {
@@ -181,10 +190,19 @@ func tcpClose(h *tcpSocketHandle) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {
-		return nil
+		return fmt.Errorf("TcpSocket handle is already closed")
 	}
 	h.closed = true
 	return h.conn.Close()
+}
+
+func (h *tcpSocketHandle) isClosed() bool {
+	if h == nil {
+		return true
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.closed
 }
 
 func tcpListenerClose(h *tcpListenerHandle) error {
@@ -194,10 +212,19 @@ func tcpListenerClose(h *tcpListenerHandle) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {
-		return nil
+		return fmt.Errorf("TcpListener handle is already closed")
 	}
 	h.closed = true
 	return h.listener.Close()
+}
+
+func (h *tcpListenerHandle) isClosed() bool {
+	if h == nil {
+		return true
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.closed
 }
 
 func udpBind(host string, port int64) (*udpSocketHandle, error) {
@@ -218,10 +245,19 @@ func udpClose(h *udpSocketHandle) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {
-		return nil
+		return fmt.Errorf("UdpSocket handle is already closed")
 	}
 	h.closed = true
 	return h.conn.Close()
+}
+
+func (h *udpSocketHandle) isClosed() bool {
+	if h == nil {
+		return true
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.closed
 }
 
 func udpReceive(h *udpSocketHandle, max int, deadline time.Time) ([]byte, *net.UDPAddr, error) {

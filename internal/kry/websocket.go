@@ -19,6 +19,8 @@ type websocketConn struct {
 	conn    net.Conn
 	read    *bufio.Reader
 	writeMu sync.Mutex
+	stateMu sync.Mutex
+	closed  bool
 }
 
 func connectWebSocket(raw string) (*websocketConn, error) {
@@ -91,11 +93,37 @@ func connectWebSocket(raw string) (*websocketConn, error) {
 	return &websocketConn{conn: conn, read: br}, nil
 }
 
-func (w *websocketConn) sendText(message string) error { return w.sendFrame(0x1, []byte(message)) }
-func (w *websocketConn) sendPong(data []byte) error    { return w.sendFrame(0xA, data) }
+func (w *websocketConn) sendText(message string) error {
+	if w.isClosed() {
+		return fmt.Errorf("WebSocket handle is closed")
+	}
+	return w.sendFrame(0x1, []byte(message))
+}
+func (w *websocketConn) sendPong(data []byte) error {
+	if w.isClosed() {
+		return fmt.Errorf("WebSocket handle is closed")
+	}
+	return w.sendFrame(0xA, data)
+}
 func (w *websocketConn) close() error {
+	w.stateMu.Lock()
+	if w.closed {
+		w.stateMu.Unlock()
+		return fmt.Errorf("WebSocket handle is already closed")
+	}
+	w.closed = true
+	w.stateMu.Unlock()
 	_ = w.sendFrame(0x8, []byte{0x03, 0xE8})
 	return w.conn.Close()
+}
+
+func (w *websocketConn) isClosed() bool {
+	if w == nil {
+		return true
+	}
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	return w.closed
 }
 
 func (w *websocketConn) sendFrame(opcode byte, payload []byte) error {
@@ -130,6 +158,9 @@ func (w *websocketConn) sendFrame(opcode byte, payload []byte) error {
 	return err
 }
 func (w *websocketConn) receiveText(max int) (string, error) {
+	if w.isClosed() {
+		return "", fmt.Errorf("WebSocket handle is closed")
+	}
 	for {
 		opcode, payload, err := w.receiveFrame(max)
 		if err != nil {
@@ -142,6 +173,9 @@ func (w *websocketConn) receiveText(max int) (string, error) {
 			}
 			return string(payload), nil
 		case 0x8:
+			w.stateMu.Lock()
+			w.closed = true
+			w.stateMu.Unlock()
 			_ = w.conn.Close()
 			return "", fmt.Errorf("WebSocket peer closed")
 		case 0x9:

@@ -58,10 +58,19 @@ func ffiLibraryClose(library *ffiLibraryHandle) error {
 	library.mu.Lock()
 	defer library.mu.Unlock()
 	if library.closed {
-		return nil
+		return fmt.Errorf("FFILibrary handle is already closed")
 	}
 	library.closed = true
 	return ffiCloseLibrary(library.handle)
+}
+
+func (library *ffiLibraryHandle) isClosed() bool {
+	if library == nil {
+		return true
+	}
+	library.mu.Lock()
+	defer library.mu.Unlock()
+	return library.closed
 }
 
 func ffiSymbol(library *ffiLibraryHandle, name string) (*ffiSymbolHandle, error) {
@@ -99,6 +108,13 @@ func ffiCall(symbol *ffiSymbolHandle, signature string, values []Value) (int64, 
 	}
 	args := make([]uintptr, len(values))
 	var keepAlive []*ffiBufferHandle
+	lockedBuffers := make([]*ffiBufferHandle, 0, len(values))
+	lockedSet := make(map[*ffiBufferHandle]struct{}, len(values))
+	defer func() {
+		for i := len(lockedBuffers) - 1; i >= 0; i-- {
+			lockedBuffers[i].mu.Unlock()
+		}
+	}()
 	for i, value := range values {
 		if value.Kind != VInt {
 			return 0, fmt.Errorf("FFI arguments must be Int values returned by ffi_buffer_address or integer literals")
@@ -107,10 +123,21 @@ func ffiCall(symbol *ffiSymbolHandle, signature string, values []Value) (int64, 
 			ffiBuffers.RLock()
 			buffer := ffiBuffers.byID[value.I]
 			ffiBuffers.RUnlock()
-			if buffer != nil && !buffer.closed && len(buffer.data) > 0 {
-				args[i] = uintptr(unsafe.Pointer(&buffer.data[0]))
-				keepAlive = append(keepAlive, buffer)
-				continue
+			if buffer != nil {
+				if _, locked := lockedSet[buffer]; !locked {
+					buffer.mu.Lock()
+					if !buffer.closed && len(buffer.data) > 0 {
+						lockedSet[buffer] = struct{}{}
+						lockedBuffers = append(lockedBuffers, buffer)
+					} else {
+						buffer.mu.Unlock()
+					}
+				}
+				if _, locked := lockedSet[buffer]; locked {
+					args[i] = uintptr(unsafe.Pointer(&buffer.data[0]))
+					keepAlive = append(keepAlive, buffer)
+					continue
+				}
 			}
 		}
 		args[i] = uintptr(value.I)
@@ -181,7 +208,12 @@ func ffiBufferNew(data []byte) *ffiBufferHandle {
 }
 
 func ffiBufferAddress(buffer *ffiBufferHandle) (int64, error) {
-	if buffer == nil || buffer.closed || len(buffer.data) == 0 {
+	if buffer == nil {
+		return 0, fmt.Errorf("invalid or closed FFIBuffer handle")
+	}
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	if buffer.closed || len(buffer.data) == 0 {
 		return 0, fmt.Errorf("invalid or closed FFIBuffer handle")
 	}
 	ffiBuffers.Lock()
@@ -198,7 +230,12 @@ func ffiBufferAddress(buffer *ffiBufferHandle) (int64, error) {
 }
 
 func ffiBufferRead(buffer *ffiBufferHandle) ([]byte, error) {
-	if buffer == nil || buffer.closed {
+	if buffer == nil {
+		return nil, fmt.Errorf("invalid or closed FFIBuffer handle")
+	}
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	if buffer.closed {
 		return nil, fmt.Errorf("invalid or closed FFIBuffer handle")
 	}
 	return append([]byte(nil), buffer.data[:buffer.length]...), nil
@@ -207,6 +244,11 @@ func ffiBufferRead(buffer *ffiBufferHandle) ([]byte, error) {
 func ffiBufferClose(buffer *ffiBufferHandle) error {
 	if buffer == nil {
 		return fmt.Errorf("invalid FFIBuffer handle")
+	}
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	if buffer.closed {
+		return fmt.Errorf("FFIBuffer handle is already closed")
 	}
 	ffiBuffers.Lock()
 	for id, known := range ffiBuffers.byID {
@@ -219,4 +261,13 @@ func ffiBufferClose(buffer *ffiBufferHandle) error {
 	buffer.data = nil
 	buffer.length = 0
 	return nil
+}
+
+func (buffer *ffiBufferHandle) isClosed() bool {
+	if buffer == nil {
+		return true
+	}
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.closed
 }

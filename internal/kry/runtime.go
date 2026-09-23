@@ -110,6 +110,7 @@ type ffiSymbolHandle struct {
 }
 
 type ffiBufferHandle struct {
+	mu     sync.Mutex
 	data   []byte
 	length int
 	closed bool
@@ -826,7 +827,46 @@ type Runtime struct {
 	Worker       bool
 	propagated   *Value
 	shutdownOnce sync.Once
+	resourceMu   sync.Mutex
+	resources    []runtimeResource
 }
+
+type runtimeResource struct {
+	name      string
+	source    *Source
+	line      int
+	column    int
+	isClosed  func() bool
+	closeFunc func() error
+}
+
+func (r *Runtime) trackResource(e *Expr, name string, isClosed func() bool, closeFunc func() error) {
+	if e == nil || isClosed == nil || closeFunc == nil {
+		return
+	}
+	r.resourceMu.Lock()
+	r.resources = append(r.resources, runtimeResource{name: name, source: e.Tok.Source, line: e.Tok.Line, column: e.Tok.Column, isClosed: isClosed, closeFunc: closeFunc})
+	r.resourceMu.Unlock()
+}
+
+func (r *Runtime) closeResources(prior *Diagnostic) *Diagnostic {
+	r.resourceMu.Lock()
+	resources := append([]runtimeResource(nil), r.resources...)
+	r.resources = nil
+	r.resourceMu.Unlock()
+	for i := len(resources) - 1; i >= 0; i-- {
+		resource := resources[i]
+		if resource.isClosed() {
+			continue
+		}
+		if prior == nil {
+			prior = Diag(CatResource, resource.source, resource.line, resource.column, "resource '%s' was not closed before its owner finished", resource.name)
+		}
+		_ = resource.closeFunc()
+	}
+	return prior
+}
+
 type RunBinding struct {
 	Value   Value
 	Mutable bool
@@ -956,6 +996,12 @@ func (r *Runtime) cleanup(prior *Diagnostic) *Diagnostic {
 			select {
 			case <-t.Done:
 				t.Joined = true
+				t.mu.Lock()
+				workerDiag := t.Diag
+				t.mu.Unlock()
+				if prior == nil && workerDiag != nil && workerDiag.Category == CatResource {
+					prior = workerDiag
+				}
 			case <-deadline.C:
 				if prior == nil {
 					prior = Diag(CatResource, r.Prog.Source, 1, 1, "worker shutdown exceeded configured deadline")
@@ -963,7 +1009,7 @@ func (r *Runtime) cleanup(prior *Diagnostic) *Diagnostic {
 			}
 		}
 	})
-	return prior
+	return r.closeResources(prior)
 }
 func (r *Runtime) execBlock(sc *RunScope, body []*Stmt) (out EvalResult) {
 	out = normal()
@@ -2338,6 +2384,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
+		r.trackResource(e, "WebSocket", conn.isClosed, conn.close)
 		return resVal(true, Value{Kind: VWebSocket, WS: conn}), nil
 	case "websocket_send":
 		if a[0].WS == nil {
@@ -2358,7 +2405,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return resVal(true, stringVal(text)), nil
 	case "websocket_close":
 		if a[0].WS != nil {
-			_ = a[0].WS.close()
+			if err := a[0].WS.close(); err != nil {
+				return nilVal(), r.fail(e, "WebSocket close failed: %s", err)
+			}
 		}
 		return nilVal(), nil
 	case "process_run":
@@ -2528,6 +2577,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
+		r.trackResource(e, "SQLite", db.isClosed, func() error { return sqliteClose(db) })
 		return resVal(true, Value{Kind: VSQLite, SQLite: db}), nil
 	case "sqlite_exec":
 		count, err := sqliteExec(a[0].SQLite, a[1].S)
@@ -2559,12 +2609,14 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
+		r.trackResource(e, "TcpSocket", socket.isClosed, func() error { return tcpClose(socket) })
 		return resVal(true, Value{Kind: VTCP, TCP: socket}), nil
 	case "tcp_listen":
 		listener, err := tcpListen(a[0].S, a[1].I)
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
+		r.trackResource(e, "TcpListener", listener.isClosed, func() error { return tcpListenerClose(listener) })
 		return resVal(true, Value{Kind: VTCPListener, TCPList: listener}), nil
 	case "tcp_accept":
 		listener := a[0].TCPList
@@ -2584,7 +2636,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
-		return resVal(true, Value{Kind: VTCP, TCP: &tcpSocketHandle{conn: conn}}), nil
+		socket := &tcpSocketHandle{conn: conn}
+		r.trackResource(e, "TcpSocket", socket.isClosed, func() error { return tcpClose(socket) })
+		return resVal(true, Value{Kind: VTCP, TCP: socket}), nil
 	case "tcp_send":
 		socket := a[0].TCP
 		if socket == nil {
@@ -2662,6 +2716,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
+		r.trackResource(e, "UdpSocket", socket.isClosed, func() error { return udpClose(socket) })
 		return resVal(true, Value{Kind: VUDP, UDP: socket}), nil
 	case "udp_send":
 		socket := a[0].UDP
@@ -2714,6 +2769,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
+		r.trackResource(e, "FFILibrary", library.isClosed, func() error { return ffiLibraryClose(library) })
 		return resVal(true, Value{Kind: VFFILibrary, FFILib: library}), nil
 	case "ffi_symbol":
 		symbol, err := ffiSymbol(a[0].FFILib, a[1].S)
@@ -2728,7 +2784,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return resVal(true, intVal(result)), nil
 	case "ffi_buffer_new":
-		return Value{Kind: VFFIBuffer, FFIBuf: ffiBufferNew(a[0].Bytes)}, nil
+		buffer := ffiBufferNew(a[0].Bytes)
+		r.trackResource(e, "FFIBuffer", buffer.isClosed, func() error { return ffiBufferClose(buffer) })
+		return Value{Kind: VFFIBuffer, FFIBuf: buffer}, nil
 	case "ffi_buffer_address":
 		address, err := ffiBufferAddress(a[0].FFIBuf)
 		if err != nil {
@@ -3944,6 +4002,9 @@ func (r *Runtime) spawn(e *Expr, name string) (Value, *Diagnostic) {
 		child.ReturnType = mustResolve(wr.Checker.Env, f.Return)
 		wr.Ctx.Calls = 1
 		x := wr.execBlock(child, f.Body)
+		if resourceDiag := wr.closeResources(nil); resourceDiag != nil {
+			x.Diag = resourceDiag
+		}
 		t.mu.Lock()
 		if x.Diag != nil {
 			t.Diag = x.Diag
