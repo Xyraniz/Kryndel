@@ -55,6 +55,9 @@ thread_join_timeout(worker_thread, 5)`
 	if d == nil || d.Category != CatResource || !strings.Contains(d.Message, "SQLite") {
 		t.Fatalf("expected unjoined worker leak diagnostic, got %#v", d)
 	}
+	if len(d.Stack) != 1 || d.Stack[0].Function != "worker" {
+		t.Fatalf("expected worker frame on leaked-resource diagnostic, got %#v", d.Stack)
+	}
 }
 
 func TestExplicitDoubleCloseReportsRuntimeDiagnostic(t *testing.T) {

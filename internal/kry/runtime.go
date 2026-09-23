@@ -990,13 +990,16 @@ func (r *Runtime) cleanup(prior *Diagnostic) *Diagnostic {
 		deadline := time.NewTimer(time.Duration(r.Lim.ShutdownMS) * time.Millisecond)
 		defer deadline.Stop()
 		for _, t := range r.Threads {
-			if t.Joined {
+			t.mu.Lock()
+			joined := t.Joined
+			t.mu.Unlock()
+			if joined {
 				continue
 			}
 			select {
 			case <-t.Done:
-				t.Joined = true
 				t.mu.Lock()
+				t.Joined = true
 				workerDiag := t.Diag
 				t.mu.Unlock()
 				if prior == nil && workerDiag != nil && workerDiag.Category == CatResource {
@@ -1794,6 +1797,14 @@ func (r *Runtime) invokeFunction(e *Expr, f *Function, receiver *Value, args []V
 		x := r.execBlock(child, f.Body)
 		r.Ctx.Calls--
 		if x.Diag != nil {
+			frame := StackFrame{Function: f.Name, Source: "<input>", Line: 1, Column: 1}
+			if e != nil {
+				frame.Line, frame.Column = e.Tok.Line, e.Tok.Column
+				if e.Tok.Source != nil {
+					frame.Source = e.Tok.Source.Name
+				}
+			}
+			x.Diag.Stack = append(x.Diag.Stack, frame)
 			return nilVal(), x.Diag
 		}
 		if x.Code == evalReturn && x.Value.Kind == VTailCall && x.Value.Tail != nil {
@@ -4014,6 +4025,16 @@ func (r *Runtime) spawn(e *Expr, name string) (Value, *Diagnostic) {
 		x := wr.execBlock(child, f.Body)
 		if resourceDiag := wr.closeResources(nil); resourceDiag != nil {
 			x.Diag = resourceDiag
+		}
+		if x.Diag != nil {
+			frame := StackFrame{Function: name, Source: "<input>", Line: 1, Column: 1}
+			if e != nil {
+				frame.Line, frame.Column = e.Tok.Line, e.Tok.Column
+				if e.Tok.Source != nil {
+					frame.Source = e.Tok.Source.Name
+				}
+			}
+			x.Diag.Stack = append(x.Diag.Stack, frame)
 		}
 		t.mu.Lock()
 		if x.Diag != nil {

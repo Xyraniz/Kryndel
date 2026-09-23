@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Limits struct {
@@ -52,14 +53,22 @@ const (
 )
 
 type Diagnostic struct {
-	Code     string   `json:"code"`
-	Category Category `json:"category"`
-	Severity string   `json:"severity"`
-	Source   string   `json:"source"`
-	Line     int      `json:"line"`
-	Column   int      `json:"column"`
-	Message  string   `json:"message"`
-	Text     string   `json:"-"`
+	Code     string       `json:"code"`
+	Category Category     `json:"category"`
+	Severity string       `json:"severity"`
+	Source   string       `json:"source"`
+	Line     int          `json:"line"`
+	Column   int          `json:"column"`
+	Message  string       `json:"message"`
+	Stack    []StackFrame `json:"stack,omitempty"`
+	Text     string       `json:"-"`
+}
+
+type StackFrame struct {
+	Function string `json:"function"`
+	Source   string `json:"source"`
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
 }
 
 func codeFor(c Category) string {
@@ -108,7 +117,7 @@ func (d *Diagnostic) Format(jsonMode bool) string {
 	}
 	out := fmt.Sprintf("%s[%s]: %s:%d:%d\n  %s\n", severity, d.Category, d.Source, d.Line, d.Column, d.Message)
 	if d.Text == "" {
-		return out
+		return out + d.formatStack()
 	}
 	lines := []rune(d.Text)
 	line, start := 1, 0
@@ -136,7 +145,15 @@ func (d *Diagnostic) Format(jsonMode bool) string {
 		}
 		out += "^\n"
 	}
-	return out
+	return out + d.formatStack()
+}
+
+func (d *Diagnostic) formatStack() string {
+	var out strings.Builder
+	for _, frame := range d.Stack {
+		fmt.Fprintf(&out, "  at %s (%s:%d:%d)\n", frame.Function, frame.Source, frame.Line, frame.Column)
+	}
+	return out.String()
 }
 
 func ReadSource(path string, lim Limits) (*Source, *Diagnostic) {

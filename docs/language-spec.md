@@ -192,10 +192,12 @@ builtin contract declares it; the caller may handle those failures.
 
 CLI diagnostics expose a stable category and code (`KRY001` through `KRY008`),
 severity, source, line, column, and a human-readable message. They do not
-currently carry a structured cause chain or stack trace. Most recoverable
-standard-library errors use `String` payloads, so their wording is not a stable
-machine-readable API. A standard structured error value and uniform cross-thread
-serialization are not yet implemented.
+currently carry a structured cause chain. Interpreter diagnostics include
+ordered call-site frames for user functions; native backend traps do not yet
+provide equivalent frames, and tail-call optimization can omit repeated tail
+frames. Most recoverable standard-library errors use `String` payloads, so their
+wording is not a stable machine-readable API. A standard structured error value
+and uniform cross-thread serialization are not yet implemented.
 
 ## Language-version and compatibility policy
 
