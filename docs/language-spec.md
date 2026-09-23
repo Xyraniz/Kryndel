@@ -60,6 +60,12 @@ generic type parameters use the declared `Copy`, `Numeric`, or `Comparable`
 constraints. Overloads are selected from the complete argument type tuple. Zero
 matches and multiple equally specific matches are type errors.
 
+Method calls use the receiver's checked type and the same overload rules for
+their explicit arguments. A private method is visible only within its declaring
+module. The checker-selected declaration is retained in KIR and is the target
+the interpreter invokes; runtime dispatch does not select a method again by
+name.
+
 Generic calls use structural type inference with the following rules:
 
 | Parameter or result type | Inference rule |

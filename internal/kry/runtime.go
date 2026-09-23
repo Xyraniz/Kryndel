@@ -1737,9 +1737,12 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		}
 		x := cloneValue(v)
 		receiver = &x
-		f = r.Funcs[methodKey(r.Checker.Env.Types[e.Receiver.Type.String()], e.Name)]
+		f = e.Function
 		if f == nil {
-			f = r.Funcs[methodKey(e.Receiver.Type, e.Name)]
+			f = r.Funcs[methodKey(r.Checker.Env.Types[e.Receiver.Type.String()], e.Name)]
+			if f == nil {
+				f = r.Funcs[methodKey(e.Receiver.Type, e.Name)]
+			}
 		}
 	} else {
 		f = e.Function

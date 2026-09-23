@@ -1090,25 +1090,37 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		if d != nil {
 			return TError, d
 		}
-		f := c.Env.Functions[methodKey(rt, e.Name)]
-		if f == nil {
+		key := methodKey(rt, e.Name)
+		candidates := c.Env.Overloads[key]
+		if len(candidates) == 0 && c.Env.Functions[key] != nil {
+			candidates = []*Function{c.Env.Functions[key]}
+		}
+		if len(candidates) == 0 {
 			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown method '%s' for %s", e.Name, rt)
 		}
-		if len(e.Args) < minArgs(f) || len(e.Args) > len(f.Params) {
-			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "method '%s' expects %d to %d argument(s), got %d", e.Name, minArgs(f), len(f.Params), len(e.Args))
-		}
-		for i, a := range e.Args {
-			pt, _ := resolveSpec(c.Env, f.Params[i].Type, 0)
-			at, dd := c.checkExpr(sc, a, pt)
-			if dd != nil {
-				return TError, dd
+		visible := false
+		var matched *Function
+		var matchedType *Type
+		for _, candidate := range candidates {
+			if !candidate.Public && candidate.Module != sc.Module {
+				continue
 			}
-			if !compatible(pt, at) {
-				return TError, Diag(CatType, a.Tok.Source, a.Tok.Line, a.Tok.Column, "argument %d to method '%s' expected %s, found %s", i+1, e.Name, pt, at)
+			visible = true
+			if returnType, ok := c.matchFunctionCall(sc, e, candidate, expected); ok {
+				if matched != nil {
+					return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "ambiguous call to method '%s': multiple overloads match", e.Name)
+				}
+				matched, matchedType = candidate, returnType
 			}
 		}
-		e.Function = f
-		return resolveSpec(c.Env, f.Return, 0)
+		if !visible {
+			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown method '%s' for %s", e.Name, rt)
+		}
+		if matched == nil {
+			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of method '%s' matches the argument types", e.Name)
+		}
+		e.Function = matched
+		return matchedType, nil
 	}
 	b, ok := c.Env.Builtins[e.Name]
 	if ok {
