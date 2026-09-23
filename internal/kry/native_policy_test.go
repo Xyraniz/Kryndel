@@ -4,7 +4,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -133,6 +135,11 @@ func TestGeneratedBuiltinCapabilitiesMatchBackendDispatch(t *testing.T) {
 				}
 				return true
 			})
+			if tc.fn == "emitExpr" {
+				// These two builtins are statement-lowered by emitStatements.
+				actual["print"] = true
+				actual["println"] = true
+			}
 			if len(actual) != len(tc.want) {
 				t.Fatalf("generated capability inventory has %d names, backend dispatch has %d", len(tc.want), len(actual))
 			}
@@ -142,6 +149,67 @@ func TestGeneratedBuiltinCapabilitiesMatchBackendDispatch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGeneratedInterpreterInventoryMatchesBuiltinRegistry(t *testing.T) {
+	registered := Builtins()
+	for name := range registered {
+		if _, ok := generatedInterpreterBuiltinCases[name]; !ok {
+			t.Errorf("registered builtin %q has no interpreter dispatch case", name)
+		}
+	}
+	for name := range generatedSelfHostedBuiltinNames {
+		if _, ok := registered[name]; !ok {
+			t.Errorf("self-host source inventory contains unknown builtin %q", name)
+		}
+	}
+	source, err := os.ReadFile("../../selfhost/source_kir_compiler.kry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := regexp.MustCompile(`(?:name|token\.text)\s*==\s*"([a-z][a-z0-9_]*)"`)
+	actualSelfHosted := map[string]bool{}
+	for _, match := range pattern.FindAllSubmatch(source, -1) {
+		name := string(match[1])
+		if _, ok := registered[name]; ok {
+			actualSelfHosted[name] = true
+		}
+	}
+	if len(actualSelfHosted) != len(generatedSelfHostedBuiltinNames) {
+		t.Fatalf("generated self-host inventory has %d names, source lists %d", len(generatedSelfHostedBuiltinNames), len(actualSelfHosted))
+	}
+	for name := range actualSelfHosted {
+		if _, ok := generatedSelfHostedBuiltinNames[name]; !ok {
+			t.Errorf("self-host source recognizes %q, missing from generated inventory", name)
+		}
+	}
+}
+
+func TestBuiltinCapabilityMatrixListsEveryBackendAndTarget(t *testing.T) {
+	rows := BuiltinCapabilityMatrix()
+	if len(rows) != len(Builtins())*len(nativeCapabilityTargets) {
+		t.Fatalf("builtin matrix has %d rows, want %d", len(rows), len(Builtins())*len(nativeCapabilityTargets))
+	}
+	lookup := map[string]BuiltinCapability{}
+	for _, row := range rows {
+		key := row.Builtin + "/" + row.Target
+		if _, duplicate := lookup[key]; duplicate {
+			t.Fatalf("duplicate builtin capability row %s", key)
+		}
+		lookup[key] = row
+	}
+	jsonLinux := lookup["json_parse/linux-x64"]
+	if jsonLinux.Interpreter != "supported" || jsonLinux.CAOT != "supported" || jsonLinux.ELFDirect != "supported" || jsonLinux.SelfHosted != "partial" {
+		t.Fatalf("unexpected Linux x64 json_parse capability: %#v", jsonLinux)
+	}
+	jsonWindows := lookup["json_parse/windows-x64"]
+	if jsonWindows.CAOT != "supported" || jsonWindows.ELFDirect != "unsupported" || jsonWindows.SelfHosted != "unsupported" {
+		t.Fatalf("unexpected Windows x64 json_parse capability: %#v", jsonWindows)
+	}
+	websocket := lookup["websocket_connect/linux-x64"]
+	if websocket.Interpreter != "supported" || websocket.CAOT != "unsupported" || websocket.ELFDirect != "unsupported" || websocket.SelfHosted != "unsupported" {
+		t.Fatalf("unexpected websocket_connect capability: %#v", websocket)
 	}
 }
 

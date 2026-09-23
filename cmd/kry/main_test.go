@@ -169,3 +169,34 @@ func TestCapabilitiesCommandWritesJSONMatrix(t *testing.T) {
 		t.Fatalf("capabilities JSON omitted the direct ELF target row: %s", output)
 	}
 }
+
+func TestBuiltinCapabilitiesCommandWritesJSONMatrix(t *testing.T) {
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = writeEnd
+	outputCh := make(chan []byte, 1)
+	errorCh := make(chan error, 1)
+	go func() {
+		output, err := io.ReadAll(readEnd)
+		outputCh <- output
+		errorCh <- err
+	}()
+	status := run([]string{"--json", "capabilities", "--builtins"})
+	_ = writeEnd.Close()
+	os.Stdout = oldStdout
+	output := <-outputCh
+	err = <-errorCh
+	_ = readEnd.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != 0 {
+		t.Fatalf("builtin capabilities command returned %d", status)
+	}
+	if !strings.Contains(string(output), `"builtin":"websocket_connect"`) || !strings.Contains(string(output), `"c_aot":"unsupported"`) || !strings.Contains(string(output), `"self_hosted":"partial"`) {
+		t.Fatalf("builtin capability JSON omitted backend states: %s", output[:min(len(output), 1000)])
+	}
+}

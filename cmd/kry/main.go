@@ -170,8 +170,28 @@ func run(args []string) int {
 }
 
 func capabilitiesCmd(args []string, jsonMode bool) int {
+	if len(args) == 1 && args[0] == "--builtins" {
+		rows := kry.BuiltinCapabilityMatrix()
+		if jsonMode {
+			if err := json.NewEncoder(os.Stdout).Encode(rows); err != nil {
+				fmt.Fprintln(os.Stderr, "kry: cannot encode builtin capabilities:", err)
+				return 1
+			}
+			return 0
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "BUILTIN\tTARGET\tINTERPRETER\tC-AOT\tELF-DIRECT\tSELF-HOSTED")
+		for _, row := range rows {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", row.Builtin, row.Target, row.Interpreter, row.CAOT, row.ELFDirect, row.SelfHosted)
+		}
+		if err := w.Flush(); err != nil {
+			fmt.Fprintln(os.Stderr, "kry: cannot write builtin capabilities:", err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) != 0 {
-		return usage("capabilities does not accept arguments")
+		return usage("capabilities accepts only --builtins")
 	}
 	rows := kry.NativeCapabilityMatrix()
 	if jsonMode {

@@ -93,6 +93,13 @@ on the current host. `partial` marks the direct ELF backend's language subset.
 The `feature_scope` field summarizes the backend, but this matrix does not yet
 probe every language construct and builtin independently.
 
+Use `kry capabilities --builtins` for a generated row for each registered
+builtin and declared target, with interpreter, C AOT, direct ELF, and current
+self-hosted subset status. JSON consumers can run `kry --json capabilities
+--builtins`. Native statuses are derived from generated backend dispatch
+inventories; `partial` marks the documented direct-ELF subset or current
+self-hosted frontend subset.
+
 The `KRY_CC` environment variable overrides the compiler. Successful builds
 print the selected backend and build-time toolchain dependency. Use
 `--no-external-toolchain` to make a no-compiler requirement explicit; `elf`,
