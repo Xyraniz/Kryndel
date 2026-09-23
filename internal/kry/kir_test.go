@@ -2,6 +2,7 @@ package kry
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -88,6 +89,125 @@ func TestKIRPreservesUnaryNotOperator(t *testing.T) {
 	}
 	if len(doc.Statements) != 1 || doc.Statements[0].Init == nil || doc.Statements[0].Init.Kind != "unary" || doc.Statements[0].Init.Operator != "!" {
 		t.Fatalf("unary not was not preserved in KIR: %#v", doc.Statements)
+	}
+}
+
+func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
+	p, c := testProgram(t, "let value: Int = 1\n")
+	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		want   string
+		mutate func(*KIRDocument)
+		limits func(*Limits, []byte)
+	}{
+		{
+			name: "unknown expression kind",
+			want: "unknown expression kind",
+			mutate: func(doc *KIRDocument) {
+				doc.Statements[0].Init.Kind = "mystery"
+			},
+		},
+		{
+			name: "missing checked type",
+			want: "has no checked type",
+			mutate: func(doc *KIRDocument) {
+				doc.Statements[0].Init.Type = ""
+			},
+		},
+		{
+			name: "unknown call target",
+			want: "undeclared function",
+			mutate: func(doc *KIRDocument) {
+				doc.Statements[0].Init = &KIRExpr{Kind: "call", Type: "Int", Name: "missing", CallTarget: "function:missing"}
+			},
+		},
+		{
+			name: "call name and target mismatch",
+			want: "does not match its target",
+			mutate: func(doc *KIRDocument) {
+				doc.Statements[0].Init = &KIRExpr{Kind: "call", Type: "Int", Name: "wrong", CallTarget: "builtin:len"}
+			},
+		},
+		{
+			name: "mismatched map entries",
+			want: "mismatched keys and values",
+			mutate: func(doc *KIRDocument) {
+				doc.Statements[0].Init = &KIRExpr{Kind: "map", Type: "Map[String, Int]", MapKeys: []*KIRExpr{{Kind: "string", Type: "String", String: "a"}}}
+			},
+		},
+		{
+			name: "mismatched struct fields",
+			want: "mismatched fields and values",
+			mutate: func(doc *KIRDocument) {
+				doc.Structs = append(doc.Structs, &KIRStruct{Name: "Pair", Fields: []*KIRField{{Name: "left", Type: "Int"}}})
+				doc.Statements[0].Init = &KIRExpr{Kind: "struct", Type: "Pair", StructName: "Pair", Fields: []string{"left"}}
+			},
+		},
+		{
+			name: "match without arms",
+			want: "match statement has no arms",
+			mutate: func(doc *KIRDocument) {
+				doc.Statements[0] = &KIRStmt{Kind: "match", Scrutinee: &KIRExpr{Kind: "int", Type: "Int"}}
+			},
+		},
+		{
+			name: "non-binding assignment target",
+			want: "assignment target is not a binding",
+			mutate: func(doc *KIRDocument) {
+				doc.Statements[0] = &KIRStmt{
+					Kind:   "assign",
+					Target: &KIRExpr{Kind: "int", Type: "Int"},
+					Value:  &KIRExpr{Kind: "int", Type: "Int"},
+				}
+			},
+		},
+		{
+			name: "nesting limit",
+			want: "tree depth exceeds configured nesting limit",
+			limits: func(limits *Limits, _ []byte) {
+				limits.MaxNesting = 1
+			},
+		},
+		{
+			name: "node limit",
+			want: "node count exceeds configured limit",
+			limits: func(limits *Limits, _ []byte) {
+				limits.MaxASTNodes = 1
+			},
+		},
+		{
+			name: "JSON byte limit",
+			want: "configured JSON limit",
+			limits: func(limits *Limits, encoded []byte) {
+				limits.MaxJSONBytes = len(encoded) - 1
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var doc KIRDocument
+			if err := json.Unmarshal(data, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if tt.mutate != nil {
+				tt.mutate(&doc)
+			}
+			encoded, err := json.Marshal(&doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			limits := DefaultLimits()
+			if tt.limits != nil {
+				tt.limits(&limits, encoded)
+			}
+			if _, err := DecodeKIR(encoded, limits); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", tt.want, err)
+			}
+		})
 	}
 }
 

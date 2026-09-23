@@ -457,6 +457,9 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "immutable binding '%s' cannot be assigned", s.Target.Name)
 			return Flow{HasError: true}
 		}
+		// Assignment places bypass checkExpr, so retain the resolved binding
+		// type on the target node for typed IR serialization.
+		s.Target.Type = b.Type
 		t, d := c.checkExpr(sc, s.Value, b.Type)
 		if d != nil {
 			c.Err = d
