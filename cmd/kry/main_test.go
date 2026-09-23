@@ -138,3 +138,34 @@ func TestEmitAcceptsExplicitKIRTarget(t *testing.T) {
 		t.Fatalf("KIR did not contain requested Linux target: %s", data)
 	}
 }
+
+func TestCapabilitiesCommandWritesJSONMatrix(t *testing.T) {
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = writeEnd
+	outputCh := make(chan []byte, 1)
+	errorCh := make(chan error, 1)
+	go func() {
+		output, err := io.ReadAll(readEnd)
+		outputCh <- output
+		errorCh <- err
+	}()
+	status := run([]string{"--json", "capabilities"})
+	_ = writeEnd.Close()
+	os.Stdout = oldStdout
+	output := <-outputCh
+	err = <-errorCh
+	_ = readEnd.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != 0 {
+		t.Fatalf("capabilities command returned %d: %s", status, output)
+	}
+	if !strings.Contains(string(output), `"format":"elf-direct"`) || !strings.Contains(string(output), `"target":"linux-x64"`) || !strings.Contains(string(output), `"status":"partial"`) {
+		t.Fatalf("capabilities JSON omitted the direct ELF target row: %s", output)
+	}
+}

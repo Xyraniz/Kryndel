@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/Xyraniz/Kryndel/internal/kry"
 )
@@ -111,6 +113,8 @@ func run(args []string) int {
 		fmt.Println("runtime: self-contained executable")
 		fmt.Printf("limits: source=%d artifact=%d instructions=%d\n", e.Limits.MaxSourceBytes, e.Limits.MaxArtifactBytes, e.Limits.MaxInstructions)
 		return 0
+	case "capabilities":
+		return capabilitiesCmd(rest, jsonMode)
 	case "check":
 		return checkCmd(e, rest, jsonMode)
 	case "run":
@@ -163,6 +167,30 @@ func run(args []string) int {
 	default:
 		return usage("unknown command " + cmd)
 	}
+}
+
+func capabilitiesCmd(args []string, jsonMode bool) int {
+	if len(args) != 0 {
+		return usage("capabilities does not accept arguments")
+	}
+	rows := kry.NativeCapabilityMatrix()
+	if jsonMode {
+		if err := json.NewEncoder(os.Stdout).Encode(rows); err != nil {
+			fmt.Fprintln(os.Stderr, "kry: cannot encode capabilities:", err)
+			return 1
+		}
+		return 0
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "FORMAT\tTARGET\tSTATUS\tBACKEND\tTOOLCHAIN\tFEATURE SCOPE\tREASON")
+	for _, row := range rows {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Format, row.Target, row.Status, row.Backend, row.Toolchain, row.FeatureScope, row.Reason)
+	}
+	if err := w.Flush(); err != nil {
+		fmt.Fprintln(os.Stderr, "kry: cannot write capabilities:", err)
+		return 1
+	}
+	return 0
 }
 func isProgramPath(path string) bool {
 	if filepath.Ext(path) != ".kry" && filepath.Ext(path) != ".kexe" {
@@ -827,9 +855,9 @@ func printHelp() {
 	fmt.Println("Kryndel " + version + " — self-contained language toolchain")
 	fmt.Println("usage: kry [global-options] command [arguments]")
 	fmt.Println("       kry [global-options] FILE.kry|FILE.kexe")
-	fmt.Println("commands: check, run, build, emit, inspect, fmt, repl, doctor, version")
+	fmt.Println("commands: check, run, build, emit, inspect, capabilities, fmt, repl, doctor, version")
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
-	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (limited machine backend); c; targets: windows-x64, windows-arm64, linux-x64")
+	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (limited machine backend); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
 	fmt.Println("check options: -Werror, -Werror=KRYW002,KRYW004, -Wno=KRYW003")
 	fmt.Println("global options: --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-instructions N, --max-wall-ms N")

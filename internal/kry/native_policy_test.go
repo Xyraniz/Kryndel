@@ -31,6 +31,54 @@ func TestNativeBackendDescriptions(t *testing.T) {
 	}
 }
 
+func TestNativeCapabilityMatrixMatchesTargetPolicy(t *testing.T) {
+	rows := NativeCapabilityMatrix()
+	if len(rows) != len(nativeCapabilityTargets)*5+1 {
+		t.Fatalf("capability matrix has %d rows, want %d", len(rows), len(nativeCapabilityTargets)*5+1)
+	}
+	targets := make(map[string]NativeTarget, len(nativeCapabilityTargets))
+	for _, target := range nativeCapabilityTargets {
+		targets[target.name] = target.target
+	}
+	seen := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		key := row.Format + "/" + row.Target
+		if seen[key] {
+			t.Fatalf("duplicate capability row %s", key)
+		}
+		seen[key] = true
+		if row.Format == "c" {
+			if row.Target != "any" || row.Status != "source-only" {
+				t.Fatalf("unexpected C source capability: %#v", row)
+			}
+			continue
+		}
+		target, ok := targets[row.Target]
+		if !ok {
+			t.Fatalf("capability row has unknown target %q", row.Target)
+		}
+		if row.Format == "macho" {
+			if row.Status != "unsupported" {
+				t.Fatalf("Mach-O capability should be unsupported: %#v", row)
+			}
+			continue
+		}
+		reason := nativeOutputTargetReason(row.Format, target)
+		want := "supported"
+		if row.Format == "elf-direct" && reason == "" {
+			want = "partial"
+		} else if reason != "" {
+			want = "unsupported"
+		}
+		if row.Status != want {
+			t.Fatalf("%s status is %q, want %q (policy reason %q)", key, row.Status, want, reason)
+		}
+	}
+	if len(seen) != len(rows) {
+		t.Fatalf("matrix has %d rows but only %d unique rows", len(rows), len(seen))
+	}
+}
+
 func TestNoExternalToolchainNeverLaunchesCCompiler(t *testing.T) {
 	old := nativeExecCommand
 	t.Cleanup(func() { nativeExecCommand = old })

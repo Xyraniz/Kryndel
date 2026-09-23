@@ -27,6 +27,33 @@ type NativeBackend struct {
 	RequiresExternalToolchain bool
 }
 
+// NativeCapability is one generated format/target row. Status describes the
+// backend's target support; external compiler availability is checked when a
+// build is requested.
+type NativeCapability struct {
+	Format       string `json:"format"`
+	Target       string `json:"target"`
+	Status       string `json:"status"`
+	Backend      string `json:"backend"`
+	Toolchain    string `json:"toolchain"`
+	FeatureScope string `json:"feature_scope"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+type nativeCapabilityTarget struct {
+	name   string
+	target NativeTarget
+}
+
+var nativeCapabilityTargets = []nativeCapabilityTarget{
+	{name: "linux-x64", target: NativeTarget{OS: "linux", Arch: "amd64"}},
+	{name: "linux-arm64", target: NativeTarget{OS: "linux", Arch: "arm64"}},
+	{name: "windows-x64", target: NativeTarget{OS: "windows", Arch: "amd64"}},
+	{name: "windows-arm64", target: NativeTarget{OS: "windows", Arch: "arm64"}},
+	{name: "darwin-x64", target: NativeTarget{OS: "darwin", Arch: "amd64"}},
+	{name: "darwin-arm64", target: NativeTarget{OS: "darwin", Arch: "arm64"}},
+}
+
 // DescribeNativeBackend returns the effective backend contract for a native
 // output format. The description is shared by the CLI and build policy checks
 // so output and enforcement cannot drift apart.
@@ -43,6 +70,59 @@ func DescribeNativeBackend(format string) (NativeBackend, error) {
 	default:
 		return NativeBackend{}, fmt.Errorf("unsupported native format %q", format)
 	}
+}
+
+// NativeCapabilityMatrix builds the canonical target matrix from the same
+// target policy used by native output validation. Compiler availability is
+// intentionally reported as a build-time dependency, since cross compilers
+// vary by host.
+func NativeCapabilityMatrix() []NativeCapability {
+	formats := []struct {
+		name  string
+		scope string
+	}{
+		{name: "elf", scope: "C AOT subset; host integrations without a C runtime implementation are rejected"},
+		{name: "elf-direct", scope: "documented direct ELF subset; scalar, string, array, struct, Option/Result, and function slices"},
+		{name: "exe", scope: "C AOT subset; host integrations without a C runtime implementation are rejected"},
+		{name: "pe", scope: "C AOT subset; host integrations without a C runtime implementation are rejected"},
+		{name: "macho", scope: "not implemented"},
+	}
+	rows := make([]NativeCapability, 0, len(nativeCapabilityTargets)*len(formats)+1)
+	for _, format := range formats {
+		backend, backendErr := DescribeNativeBackend(format.name)
+		for _, target := range nativeCapabilityTargets {
+			row := NativeCapability{
+				Format:       format.name,
+				Target:       target.name,
+				Status:       "supported",
+				Backend:      backend.Name,
+				Toolchain:    backend.ExternalToolchain,
+				FeatureScope: format.scope,
+			}
+			if backendErr != nil {
+				row.Status = "unsupported"
+				row.Backend = "none"
+				row.Toolchain = "none"
+				row.Reason = backendErr.Error()
+			} else if reason := nativeOutputTargetReason(format.name, target.target); reason != "" {
+				row.Status = "unsupported"
+				row.Reason = reason
+			} else if format.name == "elf-direct" {
+				row.Status = "partial"
+				row.Toolchain = "none"
+			}
+			rows = append(rows, row)
+		}
+	}
+	rows = append(rows, NativeCapability{
+		Format:       "c",
+		Target:       "any",
+		Status:       "source-only",
+		Backend:      "C source",
+		Toolchain:    "none (source generation only)",
+		FeatureScope: "generated C subset; this command does not compile the output",
+	})
+	return rows
 }
 
 type cCompiler struct {
@@ -108,6 +188,9 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 		return nil, fmt.Errorf("--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use --format=elf-direct for the supported direct ELF backend", format, backend.Name)
 	}
 	if format == "elf-direct" {
+		if err := validateNativeOutputTarget(format, target); err != nil {
+			return nil, err
+		}
 		if obfuscate {
 			return nil, fmt.Errorf("direct ELF backend does not support C obfuscation flags")
 		}
@@ -138,23 +221,34 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 }
 
 func validateNativeOutputTarget(format string, target NativeTarget) error {
+	if reason := nativeOutputTargetReason(format, target); reason != "" {
+		return fmt.Errorf("%s", reason)
+	}
+	return nil
+}
+
+func nativeOutputTargetReason(format string, target NativeTarget) string {
 	switch format {
 	case "exe", "pe":
 		if target.OS != "windows" {
-			return fmt.Errorf("PE output requires a Windows target")
+			return "PE output requires a Windows target"
 		}
 		if target.Arch != "amd64" {
-			return fmt.Errorf("C AOT currently supports Windows amd64 targets only")
+			return "C AOT currently supports Windows amd64 targets only"
 		}
 	case "elf":
 		if target.OS != "linux" {
-			return fmt.Errorf("ELF output requires a Linux target")
+			return "ELF output requires a Linux target"
 		}
 		if target.Arch != "amd64" && target.Arch != "arm64" {
-			return fmt.Errorf("C AOT currently supports Linux amd64 and arm64 targets only")
+			return "C AOT currently supports Linux amd64 and arm64 targets only"
+		}
+	case "elf-direct":
+		if target.OS != "linux" || target.Arch != "amd64" {
+			return "direct ELF backend currently supports only linux-amd64"
 		}
 	}
-	return nil
+	return ""
 }
 
 // EmitC returns the generated C source for a checked program.

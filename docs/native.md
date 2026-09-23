@@ -84,6 +84,15 @@ Windows arm64 PE output is not supported by the C AOT backend yet. A target
 alias being accepted by the CLI does not imply that every output format can
 produce it; unsupported format/target pairs fail before C generation.
 
+`kry capabilities` prints the canonical output-format and target matrix;
+`kry --json capabilities` emits the same rows as JSON. The matrix is generated
+from the target policy used by native build validation. `supported` means the
+backend implements that format/target pair, while `toolchain` names any
+external compiler requirement; it does not claim that compiler is installed
+on the current host. `partial` marks the direct ELF backend's language subset.
+The `feature_scope` field summarizes the backend, but this matrix does not yet
+probe every language construct and builtin independently.
+
 The `KRY_CC` environment variable overrides the compiler. Successful builds
 print the selected backend and build-time toolchain dependency. Use
 `--no-external-toolchain` to make a no-compiler requirement explicit; `elf`,
