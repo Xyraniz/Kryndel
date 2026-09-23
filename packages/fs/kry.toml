@@ -1,0 +1,4 @@
+[package]
+name = "fs"
+version = "1.2.0"
+kryndel = ">=1.7.0"

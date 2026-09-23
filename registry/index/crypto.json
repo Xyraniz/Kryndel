@@ -2,6 +2,11 @@
   "name": "crypto",
   "versions": [
     {
+      "version": "1.3.0",
+      "url": "/packages/crypto-1.3.0.tar.gz",
+      "sha256": "9f607c6c36146a3c2c55912436e4cd0938e376eabdeff53ba62886cb5496eb14"
+    },
+    {
       "version": "1.2.0",
       "url": "/packages/crypto-1.2.0.tar.gz",
       "sha256": "fbbd725a45265f0fbf6dd2813b6516d1c1aad9426c21f5f83e43ee02c7274ade"

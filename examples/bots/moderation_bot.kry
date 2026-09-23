@@ -1,9 +1,7 @@
-// Advanced Discord Bot with moderation, events, and commands
-// Full-featured bot with ban, kick, mute, warn systems
-
+// Moderation API example. Command dispatch and permission checks belong to the
+// application; every Discord and persistence error is returned to the caller.
 import "packages/discord"
 import "std/json"
-import "std/env"
 
 pub struct ModerationBot {
     bot: Bot,
@@ -19,23 +17,32 @@ pub struct WarnRecord {
     warnings: Int,
 }
 
+fn moderation_valid_snowflake(value: String) -> Bool {
+    if len(value) < 1 || len(value) > 20 { return false }
+    for point in codepoints(value) {
+        if point < 48 || point > 57 { return false }
+    }
+    return true
+}
+
 pub fn create_moderation_bot(token: String, guild_id: String, mod_log_channel: String) -> Result[ModerationBot, String] {
+    if !moderation_valid_snowflake(guild_id) || !moderation_valid_snowflake(mod_log_channel) {
+        return err("guild_id and mod_log_channel must be Discord snowflakes")
+    }
     let intents: Array[String] = ["Guilds", "GuildMembers", "GuildMessages", "MessageContent", "GuildModeration"]
     let bot_result: Result[Bot, String] = bot(token, intents)
     match bot_result {
-        ok(b) => { return ok(ModerationBot{bot: b, guild_id: guild_id, mod_log_channel: mod_log_channel}) }
-        err(e) => { return err(e) }
+        ok(client) => { return ok(ModerationBot{bot: client, guild_id: guild_id, mod_log_channel: mod_log_channel}) }
+        err(problem) => { return err(problem) }
     }
 }
 
 impl ModerationBot {
     pub fn ban_user(user_id: String, reason: String) -> Result[Nil, String] {
-        let ban_result: Result[Nil, String] = self.bot.ban(self.guild_id, user_id)
-        match ban_result {
-            ok(_) => {
-                return self.log_moderation("BAN", user_id, reason)
-            }
-            err(e) => { return err(e) }
+        let result: Result[Nil, String] = self.bot.ban(self.guild_id, user_id)
+        match result {
+            ok(_) => { return self.log_moderation("BAN", user_id, reason) }
+            err(problem) => { return err(problem) }
         }
     }
 
@@ -44,74 +51,124 @@ impl ModerationBot {
     }
 
     pub fn kick_user(user_id: String, reason: String) -> Result[Nil, String] {
-        let kick_result: Result[Nil, String] = self.bot.kick(self.guild_id, user_id)
-        match kick_result {
-            ok(_) => {
-                return self.log_moderation("KICK", user_id, reason)
-            }
-            err(e) => { return err(e) }
+        let result: Result[Nil, String] = self.bot.kick(self.guild_id, user_id)
+        match result {
+            ok(_) => { return self.log_moderation("KICK", user_id, reason) }
+            err(problem) => { return err(problem) }
         }
     }
 
     pub fn warn_user(user_id: String, moderator_id: String, reason: String) -> Result[WarnRecord, String] {
-        let current_warns: Int = self.get_warning_count(user_id)
-        let new_record: WarnRecord = WarnRecord{
+        if !moderation_valid_snowflake(user_id) || !moderation_valid_snowflake(moderator_id) {
+            return err("user_id and moderator_id must be Discord snowflakes")
+        }
+        let count_result: Result[Int, String] = self.get_warning_count(user_id)
+        let mut current_count: Int = 0
+        match count_result {
+            ok(value) => { current_count = value }
+            err(problem) => { return err(problem) }
+        }
+        let record: WarnRecord = WarnRecord{
             user_id: user_id,
             moderator_id: moderator_id,
             reason: reason,
-            timestamp: 0,
-            warnings: current_warns + 1
+            timestamp: datetime_unix_ms(),
+            warnings: current_count + 1
         }
-        self.save_warning(new_record)
-        let _ = self.log_moderation("WARN", user_id, reason + " (Warning " + str(current_warns + 1) + ")")
-        return ok(new_record)
+        let saved: Result[Nil, String] = self.save_warning(record)
+        match saved {
+            err(problem) => { return err("could not save warning: " + problem) }
+            ok(_) => {}
+        }
+        let logged: Result[Nil, String] = self.log_moderation("WARN", user_id, reason + " (Warning " + str(record.warnings) + ")")
+        match logged {
+            err(problem) => { return err(problem) }
+            ok(_) => { return ok(record) }
+        }
     }
 
-    pub fn get_warning_count(user_id: String) -> Int {
-        let warns: Result[String, String] = fs_read_text("warnings/" + user_id + ".json")
-        match warns {
-            ok(data) => {
-                let json_result: Result[Json, String] = json_parse(data)
-                match json_result {
-                    ok(j) => {
-                        // Simplified - in real impl would extract count from JSON
-                        return 1
-                    }
-                    err(_) => { return 0 }
+    pub fn get_warning_count(user_id: String) -> Result[Int, String] {
+        if !moderation_valid_snowflake(user_id) { return err("user_id must be a Discord snowflake") }
+        let path: String = "warnings/" + user_id + ".json"
+        let stored: Result[String, String] = fs_read_text(path)
+        match stored {
+            ok(text) => {
+                let parsed: Result[Json, String] = json_parse(text)
+                let mut value: Json = result_unwrap(json_parse("null"))
+                match parsed {
+                    ok(document) => { value = document }
+                    err(problem) => { return err("stored warning record is invalid JSON: " + problem) }
+                }
+                let raw_count: Result[Json, String] = json_object_get(value, "warnings")
+                match raw_count {
+                    ok(count_value) => { return json_int(count_value) }
+                    err(problem) => { return err("stored warning record has no count: " + problem) }
                 }
             }
-            err(_) => { return 0 }
+            err(problem) => {
+                if !fs_exists(path) { return ok(0) }
+                return err("could not read warning record: " + problem)
+            }
         }
     }
 
     fn save_warning(record: WarnRecord) -> Result[Nil, String] {
-        let json_str: String = "{\"user_id\":\"" + record.user_id + "\",\"warnings\":" + str(record.warnings) + "}"
-        return fs_write_text("warnings/" + record.user_id + ".json", json_str)
+        let user_json: Result[String, String] = json_quote(record.user_id)
+        let moderator_json: Result[String, String] = json_quote(record.moderator_id)
+        let reason_json: Result[String, String] = json_quote(record.reason)
+        let mut user: String = ""
+        let mut moderator: String = ""
+        let mut reason: String = ""
+        match user_json { ok(value) => { user = value } err(problem) => { return err(problem) } }
+        match moderator_json { ok(value) => { moderator = value } err(problem) => { return err(problem) } }
+        match reason_json { ok(value) => { reason = value } err(problem) => { return err(problem) } }
+        let document: String = "{\"user_id\":" + user + ",\"moderator_id\":" + moderator + ",\"reason\":" + reason + ",\"timestamp\":" + str(record.timestamp) + ",\"warnings\":" + str(record.warnings) + "}"
+        let directory: Result[Nil, String] = fs_create_dir_all("warnings")
+        match directory {
+            err(problem) => { return err(problem) }
+            ok(_) => { return fs_write_text("warnings/" + record.user_id + ".json", document) }
+        }
     }
 
     fn log_moderation(action: String, user_id: String, reason: String) -> Result[Nil, String] {
-        let log_message: String = "[" + action + "] User: " + user_id + " | Reason: " + reason
-        return fs_write_text("modlog.txt", log_message + "\n")
+        let message: String = "[" + action + "] User: " + user_id + " | Reason: " + reason
+        let result: Result[Json, String] = self.bot.send_message(self.mod_log_channel, message)
+        match result {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err("moderation action succeeded but its Discord log failed: " + problem) }
+        }
     }
 
     pub fn handle_command(command: String, args: Array[String], user_id: String) -> Result[String, String] {
         if command == "ban" && len(args) >= 1 {
-            let _ = self.ban_user(args[0], "Banned by command")
-            return ok("User banned successfully")
+            let result: Result[Nil, String] = self.ban_user(args[0], "Banned by command")
+            match result {
+                ok(_) => { return ok("User banned successfully") }
+                err(problem) => { return err(problem) }
+            }
         }
         if command == "kick" && len(args) >= 1 {
-            let _ = self.kick_user(args[0], "Kicked by command")
-            return ok("User kicked successfully")
+            let result: Result[Nil, String] = self.kick_user(args[0], "Kicked by command")
+            match result {
+                ok(_) => { return ok("User kicked successfully") }
+                err(problem) => { return err(problem) }
+            }
         }
         if command == "warn" && len(args) >= 2 {
-            let _ = self.warn_user(args[0], user_id, args[1])
-            return ok("User warned successfully")
+            let result: Result[WarnRecord, String] = self.warn_user(args[0], user_id, args[1])
+            match result {
+                ok(_) => { return ok("User warned successfully") }
+                err(problem) => { return err(problem) }
+            }
         }
         if command == "unban" && len(args) >= 1 {
-            let _ = self.unban_user(args[0])
-            return ok("User unbanned successfully")
+            let result: Result[Nil, String] = self.unban_user(args[0])
+            match result {
+                ok(_) => { return ok("User unbanned successfully") }
+                err(problem) => { return err(problem) }
+            }
         }
-        return err("Unknown command: " + command)
+        return err("Unknown or incomplete command: " + command)
     }
 
     pub fn run() -> Result[Nil, String] {

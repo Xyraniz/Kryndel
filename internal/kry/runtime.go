@@ -829,6 +829,8 @@ type Runtime struct {
 	shutdownOnce sync.Once
 	resourceMu   sync.Mutex
 	resources    []runtimeResource
+	discordRates *discordRateLimiter
+	discordCache *discordObjectCache
 }
 
 type runtimeResource struct {
@@ -901,7 +903,7 @@ func NewRuntime(prog *Program, c *Checker, lim Limits, sb Sandbox) (*Runtime, *D
 
 func NewRuntimeWithArgs(prog *Program, c *Checker, lim Limits, sb Sandbox, args []string) (*Runtime, *Diagnostic) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
-	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Args: append([]string(nil), args...), Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}}
+	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Args: append([]string(nil), args...), Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(), discordCache: newDiscordObjectCache(10_000, 30*time.Minute)}
 	return r, nil
 }
 func (r *Runtime) fail(e *Expr, format string, args ...any) *Diagnostic {
@@ -2383,6 +2385,56 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return r.httpRequest(e, a[0].S, a[1].S, a[2].S)
 	case "http_request_auth":
 		return r.httpRequestAuth(e, a[0].S, a[1].S, a[2].S, a[3].S)
+	case "discord_api_request":
+		return r.discordAPIRequest(a[0].S, a[1].S, a[2].S, a[3].S)
+	case "discord_interaction_request":
+		return r.discordInteractionRequest(a[0].S, a[1].S, a[2].S)
+	case "discord_api_upload":
+		return r.discordAPIUpload(a[0].S, a[1].S, a[2].S, a[3].S, a[4].Bytes, a[5].S)
+	case "discord_verify_interaction":
+		valid, err := verifyDiscordInteraction(a[0].S, a[1].S, a[2].S, a[3].S)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, boolVal(valid)), nil
+	case "discord_cache_get":
+		if !validDiscordCacheKind(a[0].S) || !validDiscordCacheID(a[1].S) {
+			return resVal(false, stringVal("invalid Discord cache kind or ID")), nil
+		}
+		if r.discordCache == nil {
+			return resVal(false, stringVal("Discord cache is unavailable")), nil
+		}
+		value, ok := r.discordCache.get(a[0].S, a[1].S)
+		if !ok {
+			return resVal(false, stringVal("Discord cache miss")), nil
+		}
+		return resVal(true, stringVal(value)), nil
+	case "discord_cache_put":
+		if r.discordCache == nil {
+			return resVal(false, stringVal("Discord cache is unavailable")), nil
+		}
+		if err := r.discordCache.put(a[0].S, a[1].S, a[2].S); err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, nilVal()), nil
+	case "discord_cache_delete":
+		if r.discordCache != nil && validDiscordCacheKind(a[0].S) && validDiscordCacheID(a[1].S) {
+			r.discordCache.delete(a[0].S, a[1].S)
+		}
+		return nilVal(), nil
+	case "discord_cache_clear":
+		if r.discordCache != nil {
+			r.discordCache.clear()
+		}
+		return nilVal(), nil
+	case "discord_cache_ingest":
+		if r.discordCache == nil {
+			return resVal(false, stringVal("Discord cache is unavailable")), nil
+		}
+		if err := r.discordCache.ingest(a[0].S, a[1].S); err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, nilVal()), nil
 	case "win_registry_get":
 		value, err := windowsRegistryGet(a[0].S, a[1].S)
 		if err != nil {
@@ -2427,6 +2479,14 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, nilVal()), nil
+	case "websocket_send_binary":
+		if a[0].WS == nil {
+			return resVal(false, stringVal("closed WebSocket")), nil
+		}
+		if err := a[0].WS.sendBinary(a[1].Bytes); err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, nilVal()), nil
 	case "websocket_receive":
 		if a[0].WS == nil {
 			return resVal(false, stringVal("closed WebSocket")), nil
@@ -2436,8 +2496,47 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, stringVal(text)), nil
+	case "websocket_receive_timeout":
+		if a[0].WS == nil {
+			return resVal(false, stringVal("closed WebSocket")), nil
+		}
+		if a[1].I < 1 || a[1].I > 300000 {
+			return resVal(false, stringVal("WebSocket receive timeout must be between 1 and 300000 milliseconds")), nil
+		}
+		text, err := a[0].WS.receiveTextTimeout(r.Lim.MaxSourceBytes, time.Duration(a[1].I)*time.Millisecond)
+		if err != nil {
+			if errors.Is(err, errWebSocketReceiveTimeout) {
+				return resVal(false, stringVal("WebSocket receive timed out")), nil
+			}
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, stringVal(text)), nil
+	case "websocket_receive_binary":
+		if a[0].WS == nil {
+			return resVal(false, stringVal("closed WebSocket")), nil
+		}
+		data, err := a[0].WS.receiveBinaryTimeout(r.Lim.MaxSourceBytes, 0)
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(data)), nil
+	case "websocket_receive_binary_timeout":
+		if a[0].WS == nil {
+			return resVal(false, stringVal("closed WebSocket")), nil
+		}
+		if a[1].I < 1 || a[1].I > 300000 {
+			return resVal(false, stringVal("WebSocket receive timeout must be between 1 and 300000 milliseconds")), nil
+		}
+		data, err := a[0].WS.receiveBinaryTimeout(r.Lim.MaxSourceBytes, time.Duration(a[1].I)*time.Millisecond)
+		if err != nil {
+			if errors.Is(err, errWebSocketReceiveTimeout) {
+				return resVal(false, stringVal("WebSocket receive timed out")), nil
+			}
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		return resVal(true, bytesVal(data)), nil
 	case "websocket_close":
-		if a[0].WS != nil {
+		if a[0].WS != nil && !a[0].WS.isClosed() {
 			if err := a[0].WS.close(); err != nil {
 				return nilVal(), r.fail(e, "WebSocket close failed: %s", err)
 			}
@@ -4026,7 +4125,7 @@ func (r *Runtime) spawn(e *Expr, name string) (Value, *Diagnostic) {
 	}
 	go func() {
 		defer close(t.Done)
-		wr := &Runtime{Prog: r.Prog, Checker: r.Checker, Funcs: r.Funcs, Global: newRunScope(nil), Lim: r.Lim, Sandbox: r.Sandbox, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: r.Lim}, Channels: channelsSnapshot, Threads: threadsSnapshot, Worker: true}
+		wr := &Runtime{Prog: r.Prog, Checker: r.Checker, Funcs: r.Funcs, Global: newRunScope(nil), Lim: r.Lim, Sandbox: r.Sandbox, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: r.Lim}, Channels: channelsSnapshot, Threads: threadsSnapshot, Worker: true, discordRates: r.discordRates, discordCache: r.discordCache}
 		wr.Worker = true
 		for n, v := range channelSnapshot {
 			_ = wr.Global.define(n, v, false)
