@@ -93,8 +93,10 @@ hide remaining enum/option/result cases, and statements after an unconditional
 exit. Warnings have stable `KRYW001`–`KRYW004` codes and do not change execution.
 `KRYW001` covers redundant match arms, `KRYW002` constant conditions,
 `KRYW003` non-terminating loops, and `KRYW004` unreachable statements or arms.
-`kry check -Werror FILE` reports the same diagnostics as errors and exits with
-status 1 when any warning is present.
+`kry check -Werror FILE` reports all enabled diagnostics as errors and exits
+with status 1 when any warning is present. `-Werror=KRYW002,KRYW004` promotes
+only the selected rules, and `-Wno=KRYW003` disables selected rules. Unknown
+warning codes are usage errors.
 
 `defer` records its body for the end of the current lexical scope. Deferred
 bodies execute in reverse registration order on normal exit, `return`, `break`,

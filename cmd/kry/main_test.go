@@ -82,6 +82,44 @@ func TestCheckWarningsAndWerror(t *testing.T) {
 	}
 }
 
+func TestCheckWarningRulesCanBeSelectedIndividually(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "warning-rules.kry")
+	source := `fn read() -> Int {
+    if true { return 1 } else { return 2 }
+    println("unreachable")
+}`
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	capture := func(args []string) (int, string) {
+		t.Helper()
+		readEnd, writeEnd, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldStderr := os.Stderr
+		os.Stderr = writeEnd
+		status := run(args)
+		_ = writeEnd.Close()
+		os.Stderr = oldStderr
+		output, err := io.ReadAll(readEnd)
+		_ = readEnd.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return status, string(output)
+	}
+	if status, output := capture([]string{"check", "-Wno=KRYW002", path}); status != 0 || strings.Contains(output, "KRYW002") || !strings.Contains(output, "KRYW004") {
+		t.Fatalf("disabled rule should leave other rules enabled, got status %d and %q", status, output)
+	}
+	if status, output := capture([]string{"check", "-Werror=KRYW002", path}); status != 1 || !strings.Contains(output, "KRYW002") || !strings.Contains(output, "error[") || !strings.Contains(output, "warning[") || !strings.Contains(output, "KRYW004") {
+		t.Fatalf("selected error rule should fail with a stable code, got status %d and %q", status, output)
+	}
+	if status, output := capture([]string{"check", "-Wno=KRYW999", path}); status != 2 || !strings.Contains(output, "unknown warning code") {
+		t.Fatalf("unknown warning code should be a usage error, got status %d and %q", status, output)
+	}
+}
+
 func TestEmitAcceptsExplicitKIRTarget(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "target.kry")

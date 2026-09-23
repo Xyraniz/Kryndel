@@ -208,12 +208,34 @@ func report(d *kry.Diagnostic, jsonMode bool) int {
 
 func checkCmd(e *kry.Engine, args []string, jsonMode bool) int {
 	werror := false
+	werrorCodes := map[string]bool{}
+	disabledWarnings := map[string]bool{}
 	path := ""
 	for _, arg := range args {
 		switch arg {
 		case "-Werror", "--Werror":
 			werror = true
 		default:
+			if strings.HasPrefix(arg, "-Werror=") {
+				codes, err := parseWarningCodes(strings.TrimPrefix(arg, "-Werror="))
+				if err != nil {
+					return usage(err.Error())
+				}
+				for _, code := range codes {
+					werrorCodes[code] = true
+				}
+				continue
+			}
+			if strings.HasPrefix(arg, "-Wno=") {
+				codes, err := parseWarningCodes(strings.TrimPrefix(arg, "-Wno="))
+				if err != nil {
+					return usage(err.Error())
+				}
+				for _, code := range codes {
+					disabledWarnings[code] = true
+				}
+				continue
+			}
 			if path != "" {
 				return usage("check expects one source or artifact path")
 			}
@@ -228,11 +250,16 @@ func checkCmd(e *kry.Engine, args []string, jsonMode bool) int {
 		return report(diagnostic, jsonMode)
 	}
 	warnings := kry.AnalyzeWarnings(program)
+	hasError := false
 	for _, warning := range warnings {
-		if werror {
+		if disabledWarnings[warning.Code] {
+			continue
+		}
+		if werror || werrorCodes[warning.Code] {
 			copy := *warning
 			copy.Severity = "error"
 			warning = &copy
+			hasError = true
 		}
 		if jsonMode {
 			fmt.Print(warning.Format(true))
@@ -240,10 +267,28 @@ func checkCmd(e *kry.Engine, args []string, jsonMode bool) int {
 			fmt.Fprint(os.Stderr, warning.Format(false))
 		}
 	}
-	if werror && len(warnings) != 0 {
+	if hasError {
 		return 1
 	}
 	return 0
+}
+
+func parseWarningCodes(raw string) ([]string, error) {
+	parts := strings.Split(raw, ",")
+	codes := make([]string, 0, len(parts))
+	for _, part := range parts {
+		code := strings.TrimSpace(part)
+		if code == "" {
+			return nil, fmt.Errorf("warning option requires one or more comma-separated KRYW codes")
+		}
+		switch code {
+		case kry.WarnRedundantMatch, kry.WarnConstantBranch, kry.WarnInfiniteLoop, kry.WarnUnreachable:
+			codes = append(codes, code)
+		default:
+			return nil, fmt.Errorf("unknown warning code %q", code)
+		}
+	}
+	return codes, nil
 }
 func usage(msg string) int {
 	if msg != "" {
@@ -786,7 +831,7 @@ func printHelp() {
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
 	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (limited machine backend); c; targets: windows-x64, windows-arm64, linux-x64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
-	fmt.Println("check options: -Werror (treat warnings as errors)")
+	fmt.Println("check options: -Werror, -Werror=KRYW002,KRYW004, -Wno=KRYW003")
 	fmt.Println("global options: --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-instructions N, --max-wall-ms N")
 	fmt.Println("sealed artifacts: --passphrase VALUE, --passphrase-file PATH (AES-256-GCM + PBKDF2-SHA256)")
 }
