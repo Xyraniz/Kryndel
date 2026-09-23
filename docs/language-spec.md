@@ -60,6 +60,21 @@ generic type parameters use the declared `Copy`, `Numeric`, or `Comparable`
 constraints. Overloads are selected from the complete argument type tuple. Zero
 matches and multiple equally specific matches are type errors.
 
+Generic calls use structural type inference with the following rules:
+
+| Parameter or result type | Inference rule |
+| --- | --- |
+| `T` | Infer `T` from the corresponding argument and check its declared constraint. |
+| `Array[T]`, `Option[T]`, `Result[T, E]`, `Map[K, V]`, and other supported generic containers | Match the container constructor, then recursively infer each type argument. |
+| Repeated `T` in multiple parameters | Every occurrence must resolve to the same type. |
+| Generic result with an unresolved parameter | The expected result type may infer remaining parameters; otherwise the call has no matching overload. |
+| Competing overloads | Apply constraints and argument inference to each candidate; exactly one candidate must match. |
+
+Type nesting is bounded by the configured `MaxTypeDepth` resource limit.
+Function values and higher-order generic parameters are unsupported because
+functions are declarations rather than values. Generic struct declarations,
+type-associated items, and monomorphization controls are also not implemented.
+
 Explicit call arguments evaluate left to right. Omitted trailing defaults are
 evaluated at the call site in parameter order. `return` exits the current
 function. `break` and `continue` affect the innermost loop. `match` evaluates its

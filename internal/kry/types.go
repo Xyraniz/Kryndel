@@ -245,7 +245,7 @@ func TypeCopyable(root *Type) bool {
 		case TyNil, TyInt, TyUInt, TyFloat, TyBool, TyString, TyBytes, TyEnum, TyJSON:
 			ok = true
 		case TyGeneric:
-			ok = t.B != nil && t.B.Name == "Copy"
+			ok = t.B != nil && (t.B.Name == "Copy" || t.B.Name == "Numeric")
 		case TyArray, TyOption, TySet, TyActor, TyShared:
 			if t.Kind == TyShared {
 				ok = true

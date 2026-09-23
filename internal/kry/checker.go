@@ -1127,7 +1127,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	for _, f := range candidates {
 		if f.Public || f.Module == sc.Module {
 			visible = true
-			if rt, ok := c.matchFunctionCall(sc, e, f); ok {
+			if rt, ok := c.matchFunctionCall(sc, e, f, expected); ok {
 				if matched != nil {
 					return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "ambiguous call to '%s': multiple overloads match", e.Name)
 				}
@@ -1145,43 +1145,114 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of '%s' matches the argument types", e.Name)
 }
 
-func (c *Checker) matchFunctionCall(sc *Scope, e *Expr, f *Function) (*Type, bool) {
+func (c *Checker) matchFunctionCall(sc *Scope, e *Expr, f *Function, expectedReturn *Type) (*Type, bool) {
 	if len(e.Args) < minArgs(f) || len(e.Args) > len(f.Params) {
 		return nil, false
 	}
 	previous := c.Env.TypeParams
 	c.Env.TypeParams = map[string]*Type{}
+	constraints := make(map[string]string, len(f.TypeParams))
+	inferred := make(map[string]bool, len(f.TypeParams))
 	for _, param := range f.TypeParams {
 		c.Env.TypeParams[param.Name] = Generic(param.Name, param.Constraint)
+		constraints[param.Name] = param.Constraint
 	}
 	defer func() { c.Env.TypeParams = previous }()
 	for i, arg := range e.Args {
 		paramSpec := f.Params[i].Type
-		var expected *Type
-		if len(paramSpec.Params) == 0 {
-			if generic := c.Env.TypeParams[paramSpec.Name]; generic != nil {
-				actual, d := c.checkExpr(sc, arg, nil)
-				if d != nil || !satisfiesConstraint(actual, generic.B.Name) {
-					return nil, false
-				}
-				if previousGeneric := c.Env.TypeParams[paramSpec.Name]; previousGeneric != nil && previousGeneric.Kind != TyGeneric && !typeEqual(previousGeneric, actual) {
-					return nil, false
-				}
-				c.Env.TypeParams[paramSpec.Name] = actual
-				continue
-			}
+		argumentExpected, err := resolveSpec(c.Env, paramSpec, 0)
+		if err != nil {
+			return nil, false
 		}
-		expected, _ = resolveSpec(c.Env, paramSpec, 0)
-		actual, d := c.checkExpr(sc, arg, expected)
-		if d != nil || !compatible(expected, actual) {
+		actual, d := c.checkExpr(sc, arg, argumentExpected)
+		if d != nil || !unifyGenericSpec(c.Env, paramSpec, actual, 0, constraints, inferred) {
+			return nil, false
+		}
+	}
+	if expectedReturn != nil && functionReturnContainsGeneric(f.Return, f.TypeParams) {
+		if !unifyGenericSpec(c.Env, f.Return, expectedReturn, 0, constraints, inferred) {
+			return nil, false
+		}
+	}
+	for _, param := range f.TypeParams {
+		if !inferred[param.Name] {
 			return nil, false
 		}
 	}
 	rt, d := resolveSpec(c.Env, f.Return, 0)
-	if d != nil {
+	if d != nil || expectedReturn != nil && functionReturnContainsGeneric(f.Return, f.TypeParams) && !compatible(expectedReturn, rt) {
 		return nil, false
 	}
 	return rt, true
+}
+
+func functionReturnContainsGeneric(spec *TypeSpec, params []TypeParam) bool {
+	if spec == nil {
+		return false
+	}
+	for _, param := range params {
+		if len(spec.Params) == 0 && spec.Name == param.Name {
+			return true
+		}
+	}
+	for _, child := range spec.Params {
+		if functionReturnContainsGeneric(child, params) {
+			return true
+		}
+	}
+	return false
+}
+
+func unifyGenericSpec(env *TypeEnv, spec *TypeSpec, actual *Type, depth int, constraints map[string]string, inferred map[string]bool) bool {
+	if spec == nil || actual == nil || depth > env.Lim.MaxTypeDepth {
+		return false
+	}
+	if len(spec.Params) == 0 {
+		if generic := env.TypeParams[spec.Name]; generic != nil {
+			if actual.Kind == TyGeneric && actual.Name == spec.Name {
+				return true
+			}
+			if inferred[spec.Name] {
+				return typeEqual(generic, actual)
+			}
+			if !satisfiesConstraint(actual, constraints[spec.Name]) {
+				return false
+			}
+			env.TypeParams[spec.Name] = actual
+			inferred[spec.Name] = true
+			return true
+		}
+		expected, err := resolveSpec(env, spec, depth)
+		return err == nil && compatible(expected, actual)
+	}
+	shape, err := resolveSpec(env, spec, depth)
+	if err != nil || shape.Kind != actual.Kind {
+		return false
+	}
+	actualArgs := typeArguments(actual)
+	if len(spec.Params) != len(actualArgs) {
+		return false
+	}
+	for i, child := range spec.Params {
+		if !unifyGenericSpec(env, child, actualArgs[i], depth+1, constraints, inferred) {
+			return false
+		}
+	}
+	return true
+}
+
+func typeArguments(t *Type) []*Type {
+	if t == nil {
+		return nil
+	}
+	switch t.Kind {
+	case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor, TyShared:
+		return []*Type{t.A}
+	case TyResult, TyMap:
+		return []*Type{t.A, t.B}
+	default:
+		return nil
+	}
 }
 
 // minArgs returns the number of required (non-defaulted) parameters.
@@ -1196,6 +1267,24 @@ func minArgs(f *Function) int {
 }
 
 func satisfiesConstraint(t *Type, constraint string) bool {
+	if t != nil && t.Kind == TyGeneric {
+		inherited := ""
+		if t.B != nil {
+			inherited = t.B.Name
+		}
+		switch constraint {
+		case "", "Any":
+			return true
+		case "Copy":
+			return inherited == "Copy" || inherited == "Numeric"
+		case "Numeric":
+			return inherited == "Numeric"
+		case "Comparable":
+			return inherited == "Comparable" || inherited == "Numeric"
+		default:
+			return false
+		}
+	}
 	switch constraint {
 	case "", "Any":
 		return t != nil && t.Kind != TyError && t.Kind != TyUnknown
