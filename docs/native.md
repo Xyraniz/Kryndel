@@ -9,11 +9,11 @@ make
 ./tools/kry run examples/fibonacci.kry
 ```
 
-Kryndel exposes three distinct products. `kry run` interprets source on the portable Go runtime. `kry build --format=kexe` writes a portable `KRYNATIVE4` bundle containing checked source files; it is not a machine-code executable. `kry build --format=elf-direct` emits machine code directly for its explicitly supported subset. The default native AOT formats (`elf`, `exe`, and `pe`) use the generated-C backend and require an external C compiler. `--format=c` emits C source without invoking a compiler.
+Kryndel exposes three distinct products. `kry run` interprets source on the portable Go runtime. `kry build --format=kexe` writes a portable `KRYNATIVE4` bundle containing checked source files; it is not a machine-code executable. `kry build --format=elf-direct` emits machine code directly for its explicitly supported Linux amd64 subset. The native AOT formats (`elf`, `exe`, and `pe`) use the generated-C backend and require an external C compiler. C AOT accepts Linux amd64/arm64 and Windows amd64 targets; target OS and architecture are validated before C lowering. `--format=c` emits C source without invoking a compiler.
 
 The executable does not require C, Python, Rust, Node.js, or an equivalent runtime to execute interpreted Kryndel programs. The only source-build dependency for the Go toolchain is Go and its standard library, plus the external `ffmpeg` executable when Windows webcam capture is requested. Host integrations that need Go libraries or platform frameworks are rejected by native backends with their builtin name instead of embedding or invoking the VM.
 
-On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` when it is on `PATH`. If it is missing and WSL2 has the `Ubuntu` distribution with that compiler, the builder automatically invokes it and translates temporary paths into `/mnt/<drive>/...`; `KRY_WSL_DISTRO` selects another distribution. Windows PE builds continue to use the configured MinGW-capable `gcc` on Windows. The test suite executes the ELF AOT parity tests on Linux/amd64 and validates PE/ELF headers on Windows.
+On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` and Linux/arm64 builds use `aarch64-linux-gnu-gcc` when the selected compiler is on `PATH`. If it is missing and WSL2 has the `Ubuntu` distribution with that compiler, the builder automatically invokes it and translates temporary paths into `/mnt/<drive>/...`; `KRY_WSL_DISTRO` selects another distribution. Windows PE builds currently support amd64 and use the configured MinGW-capable `gcc` on Windows. The test suite executes the ELF AOT parity tests on Linux/amd64 and validates PE/ELF headers on Windows.
 
 ## Command contract
 
@@ -77,7 +77,12 @@ ahead-of-time backend. The checked program is lowered to C by
 | Target | Compiler | Output |
 | --- | --- | --- |
 | `linux-x64` | `cc`/`gcc`/`clang` | ELF64 executable |
-| `windows-x64` | `x86_64-w64-mingw32-gcc` | PE32+ executable |
+| `linux-arm64` | `aarch64-linux-gnu-gcc` | ELF64 executable |
+| `windows-x64` | MinGW-capable `gcc` | PE32+ executable |
+
+Windows arm64 PE output is not supported by the C AOT backend yet. A target
+alias being accepted by the CLI does not imply that every output format can
+produce it; unsupported format/target pairs fail before C generation.
 
 The `KRY_CC` environment variable overrides the compiler. Successful builds
 print the selected backend and build-time toolchain dependency. Use

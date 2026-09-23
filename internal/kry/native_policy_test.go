@@ -49,3 +49,11 @@ func TestNoExternalToolchainNeverLaunchesCCompiler(t *testing.T) {
 		t.Fatal("no-external-toolchain build attempted to execute an external command")
 	}
 }
+
+func TestNativeTargetIsRejectedBeforeFeatureLowering(t *testing.T) {
+	p, c := testProgram(t, `let result: Result[FFILibrary, String] = ffi_library_open("missing.dll")`)
+	_, err := BuildNative(p, c, NativeTarget{OS: "windows", Arch: "amd64"}, "elf")
+	if err == nil || !strings.Contains(err.Error(), "ELF output requires a Linux target") {
+		t.Fatalf("expected target validation before C feature lowering, got %v", err)
+	}
+}

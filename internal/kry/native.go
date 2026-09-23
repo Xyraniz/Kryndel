@@ -113,6 +113,9 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 		}
 		return BuildDirectELF(p, c, target)
 	}
+	if err := validateNativeOutputTarget(format, target); err != nil {
+		return nil, err
+	}
 	var src string
 	if obfuscate {
 		src, err = GenerateCObfuscated(p, c)
@@ -125,20 +128,33 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 	switch format {
 	case "c":
 		return []byte(src), nil
-	case "exe", "pe":
-		if target.OS != "windows" {
-			return nil, fmt.Errorf("PE output requires a Windows target")
-		}
-	case "elf":
-		if target.OS != "linux" {
-			return nil, fmt.Errorf("ELF output requires a Linux target")
-		}
+	case "exe", "pe", "elf":
 	case "macho":
 		return nil, fmt.Errorf("Mach-O output requires a Darwin toolchain; use --format=c and a local clang")
 	default:
 		return nil, fmt.Errorf("unsupported native format %q", format)
 	}
 	return compileC(src, target)
+}
+
+func validateNativeOutputTarget(format string, target NativeTarget) error {
+	switch format {
+	case "exe", "pe":
+		if target.OS != "windows" {
+			return fmt.Errorf("PE output requires a Windows target")
+		}
+		if target.Arch != "amd64" {
+			return fmt.Errorf("C AOT currently supports Windows amd64 targets only")
+		}
+	case "elf":
+		if target.OS != "linux" {
+			return fmt.Errorf("ELF output requires a Linux target")
+		}
+		if target.Arch != "amd64" && target.Arch != "arm64" {
+			return fmt.Errorf("C AOT currently supports Linux amd64 and arm64 targets only")
+		}
+	}
+	return nil
 }
 
 // EmitC returns the generated C source for a checked program.

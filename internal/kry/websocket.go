@@ -113,8 +113,12 @@ func (w *websocketConn) close() error {
 	}
 	w.closed = true
 	w.stateMu.Unlock()
-	_ = w.sendFrame(0x8, []byte{0x03, 0xE8})
-	return w.conn.Close()
+	frameErr := w.sendFrame(0x8, []byte{0x03, 0xE8})
+	closeErr := w.conn.Close()
+	if frameErr != nil {
+		return frameErr
+	}
+	return closeErr
 }
 
 func (w *websocketConn) isClosed() bool {
