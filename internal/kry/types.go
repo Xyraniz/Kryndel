@@ -504,6 +504,13 @@ func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
 				return nil, Diag(CatType, f.Tok.Source, f.Tok.Line, f.Tok.Column, "function '%s' with the same signature is already defined", f.Name)
 			}
 		}
+		maxOverloads := lim.MaxOverloadsPerName
+		if maxOverloads <= 0 {
+			maxOverloads = DefaultLimits().MaxOverloadsPerName
+		}
+		if len(e.Overloads[key]) >= maxOverloads {
+			return nil, Diag(CatResource, f.Tok.Source, f.Tok.Line, f.Tok.Column, "function overload limit of %d exceeded for '%s'", maxOverloads, f.Name)
+		}
 		e.Overloads[key] = append(e.Overloads[key], f)
 		if _, ok := e.Functions[key]; !ok {
 			e.Functions[key] = f

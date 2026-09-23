@@ -8,28 +8,29 @@ import (
 )
 
 type Limits struct {
-	MaxSourceBytes     int
-	MaxArtifactBytes   int
-	MaxTokens          int
-	MaxASTNodes        int
-	MaxNesting         int
-	MaxTypeDepth       int
-	MaxImports         int
-	MaxCallDepth       int
-	MaxInstructions    uint64
-	MaxMemoryBytes     int64
-	MaxStringBytes     int
-	MaxJSONBytes       int
-	MaxArrayElements   int
-	MaxChannelCapacity int
-	MaxWorkers         int
-	MaxOutputBytes     int64
-	MaxWallTimeMS      int64
-	ShutdownMS         int64
+	MaxSourceBytes      int
+	MaxArtifactBytes    int
+	MaxTokens           int
+	MaxASTNodes         int
+	MaxNesting          int
+	MaxTypeDepth        int
+	MaxOverloadsPerName int
+	MaxImports          int
+	MaxCallDepth        int
+	MaxInstructions     uint64
+	MaxMemoryBytes      int64
+	MaxStringBytes      int
+	MaxJSONBytes        int
+	MaxArrayElements    int
+	MaxChannelCapacity  int
+	MaxWorkers          int
+	MaxOutputBytes      int64
+	MaxWallTimeMS       int64
+	ShutdownMS          int64
 }
 
 func DefaultLimits() Limits {
-	return Limits{MaxSourceBytes: 16 << 20, MaxArtifactBytes: 64 << 20, MaxTokens: 1_000_000, MaxASTNodes: 1_000_000, MaxNesting: 512, MaxTypeDepth: 128, MaxImports: 256, MaxCallDepth: 1024, MaxInstructions: 5_000_000, MaxMemoryBytes: 256 << 20, MaxStringBytes: 16 << 20, MaxJSONBytes: 64 << 20, MaxArrayElements: 1_000_000, MaxChannelCapacity: 1_000_000, MaxWorkers: 256, MaxOutputBytes: 16 << 20, MaxWallTimeMS: 10_000, ShutdownMS: 2_000}
+	return Limits{MaxSourceBytes: 16 << 20, MaxArtifactBytes: 64 << 20, MaxTokens: 1_000_000, MaxASTNodes: 1_000_000, MaxNesting: 512, MaxTypeDepth: 128, MaxOverloadsPerName: 256, MaxImports: 256, MaxCallDepth: 1024, MaxInstructions: 5_000_000, MaxMemoryBytes: 256 << 20, MaxStringBytes: 16 << 20, MaxJSONBytes: 64 << 20, MaxArrayElements: 1_000_000, MaxChannelCapacity: 1_000_000, MaxWorkers: 256, MaxOutputBytes: 16 << 20, MaxWallTimeMS: 10_000, ShutdownMS: 2_000}
 }
 
 type Source struct {

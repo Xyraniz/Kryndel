@@ -71,6 +71,10 @@ Generic calls use structural type inference with the following rules:
 | Competing overloads | Apply constraints and argument inference to each candidate; exactly one candidate must match. |
 
 Type nesting is bounded by the configured `MaxTypeDepth` resource limit.
+Overload candidate sets are bounded by `MaxOverloadsPerName` (256 by default)
+so a call cannot trigger an unbounded overload search. The current compiler
+checks generic calls but does not monomorphize or generate per-instantiation
+code.
 Function values and higher-order generic parameters are unsupported because
 functions are declarations rather than values. Generic struct declarations,
 type-associated items, and monomorphization controls are also not implemented.
