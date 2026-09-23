@@ -19,6 +19,32 @@ type NativeTarget struct {
 	GUI  bool
 }
 
+// NativeBackend describes the implementation and build-time dependencies for
+// a requested output format.
+type NativeBackend struct {
+	Name                      string
+	ExternalToolchain         string
+	RequiresExternalToolchain bool
+}
+
+// DescribeNativeBackend returns the effective backend contract for a native
+// output format. The description is shared by the CLI and build policy checks
+// so output and enforcement cannot drift apart.
+func DescribeNativeBackend(format string) (NativeBackend, error) {
+	switch format {
+	case "elf-direct":
+		return NativeBackend{Name: "direct ELF", ExternalToolchain: "none"}, nil
+	case "c":
+		return NativeBackend{Name: "C source", ExternalToolchain: "none (source only)"}, nil
+	case "exe", "pe", "elf":
+		return NativeBackend{Name: "C AOT", ExternalToolchain: "external C compiler", RequiresExternalToolchain: true}, nil
+	case "macho":
+		return NativeBackend{}, fmt.Errorf("Mach-O output is not implemented; use --format=c with a local clang")
+	default:
+		return NativeBackend{}, fmt.Errorf("unsupported native format %q", format)
+	}
+}
+
 type cCompiler struct {
 	program string
 	prefix  []string
@@ -49,10 +75,9 @@ func ParseNativeTarget(raw string) (NativeTarget, error) {
 	return t, nil
 }
 
-// BuildNative compiles a checked program into a real, runnable executable. The
-// program is lowered to C and compiled with the host C compiler (or a cross
-// compiler for Windows targets), producing genuine PE/ELF binaries that execute
-// the full checked language rather than a constant-output stub.
+// BuildNative compiles a checked program into a runnable executable using the
+// requested backend. The "elf-direct" format bypasses C; the "elf", "exe", and
+// "pe" formats lower to C and invoke an external C compiler.
 func BuildNative(p *Program, c *Checker, target NativeTarget, format string) ([]byte, error) {
 	return BuildNativeOpts(p, c, target, format, false)
 }
@@ -61,8 +86,26 @@ func BuildNative(p *Program, c *Checker, target NativeTarget, format string) ([]
 // obfuscate is true, string literals are masked so their plaintext does not
 // appear in the produced executable.
 func BuildNativeOpts(p *Program, c *Checker, target NativeTarget, format string, obfuscate bool) ([]byte, error) {
+	return BuildNativeWithPolicyOpts(p, c, target, format, obfuscate, false)
+}
+
+// nativeExecCommand is isolated for regression tests that prove a rejected
+// no-toolchain build never attempts to launch an external compiler.
+var nativeExecCommand = exec.Command
+
+// BuildNativeWithPolicyOpts is BuildNativeOpts with an explicit external
+// toolchain policy. When noExternalToolchain is true, formats that compile
+// generated C are rejected before code generation or process execution.
+func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, format string, obfuscate, noExternalToolchain bool) ([]byte, error) {
 	if p == nil || c == nil {
 		return nil, fmt.Errorf("missing checked program")
+	}
+	backend, err := DescribeNativeBackend(format)
+	if err != nil {
+		return nil, err
+	}
+	if noExternalToolchain && backend.RequiresExternalToolchain {
+		return nil, fmt.Errorf("--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use --format=elf-direct for the supported direct ELF backend", format, backend.Name)
 	}
 	if format == "elf-direct" {
 		if obfuscate {
@@ -71,7 +114,6 @@ func BuildNativeOpts(p *Program, c *Checker, target NativeTarget, format string,
 		return BuildDirectELF(p, c, target)
 	}
 	var src string
-	var err error
 	if obfuscate {
 		src, err = GenerateCObfuscated(p, c)
 	} else {
@@ -149,7 +191,7 @@ func linuxCrossCompiler(name string) (cCompiler, error) {
 	if distro == "" {
 		distro = "Ubuntu"
 	}
-	probe := exec.Command(wsl, "-d", distro, "--", name, "--version")
+	probe := nativeExecCommand(wsl, "-d", distro, "--", name, "--version")
 	probe.Stdout = io.Discard
 	probe.Stderr = io.Discard
 	if err := probe.Run(); err != nil {
@@ -186,7 +228,7 @@ func compileC(src string, target NativeTarget) ([]byte, error) {
 		args[4] = wslPath(out)
 	}
 	args = append(append([]string{}, compiler.prefix...), args...)
-	cmd := exec.Command(compiler.program, args...)
+	cmd := nativeExecCommand(compiler.program, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

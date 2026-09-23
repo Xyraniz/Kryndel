@@ -9,7 +9,9 @@ make
 ./tools/kry run examples/fibonacci.kry
 ```
 
-The executable does not load modules from another language and does not require C, Python, Rust, Node.js, or an equivalent runtime to execute interpreted Kryndel programs. The only source-build dependency for that path is the documented Go toolchain and standard library, plus the external `ffmpeg` executable when Windows webcam capture is requested. The full portable execution path is the self-contained `KRYNATIVE3` bundle. Native `--format=elf`/`--format=exe` output is produced by a C-based ahead-of-time backend that lowers the checked program to C and compiles it with the host C toolchain; host integrations that need Go libraries or platform frameworks are rejected with their builtin name instead of embedding or invoking the VM.
+Kryndel exposes three distinct products. `kry run` interprets source on the portable Go runtime. `kry build --format=kexe` writes a portable `KRYNATIVE3` bundle containing checked source files; it is not a machine-code executable. `kry build --format=elf-direct` emits machine code directly for its explicitly supported subset. The default native AOT formats (`elf`, `exe`, and `pe`) use the generated-C backend and require an external C compiler. `--format=c` emits C source without invoking a compiler.
+
+The executable does not require C, Python, Rust, Node.js, or an equivalent runtime to execute interpreted Kryndel programs. The only source-build dependency for the Go toolchain is Go and its standard library, plus the external `ffmpeg` executable when Windows webcam capture is requested. Host integrations that need Go libraries or platform frameworks are rejected by native backends with their builtin name instead of embedding or invoking the VM.
 
 On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` when it is on `PATH`. If it is missing and WSL2 has the `Ubuntu` distribution with that compiler, the builder automatically invokes it and translates temporary paths into `/mnt/<drive>/...`; `KRY_WSL_DISTRO` selects another distribution. Windows PE builds continue to use the configured MinGW-capable `gcc` on Windows. The test suite executes the ELF AOT parity tests on Linux/amd64 and validates PE/ELF headers on Windows.
 
@@ -21,9 +23,12 @@ On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` when it is on `
 | `run source.kry` | Check and execute source. | `0` |
 | `run file.kexe` | Validate the container and execute its source payload. | `0` |
 | `build source.kry` | Check and write a deterministic `KRYNATIVE3` bundle. | `0` |
+| `build source.kry --format=kexe` | Write a portable bundle containing validated source; no compiler is invoked. | `0` |
 | `build source.kry --format=exe --target=windows-x64` | Check and write a real PE32+ entrypoint for the selected target. | `0` |
-| `build source.kry --format=elf --target=linux-x64` | Check and write a real ELF64 entrypoint for the selected target. | `0` |
+| `build source.kry --format=elf --target=linux-x64` | Check and write an ELF64 executable with the generated-C AOT backend; an external C compiler is required. | `0` |
 | `build source.kry --format=elf-direct --target=linux-x64` | Use the dependency-free direct machine backend for the documented scalar-output, immutable String-pointer, dynamic String-concatenation, immutable qword-Array literal/index/push/get/concat, tagged Option/Result construction and inspection, Int/Bool/UInt assignment/control-flow, and scalar/pointer-function slice; no C compiler is invoked. | `0` |
+| `build source.kry --format=elf-direct --target=linux-x64 --no-external-toolchain` | Require the direct backend and forbid builds that need an external compiler. | `0` |
+| `build source.kry --format=elf --no-external-toolchain` | Reject before backend code generation; the C AOT backend requires an external C compiler. | `2` |
 | `build source.kry --format=c` | Check and emit the generated C source without compiling. | `0` |
 | `emit source.kry --format=kry-ir [--target=TARGET]` | Emit deterministic, versioned checked KIR JSON without executing source; `TARGET` defaults to the host. | `0` |
 | `inspect binary` | Inspect PE/ELF headers and reject unknown binary formats. | `0` |
@@ -31,7 +36,7 @@ On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` when it is on `
 | `repl` | Run the interactive read-evaluate-print loop. | `0` |
 | `doctor` | Report native installation readiness. | `0` |
 | `version` | Print the compiler version. | `0` |
-| Invalid usage | Print a categorized CLI error. | `2` |
+| Invalid usage or a forbidden external toolchain | Print a categorized CLI error naming the requested format and required dependency. | `2` |
 | Source, type, runtime, artifact, or I/O failure | Print a categorized diagnostic. | `1` |
 | Missing built executable | Print an actionable build message. | `69` |
 
@@ -73,9 +78,13 @@ ahead-of-time backend. The checked program is lowered to C by
 | `linux-x64` | `cc`/`gcc`/`clang` | ELF64 executable |
 | `windows-x64` | `x86_64-w64-mingw32-gcc` | PE32+ executable |
 
-The `KRY_CC` environment variable overrides the compiler. `--format=c` emits the
-generated C source instead of a binary, which is useful for inspection and for
-building with a custom toolchain.
+The `KRY_CC` environment variable overrides the compiler. Successful builds
+print the selected backend and build-time toolchain dependency. Use
+`--no-external-toolchain` to make a no-compiler requirement explicit; `elf`,
+`exe`, and `pe` fail before C generation or process execution. `elf-direct` is
+available only for its documented subset and rejects unsupported source before
+emitting an executable. `--format=c` emits C source for inspection or later use
+with a separately managed toolchain; this command itself does not invoke one.
 
 The generated code mirrors the interpreter's semantics exactly: values are
 immutable and arena-allocated with a memory budget, arithmetic is checked,

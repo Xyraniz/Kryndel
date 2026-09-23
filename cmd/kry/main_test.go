@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,35 @@ func TestDirectProgramInvocation(t *testing.T) {
 	}
 	if got := run([]string{source, "unexpected"}); got != 2 {
 		t.Fatalf("direct invocation accepted extra arguments with status %d", got)
+	}
+}
+
+func TestNoExternalToolchainCLIRejectsCBackendBeforeSourceIO(t *testing.T) {
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = writeEnd
+	t.Cleanup(func() {
+		os.Stderr = oldStderr
+		_ = readEnd.Close()
+		_ = writeEnd.Close()
+	})
+
+	missing := filepath.Join(t.TempDir(), "does-not-exist.kry")
+	status := run([]string{"build", missing, "--format=elf", "--no-external-toolchain"})
+	_ = writeEnd.Close()
+	os.Stderr = oldStderr
+	message, err := io.ReadAll(readEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != 2 {
+		t.Fatalf("no-external-toolchain build returned %d, want 2", status)
+	}
+	if !strings.Contains(string(message), "--no-external-toolchain forbids --format=elf") || !strings.Contains(string(message), "external C compiler") {
+		t.Fatalf("build did not explain the forbidden backend dependency: %s", message)
 	}
 }
 

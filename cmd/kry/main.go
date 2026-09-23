@@ -267,6 +267,7 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	src, out, format, target := a[0], "", "kexe", "host"
 	encrypt := false
 	obfuscate := false
+	noExternalToolchain := false
 	iterations := 0
 	for i := 1; i < len(a); i++ {
 		x := a[i]
@@ -288,6 +289,8 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 			encrypt = true
 		case x == "--obfuscate":
 			obfuscate = true
+		case x == "--no-external-toolchain":
+			noExternalToolchain = true
 		case strings.HasPrefix(x, "--iterations="):
 			v, err := strconv.Atoi(strings.TrimPrefix(x, "--iterations="))
 			if err != nil || v < 0 {
@@ -320,14 +323,21 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 			if d := e.BuildSealedPath(src, out, e.Passphrase, iterations); d != nil {
 				return report(d, jsonMode)
 			}
-			fmt.Println("built " + out + " (encrypted)")
+			fmt.Println("built " + out + " (encrypted; backend=portable KRYNATIVE3; external-toolchain=none)")
 			return 0
 		}
 		if d := e.BuildPath(src, out); d != nil {
 			return report(d, jsonMode)
 		}
-		fmt.Println("built " + out)
+		fmt.Println("built " + out + " (backend=portable KRYNATIVE3; external-toolchain=none)")
 		return 0
+	}
+	backend, err := kry.DescribeNativeBackend(format)
+	if err != nil {
+		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "%v", err), jsonMode)
+	}
+	if noExternalToolchain && backend.RequiresExternalToolchain {
+		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use --format=elf-direct for the supported direct ELF backend", format, backend.Name), jsonMode)
 	}
 	p, c, d := e.CheckPath(src)
 	if d != nil {
@@ -337,7 +347,7 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	if err != nil {
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "%v", err), jsonMode)
 	}
-	data, err := kry.BuildNativeOpts(p, c, t, format, obfuscate)
+	data, err := kry.BuildNativeWithPolicyOpts(p, c, t, format, obfuscate, noExternalToolchain)
 	if err != nil {
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "native build failed: %v", err), jsonMode)
 	}
@@ -358,7 +368,7 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	if format == "exe" || format == "pe" || format == "elf" || format == "elf-direct" {
 		_ = os.Chmod(out, 0o755)
 	}
-	fmt.Println("built " + out)
+	fmt.Printf("built %s (backend=%s; external-toolchain=%s)\n", out, backend.Name, backend.ExternalToolchain)
 	return 0
 }
 func fmtCmd(e *kry.Engine, a []string, jsonMode bool) int {
@@ -738,8 +748,8 @@ func printHelp() {
 	fmt.Println("       kry [global-options] FILE.kry|FILE.kexe")
 	fmt.Println("commands: check, run, build, emit, inspect, fmt, repl, doctor, version")
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
-	fmt.Println("build formats: kexe, exe/pe, elf; targets: windows-x64, windows-arm64, linux-x64")
-	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate")
+	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (limited machine backend); c; targets: windows-x64, windows-arm64, linux-x64")
+	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
 	fmt.Println("global options: --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-instructions N, --max-wall-ms N")
 	fmt.Println("sealed artifacts: --passphrase VALUE, --passphrase-file PATH (AES-256-GCM + PBKDF2-SHA256)")
 }
