@@ -213,6 +213,100 @@ func TestBuiltinCapabilityMatrixListsEveryBackendAndTarget(t *testing.T) {
 	}
 }
 
+func TestLanguageCapabilityMatrixCoversGeneratedItemsAndTargets(t *testing.T) {
+	rows := LanguageCapabilityMatrix()
+	expectedItems := len(Builtins()) + len(generatedLanguageExprKinds) + len(generatedLanguageStmtKinds) + len(generatedLanguagePatternKinds) + len(generatedLanguageUnaryOperators) + len(generatedLanguageBinaryOperators) + len(generatedLanguageTypeKinds)
+	if len(rows) != expectedItems*len(nativeCapabilityTargets) {
+		t.Fatalf("language matrix has %d rows, want %d", len(rows), expectedItems*len(nativeCapabilityTargets))
+	}
+	lookup := map[string]LanguageCapability{}
+	for _, row := range rows {
+		key := row.Category + "/" + row.Feature + "/" + row.Target
+		if _, duplicate := lookup[key]; duplicate {
+			t.Fatalf("duplicate language capability row %s", key)
+		}
+		if row.Interpreter == "" || row.CAOT == "" || row.ELFDirect == "" || row.SelfHosted == "" {
+			t.Fatalf("capability row has an empty backend state: %#v", row)
+		}
+		lookup[key] = row
+	}
+	if len(lookup) != len(rows) {
+		t.Fatalf("language matrix has %d rows but %d unique rows", len(rows), len(lookup))
+	}
+	checks := []struct {
+		key          string
+		caot, direct string
+		selfHosted   string
+	}{
+		{key: "expression/ExFloat/linux-x64", caot: "supported", direct: "unsupported", selfHosted: "unsupported"},
+		{key: "statement/StMatch/linux-x64", caot: "supported", direct: "unsupported", selfHosted: "unsupported"},
+		{key: "pattern/PatResult/linux-x64", caot: "supported", direct: "unsupported", selfHosted: "unsupported"},
+		{key: "unary_operator/MINUS/linux-x64", caot: "supported", direct: "partial", selfHosted: "partial"},
+		{key: "binary_operator/SHL/linux-x64", caot: "unsupported", direct: "partial", selfHosted: "partial"},
+		{key: "type/TyChannel/linux-x64", caot: "supported", direct: "unsupported", selfHosted: "unsupported"},
+	}
+	for _, check := range checks {
+		row, ok := lookup[check.key]
+		if !ok {
+			t.Fatalf("language matrix is missing %s", check.key)
+		}
+		if row.CAOT != check.caot || row.ELFDirect != check.direct || row.SelfHosted != check.selfHosted {
+			t.Errorf("%s has unexpected backend states: %#v", check.key, row)
+		}
+	}
+}
+
+func TestLanguageCapabilityNamesCoverDeclaredKinds(t *testing.T) {
+	for kind := ExprKind(0); kind < ExprKind(len(generatedLanguageExprKinds)); kind++ {
+		name := expressionKindName(kind)
+		if name == "" {
+			t.Errorf("expression kind %d has no language capability name", kind)
+			continue
+		}
+		if _, ok := generatedLanguageExprKinds[name]; !ok {
+			t.Errorf("expression kind %q is missing from generated language inventory", name)
+		}
+	}
+	for kind := StmtKind(0); kind < StmtKind(len(generatedLanguageStmtKinds)); kind++ {
+		name := statementKindName(kind)
+		if name == "" {
+			t.Errorf("statement kind %d has no language capability name", kind)
+			continue
+		}
+		if _, ok := generatedLanguageStmtKinds[name]; !ok {
+			t.Errorf("statement kind %q is missing from generated language inventory", name)
+		}
+	}
+	for kind := PatternKind(0); kind < PatternKind(len(generatedLanguagePatternKinds)); kind++ {
+		name := patternKindName(kind)
+		if name == "" {
+			t.Errorf("pattern kind %d has no language capability name", kind)
+			continue
+		}
+		if _, ok := generatedLanguagePatternKinds[name]; !ok {
+			t.Errorf("pattern kind %q is missing from generated language inventory", name)
+		}
+	}
+	for kind := TyVoid; kind <= TyFFIBuffer; kind++ {
+		name := typeKindName(kind)
+		if name == "" {
+			t.Errorf("language type kind %d has no capability name", kind)
+			continue
+		}
+		if _, ok := generatedLanguageTypeKinds[name]; !ok {
+			t.Errorf("language type %q is missing from generated inventory", name)
+		}
+	}
+}
+
+func TestNativeBuildPreflightsGeneratedSyntaxCapabilities(t *testing.T) {
+	p, c := testProgram(t, "unsafe { }\n")
+	_, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err == nil || !strings.Contains(err.Error(), `statement "StUnsafe" is not listed as supported by the elf-direct backend`) {
+		t.Fatalf("direct ELF should reject unsupported statements during capability preflight, got %v", err)
+	}
+}
+
 func TestNoExternalToolchainNeverLaunchesCCompiler(t *testing.T) {
 	old := nativeExecCommand
 	t.Cleanup(func() { nativeExecCommand = old })

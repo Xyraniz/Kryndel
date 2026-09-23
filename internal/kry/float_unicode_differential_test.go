@@ -100,6 +100,19 @@ func TestFloatBoundaryPolicy(t *testing.T) {
 	}
 }
 
+func TestUnaryFloatSignsPreserveTheirOperators(t *testing.T) {
+	got, diagnostic := runInterpreterCapture(t, `fn main() -> Nil {
+    println(+1.5)
+    println(-1.5)
+}`)
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	if got != "1.5\n-1.5\n" {
+		t.Fatalf("unary Float signs produced %q", got)
+	}
+}
+
 func TestUnicodePolicyBoundaries(t *testing.T) {
 	program := `fn main() -> Nil {
     let combining: String = "é"

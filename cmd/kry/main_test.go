@@ -200,3 +200,42 @@ func TestBuiltinCapabilitiesCommandWritesJSONMatrix(t *testing.T) {
 		t.Fatalf("builtin capability JSON omitted backend states: %s", output[:min(len(output), 1000)])
 	}
 }
+
+func TestLanguageCapabilitiesCommandWritesJSONMatrix(t *testing.T) {
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = writeEnd
+	outputCh := make(chan []byte, 1)
+	errorCh := make(chan error, 1)
+	go func() {
+		output, err := io.ReadAll(readEnd)
+		outputCh <- output
+		errorCh <- err
+	}()
+	status := run([]string{"--json", "capabilities", "--features"})
+	_ = writeEnd.Close()
+	os.Stdout = oldStdout
+	output := <-outputCh
+	err = <-errorCh
+	_ = readEnd.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != 0 {
+		t.Fatalf("language capabilities command returned %d", status)
+	}
+	for _, fragment := range []string{
+		`"category":"expression"`, `"feature":"ExFloat"`,
+		`"category":"binary_operator"`, `"feature":"SHL"`,
+		`"category":"type"`, `"feature":"TyChannel"`,
+		`"category":"builtin"`, `"feature":"websocket_connect"`,
+		`"target":"linux-x64"`, `"elf_direct":"partial"`,
+	} {
+		if !strings.Contains(string(output), fragment) {
+			t.Fatalf("language capability JSON omitted %s: %s", fragment, output[:min(len(output), 1500)])
+		}
+	}
+}

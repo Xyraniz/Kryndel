@@ -170,6 +170,26 @@ func run(args []string) int {
 }
 
 func capabilitiesCmd(args []string, jsonMode bool) int {
+	if len(args) == 1 && args[0] == "--features" {
+		rows := kry.LanguageCapabilityMatrix()
+		if jsonMode {
+			if err := json.NewEncoder(os.Stdout).Encode(rows); err != nil {
+				fmt.Fprintln(os.Stderr, "kry: cannot encode language capabilities:", err)
+				return 1
+			}
+			return 0
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "CATEGORY\tFEATURE\tTARGET\tINTERPRETER\tC-AOT\tELF-DIRECT\tSELF-HOSTED")
+		for _, row := range rows {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Category, row.Feature, row.Target, row.Interpreter, row.CAOT, row.ELFDirect, row.SelfHosted)
+		}
+		if err := w.Flush(); err != nil {
+			fmt.Fprintln(os.Stderr, "kry: cannot write language capabilities:", err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) == 1 && args[0] == "--builtins" {
 		rows := kry.BuiltinCapabilityMatrix()
 		if jsonMode {
@@ -191,7 +211,7 @@ func capabilitiesCmd(args []string, jsonMode bool) int {
 		return 0
 	}
 	if len(args) != 0 {
-		return usage("capabilities accepts only --builtins")
+		return usage("capabilities accepts only --builtins or --features")
 	}
 	rows := kry.NativeCapabilityMatrix()
 	if jsonMode {

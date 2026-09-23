@@ -100,6 +100,18 @@ self-hosted subset status. JSON consumers can run `kry --json capabilities
 inventories; `partial` marks the documented direct-ELF subset or current
 self-hosted frontend subset.
 
+Use `kry capabilities --features` for the combined language matrix. It lists
+every registered builtin, expression kind, statement kind, pattern kind,
+unary and binary operator, and declared language type for every native target.
+The JSON form is `kry --json capabilities --features`. The generator reads the
+Go backend dispatch and the Stage 3 source compiler's syntax and builtin
+recognition; native builds consult the same generated inventories before
+emitting C or machine-code output. `supported` means the backend has a lowering
+or runtime handler for that item and the target is allowed; `partial` means a
+bounded implementation exists; `unsupported` means no handler is advertised
+for that backend/target. These inventories describe dispatch coverage and do
+not by themselves prove semantic parity across all input combinations.
+
 The `KRY_CC` environment variable overrides the compiler. Successful builds
 print the selected backend and build-time toolchain dependency. Use
 `--no-external-toolchain` to make a no-compiler requirement explicit; `elf`,
@@ -108,10 +120,12 @@ available only for its documented subset and rejects unsupported source before
 emitting an executable. `--format=c` emits C source for inspection or later use
 with a separately managed toolchain; this command itself does not invoke one.
 
-The generated code mirrors the interpreter's semantics exactly: values are
-immutable and arena-allocated with a memory budget, arithmetic is checked,
-display and float formatting are byte-for-byte identical, and `defer` unwinds
-per block. The backend supports functions, recursion, `if`/`else`, `while`,
+The C AOT runtime implements immutable values with an arena budget, checked
+arithmetic, and per-block `defer` unwinding for its accepted subset. Those
+implementation choices do not establish parity for every interpreter input;
+the capability matrix reports lowering coverage, and parity still depends on
+the targeted regression tests for each operation. The backend supports
+functions, recursion, `if`/`else`, `while`,
 `for`, `match`, structs, enums, arrays, maps, sets, strings, bytes, `Option`,
 `Result`, the `?` operator, and the pure, filesystem, environment, JSON, crypto,
 process and timing builtins. It also supports the deterministic concurrency

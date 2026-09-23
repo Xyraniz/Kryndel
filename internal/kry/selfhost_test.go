@@ -687,6 +687,9 @@ func TestStage34KryndelDynamicBackendUnaryNot(t *testing.T) {
 
 func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	t.Logf("bootstrap host Go version=%s target=linux-amd64", runtime.Version())
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("Stage 3 bootstrap hashes are target-specific; run the locked bootstrap on linux-amd64")
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -771,9 +774,6 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	assertLinuxAMD64ELF(t, compilerELF, "stage35 generated source compiler")
 	verifyBootstrapHash(t, lock, verifiedHashes, "stage1-source-kir-compiler.elf", compilerELF)
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("generated compiler execution requires linux-amd64; KIR parsing and ELF generation passed")
-	}
 	if err := os.Chmod(generatedCompiler, 0o700); err != nil {
 		t.Fatal(err)
 	}

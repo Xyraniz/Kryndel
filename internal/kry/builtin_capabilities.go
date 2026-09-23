@@ -72,15 +72,35 @@ func nativeBuiltinBackendStatus(name, format string, target NativeTarget) string
 }
 
 func validateNativeFeatureSupport(p *Program, c *Checker, format string, target NativeTarget) error {
+	if p == nil || c == nil || c.Env == nil {
+		return fmt.Errorf("missing checked program or type environment")
+	}
 	var walkExpr func(*Expr, bool) error
 	walkExpr = func(e *Expr, allowDirectOutput bool) error {
 		if e == nil {
 			return nil
 		}
-		if format == "elf-direct" && e.ConstValue != nil {
-			switch e.ConstValue.Kind {
-			case VInt, VUInt, VBool, VString:
-				return nil
+		if kind := expressionKindName(e.Kind); kind == "" {
+			return fmt.Errorf("expression kind %d is not listed as supported by the %s backend for %s-%s", e.Kind, format, target.OS, target.Arch)
+		} else if err := validateLanguageItem("expression", kind, format, target); err != nil {
+			return err
+		}
+		if e.Kind == ExUnary || e.Kind == ExBinary {
+			category := "binary_operator"
+			if e.Kind == ExUnary {
+				category = "unary_operator"
+			}
+			if operator := operatorKindName(e.Op); operator == "" {
+				return fmt.Errorf("operator %q is not listed as supported by the %s backend for %s-%s", opText(e.Op), format, target.OS, target.Arch)
+			} else if err := validateLanguageItem(category, operator, format, target); err != nil {
+				return err
+			}
+		}
+		if e.Type != nil && e.Type.Kind != TyNil && e.Type.Kind != TyVoid && e.Type.Kind != TyError && e.Type.Kind != TyUnknown {
+			if kind := typeKindName(e.Type.Kind); kind == "" {
+				return fmt.Errorf("type kind %d is not listed as supported by the %s backend for %s-%s", e.Type.Kind, format, target.OS, target.Arch)
+			} else if err := validateLanguageItem("type", kind, format, target); err != nil {
+				return err
 			}
 		}
 		if e.Kind == ExCall && e.Function == nil && c.Env != nil {
@@ -114,7 +134,18 @@ func validateNativeFeatureSupport(p *Program, c *Checker, format string, target 
 			if s == nil {
 				continue
 			}
+			if kind := statementKindName(s.Kind); kind == "" {
+				return fmt.Errorf("statement kind %d is not listed as supported by the %s backend for %s-%s", s.Kind, format, target.OS, target.Arch)
+			} else if err := validateLanguageItem("statement", kind, format, target); err != nil {
+				return err
+			}
 			for _, e := range []*Expr{s.Init, s.Expr, s.Target, s.Value, s.Cond, s.Iter, s.Return, s.Scrutinee} {
+				if s.Kind == StReturn && e == s.Return && e != nil && e.Kind == ExNil {
+					// Nil is the source spelling of a no-value return. The direct
+					// backend lowers that return as a void result without an ExNil
+					// value representation.
+					continue
+				}
 				allowOutput := format == "elf-direct" && s.Kind == StExpr && e == s.Expr
 				if err := walkExpr(e, allowOutput); err != nil {
 					return err
@@ -126,6 +157,11 @@ func validateNativeFeatureSupport(p *Program, c *Checker, format string, target 
 				}
 			}
 			for _, arm := range s.Arms {
+				if kind := patternKindName(arm.Pattern.Kind); kind == "" {
+					return fmt.Errorf("pattern kind %d is not listed as supported by the %s backend for %s-%s", arm.Pattern.Kind, format, target.OS, target.Arch)
+				} else if err := validateLanguageItem("pattern", kind, format, target); err != nil {
+					return err
+				}
 				if err := walkStmts(arm.Body); err != nil {
 					return err
 				}
@@ -136,7 +172,38 @@ func validateNativeFeatureSupport(p *Program, c *Checker, format string, target 
 	if err := walkStmts(p.Statements); err != nil {
 		return err
 	}
+	for _, decl := range p.Structs {
+		for _, field := range decl.Fields {
+			if field.Type != nil && field.Type.Kind != TyNil && field.Type.Kind != TyVoid {
+				if err := validateLanguageItem("type", typeKindName(field.Type.Kind), format, target); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	for _, function := range p.Functions {
+		env := *c.Env
+		env.TypeParams = make(map[string]*Type, len(function.TypeParams))
+		for name, typ := range c.Env.TypeParams {
+			env.TypeParams[name] = typ
+		}
+		for _, param := range function.TypeParams {
+			env.TypeParams[param.Name] = Generic(param.Name, param.Constraint)
+		}
+		for _, parameter := range function.Params {
+			typ, diagnostic := resolveSpec(&env, parameter.Type, 0)
+			if diagnostic == nil && typ != nil && typ.Kind != TyNil && typ.Kind != TyVoid {
+				if err := validateLanguageItem("type", typeKindName(typ.Kind), format, target); err != nil {
+					return err
+				}
+			}
+		}
+		returnType, diagnostic := resolveSpec(&env, function.Return, 0)
+		if diagnostic == nil && returnType != nil && returnType.Kind != TyNil && returnType.Kind != TyVoid {
+			if err := validateLanguageItem("type", typeKindName(returnType.Kind), format, target); err != nil {
+				return err
+			}
+		}
 		if err := walkStmts(function.Body); err != nil {
 			return err
 		}

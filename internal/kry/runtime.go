@@ -1371,6 +1371,9 @@ func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 			if e.Op == PLUS {
 				return v, nil
 			}
+			if e.Op != MINUS {
+				return nilVal(), r.fail(e, "unsupported unary operator %s for Int", opText(e.Op))
+			}
 			if v.I == math.MinInt64 {
 				return nilVal(), r.fail(e, "negation overflow")
 			}
@@ -1386,6 +1389,12 @@ func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 			return nilVal(), r.fail(e, "unary '-' is not defined for UInt")
 		}
 		if v.Kind == VFloat {
+			if e.Op == PLUS {
+				return v, nil
+			}
+			if e.Op != MINUS {
+				return nilVal(), r.fail(e, "unsupported unary operator %s for Float", opText(e.Op))
+			}
 			z := -v.F
 			if !isFinite(z) {
 				return nilVal(), r.fail(e, "floating-point result must be finite")
