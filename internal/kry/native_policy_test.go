@@ -164,6 +164,20 @@ func TestNoExternalToolchainNeverLaunchesCCompiler(t *testing.T) {
 	}
 }
 
+func TestNativeBuildPreflightsGeneratedBuiltinCapabilities(t *testing.T) {
+	p, c := testProgram(t, `let library = ffi_library_open("missing.so")`)
+	if _, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "c"); err == nil || !strings.Contains(err.Error(), `builtin "ffi_library_open" is not listed as supported by the c backend`) {
+		t.Fatalf("C source output should reject unsupported builtins during capability preflight, got %v", err)
+	}
+	p, c = testProgram(t, `let socket = tcp_connect("127.0.0.1", 1)`)
+	if _, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf-direct"); err == nil || !strings.Contains(err.Error(), `builtin "tcp_connect" is not listed as supported by the elf-direct backend`) {
+		t.Fatalf("direct ELF should reject unsupported builtins during capability preflight, got %v", err)
+	}
+	if _, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), `builtin "tcp_connect" is not listed as supported by the elf-direct backend`) {
+		t.Fatalf("direct ELF API should reject unsupported builtins during capability preflight, got %v", err)
+	}
+}
+
 func TestNativeTargetIsRejectedBeforeFeatureLowering(t *testing.T) {
 	p, c := testProgram(t, `let result: Result[FFILibrary, String] = ffi_library_open("missing.dll")`)
 	_, err := BuildNative(p, c, NativeTarget{OS: "windows", Arch: "amd64"}, "elf")

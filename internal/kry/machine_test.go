@@ -41,7 +41,7 @@ println(prefix + str(40 + 2))
 
 func TestDirectELFRejectsDynamicConstructs(t *testing.T) {
 	p, c := testProgram(t, "let value: String = datetime_now()\nprintln(value)\n")
-	if _, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), "compile-time") {
+	if _, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), `builtin "datetime_now" is not listed as supported by the elf-direct backend`) {
 		t.Fatalf("expected direct backend subset diagnostic, got %v", err)
 	}
 }

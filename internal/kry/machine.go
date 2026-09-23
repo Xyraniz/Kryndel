@@ -26,6 +26,9 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 	if p == nil || c == nil {
 		return nil, fmt.Errorf("missing checked program")
 	}
+	if err := validateNativeFeatureSupport(p, c, "elf-direct", target); err != nil {
+		return nil, err
+	}
 	// Force every direct backend build through the public interchange format.
 	// This catches schema drift before the machine emitter is allowed to run.
 	kir, err := EmitKIR(p, c, target)

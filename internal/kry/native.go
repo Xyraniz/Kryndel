@@ -201,6 +201,9 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 	if err := validateNativeOutputTarget(format, target); err != nil {
 		return nil, err
 	}
+	if err := validateNativeFeatureSupport(p, c, format, target); err != nil {
+		return nil, err
+	}
 	var src string
 	if obfuscate {
 		src, err = GenerateCObfuscated(p, c)
