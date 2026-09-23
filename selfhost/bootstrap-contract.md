@@ -15,7 +15,7 @@ reproducible until a second clean build produces identical hashes.
 | 0 | Go reference compiler built from `cmd/kry` and `internal/kry`. | Host `kry` executable. | This is the trusted reference and may use Go. Record its executable hash and Go version. | Implemented; command is `go build -o kry ./cmd/kry`. No bootstrap hash lock is checked in. |
 | 1 | Stage 0 checks the Kryndel frontend/backend, emits its KIR, and runs `kir_backend.kry` to produce a Linux amd64 source compiler. | `source-kir-compiler` ELF plus the exact KIR input. | After Stage 0 has produced and launched the ELF, compilation of a fixture must not start Go, C, an assembler, or a linker. | The first half of `TestStage36KryndelSecondCompilerBootstrap` covers this source-compiler subset on Linux amd64. The test skips executable checks on other hosts. |
 | 2 | Stage 1 compiles the bundled `elf_backend.kry`, `dynamic_backend.kry`, and `source_kir_compiler.kry` sources into another compiler. | Second-level source compiler ELF and its source bundle. | Stage 1 itself must compile the bundle and fixture without launching Go, C, an assembler, a linker, or its earlier Stage 0 host. | The second half of `TestStage36KryndelSecondCompilerBootstrap` compiles and runs a fixture and checks an invalid-source diagnostic. This proves the tested subset, not complete language support. |
-| 3 | Rebuild Stage 2 from the same checked-in Kryndel sources using the declared bootstrap input, then compare the rebuilt compiler. | Rebuilt Stage 2 ELF with byte-identical SHA-256. | The rebuild must succeed without Stage 0 and without Go, C, an assembler, a linker, or an earlier compiler. | Not implemented. There is no checked-in clean rebuild command or expected hash. |
+| 3 | Rebuild the second-level source compiler from the same checked-in Kryndel sources using that compiler itself. | Rebuilt compiler ELF with byte-identical SHA-256. | The rebuild must succeed without Stage 0 and without Go, C, an assembler, a linker, or an earlier compiler. | `TestStage36KryndelSecondCompilerBootstrap` now performs this self-rebuild and requires byte-identical Stage 2/Stage 3 ELF bytes on Linux amd64. This is still a subset probe: there is no checked-in clean rebuild command or persistent expected-hash lock, so Stage 3 is not claimed complete. |
 | 4 | Compile the complete published language specification for every declared target. | Release compiler artifacts and the compatibility fixture results for every target. | The compiler must accept the full language and all its targets; every target build must honor the target's declared external-toolchain policy. | Not implemented. Modules, general heap values, linker/object-file support, Windows, and other documented unsupported features remain outstanding. |
 
 ## Reproducing the current Stage 1 and Stage 2 probe
@@ -28,10 +28,12 @@ go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count
 
 The host Go test emits KIR and runs `kir_backend.kry` to produce Stage 1. Stage
 1 then compiles and runs a fixture, compiles the bundled frontend/backend into
-Stage 2, and uses Stage 2 to compile and run the fixture again. The test does
-not currently write a persistent manifest of the KIR, source bundle, Stage 1,
-or Stage 2 hashes. Those hashes must be added before Stage 1 or Stage 2 is
-called a reproducible bootstrap stage.
+Stage 2, and uses Stage 2 to compile and run the fixture again. Stage 2 then
+rebuilds itself from the same bundled source and the test compares the complete
+ELF byte streams, reporting their SHA-256. The test does not currently write a
+persistent manifest of the KIR, source bundle, Stage 1, Stage 2, or Stage 3
+hashes. A checked-in lock and a standalone clean rebuild command remain
+necessary before this subset probe can count as an accepted Stage 3 bootstrap.
 
 ## Release gate
 

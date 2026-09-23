@@ -2,6 +2,7 @@ package kry
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"os"
@@ -825,6 +826,21 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if !strings.Contains(string(invalidOutput), "unsupported statement") {
 		t.Fatalf("stage36 second-level compiler returned an unexpected invalid-source diagnostic (exit %v): %s", invalidErr, invalidOutput)
 	}
+
+	thirdCompiler := filepath.Join(dir, "third-source-kir-compiler")
+	thirdCompilerOutput, err := exec.Command(secondCompiler, bundledCompiler, thirdCompiler).CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage3 second-level compiler failed to rebuild itself from the bundled sources: %v; output: %s", err, thirdCompilerOutput)
+	}
+	thirdCompilerELF, err := os.ReadFile(thirdCompiler)
+	if err != nil {
+		t.Fatalf("stage3 compiler did not write its rebuilt ELF: %v", err)
+	}
+	assertLinuxAMD64ELF(t, thirdCompilerELF, "stage3 self-rebuilt source compiler")
+	if !bytes.Equal(secondCompilerELF, thirdCompilerELF) {
+		t.Fatalf("stage3 self-rebuild was not byte-reproducible: Stage 2 sha256=%x Stage 3 sha256=%x", sha256.Sum256(secondCompilerELF), sha256.Sum256(thirdCompilerELF))
+	}
+	t.Logf("stage3 second-level compiler rebuilt itself byte-for-byte; sha256=%x", sha256.Sum256(thirdCompilerELF))
 }
 
 func TestStage3SourceKIRCompilerMatchesDirectELFOracle(t *testing.T) {
