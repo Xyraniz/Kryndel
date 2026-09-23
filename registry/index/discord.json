@@ -5,6 +5,16 @@
       "version": "1.0.0",
       "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.0.0.tar.gz",
       "sha256": "0f964883a2b3a01fd23782da3186290dd30a5c59fd8470e4fa74ff129cff7cb3"
+    },
+    {
+      "version": "1.1.0",
+      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.1.0.tar.gz",
+      "sha256": "fa8d484af6b542ea90f591bdbac9ec3dc197f91d3d87c9a3bc7302c545488cee"
+    },
+    {
+      "version": "1.2.0",
+      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.2.0.tar.gz",
+      "sha256": "96c71c5f2c91ee13000d0d611663cc487247ffb57b04c6419404249af8df9d68"
     }
   ]
 }

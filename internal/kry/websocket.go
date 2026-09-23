@@ -6,6 +6,8 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -13,14 +15,25 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
 
+var errWebSocketReceiveTimeout = errors.New("WebSocket receive timed out")
+
+type websocketReadResult struct {
+	opcode  byte
+	payload []byte
+	err     error
+}
+
 type websocketConn struct {
-	conn    net.Conn
-	read    *bufio.Reader
-	writeMu sync.Mutex
-	stateMu sync.Mutex
-	closed  bool
+	conn        net.Conn
+	read        *bufio.Reader
+	writeMu     sync.Mutex
+	readMu      sync.Mutex
+	pendingRead chan websocketReadResult
+	stateMu     sync.Mutex
+	closed      bool
 }
 
 func connectWebSocket(raw string) (*websocketConn, error) {
@@ -99,6 +112,12 @@ func (w *websocketConn) sendText(message string) error {
 	}
 	return w.sendFrame(0x1, []byte(message))
 }
+func (w *websocketConn) sendBinary(message []byte) error {
+	if w.isClosed() {
+		return fmt.Errorf("WebSocket handle is closed")
+	}
+	return w.sendFrame(0x2, message)
+}
 func (w *websocketConn) sendPong(data []byte) error {
 	if w.isClosed() {
 		return fmt.Errorf("WebSocket handle is closed")
@@ -162,79 +181,188 @@ func (w *websocketConn) sendFrame(opcode byte, payload []byte) error {
 	return err
 }
 func (w *websocketConn) receiveText(max int) (string, error) {
-	if w.isClosed() {
-		return "", fmt.Errorf("WebSocket handle is closed")
+	return w.receiveTextTimeout(max, 0)
+}
+
+// receiveTextTimeout keeps the frame parser running across caller timeouts. A
+// socket deadline in the middle of a frame would consume part of that frame
+// and make the next read start at the wrong byte, so the reader goroutine owns
+// the stream until it has produced a complete text frame or a terminal error.
+func (w *websocketConn) receiveTextTimeout(max int, timeout time.Duration) (string, error) {
+	opcode, payload, err := w.receiveMessageTimeout(max, timeout)
+	if err != nil {
+		return "", err
 	}
+	if opcode != 0x1 {
+		return "", fmt.Errorf("WebSocket message is binary; use websocket_receive_binary")
+	}
+	if !validUTF8(payload) {
+		return "", fmt.Errorf("WebSocket text frame is not UTF-8")
+	}
+	return string(payload), nil
+}
+
+func (w *websocketConn) receiveBinaryTimeout(max int, timeout time.Duration) ([]byte, error) {
+	opcode, payload, err := w.receiveMessageTimeout(max, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if opcode != 0x2 {
+		return nil, fmt.Errorf("WebSocket message is text; use websocket_receive")
+	}
+	return payload, nil
+}
+
+func (w *websocketConn) receiveMessageTimeout(max int, timeout time.Duration) (byte, []byte, error) {
+	w.readMu.Lock()
+	defer w.readMu.Unlock()
+	if w.isClosed() {
+		return 0, nil, fmt.Errorf("WebSocket handle is closed")
+	}
+	if w.pendingRead == nil {
+		pending := make(chan websocketReadResult, 1)
+		w.pendingRead = pending
+		go func() {
+			opcode, payload, err := w.receiveMessageRaw(max)
+			pending <- websocketReadResult{opcode: opcode, payload: payload, err: err}
+		}()
+	}
+	pending := w.pendingRead
+	if timeout <= 0 {
+		result := <-pending
+		w.pendingRead = nil
+		return result.opcode, result.payload, result.err
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case result := <-pending:
+		w.pendingRead = nil
+		return result.opcode, result.payload, result.err
+	case <-timer.C:
+		return 0, nil, errWebSocketReceiveTimeout
+	}
+}
+
+func (w *websocketConn) receiveMessageRaw(max int) (byte, []byte, error) {
+	if w.isClosed() {
+		return 0, nil, fmt.Errorf("WebSocket handle is closed")
+	}
+	var messageOpcode byte
+	var message []byte
+	collecting := false
 	for {
-		opcode, payload, err := w.receiveFrame(max)
+		fin, opcode, payload, err := w.receiveFrame(max)
 		if err != nil {
-			return "", err
-		}
-		switch opcode {
-		case 0x1:
-			if !validUTF8(payload) {
-				return "", fmt.Errorf("WebSocket text frame is not UTF-8")
-			}
-			return string(payload), nil
-		case 0x8:
 			w.stateMu.Lock()
 			w.closed = true
 			w.stateMu.Unlock()
 			_ = w.conn.Close()
-			return "", fmt.Errorf("WebSocket peer closed")
-		case 0x9:
-			if err := w.sendPong(payload); err != nil {
-				return "", err
+			return 0, nil, err
+		}
+		switch opcode {
+		case 0x8, 0x9, 0xA:
+			if !fin || len(payload) > 125 {
+				return 0, nil, fmt.Errorf("invalid fragmented or oversized WebSocket control frame")
 			}
+			if opcode == 0x9 {
+				if err := w.sendPong(payload); err != nil {
+					return 0, nil, err
+				}
+				continue
+			}
+			if opcode == 0xA {
+				continue
+			}
+			w.stateMu.Lock()
+			w.closed = true
+			w.stateMu.Unlock()
+			_ = w.conn.Close()
+			code := 1005
+			reason := ""
+			if len(payload) == 1 {
+				return 0, nil, fmt.Errorf("WebSocket close frame has a one-byte payload")
+			}
+			if len(payload) >= 2 {
+				code = int(binary.BigEndian.Uint16(payload[:2]))
+				reasonBytes := payload[2:]
+				if !validUTF8(reasonBytes) {
+					return 0, nil, fmt.Errorf("WebSocket close reason is not UTF-8 (code %d)", code)
+				}
+				reason = string(reasonBytes)
+			}
+			return 0, nil, fmt.Errorf("WebSocket peer closed with code %d: %s", code, reason)
+		case 0x0:
+			if !collecting {
+				return 0, nil, fmt.Errorf("unexpected WebSocket continuation frame")
+			}
+			if len(payload) > max-len(message) {
+				return 0, nil, fmt.Errorf("WebSocket message exceeds configured limit")
+			}
+			message = append(message, payload...)
+			if fin {
+				return messageOpcode, message, nil
+			}
+		case 0x1, 0x2:
+			if collecting {
+				return 0, nil, fmt.Errorf("new WebSocket data frame before the previous message finished")
+			}
+			if fin {
+				return opcode, payload, nil
+			}
+			if len(payload) > max {
+				return 0, nil, fmt.Errorf("WebSocket message exceeds configured limit")
+			}
+			messageOpcode, message, collecting = opcode, payload, true
 		default:
+			return 0, nil, fmt.Errorf("unsupported WebSocket frame opcode %d", opcode)
 		}
 	}
 }
-func (w *websocketConn) receiveFrame(max int) (byte, []byte, error) {
+func (w *websocketConn) receiveFrame(max int) (bool, byte, []byte, error) {
 	first, err := w.read.ReadByte()
 	if err != nil {
-		return 0, nil, err
+		return false, 0, nil, err
 	}
 	second, err := w.read.ReadByte()
 	if err != nil {
-		return 0, nil, err
+		return false, 0, nil, err
+	}
+	if first&0x70 != 0 {
+		return false, 0, nil, fmt.Errorf("WebSocket extension bits are not negotiated")
 	}
 	opcode := first & 0x0f
+	fin := first&0x80 != 0
 	n := int64(second & 0x7f)
 	if n == 126 {
 		var b [2]byte
 		if _, err = io.ReadFull(w.read, b[:]); err != nil {
-			return 0, nil, err
+			return false, 0, nil, err
 		}
 		n = int64(b[0])<<8 | int64(b[1])
 	} else if n == 127 {
 		var b [8]byte
 		if _, err = io.ReadFull(w.read, b[:]); err != nil {
-			return 0, nil, err
+			return false, 0, nil, err
 		}
 		for _, x := range b {
 			n = (n << 8) | int64(x)
 		}
 	}
 	if n < 0 || n > int64(max) {
-		return 0, nil, fmt.Errorf("WebSocket frame exceeds configured limit")
+		return false, 0, nil, fmt.Errorf("WebSocket frame exceeds configured limit")
 	}
 	masked := second&0x80 != 0
-	var key [4]byte
 	if masked {
-		if _, err = io.ReadFull(w.read, key[:]); err != nil {
-			return 0, nil, err
-		}
+		return false, 0, nil, fmt.Errorf("server WebSocket frames must not be masked")
+	}
+	if opcode >= 0x8 && (!fin || n > 125) {
+		return false, 0, nil, fmt.Errorf("invalid WebSocket control frame")
 	}
 	payload := make([]byte, n)
 	if _, err = io.ReadFull(w.read, payload); err != nil {
-		return 0, nil, err
+		return false, 0, nil, err
 	}
-	if masked {
-		for i := range payload {
-			payload[i] ^= key[i%4]
-		}
-	}
-	return opcode, payload, nil
+	return fin, opcode, payload, nil
 }
 func randomRequestID() string { n, _ := rand.Int(rand.Reader, big.NewInt(1<<62)); return n.String() }

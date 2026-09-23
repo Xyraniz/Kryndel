@@ -728,6 +728,100 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			}
 		}
 		return Res(TString, TString), nil
+	case "discord_api_request":
+		for i := 0; i < 4; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("discord_api_request expects String arguments")
+			}
+		}
+		return Res(TString, TString), nil
+	case "discord_interaction_request":
+		for i := 0; i < 3; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("discord_interaction_request expects String arguments")
+			}
+		}
+		return Res(TString, TString), nil
+	case "discord_api_upload":
+		for i := 0; i < 6; i++ {
+			want := TString
+			if i == 4 {
+				want = TBytes
+			}
+			t, d := arg(i, want)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, want) {
+				return bad("discord_api_upload expects String arguments and Bytes file data")
+			}
+		}
+		return Res(TString, TString), nil
+	case "discord_verify_interaction":
+		for i := 0; i < 4; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("discord_verify_interaction expects String arguments")
+			}
+		}
+		return Res(TBool, TString), nil
+	case "discord_cache_get":
+		for i := 0; i < 2; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("discord_cache_get expects String arguments")
+			}
+		}
+		return Res(TString, TString), nil
+	case "discord_cache_put":
+		for i := 0; i < 3; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("discord_cache_put expects String arguments")
+			}
+		}
+		return Res(TNil, TString), nil
+	case "discord_cache_delete":
+		for i := 0; i < 2; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("discord_cache_delete expects String arguments")
+			}
+		}
+		return TNil, nil
+	case "discord_cache_clear":
+		return TNil, nil
+	case "discord_cache_ingest":
+		for i := 0; i < 2; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("discord_cache_ingest expects String arguments")
+			}
+		}
+		return Res(TNil, TString), nil
 	case "win_registry_get":
 		for i := 0; i < 2; i++ {
 			t, d := arg(i, TString)
@@ -800,6 +894,19 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("websocket_send expects WebSocket and String")
 		}
 		return Res(TNil, TString), nil
+	case "websocket_send_binary":
+		s, d := arg(0, &Type{Kind: TyWebSocket, Name: "WebSocket"})
+		if d != nil {
+			return TError, d
+		}
+		data, d := arg(1, TBytes)
+		if d != nil {
+			return TError, d
+		}
+		if s.Kind != TyWebSocket || !typeEqual(data, TBytes) {
+			return bad("websocket_send_binary expects WebSocket and Bytes")
+		}
+		return Res(TNil, TString), nil
 	case "websocket_receive":
 		s, d := arg(0, &Type{Kind: TyWebSocket, Name: "WebSocket"})
 		if d != nil {
@@ -809,6 +916,37 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("websocket_receive expects WebSocket")
 		}
 		return Res(TString, TString), nil
+	case "websocket_receive_timeout":
+		s, d := arg(0, &Type{Kind: TyWebSocket, Name: "WebSocket"})
+		if d != nil {
+			return TError, d
+		}
+		ms, d := arg(1, TInt)
+		if d != nil {
+			return TError, d
+		}
+		if s.Kind != TyWebSocket || !typeEqual(ms, TInt) {
+			return bad("websocket_receive_timeout expects WebSocket and Int")
+		}
+		return Res(TString, TString), nil
+	case "websocket_receive_binary", "websocket_receive_binary_timeout":
+		s, d := arg(0, &Type{Kind: TyWebSocket, Name: "WebSocket"})
+		if d != nil {
+			return TError, d
+		}
+		if s.Kind != TyWebSocket {
+			return bad(b.Name + " expects WebSocket")
+		}
+		if b.Name == "websocket_receive_binary_timeout" {
+			ms, d := arg(1, TInt)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(ms, TInt) {
+				return bad("websocket_receive_binary_timeout expects WebSocket and Int")
+			}
+		}
+		return Res(TBytes, TString), nil
 	case "websocket_close":
 		s, d := arg(0, &Type{Kind: TyWebSocket, Name: "WebSocket"})
 		if d != nil {

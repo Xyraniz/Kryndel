@@ -1,6 +1,14 @@
 import "std/env"
 import "packages/discord"
 
+fn respond_to_ping(message_json: String) -> String {
+    let message: Json = result_unwrap(json_parse(message_json))
+    let raw_content: Json = result_unwrap(json_object_get(message, "content"))
+    let content: String = result_unwrap(json_string(raw_content))
+    if content == "!ping" { return "Pong!" }
+    return ""
+}
+
 fn main() -> Result[Nil, String] {
     let token: Result[String, String] = require("DISCORD_TOKEN")
     match token {
@@ -9,7 +17,17 @@ fn main() -> Result[Nil, String] {
             let client: Result[Bot, String] = bot(secret, intents)
             match client {
                 ok(connected) => {
-                    return connected.run()
+                    let configured: Result[Bot, String] = connected.with_shard(0, 1)
+                    match configured {
+                        ok(client) => {
+                            let registration: Result[Nil, String] = poly_register("discord.on_message", "respond_to_ping", 0)
+                            match registration {
+                                ok(_) => { return client.run() }
+                                err(problem) => { return err(problem) }
+                            }
+                        }
+                        err(problem) => { return err(problem) }
+                    }
                 }
                 err(problem) => {
                     return err(problem)

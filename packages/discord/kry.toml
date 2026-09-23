@@ -1,0 +1,4 @@
+[package]
+name = "discord"
+version = "1.2.0"
+kryndel = ">=2.9.0"

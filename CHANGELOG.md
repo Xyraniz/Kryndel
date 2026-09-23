@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Discord Gateway, interactions, and REST
+
+The Discord Gateway now retains session IDs and dispatch sequences, resumes sessions after transient disconnects, reconnects after server requests, validates shard configuration, and reports permanent close codes. Gateway dispatches update a bounded cache of recent Discord objects. The Discord package now includes Ed25519 interaction signature checks, unauthenticated interaction callback and follow-up helpers, global and guild command registration, and multipart file uploads. REST rate-limit buckets and global limits are coordinated across routes and worker runtimes, and multipart request bodies are replayed on retries.
+
+The Discord package archive is version 1.2.0 and its manifest, source, and pinned registry checksum are kept together. The earlier registry archives for `async`, `crypto`, `fs`, and `json` remain unchanged. Gateway events and voice-state updates are exposed, but voice media transport and DAVE encryption are not implemented.
+
+The previous Discord Gateway did not reconnect after an explicit reconnect request and did not preserve resumable session state. The earlier REST layer retried 429 responses independently and could resend an empty file body. These issues are fixed. Current permanent Gateway failures and malformed interaction signatures now surface as explicit errors.
+
 ## Unreleased — Language contracts and verification matrix
 
 Float, map/set, and Unicode behavior is now documented as an explicit language contract: finite IEEE-754 values, signed-zero handling, subnormal preservation, insertion ordering, structural key equality, code-point indexing, and locale-independent formatting are covered by regression and interpreter/native differential tests. The differential capture path now uses the supported `io.ReadAll` API, and invalid test inputs were corrected to exercise the actual typed syntax.

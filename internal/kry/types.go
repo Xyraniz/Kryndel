@@ -528,8 +528,15 @@ func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
 				return nil, d
 			}
 			s.Fields[i].Type = t
-			if s.Public && !ensurePublicType(t, "", 0) {
-				return nil, Diag(CatType, s.Fields[i].Tok.Source, s.Fields[i].Tok.Line, s.Fields[i].Tok.Column, "public struct '%s' exposes a private field type", s.Name)
+		}
+	}
+	for _, s := range prog.Structs {
+		if !s.Public {
+			continue
+		}
+		for _, field := range s.Fields {
+			if !ensurePublicType(field.Type, "", 0) {
+				return nil, Diag(CatType, field.Tok.Source, field.Tok.Line, field.Tok.Column, "public struct '%s' exposes a private field type", s.Name)
 			}
 		}
 	}

@@ -2,6 +2,11 @@
   "name": "async",
   "versions": [
     {
+      "version": "1.2.0",
+      "url": "/packages/async-1.2.0.tar.gz",
+      "sha256": "4e11be261b9b2aadb0ca28bd79fed2bffc3fbaa536f8944b97e4ae203b20a005"
+    },
+    {
       "version": "1.1.0",
       "url": "/packages/async-1.1.0.tar.gz",
       "sha256": "3d7c86611147deeaca6f51b45fd6bfcb202753851d46fde34267feef359a5779"
