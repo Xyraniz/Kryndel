@@ -37,6 +37,12 @@ func (e *Engine) CheckPath(path string) (*Program, *Checker, *Diagnostic) {
 			return nil, nil, d
 		}
 		c, d := Check(p, e.Limits)
+		if d != nil {
+			return nil, nil, d
+		}
+		if _, d = ValidateIR(p, e.Limits); d != nil {
+			return nil, nil, d
+		}
 		return p, c, d
 	}
 	p, d := LoadProgram(path, e.Limits, e.RestrictedRoot)

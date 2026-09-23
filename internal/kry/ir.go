@@ -27,12 +27,22 @@ type ValidatedIR struct {
 }
 
 func CompileIR(p *Program, lim Limits) (*ValidatedIR, *Diagnostic) {
+	if p == nil {
+		return nil, Diag(CatCLI, nil, 1, 1, "missing program")
+	}
 	ir := &ValidatedIR{}
+	var limitFailure string
 	add := func(op OpCode, t Token, d int) {
+		if ir == nil {
+			return
+		}
 		if uint64(len(ir.Instructions)) >= lim.MaxInstructions {
+			limitFailure = "IR instruction limit exceeded"
+			ir = nil
 			return
 		}
 		if d > lim.MaxNesting {
+			limitFailure = "IR nesting limit exceeded"
 			ir = nil
 			return
 		}
@@ -135,7 +145,7 @@ func CompileIR(p *Program, lim Limits) (*ValidatedIR, *Diagnostic) {
 		st(s, 0)
 	}
 	if ir == nil {
-		return nil, Diag(CatResource, p.Source, 1, 1, "IR nesting or instruction limit exceeded")
+		return nil, Diag(CatResource, p.Source, 1, 1, "%s", limitFailure)
 	}
 	return ir, nil
 }
