@@ -65,6 +65,23 @@ func TestProgramPathRequiresKnownExtension(t *testing.T) {
 	}
 }
 
+func TestCheckWarningsAndWerror(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "warnings.kry")
+	source := `fn read() -> Int {
+    if true { return 1 } else { return 2 }
+    println("unreachable")
+}`
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := run([]string{"check", path}); status != 0 {
+		t.Fatalf("check with warnings returned %d", status)
+	}
+	if status := run([]string{"check", "-Werror", path}); status != 1 {
+		t.Fatalf("check -Werror returned %d, want 1", status)
+	}
+}
+
 func TestEmitAcceptsExplicitKIRTarget(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "target.kry")

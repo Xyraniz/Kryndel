@@ -112,11 +112,7 @@ func run(args []string) int {
 		fmt.Printf("limits: source=%d artifact=%d instructions=%d\n", e.Limits.MaxSourceBytes, e.Limits.MaxArtifactBytes, e.Limits.MaxInstructions)
 		return 0
 	case "check":
-		if len(rest) != 1 {
-			return usage("check expects one source or artifact path")
-		}
-		_, _, d := e.CheckPath(rest[0])
-		return report(d, jsonMode)
+		return checkCmd(e, rest, jsonMode)
 	case "run":
 		if len(rest) < 1 {
 			return usage("run expects one source or artifact path")
@@ -205,6 +201,46 @@ func report(d *kry.Diagnostic, jsonMode bool) int {
 		if d.Category == kry.CatCLI {
 			return 2
 		}
+		return 1
+	}
+	return 0
+}
+
+func checkCmd(e *kry.Engine, args []string, jsonMode bool) int {
+	werror := false
+	path := ""
+	for _, arg := range args {
+		switch arg {
+		case "-Werror", "--Werror":
+			werror = true
+		default:
+			if path != "" {
+				return usage("check expects one source or artifact path")
+			}
+			path = arg
+		}
+	}
+	if path == "" {
+		return usage("check expects one source or artifact path")
+	}
+	program, _, diagnostic := e.CheckPath(path)
+	if diagnostic != nil {
+		return report(diagnostic, jsonMode)
+	}
+	warnings := kry.AnalyzeWarnings(program)
+	for _, warning := range warnings {
+		if werror {
+			copy := *warning
+			copy.Severity = "error"
+			warning = &copy
+		}
+		if jsonMode {
+			fmt.Print(warning.Format(true))
+		} else {
+			fmt.Fprint(os.Stderr, warning.Format(false))
+		}
+	}
+	if werror && len(warnings) != 0 {
 		return 1
 	}
 	return 0
@@ -750,6 +786,7 @@ func printHelp() {
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
 	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (limited machine backend); c; targets: windows-x64, windows-arm64, linux-x64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
+	fmt.Println("check options: -Werror (treat warnings as errors)")
 	fmt.Println("global options: --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-instructions N, --max-wall-ms N")
 	fmt.Println("sealed artifacts: --passphrase VALUE, --passphrase-file PATH (AES-256-GCM + PBKDF2-SHA256)")
 }

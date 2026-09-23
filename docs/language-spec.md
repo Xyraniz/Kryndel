@@ -67,6 +67,15 @@ scrutinee once, then selects the first matching arm; the checker rejects
 non-exhaustive alternatives for enums, `Option`, and `Result`, as well as
 duplicate alternatives.
 
+`kry check FILE` reports source warnings for constant Boolean conditions,
+constant-true loops without a `break`, repeated match arms, wildcard arms that
+hide remaining enum/option/result cases, and statements after an unconditional
+exit. Warnings have stable `KRYW001`–`KRYW004` codes and do not change execution.
+`KRYW001` covers redundant match arms, `KRYW002` constant conditions,
+`KRYW003` non-terminating loops, and `KRYW004` unreachable statements or arms.
+`kry check -Werror FILE` reports the same diagnostics as errors and exits with
+status 1 when any warning is present.
+
 `defer` records its body for the end of the current lexical scope. Deferred
 bodies execute in reverse registration order on normal exit, `return`, `break`,
 `continue`, or a runtime error. Every deferred body runs even when an earlier

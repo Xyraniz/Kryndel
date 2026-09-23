@@ -101,7 +101,11 @@ func (d *Diagnostic) Format(jsonMode bool) string {
 		b, _ := json.Marshal(d)
 		return string(b) + "\n"
 	}
-	out := fmt.Sprintf("error[%s]: %s:%d:%d\n  %s\n", d.Category, d.Source, d.Line, d.Column, d.Message)
+	severity := d.Severity
+	if severity == "" {
+		severity = "error"
+	}
+	out := fmt.Sprintf("%s[%s]: %s:%d:%d\n  %s\n", severity, d.Category, d.Source, d.Line, d.Column, d.Message)
 	if d.Text == "" {
 		return out
 	}

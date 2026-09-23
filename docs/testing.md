@@ -18,7 +18,7 @@ The native Go tests cover recursive functions, `if`, `while`, mutable bindings, 
 | --- | --- |
 | Lexer | UTF-8 source, line and block comments, nested comments, escapes, malformed literals, invalid characters, and exact positions. |
 | Parser | Incomplete expressions, malformed blocks, declarations, imports, patterns, precedence, and nested scopes. |
-| Type checker | Unknown types, mismatched declarations, immutable assignment, invalid operators, non-Boolean conditions, unknown functions, arity, return mismatches, worker resolution, and thread transfer types. |
+| Type checker | Unknown types, mismatched declarations, immutable assignment, invalid operators, non-Boolean conditions, unknown functions, arity, return mismatches, worker resolution, thread transfer types, and stable warning codes with `-Werror`. |
 | Mutability | Immutable rejection, mutable success, shadowing, branch scopes, loop scopes, and function scopes. |
 | Runtime | Division by zero, out-of-bounds indexing, invalid UTF-8, embedded NUL values, conversions, assertions, recursion, control-flow misuse, channel transfer, worker joins, shutdown, and worker failures. |
 | Numeric safety | Overflow, underflow, minimum integer negation, `abs(Int minimum)`, literal overflow, and allocation-size checks. |
