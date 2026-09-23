@@ -171,13 +171,14 @@ The language version is independent of the compiler's release number and uses
 
 Before removing a feature, the compiler must warn that it is deprecated for at
 least one published minor release and one year, whichever is longer. The
-manifest, KIR, and portable artifact must carry the selected language version.
+manifest, KIR, and portable artifact carry the selected language version.
 Unknown major versions must fail with an explicit compatibility diagnostic;
 the compiler must not reinterpret them as the current dialect. Each published
 language version must retain source, stdout, exit-status, and diagnostic fixtures
 under `tests/compat/<version>/`.
 
-The current repository does not yet stamp or enforce a language version in all
-three formats. Until that metadata work lands, artifacts and manifests use the
-single current dialect described above; this gap is tracked by the compiler
-compatibility work.
+The current compiler supports language version 1.0.0. New manifests, KIR v2,
+and KRYNATIVE4 artifacts record it explicitly. For compatibility, manifests
+without the field, KIR v1 documents, and KRYNATIVE3 artifacts are interpreted
+as 1.0.0. Unknown or malformed versions are rejected instead of being silently
+treated as the current dialect.

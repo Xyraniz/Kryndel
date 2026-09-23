@@ -1696,7 +1696,7 @@ fn compile_source(source: String) -> Result[Bytes, String] {
     let program: Result[ParsedProgram, String] = parse_program(parser)
     if is_err(program) { return err(program_error(program)) }
     let parsed: ParsedProgram = result_unwrap(program)
-    let document_text: String = "{\"format\":\"kry-ir\",\"version\":1,\"module\":\"\",\"source\":\"\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":" + parsed.structs + ",\"enums\":[],\"functions\":" + parsed.functions + ",\"statements\":" + parsed.statements + "}"
+    let document_text: String = "{\"format\":\"kry-ir\",\"version\":2,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":" + parsed.structs + ",\"enums\":[],\"functions\":" + parsed.functions + ",\"statements\":" + parsed.statements + "}"
     let document: Result[Json, String] = json_parse(document_text)
     if is_err(document) { return err(unwrap_or(result_error(document), "source frontend produced invalid KIR")) }
     let lowered: Result[Bytes, String] = compile_document(result_unwrap(document))

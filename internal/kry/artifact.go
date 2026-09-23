@@ -12,8 +12,12 @@ import (
 	"strings"
 )
 
-const artifactMagic = "KRYNATIVE3\x00"
-const compilerIdentity = "kryndel-go-1.2.0"
+const (
+	artifactMagic       = "KRYNATIVE4\x00"
+	legacyArtifactMagic = "KRYNATIVE3\x00"
+	compilerIdentity    = "kryndel-go-1.3.0"
+	legacyCompilerID    = "kryndel-go-1.2.0"
+)
 
 type ArtifactEntry struct {
 	Path string
@@ -21,8 +25,8 @@ type ArtifactEntry struct {
 	Hash [32]byte
 }
 type Artifact struct {
-	Compiler, Target string
-	Entries          []ArtifactEntry
+	Compiler, Target, LanguageVersion string
+	Entries                           []ArtifactEntry
 }
 
 func safeArtifactPath(p string) bool {
@@ -60,8 +64,9 @@ func BuildArtifact(prog *Program, root string) ([]byte, *Diagnostic) {
 	sort.Slice(entries[1:], func(i, j int) bool { return entries[i+1].Path < entries[j+1].Path })
 	var b bytes.Buffer
 	b.WriteString(artifactMagic)
-	writeU32(&b, 3)
+	writeU32(&b, 4)
 	writeString(&b, compilerIdentity)
+	writeString(&b, LanguageVersion)
 	b.Write([]byte{'K', 'R', 'Y'})
 	writeString(&b, runtime.GOOS+"/"+runtime.GOARCH)
 	writeU32(&b, uint32(len(entries)))
@@ -93,16 +98,38 @@ func DecodeArtifact(data []byte, lim Limits) (*Artifact, *Diagnostic) {
 	if n, e := r.Read(magic); e != nil || n != len(magic) {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: truncated header")
 	}
-	if string(magic) != artifactMagic {
+	formatVersion := uint32(0)
+	legacy := false
+	switch string(magic) {
+	case artifactMagic:
+		formatVersion = 4
+	case legacyArtifactMagic:
+		formatVersion = 3
+		legacy = true
+	default:
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid header")
 	}
 	ver, ok := readU32(r)
-	if !ok || ver != 3 {
+	if !ok || ver != formatVersion {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: unsupported version")
 	}
 	compiler, ok := readString(r, 256)
-	if !ok || compiler != compilerIdentity {
+	expectedCompiler := compilerIdentity
+	if legacy {
+		expectedCompiler = legacyCompilerID
+	}
+	if !ok || compiler != expectedCompiler {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: incompatible compiler or invalid length")
+	}
+	languageVersion := LanguageVersion
+	if !legacy {
+		languageVersion, ok = readString(r, 64)
+		if !ok {
+			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid language version")
+		}
+		if err := checkLanguageVersion(languageVersion); err != nil {
+			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: %s", err)
+		}
 	}
 	var tag [3]byte
 	if n, err := r.Read(tag[:]); err != nil || n != len(tag) || string(tag[:]) != "KRY" {
@@ -116,7 +143,7 @@ func DecodeArtifact(data []byte, lim Limits) (*Artifact, *Diagnostic) {
 	if !ok || n == 0 || int64(n) > int64(lim.MaxImports+1) {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid entry count")
 	}
-	a := &Artifact{Compiler: compiler, Target: target}
+	a := &Artifact{Compiler: compiler, Target: target, LanguageVersion: languageVersion}
 	seen := map[string]bool{}
 	for i := uint32(0); i < n; i++ {
 		path, ok := readString(r, lim.MaxSourceBytes)

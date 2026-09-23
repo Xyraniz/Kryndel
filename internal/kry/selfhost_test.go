@@ -668,9 +668,10 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	var header struct {
-		Format  string `json:"format"`
-		Version int    `json:"version"`
-		Target  struct {
+		Format          string `json:"format"`
+		Version         int    `json:"version"`
+		LanguageVersion string `json:"language_version"`
+		Target          struct {
 			OS   string `json:"os"`
 			Arch string `json:"arch"`
 		} `json:"target"`
@@ -678,7 +679,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if err := json.Unmarshal(kir, &header); err != nil {
 		t.Fatalf("source compiler KIR is not valid JSON: %v", err)
 	}
-	if header.Format != KIRFormat || header.Version != KIRVersion || header.Target.OS != "linux" || header.Target.Arch != "amd64" {
+	if header.Format != KIRFormat || header.Version != KIRVersion || header.LanguageVersion != LanguageVersion || header.Target.OS != "linux" || header.Target.Arch != "amd64" {
 		t.Fatalf("unexpected source compiler KIR header: %#v", header)
 	}
 	if len(kir) > DefaultLimits().MaxJSONBytes {
@@ -699,15 +700,15 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if err := os.WriteFile(kirFile, kir, 0o600); err != nil {
 		t.Fatal(err)
 	}
-		backendLimits := DefaultLimits()
-		backendLimits.MaxWallTimeMS = 12 * 60 * 1000
-		backendLimits.MaxInstructions = 100_000_000
-		if os.Getenv("KRY_RACE") == "1" {
-			// The race instrumented interpreter is substantially slower during
-			// the large bootstrap, but it must still exercise the same checks.
-			backendLimits.MaxWallTimeMS = 30 * 60 * 1000
-			backendLimits.MaxInstructions = 250_000_000
-		}
+	backendLimits := DefaultLimits()
+	backendLimits.MaxWallTimeMS = 12 * 60 * 1000
+	backendLimits.MaxInstructions = 100_000_000
+	if os.Getenv("KRY_RACE") == "1" {
+		// The race instrumented interpreter is substantially slower during
+		// the large bootstrap, but it must still exercise the same checks.
+		backendLimits.MaxWallTimeMS = 30 * 60 * 1000
+		backendLimits.MaxInstructions = 250_000_000
+	}
 	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, backendLimits, Sandbox{}, []string{kirFile, generatedCompiler})
 	if d != nil {
 		t.Fatal(d.Message)

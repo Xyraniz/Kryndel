@@ -1,6 +1,6 @@
 # Packages, registries, and reproducibility
 
-Kryndel uses `kry.toml` as the project manifest and `kry.lock` as the resolution result. Resolution accepts exact versions, `^`, `~`, `>=`, and `*`; candidates are sorted semantically and dependencies are processed in stable order. The installer downloads `tar.gz` archives, validates SHA-256 before extraction, and copies only regular entries under `vendor/<name>`.
+Kryndel uses `kry.toml` as the project manifest and `kry.lock` as the resolution result. New manifests record `language_version = "1.0.0"` under `[package]`; manifests without that key use 1.0.0 for compatibility. Resolution accepts exact versions, `^`, `~`, `>=`, and `*`; candidates are sorted semantically and dependencies are processed in stable order. The installer downloads `tar.gz` archives, validates SHA-256 before extraction, and copies only regular entries under `vendor/<name>`.
 
 | Command | Result | Guarantee |
 | --- | --- | --- |

@@ -9,7 +9,7 @@ make
 ./tools/kry run examples/fibonacci.kry
 ```
 
-Kryndel exposes three distinct products. `kry run` interprets source on the portable Go runtime. `kry build --format=kexe` writes a portable `KRYNATIVE3` bundle containing checked source files; it is not a machine-code executable. `kry build --format=elf-direct` emits machine code directly for its explicitly supported subset. The default native AOT formats (`elf`, `exe`, and `pe`) use the generated-C backend and require an external C compiler. `--format=c` emits C source without invoking a compiler.
+Kryndel exposes three distinct products. `kry run` interprets source on the portable Go runtime. `kry build --format=kexe` writes a portable `KRYNATIVE4` bundle containing checked source files; it is not a machine-code executable. `kry build --format=elf-direct` emits machine code directly for its explicitly supported subset. The default native AOT formats (`elf`, `exe`, and `pe`) use the generated-C backend and require an external C compiler. `--format=c` emits C source without invoking a compiler.
 
 The executable does not require C, Python, Rust, Node.js, or an equivalent runtime to execute interpreted Kryndel programs. The only source-build dependency for the Go toolchain is Go and its standard library, plus the external `ffmpeg` executable when Windows webcam capture is requested. Host integrations that need Go libraries or platform frameworks are rejected by native backends with their builtin name instead of embedding or invoking the VM.
 
@@ -22,7 +22,7 @@ On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` when it is on `
 | `check source.kry` | Read, lex, parse, resolve modules, and type-check without effects. | `0` |
 | `run source.kry` | Check and execute source. | `0` |
 | `run file.kexe` | Validate the container and execute its source payload. | `0` |
-| `build source.kry` | Check and write a deterministic `KRYNATIVE3` bundle. | `0` |
+| `build source.kry` | Check and write a deterministic `KRYNATIVE4` bundle. | `0` |
 | `build source.kry --format=kexe` | Write a portable bundle containing validated source; no compiler is invoked. | `0` |
 | `build source.kry --format=exe --target=windows-x64` | Check and write a real PE32+ entrypoint for the selected target. | `0` |
 | `build source.kry --format=elf --target=linux-x64` | Check and write an ELF64 executable with the generated-C AOT backend; an external C compiler is required. | `0` |
@@ -44,15 +44,16 @@ Diagnostics use the stable form `error[category]: file:line:column`, followed by
 
 `--format=llvm-ir` is rejected explicitly until Kryndel has a real lowering to LLVM's typed SSA model. It never emits placeholder IR.
 
-## KRYNATIVE3 format
+## KRYNATIVE4 format
 
 The artifact is a deterministic, self-contained bundle. It is written through a temporary file, flushed and synchronized, then renamed atomically:
 
 ```text
-KRYNATIVE3\0
+KRYNATIVE4\0
 
-u32 format version (=3)
+u32 format version (=4)
 u64 compiler-identity length, UTF-8 bytes
+u64 language-version length, UTF-8 bytes (currently `1.0.0`)
 three-byte header tag `KRY`
 u64 target-identity length, UTF-8 bytes
 u32 source-entry count
@@ -64,7 +65,7 @@ repeat source-entry count:
 
 The `<root>` entry is always first; all remaining entries are sorted by canonical UTF-8 logical path. Module entries are relative, traversal-safe paths. The decoder rejects incompatible compiler or target metadata, truncated fields, integer-size inconsistencies, duplicate entries, invalid hashes, unsafe paths, trailing bytes, and source artifacts masquerading as modules. `run file.kexe` reuses the normal parse, module, checker, and runtime pipeline over the embedded sources, so a missing external module cannot change execution.
 
-The former `KRYNATIVE1` single-source container is intentionally rejected as an incompatible artifact rather than silently interpreted.
+The reader accepts legacy KRYNATIVE3 version 3 files with compiler identity `kryndel-go-1.2.0`, treating them as language version 1.0.0. The former `KRYNATIVE1` single-source container is rejected.
 
 ## Native binary formats
 
@@ -131,7 +132,7 @@ encryption; it does not replace it.
 
 ### Sealed artifacts
 
-A sealed artifact (`KRYSEAL1`) is the plain `KRYNATIVE3` byte stream wrapped in
+A sealed artifact (`KRYSEAL1`) is the plain `KRYNATIVE4` byte stream wrapped in
 AES-256-GCM with a PBKDF2-HMAC-SHA-256 key derived from a passphrase. The
 container is self-describing (magic, version, iteration count, salt, nonce,
 length) so the KDF or cipher can be revised without breaking old files. The

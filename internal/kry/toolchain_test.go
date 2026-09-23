@@ -104,8 +104,11 @@ func TestArtifactDeterminismAndCorruption(t *testing.T) {
 		t.Fatal("artifact bytes are not deterministic")
 	}
 	decoded, d := DecodeArtifact(a, DefaultLimits())
-	if d != nil || len(decoded.Entries) != 2 || decoded.Entries[0].Path != "<root>" {
+	if d != nil || len(decoded.Entries) != 2 || decoded.Entries[0].Path != "<root>" || decoded.LanguageVersion != LanguageVersion {
 		t.Fatalf("invalid decoded artifact: %#v", d)
+	}
+	if !bytes.HasPrefix(a, []byte(artifactMagic)) {
+		t.Fatalf("new artifact does not use %q", artifactMagic)
 	}
 	if _, d = DecodeArtifact(append(append([]byte{}, a...), 'x'), DefaultLimits()); d == nil || !strings.Contains(d.Message, "trailing") {
 		t.Fatalf("trailing bytes were accepted: %#v", d)

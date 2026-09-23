@@ -22,9 +22,9 @@ import (
 )
 
 type PackageManifest struct {
-	Name, Version, Kryndel string
-	Dependencies           map[string]string
-	TargetDependencies     map[string]map[string]string
+	Name, Version, Kryndel, LanguageVersion string
+	Dependencies                            map[string]string
+	TargetDependencies                      map[string]map[string]string
 }
 
 type LockedPackage struct {
@@ -73,7 +73,7 @@ func NewPackageManager() *PackageManager {
 }
 
 func ParseManifest(data string) (PackageManifest, error) {
-	m := PackageManifest{Dependencies: map[string]string{}, TargetDependencies: map[string]map[string]string{}}
+	m := PackageManifest{LanguageVersion: LanguageVersion, Dependencies: map[string]string{}, TargetDependencies: map[string]map[string]string{}}
 	section := ""
 	for _, raw := range strings.Split(strings.ReplaceAll(data, "\r\n", "\n"), "\n") {
 		line := strings.TrimSpace(strings.SplitN(raw, "#", 2)[0])
@@ -99,6 +99,8 @@ func ParseManifest(data string) (PackageManifest, error) {
 				m.Version = value
 			case "kryndel":
 				m.Kryndel = value
+			case "language_version":
+				m.LanguageVersion = value
 			default:
 				return m, fmt.Errorf("unknown package key %q", key)
 			}
@@ -122,6 +124,9 @@ func ParseManifest(data string) (PackageManifest, error) {
 	if m.Version == "" {
 		return m, fmt.Errorf("package version is required")
 	}
+	if err := checkLanguageVersion(m.LanguageVersion); err != nil {
+		return m, err
+	}
 	return m, nil
 }
 
@@ -133,6 +138,12 @@ func FormatManifest(m PackageManifest) string {
 	b.WriteString(m.Version)
 	b.WriteString("\"\nkryndel = \"")
 	b.WriteString(m.Kryndel)
+	b.WriteString("\"\nlanguage_version = \"")
+	languageVersion := m.LanguageVersion
+	if languageVersion == "" {
+		languageVersion = LanguageVersion
+	}
+	b.WriteString(languageVersion)
 	b.WriteString("\"\n\n[dependencies]\n")
 	keys := sortedKeys(m.Dependencies)
 	for _, k := range keys {
@@ -690,7 +701,7 @@ func EnsureProject(dir, name string) error {
 }
 
 func ensureProjectFiles(dir, name string, replaceMain bool) error {
-	m := PackageManifest{Name: name, Version: "0.1.0", Kryndel: ">=1.3.0", Dependencies: map[string]string{}, TargetDependencies: map[string]map[string]string{}}
+	m := PackageManifest{Name: name, Version: "0.1.0", Kryndel: ">=1.3.0", LanguageVersion: LanguageVersion, Dependencies: map[string]string{}, TargetDependencies: map[string]map[string]string{}}
 	if _, err := os.Stat(filepath.Join(dir, "kry.toml")); os.IsNotExist(err) {
 		if err := WriteManifest(dir, m); err != nil {
 			return err

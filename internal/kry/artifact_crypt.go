@@ -1,7 +1,7 @@
 package kry
 
 // artifact_crypt.go adds an authenticated, passphrase-protected container for
-// Kryndel artifacts. A sealed artifact is the plain KRYNATIVE3 byte stream
+// Kryndel artifacts. A sealed artifact is the plain KRYNATIVE4 byte stream
 // wrapped in AES-256-GCM, with the encryption key derived from a passphrase via
 // PBKDF2-HMAC-SHA-256.
 //

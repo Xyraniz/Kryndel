@@ -26,7 +26,7 @@ let answer: UInt8 = add(u8(1)) << 1
 	if !bytes.Equal(a, b) {
 		t.Fatal("KIR emission is not deterministic")
 	}
-	if !strings.Contains(string(a), `"format": "kry-ir"`) || !strings.Contains(string(a), `"version": 1`) {
+	if !strings.Contains(string(a), `"format": "kry-ir"`) || !strings.Contains(string(a), `"version": 2`) || !strings.Contains(string(a), `"language_version": "1.0.0"`) {
 		t.Fatalf("KIR header missing from %s", a[:minInt(len(a), 160)])
 	}
 	d, err := DecodeKIR(a, DefaultLimits())
@@ -50,12 +50,29 @@ func TestKIRRejectsWrongVersionAndTrailingData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrong := bytes.Replace(data, []byte(`"version": 1`), []byte(`"version": 99`), 1)
+	wrong := bytes.Replace(data, []byte(`"version": 2`), []byte(`"version": 99`), 1)
 	if _, err = DecodeKIR(wrong, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "version") {
 		t.Fatalf("expected version rejection, got %v", err)
 	}
 	if _, err = DecodeKIR(append(append([]byte{}, data...), data...), DefaultLimits()); err == nil || !strings.Contains(err.Error(), "trailing") {
 		t.Fatalf("expected trailing-data rejection, got %v", err)
+	}
+}
+
+func TestKIRV1DefaultsLanguageVersion(t *testing.T) {
+	p, c := testProgram(t, "let x: Int = 1\n")
+	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := bytes.Replace(data, []byte(`"version": 2`), []byte(`"version": 1`), 1)
+	legacy = bytes.Replace(legacy, []byte("  \"language_version\": \"1.0.0\",\n"), nil, 1)
+	doc, err := DecodeKIR(legacy, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Version != 1 || doc.LanguageVersion != LanguageVersion {
+		t.Fatalf("legacy KIR compatibility mismatch: version=%d language=%q", doc.Version, doc.LanguageVersion)
 	}
 }
 

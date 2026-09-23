@@ -1,6 +1,6 @@
 // Stage 1 self-hosted backend.
 //
-// This program consumes KIR v1 and emits a real Linux x86-64 ELF executable
+// This program consumes KIR v2 and emits a real Linux x86-64 ELF executable
 // for static print/println calls. It deliberately rejects dynamic constructs;
 // the rejection is part of the bootstrap contract and will shrink as the
 // frontend and lowering stages are ported to Kryndel.
@@ -193,7 +193,7 @@ pub fn compile_kir(document: Json) -> Result[Bytes, String] {
     let statements: Json = json_field(document, "statements")
     let mut payload: Array[UInt8] = []
     let mut bindings: Map[String, String] = {}
-    // The first implementation uses a bounded index loop. KIR v1 always
+    // The first implementation uses a bounded index loop. KIR v2 always
     // exposes a JSON array length, and the empty case is handled explicitly.
     let count: Int = result_unwrap(json_array_len(statements))
     let mut index: Int = 0

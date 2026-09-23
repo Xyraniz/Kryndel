@@ -7,15 +7,15 @@ import (
 	"io"
 )
 
-// KIR is the stable, host-independent representation exchanged between the
+// KIR is the host-independent representation exchanged between the
 // checked Kryndel frontend and future Kryndel-written backends. It is a typed
-// tree for v1 rather than a source dump: every expression carries its checked
+// tree rather than a source dump: every expression carries its checked
 // type, every call identifies its builtin or user-function target, and source
 // locations are retained for diagnostics. The wire format is canonical JSON
 // so a Kryndel program can consume it using the standard Json value API.
 const (
 	KIRFormat  = "kry-ir"
-	KIRVersion = 1
+	KIRVersion = 2
 )
 
 type KIRTarget struct {
@@ -25,17 +25,18 @@ type KIRTarget struct {
 }
 
 type KIRDocument struct {
-	Format     string         `json:"format"`
-	Version    int            `json:"version"`
-	Module     string         `json:"module"`
-	Source     string         `json:"source"`
-	Target     KIRTarget      `json:"target"`
-	Imports    []string       `json:"imports"`
-	Sources    []string       `json:"sources"`
-	Structs    []*KIRStruct   `json:"structs"`
-	Enums      []*KIREnum     `json:"enums"`
-	Functions  []*KIRFunction `json:"functions"`
-	Statements []*KIRStmt     `json:"statements"`
+	Format          string         `json:"format"`
+	Version         int            `json:"version"`
+	LanguageVersion string         `json:"language_version"`
+	Module          string         `json:"module"`
+	Source          string         `json:"source"`
+	Target          KIRTarget      `json:"target"`
+	Imports         []string       `json:"imports"`
+	Sources         []string       `json:"sources"`
+	Structs         []*KIRStruct   `json:"structs"`
+	Enums           []*KIREnum     `json:"enums"`
+	Functions       []*KIRFunction `json:"functions"`
+	Statements      []*KIRStmt     `json:"statements"`
 }
 
 type KIRStruct struct {
@@ -174,7 +175,7 @@ type KIRValue struct {
 	OK       bool        `json:"ok"`
 }
 
-// EmitKIR serializes a checked program into deterministic KIR v1 JSON. The
+// EmitKIR serializes a checked program into deterministic KIR v2 JSON. The
 // checker is required so the format cannot accidentally become an untyped
 // source transport when a caller forgets to validate first.
 func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
@@ -182,7 +183,7 @@ func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 		return nil, fmt.Errorf("missing checked program")
 	}
 	d := &KIRDocument{
-		Format: KIRFormat, Version: KIRVersion, Module: p.Module,
+		Format: KIRFormat, Version: KIRVersion, LanguageVersion: LanguageVersion, Module: p.Module,
 		Source: sourceName(p.Source), Target: KIRTarget{OS: target.OS, Arch: target.Arch, GUI: target.GUI},
 		Imports: make([]string, 0, len(p.Imports)), Sources: make([]string, 0, len(p.Sources)),
 		Structs: make([]*KIRStruct, 0, len(p.Structs)), Enums: make([]*KIREnum, 0, len(p.Enums)),
@@ -355,8 +356,16 @@ func DecodeKIR(data []byte, lim Limits) (*KIRDocument, error) {
 	if d.Format != KIRFormat {
 		return nil, fmt.Errorf("unsupported KIR format %q", d.Format)
 	}
-	if d.Version != KIRVersion {
+	if d.Version != 1 && d.Version != KIRVersion {
 		return nil, fmt.Errorf("unsupported KIR version %d", d.Version)
+	}
+	if d.LanguageVersion == "" && d.Version == 1 {
+		// KIR v1 predates explicit language-version metadata and is defined to
+		// describe the single legacy dialect, now identified as language 1.0.0.
+		d.LanguageVersion = LanguageVersion
+	}
+	if err := checkLanguageVersion(d.LanguageVersion); err != nil {
+		return nil, err
 	}
 	if d.Target.OS == "" || d.Target.Arch == "" {
 		return nil, fmt.Errorf("KIR target is incomplete")
