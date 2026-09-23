@@ -1,7 +1,11 @@
 package kry
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -76,6 +80,68 @@ func TestNativeCapabilityMatrixMatchesTargetPolicy(t *testing.T) {
 	}
 	if len(seen) != len(rows) {
 		t.Fatalf("matrix has %d rows but only %d unique rows", len(rows), len(seen))
+	}
+}
+
+func TestGeneratedBuiltinCapabilitiesMatchBackendDispatch(t *testing.T) {
+	cases := []struct {
+		file string
+		fn   string
+		want map[string]struct{}
+	}{
+		{file: "codegen.go", fn: "builtinCall", want: generatedCAOTBuiltinCases},
+		{file: "machine_dynamic.go", fn: "emitExpr", want: generatedDirectELFBuiltinCases},
+	}
+	for _, tc := range cases {
+		t.Run(tc.fn, func(t *testing.T) {
+			file, err := parser.ParseFile(token.NewFileSet(), tc.file, nil, parser.AllErrors)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var function *ast.FuncDecl
+			for _, declaration := range file.Decls {
+				if candidate, ok := declaration.(*ast.FuncDecl); ok && candidate.Name.Name == tc.fn {
+					function = candidate
+					break
+				}
+			}
+			if function == nil {
+				t.Fatalf("function %s not found in %s", tc.fn, tc.file)
+			}
+			actual := map[string]bool{}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				switchStmt, ok := node.(*ast.SwitchStmt)
+				if !ok {
+					return true
+				}
+				tag, ok := switchStmt.Tag.(*ast.SelectorExpr)
+				if !ok || tag.Sel.Name != "Name" {
+					return true
+				}
+				for _, rawClause := range switchStmt.Body.List {
+					clause := rawClause.(*ast.CaseClause)
+					for _, expression := range clause.List {
+						literal, ok := expression.(*ast.BasicLit)
+						if !ok || literal.Kind != token.STRING {
+							continue
+						}
+						name, err := strconv.Unquote(literal.Value)
+						if err == nil {
+							actual[name] = true
+						}
+					}
+				}
+				return true
+			})
+			if len(actual) != len(tc.want) {
+				t.Fatalf("generated capability inventory has %d names, backend dispatch has %d", len(tc.want), len(actual))
+			}
+			for name := range actual {
+				if _, ok := tc.want[name]; !ok {
+					t.Errorf("backend dispatch supports %q, missing from generated inventory", name)
+				}
+			}
+		})
 	}
 }
 

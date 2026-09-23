@@ -1,5 +1,7 @@
 package kry
 
+//go:generate go run ../../cmd/kry-capgen
+
 import (
 	"bytes"
 	"encoding/binary"
