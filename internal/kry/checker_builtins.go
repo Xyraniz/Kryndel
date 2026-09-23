@@ -1423,6 +1423,9 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 				return bad("poly_register expects String slot and handler")
 			}
 		}
+		if !isStaticPolyHandler(c, e.Args[1]) {
+			return bad("poly_register requires a literal name of one top-level fn(String) -> String handler")
+		}
 		priority, d := arg(2, TInt)
 		if d != nil {
 			return TError, d
@@ -1440,6 +1443,9 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			if !typeEqual(t, TString) {
 				return bad("poly_reorder expects String slot, handler, and predecessor")
 			}
+		}
+		if !isStaticPolyHandler(c, e.Args[1]) || !isStaticPolyHandler(c, e.Args[2]) {
+			return bad("poly_reorder requires literal names of top-level fn(String) -> String handlers")
 		}
 		return Res(TNil, TString), nil
 	case "poly_dispatch":
@@ -2063,3 +2069,26 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not implemented", b.Name)
 }
 func mustResolve(e *TypeEnv, s *TypeSpec) *Type { t, _ := resolveSpec(e, s, 0); return t }
+
+// isStaticPolyHandler confines runtime polymorphism to the declared handler
+// ABI. Function names are not values in Kryndel, so the name must be a literal
+// and resolve to one unambiguous top-level function with signature String->String.
+func isStaticPolyHandler(c *Checker, name *Expr) bool {
+	if c == nil || c.Env == nil || name == nil || name.Kind != ExString {
+		return false
+	}
+	candidates := c.Env.Overloads[name.Str]
+	if len(candidates) != 1 {
+		return false
+	}
+	f := candidates[0]
+	if f.Receiver != nil || len(f.TypeParams) != 0 || len(f.Params) != 1 {
+		return false
+	}
+	param, err := resolveSpec(c.Env, f.Params[0].Type, 0)
+	if err != nil || !typeEqual(param, TString) {
+		return false
+	}
+	result, err := resolveSpec(c.Env, f.Return, 0)
+	return err == nil && typeEqual(result, TString)
+}

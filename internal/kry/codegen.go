@@ -1185,8 +1185,8 @@ func (g *cgen) taskSpawn(e *Expr) string {
 	return fmt.Sprintf("k_task_spawn(%s, %s, 0, 0)", g.expr(e.Args[0]), g.fnName[f])
 }
 
-// polyRegister lowers poly_register(slot, handler, priority). The handler name
-// is resolved at runtime so wrappers can forward it dynamically.
+// polyRegister lowers poly_register(slot, handler, priority). The checker has
+// already constrained handler to an unambiguous literal function name.
 func (g *cgen) polyRegister(e *Expr) string {
 	return fmt.Sprintf("k_poly_register(%s, %s, %s)", g.expr(e.Args[0]), g.expr(e.Args[1]), g.expr(e.Args[2]))
 }
