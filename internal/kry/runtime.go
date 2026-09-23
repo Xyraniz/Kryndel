@@ -3752,7 +3752,11 @@ func (r *Runtime) toInt(e *Expr, v Value) (Value, *Diagnostic) {
 		}
 		return intVal(0), nil
 	case VFloat:
-		if !isFinite(v.F) || v.F < float64(math.MinInt64) || v.F > float64(math.MaxInt64) {
+		// float64(math.MaxInt64) rounds up to exactly 2^63. Use an
+		// exclusive upper bound so that value cannot pass range validation
+		// and wrap to MinInt64 during the conversion below.
+		const int64Boundary = 9223372036854775808.0
+		if !isFinite(v.F) || v.F < -int64Boundary || v.F >= int64Boundary {
 			return nilVal(), r.fail(e, "float is outside Int range")
 		}
 		return intVal(int64(v.F)), nil

@@ -2,6 +2,14 @@
 
 KIR (`kry-ir`) is the stable interchange format between the checked Kryndel frontend and compiler backends. `kry emit file.kry --format=kry-ir` writes one canonical UTF-8 JSON document followed by a newline.
 
+KIR v1 is currently a typed serialization of the checked AST, not a shared
+execution IR. The Go interpreter, C generator, and direct ELF backend still
+consume the AST and checker state through separate paths. The self-hosted KIR
+backend accepts a narrower language subset and rejects unsupported constructs.
+See the [language specification](language-spec.md) for source semantics and
+the [architecture status](architecture.md#intermediate-representation-status)
+for the planned common intermediate representation.
+
 The top-level contract is:
 
 ```json

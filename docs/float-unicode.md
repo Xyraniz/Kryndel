@@ -6,7 +6,7 @@
 
 Negative zero is representable and formats as `-0`; it compares equal to positive zero. Ordered comparisons use IEEE numeric ordering. Since non-finite values cannot exist, unordered `NaN` comparisons are not observable.
 
-Float formatting is locale-independent and uses the shortest round-trippable decimal representation produced by the implementation. Decimal parsing accepts complete finite values only. Conversion from `Int` or `UInt` is explicit; it may round when the integer cannot be represented exactly by binary64, and conversion back to `Int` rejects values outside the signed range.
+Float formatting is locale-independent and uses the shortest round-trippable decimal representation produced by the implementation. Decimal parsing accepts complete finite values only. Conversion from `Int` or `UInt` is explicit and rounds to the nearest representable binary64 value; it does not report precision loss. Conversion from `Float` to `Int` truncates toward zero and rejects values below `-2^63` or at or above `2^63`.
 
 Subnormal finite values are valid when produced by conversion or parsing, including the smallest positive binary64 value. They must not be flushed to zero. The source literal grammar currently uses ordinary decimal literals; exponent-form values can be supplied to `float(String)`.
 
@@ -14,9 +14,9 @@ Subnormal finite values are valid when produced by conversion or parsing, includ
 
 Maps and sets preserve insertion order. `map_keys`, `map_values`, `set_to_array`, display, and iteration return values in insertion order. Updating an existing map key does not move it. Removing and reinserting a key appends it at the new insertion point.
 
-Map and set membership uses the language equality relation recursively. Keys must be comparable and must not contain external handles. Float keys are not part of the stable key domain; use an integer or a canonical string for numeric keys. Duplicate map keys update the earlier entry; duplicate set values are ignored.
+Map and set membership uses the language equality relation recursively. Keys must be comparable and must not contain external handles. Float keys are not part of the stable key domain; use an integer or a canonical string for numeric keys. A map literal with a duplicate key is a runtime error. `map_insert` replaces an existing value while retaining that key's position; duplicate set values are ignored.
 
-The implementation deliberately uses ordered persistent values instead of randomized hash-table iteration so output and compiler artifacts remain reproducible. This is a semantic guarantee, not an implementation accident.
+The implementation deliberately uses ordered persistent values instead of randomized hash-table iteration so output and compiler artifacts remain reproducible. Map and set equality is structural, type exact, and order sensitive. This is a semantic guarantee, not an implementation accident.
 
 ## Unicode
 
@@ -30,8 +30,8 @@ The differential tests in `internal/kry/float_unicode_differential_test.go` cove
 
 ## Boundary contract
 
-The language accepts finite IEEE-754 binary64 values, including subnormals and both signed zeroes. NaN and infinities are rejected at conversion boundaries. Equality treats `-0` and `+0` as equal, display retains `-0`, and ordering is defined only for finite values. Conversion APIs report overflow and precision loss explicitly and never consult the process locale.
+The language accepts finite IEEE-754 binary64 values, including subnormals and both signed zeroes. NaN and infinities are rejected at conversion boundaries. Equality treats `-0` and `+0` as equal, display retains `-0`, and ordering is defined only for finite values. Integer-to-Float conversion may lose precision using round-to-nearest binary64 conversion; Float-to-Int truncates toward zero and reports range overflow. Parsing and formatting never consult the process locale.
 
-Collections are insertion ordered: map updates retain the original key position, reinsertion appends, and sets retain the first occurrence order. Structural equality is type exact, duplicate map literals update an existing key, and Float is not a map or set key.
+Collections are insertion ordered: `map_insert` updates retain the original key position, removal followed by reinsertion appends, and sets retain the first occurrence order. Structural equality is type exact and order sensitive. Duplicate map literals are runtime errors; duplicate set elements collapse to the first occurrence. Float is not a map or set key.
 
 String APIs use code-point indices. Bytes, code points, and grapheme clusters are separate concepts: `string_to_bytes` returns UTF-8 bytes, `string_chars` returns code-point strings, and `substring` accepts code-point boundaries. The runtime preserves unnormalized input, combining marks, emoji ZWJ sequences, and regional indicators without claiming grapheme-cluster semantics.

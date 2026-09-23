@@ -7,9 +7,9 @@ UTF-8 source
     -> lexer
     -> parser and AST
     -> module resolver
-    -> static type checker
-    -> validated intermediate representation and constant-folded fast paths
-    -> bounded VM/runtime and synchronized worker scheduler
+    -> static type checker annotating the AST
+    -> interpreter, C code generator, or direct ELF lowering
+    -> bounded runtime or emitted artifact
     -> output, diagnostics, or versioned KRYNATIVE3 bundle
 ```
 
@@ -21,7 +21,7 @@ UTF-8 source
 | Parser | Expressions, bindings, functions, modules, data declarations, blocks, and patterns. | Native AST. |
 | Type checker | Type inference, annotations, complete-argument multiple dispatch, constrained generics, privacy, operators, mutability, returns, conditions, exhaustiveness, and constant folding. | Native type model and source locations. |
 | Module resolver | Relative source lookup, public exports, cycle detection, and traversal rejection. | Explicit filesystem paths only. |
-| Runtime | Validated IR execution, folded primitive values, scopes, calls, tail-call trampolines, recursion, collections, UTF-8, options, results, control flow, channels, synchronized `Shared[T]` cells, actor mailboxes, structured `TaskGroup` workers, safepoints, and budgets. | Go standard library only. |
+| Runtime | Interprets the checked AST and folded primitive values; provides scopes, calls, tail-call trampolines, recursion, collections, UTF-8, options, results, control flow, channels, synchronized `Shared[T]` cells, actor mailboxes, structured `TaskGroup` workers, safepoints, and budgets. | Go standard library only. |
 | Artifact reader/writer | Versioned KRYNATIVE3 metadata, deterministic source bundle, SHA-256 hashes, atomic writes, and strict replay validation. | Go binary/file APIs. |
 | CLI | `check`, `run`, `build`, `fmt`, `repl`, `doctor`, `version`, and help. | Explicit command-line and filesystem inputs. |
 
@@ -44,3 +44,21 @@ Lexical scopes are represented by parent-linked environments. A declaration is l
 ## Artifact format
 
 `build` accepts a source file, validates it, and writes a deterministic KRYNATIVE3 bundle with a fixed magic, semantic version, compiler/target metadata, exact payload length, an ordered `<root>` plus imported source entries, and a SHA-256 hash for every source. The writer uses a temporary file, flush/sync, and atomic rename. The reader rejects incompatible metadata, truncated or oversized fields, duplicate or unsafe paths, invalid hashes, trailing bytes, and any embedded source that fails the ordinary lexer, parser, module, or checker pipeline. Building the same source twice produces identical bytes. `emit --format=kry-ir` exposes the checked program through deterministic KIR v1 JSON for the future Kryndel compiler. For `--format=elf --target=linux-x64`, the native path still emits the explicitly documented C-backed AOT subset; the direct machine-code replacement is not claimed until bootstrap parity tests exist.
+
+## Intermediate representation status
+
+The checker currently stores resolved expression types and call targets on AST
+nodes. The interpreter executes that checked AST. The generated-C and direct
+ELF backends also receive the AST plus checker state. KIR v1 is a deterministic,
+typed serialization of the checked tree, but it is not yet the single internal
+representation shared by execution and code generation. The `ValidatedIR` in
+`internal/kry/ir.go` currently records a bounded traversal and is not an
+executable lowering. Consequently, semantic parity still depends on tests
+between multiple implementations.
+
+The planned compiler boundary is `source -> AST -> typed HIR -> validated
+MIR/KIR -> interpreter or target backend`. Resolution and overload selection
+must be recorded in that typed representation. Backend feature checks must run
+against the selected target before any output bytes are emitted. This remains
+work in progress; KIR v1's current limits are listed in the
+[KIR reference](kry-ir.md).

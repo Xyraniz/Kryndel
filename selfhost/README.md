@@ -1,5 +1,9 @@
 # Self-hosting stages
 
+The bootstrap stage names and completion evidence are defined in the
+[bootstrap contract](bootstrap-contract.md). The Stage 14–36 entries below are
+feature milestones and must not be mistaken for complete bootstrap stages.
+
 `elf_backend.kry` is the reusable lowering component of the first executable compiler written in Kryndel. `dynamic_backend.kry` adds the second lowering slice, and `kir_backend.kry` provides their command-line entrypoint. Together they consume the checked frontend's `kry-ir/v1` JSON and write a Linux x86-64 ELF64 file without invoking C, Go, or an external assembler.
 
 `source_compiler.kry` is the next bootstrap stage. It contains a bounded but real source lexer and recursive-descent expression parser written in Kryndel itself. It handles comments, line separators, escaped strings, static `let`/`const` bindings, `print`/`println`, `str(...)`, parentheses, and the arithmetic precedence levels `* / %` above `+ -`. It evaluates that static subset and sends the resulting bytes through the same Kryndel ELF emitter.

@@ -1,5 +1,9 @@
 # Kryndel language reference
 
+This page is a user guide. The normative evaluation, type, error, collection,
+float-conversion, aliasing, and concurrency rules are in the
+[language specification](language-spec.md).
+
 Kryndel uses braces for blocks and infix expressions. The syntax is intentionally small, but the checker assigns a concrete type to every expression before execution. Type annotations after `:` and `->` are semantic declarations, not comments.
 
 ## Declarations and control flow
@@ -150,7 +154,7 @@ match poly_dispatch("render", "hello") {
 
 `Float` is an IEEE-754 binary64 value with a finite-value boundary. NaN and positive or negative infinity are rejected by parsing and conversion builtins with a typed error. Positive and negative zero compare equal, while formatting preserves the sign as `-0`; subnormal values are accepted and round-trip through the binary64 representation. Ordering is the IEEE numeric order for finite values, and every conversion that can overflow or lose precision is explicit. Formatting uses locale-independent decimal syntax.
 
-Maps preserve insertion order. Updating an existing key keeps its original position; removing and reinserting a key appends it. Sets preserve the insertion order of their first occurrence. Map and set equality is structural and type-exact, keys use the language equality contract, and duplicate map keys update the earlier entry. Float keys are rejected because non-finite values and signed-zero edge cases would make hashing ambiguous. Hashing is an implementation detail and never determines iteration order; programs that emit artifacts or stdout must use explicit sorting when they need a different order.
+Maps preserve insertion order. `map_insert` updating an existing key keeps its original position; removing and reinserting a key appends it. Sets preserve the insertion order of their first occurrence. Map and set equality is structural, type-exact, and order-sensitive. Keys use the language equality contract. A duplicate key in a map literal is a runtime error, while `map_insert` replaces an existing value. Float keys are rejected because non-finite values and signed-zero edge cases would make hashing ambiguous. Hashing is an implementation detail and never determines iteration order; programs that emit artifacts or stdout must use explicit sorting when they need a different order.
 
 String length, indexing, `string_chars`, and `substring` use Unicode code-point indices, not bytes or grapheme clusters. `string_to_bytes` exposes UTF-8 bytes explicitly. The runtime does not normalize strings, preserves combining marks and zero-width joiners, performs case conversion only through explicit builtins, rejects invalid indices, and never promises that a code point is a user-perceived character. Slicing is code-point safe and cannot split a UTF-8 encoding; grapheme-cluster segmentation remains the responsibility of a higher-level library.
 
