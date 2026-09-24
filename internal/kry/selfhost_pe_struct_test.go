@@ -67,7 +67,7 @@ fn main() -> Nil { let outer = Outer { inner: Inner { value: 1 } } }`,
 			source: `struct Point { x: Int }
 fn read(point: Point) -> Int { return point.x }
 fn main() -> Nil { let point = Point { x: 1 }; assert_eq(read(point), 1) }`,
-			want: "function parameters require scalar or enum types",
+			want: "function parameters require supported scalar, enum, or collection types and no defaults",
 		},
 		{
 			name: "struct return",

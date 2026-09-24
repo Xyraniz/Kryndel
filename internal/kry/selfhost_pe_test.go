@@ -246,6 +246,45 @@ fn main() -> Nil {
 	}
 }
 
+func TestSelfhostPEBackendCollectionFunctionArgumentsAndReturns(t *testing.T) {
+	source := `
+fn identity_words(values: Array[String]) -> Array[String] { return values }
+fn make_words() -> Array[String] { return ["from-return"] }
+fn first_word(values: Array[String]) -> String { return values[0] }
+
+fn identity_flags(flags: Map[String, Bool]) -> Map[String, Bool] { return flags }
+fn make_flags() -> Map[String, Bool] { return {"ready": true} }
+fn is_ready(flags: Map[String, Bool]) -> Bool { return unwrap_or(map_get(flags, "ready"), false) }
+
+fn main() -> Nil {
+    let words: Array[String] = identity_words(make_words())
+    println(first_word(words))
+    let flags: Map[String, Bool] = identity_flags(make_flags())
+    println(is_ready(flags))
+    println(is_ready({"ready": false}))
+}
+`
+	image, d := runSelfhostPEBackend(t, source)
+	if d != nil {
+		t.Fatalf("selfhost PE backend rejected collection function arguments or returns: %v", d)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("native PE execution requires Windows amd64")
+	}
+	executable := filepath.Join(t.TempDir(), "collection-functions.exe")
+	if err := os.WriteFile(executable, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(executable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated collection-function PE failed: %v; output: %s", err, output)
+	}
+	want := "from-return\ntrue\nfalse\n"
+	if string(output) != want {
+		t.Fatalf("unexpected collection-function PE output %q; want %q", output, want)
+	}
+}
+
 func TestSelfhostPEBackendIntArrayBoundsChecks(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -444,16 +483,16 @@ func TestSelfhostPEBackendRejectsUnsupportedCollectionShapes(t *testing.T) {
 			diagnostic: "PE backend: map literal keys must be String literals",
 		},
 		{
-			name: "map function parameter",
-			source: `fn lookup(values: Map[String, Int]) -> Bool { return map_contains_key(values, "key") }
+			name: "map with unsupported function parameter type",
+			source: `fn lookup(values: Map[Int, Int]) -> Int { return 0 }
 fn main() -> Nil {}`,
-			diagnostic: "PE backend: map function parameters are not supported",
+			diagnostic: "PE backend: function parameters require supported scalar, enum, or collection types and no defaults",
 		},
 		{
-			name: "map function return",
-			source: `fn make() -> Map[String, Int] { return {"key": 1} }
+			name: "map with unsupported function return type",
+			source: `fn make() -> Map[Int, Int] { return {} }
 fn main() -> Nil {}`,
-			diagnostic: "PE backend: map function returns are not supported",
+			diagnostic: "PE backend: function 'make' has an unsupported return type",
 		},
 		{
 			name: "nested array elements",
@@ -503,15 +542,15 @@ fn main() -> Nil {}`,
 		},
 		{
 			name: "array function parameter",
-			source: `fn read(values: Array[Int]) -> Int { return len(values) }
-fn main() -> Nil { println(read([1])) }`,
-			diagnostic: "PE backend: array function parameters are not supported",
+			source: `fn read(values: Array[Array[Int]]) -> Int { return 0 }
+fn main() -> Nil {}`,
+			diagnostic: "PE backend: function parameters require supported scalar, enum, or collection types and no defaults",
 		},
 		{
 			name: "array function return",
-			source: `fn make() -> Array[Int] { return [1] }
-fn main() -> Nil { println(len(make())) }`,
-			diagnostic: "PE backend: array function returns are not supported",
+			source: `fn make() -> Array[Array[Int]] { return [[1]] }
+fn main() -> Nil {}`,
+			diagnostic: "PE backend: function 'make' has an unsupported return type",
 		},
 	}
 	for _, tc := range cases {
@@ -616,6 +655,30 @@ fn truth_value() -> Bool {
     return true
 }
 
+fn identity_words(values: Array[String]) -> Array[String] {
+    return values
+}
+
+fn make_words() -> Array[String] {
+    return ["from-function"]
+}
+
+fn first_word(values: Array[String]) -> String {
+    return values[0]
+}
+
+fn identity_flags(flags: Map[String, Bool]) -> Map[String, Bool] {
+    return flags
+}
+
+fn make_flags() -> Map[String, Bool] {
+    return {"ready": true}
+}
+
+fn is_ready(flags: Map[String, Bool]) -> Bool {
+    return unwrap_or(map_get(flags, "ready"), false)
+}
+
 fn main() -> Nil {
     let mut index: Int = 0
     while index < 3 {
@@ -658,6 +721,10 @@ fn main() -> Nil {
     }
     let empty_labels: Array[String] = []
     println(len(empty_labels))
+    let returned_words: Array[String] = identity_words(make_words())
+    println(first_word(returned_words))
+    let returned_flags: Map[String, Bool] = identity_flags(make_flags())
+    println(is_ready(returned_flags))
     println("compiled from Kryndel source")
 }
 `
@@ -709,7 +776,7 @@ fn main() -> Nil {
 	if err != nil {
 		t.Fatalf("selfhost-source-generated PE failed: %v; output: %s", err, output)
 	}
-	want := "2\n4\n6\ncontinued condition\n17\n42\n-42\n-42\n0\ntrue\n17\n2\n4\ntrue\n-8\ntrue\nKryndel\nenum-map-ok\nfalse\ntrue\nfrom-array\nenum-array-ok\n0\ncompiled from Kryndel source\n"
+	want := "2\n4\n6\ncontinued condition\n17\n42\n-42\n-42\n0\ntrue\n17\n2\n4\ntrue\n-8\ntrue\nKryndel\nenum-map-ok\nfalse\ntrue\nfrom-array\nenum-array-ok\n0\nfrom-function\ntrue\ncompiled from Kryndel source\n"
 	if string(output) != want {
 		t.Fatalf("unexpected source-compiled PE output %q", output)
 	}
