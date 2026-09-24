@@ -34,6 +34,141 @@ fn validate_application_command_options(value: String) -> Result[String, String]
     return ok(value)
 }
 
+fn application_command_key(command: Json) -> Result[String, String] {
+    if json_kind(command) != "object" { return err("Discord application command must be a JSON object") }
+    let raw_name: Json = json_object_get(command, "name")?
+    let name: String = json_string(raw_name)?
+    let mut command_type: Int = 1
+    let raw_type: Result[Json, String] = json_object_get(command, "type")
+    match raw_type {
+        ok(value) => { command_type = json_int(value)? }
+        err(_) => {}
+    }
+    if command_type < 1 || command_type > 3 { return err("Discord application command type must be 1, 2, or 3") }
+    if command_type == 1 {
+        if !valid_chat_command_name(name) { return err("chat-input command name is invalid") }
+    } else if !valid_context_command_name(name) {
+        return err("context-menu command name is invalid")
+    }
+    return ok(name + ":" + str(command_type))
+}
+
+fn application_command_array_json(commands: Array[String]) -> String {
+    let mut output: String = "["
+    let mut index: Int = 0
+    for command in commands {
+        if index > 0 { output = output + "," }
+        output = output + command
+        index = index + 1
+    }
+    return output + "]"
+}
+
+pub struct CommandTree {
+    private application_id: String,
+    private guild_id: String,
+    private commands: Array[String],
+}
+
+pub fn command_tree(application_id: String) -> Result[CommandTree, String] {
+    if !valid_snowflake(application_id) { return err("application_id must be a Discord snowflake") }
+    return ok(CommandTree{application_id: application_id, guild_id: "", commands: []})
+}
+
+pub fn guild_command_tree(application_id: String, guild_id: String) -> Result[CommandTree, String] {
+    if !valid_snowflake(application_id) || !valid_snowflake(guild_id) {
+        return err("application_id and guild_id must be Discord snowflakes")
+    }
+    return ok(CommandTree{application_id: application_id, guild_id: guild_id, commands: []})
+}
+
+impl CommandTree {
+    // Adds a normalized command definition and rejects duplicate name/type pairs.
+    pub fn add(command_json: String) -> Result[CommandTree, String] {
+        let command: Json = json_parse(command_json)?
+        let key: String = application_command_key(command)?
+        for existing_json in self.commands {
+            let existing: Json = json_parse(existing_json)?
+            if application_command_key(existing)? == key {
+                return err("Discord command tree already contains this command name and type")
+            }
+        }
+        let normalized: String = json_stringify(command)
+        return ok(CommandTree{
+            application_id: self.application_id,
+            guild_id: self.guild_id,
+            commands: array_push(self.commands, normalized),
+        })
+    }
+
+    pub fn commands_json() -> String {
+        return application_command_array_json(self.commands)
+    }
+
+    // Syncs the local set with Discord using the global or guild overwrite route.
+    pub fn sync(bot: Bot) -> Result[Json, String] {
+        let commands: String = application_command_array_json(self.commands)
+        if self.guild_id == "" {
+            return bot.sync_global_commands(self.application_id, commands)
+        }
+        return bot.bulk_overwrite_guild_commands(self.application_id, self.guild_id, commands)
+    }
+}
+
+fn valid_choice_display_name(value: String) -> Bool {
+    return len(value) >= 1 && len(value) <= 100
+}
+
+pub fn string_choice_json(name: String, value: String) -> Result[String, String] {
+    if !valid_choice_display_name(name) || len(value) < 1 || len(value) > 100 {
+        return err("string choice name and value must contain 1 to 100 Unicode code points")
+    }
+    let encoded_name: String = json_quote(name)?
+    let encoded_value: String = json_quote(value)?
+    return ok("{\"name\":" + encoded_name + ",\"value\":" + encoded_value + "}")
+}
+
+pub fn integer_choice_json(name: String, value: Int) -> Result[String, String] {
+    if !valid_choice_display_name(name) { return err("choice name must contain 1 to 100 Unicode code points") }
+    let encoded_name: String = json_quote(name)?
+    return ok("{\"name\":" + encoded_name + ",\"value\":" + str(value) + "}")
+}
+
+pub fn number_choice_json(name: String, value: Float) -> Result[String, String] {
+    if !valid_choice_display_name(name) { return err("choice name must contain 1 to 100 Unicode code points") }
+    let encoded_name: String = json_quote(name)?
+    let encoded_value: String = str(value)
+    let checked_number: Json = json_parse(encoded_value)?
+    if json_kind(checked_number) != "number" { return err("choice value must be a finite number") }
+    return ok("{\"name\":" + encoded_name + ",\"value\":" + encoded_value + "}")
+}
+
+pub fn autocomplete_response_json(choices_json: String) -> Result[String, String] {
+    let choices: Json = json_parse(choices_json)?
+    let count: Int = json_array_len(choices)?
+    if count > 25 { return err("Discord autocomplete responses accept at most 25 choices") }
+    let mut index: Int = 0
+    while index < count {
+        let choice: Json = json_array_get(choices, index)?
+        if json_kind(choice) != "object" { return err("each autocomplete choice must be a JSON object") }
+        let name_json: Json = json_object_get(choice, "name")?
+        let name: String = json_string(name_json)?
+        if !valid_choice_display_name(name) { return err("autocomplete choice names must contain 1 to 100 Unicode code points") }
+        let value_json: Json = json_object_get(choice, "value")?
+        let value_kind: String = json_kind(value_json)
+        if value_kind != "string" && value_kind != "number" {
+            return err("autocomplete choice values must be strings or numbers")
+        }
+        if value_kind == "string" {
+            let value: String = json_string(value_json)?
+            if len(value) < 1 || len(value) > 100 { return err("autocomplete string values must contain 1 to 100 Unicode code points") }
+        }
+        index = index + 1
+    }
+    let normalized: String = json_stringify(choices)
+    return ok("{\"type\":8,\"data\":{\"choices\":" + normalized + "}}")
+}
+
 // This builder accepts the ASCII subset of Discord's CHAT_INPUT name rule.
 // The Discord API also accepts certain Unicode letter/number categories;
 // Kryndel has no Unicode-category predicate yet, so this helper rejects them

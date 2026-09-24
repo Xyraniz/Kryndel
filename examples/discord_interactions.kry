@@ -1,0 +1,35 @@
+import "std/env"
+import "packages/discord"
+
+fn ping_interaction(interaction_json: String) -> String {
+    return result_unwrap(interaction_message_response_json("Pong!"))
+}
+
+fn color_autocomplete(interaction_json: String) -> String {
+    let blue: String = result_unwrap(string_choice_json("Blue", "blue"))
+    let green: String = result_unwrap(string_choice_json("Green", "green"))
+    let choices: String = "[" + blue + "," + green + "]"
+    return result_unwrap(autocomplete_response_json(choices))
+}
+
+fn main() -> Result[Nil, String] {
+    let token: String = require("DISCORD_TOKEN")?
+    let application_id: String = require("DISCORD_APPLICATION_ID")?
+    let guild_id: String = require("DISCORD_GUILD_ID")?
+    let client: Bot = bot(token, ["Guilds"])?
+
+    let ping: String = slash_command_json("ping", "Check if the bot is online", "[]")?
+    let color: String = "{\"name\":\"color\",\"type\":1,\"description\":\"Choose a color\",\"options\":[{\"name\":\"color\",\"description\":\"Search available colors\",\"type\":3,\"required\":true,\"autocomplete\":true}]}"
+    let empty_tree: CommandTree = guild_command_tree(application_id, guild_id)?
+    let with_ping: CommandTree = empty_tree.add(ping)?
+    let tree: CommandTree = with_ping.add(color)?
+    let synced: Json = tree.sync(client)?
+
+    let ping_handler: Result[Nil, String] = poly_register("discord.on_command.ping", "ping_interaction", 0)
+    ping_handler?
+    let autocomplete_handler: Result[Nil, String] = poly_register("discord.on_autocomplete.color", "color_autocomplete", 0)
+    autocomplete_handler?
+    return client.run()
+}
+
+main()
