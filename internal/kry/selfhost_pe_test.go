@@ -60,6 +60,74 @@ func runSelfhostPEBackend(t *testing.T, source string) ([]byte, error) {
 	return image, nil
 }
 
+func TestSelfhostPEBackendProcessArgsWindows(t *testing.T) {
+	source := `
+fn main() -> Nil {
+    let args: Array[String] = process_args()
+    println(len(args))
+    let mut index: Int = 0
+    while index < len(args) {
+        println(args[index])
+        index = index + 1
+    }
+}
+`
+	image, d := runSelfhostPEBackend(t, source)
+	if d != nil {
+		t.Fatalf("selfhost PE backend rejected process_args: %v", d)
+	}
+	peImage, err := pe.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatalf("Go PE parser rejected the process_args image: %v", err)
+	}
+	imports, err := peImage.ImportedSymbols()
+	peImage.Close()
+	if err != nil {
+		t.Fatalf("could not read process_args PE imports: %v", err)
+	}
+	for _, required := range []string{
+		"GetCommandLineW:KERNEL32.dll",
+		"CommandLineToArgvW:SHELL32.dll",
+		"WideCharToMultiByte:KERNEL32.dll",
+		"LocalFree:KERNEL32.dll",
+	} {
+		found := false
+		for _, symbol := range imports {
+			if symbol == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("process_args PE is missing import %q (imports: %v)", required, imports)
+		}
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("native PE execution requires Windows amd64")
+	}
+	executable := filepath.Join(t.TempDir(), "process-args.exe")
+	if err := os.WriteFile(executable, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	emptyOutput, err := exec.Command(executable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated process_args PE failed with no user arguments: %v; output: %s", err, emptyOutput)
+	}
+	if string(emptyOutput) != "0\n" {
+		t.Fatalf("process_args included argv[0] for an empty argument list: got %q, want %q", emptyOutput, "0\n")
+	}
+	args := []string{"plain", "with spaces", "", `quote"inside`, `slash\end`, "é🙂"}
+	command := exec.Command(executable, args...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated process_args PE failed: %v; output: %s", err, output)
+	}
+	want := "6\nplain\nwith spaces\n\nquote\"inside\nslash\\end\né🙂\n"
+	if string(output) != want {
+		t.Fatalf("process_args did not preserve decoded UTF-8 arguments: got %q, want %q", output, want)
+	}
+}
+
 func TestSelfhostPEBackendFunctionsControlFlowAndOutput(t *testing.T) {
 	source := `
 fn weighted(a: Int, b: Int, c: Int, d: Int) -> Int {

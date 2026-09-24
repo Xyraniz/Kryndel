@@ -785,7 +785,7 @@ fn pe_heap_alloc_import_index() -> Int {
     return 4
 }
 
-fn pe_dynamic_imports(needs_heap: Bool) -> Array[Array[String]] {
+fn pe_dynamic_imports(needs_heap: Bool, needs_host_runtime: Bool) -> Array[Array[String]] {
     let mut imports: Array[Array[String]] = [
         ["KERNEL32.dll", "GetStdHandle"],
         ["KERNEL32.dll", "WriteFile"],
@@ -796,6 +796,15 @@ fn pe_dynamic_imports(needs_heap: Bool) -> Array[Array[String]] {
         // The Win32 process heap allocator occupies indexes 3 and 4.
         imports = array_push(imports, ["KERNEL32.dll", "GetProcessHeap"])
         imports = array_push(imports, ["KERNEL32.dll", "HeapAlloc"])
+    }
+    if needs_host_runtime {
+        // Append host-service imports after the stable console, exit, and heap
+        // indexes. process_args uses the Windows command-line parser and
+        // explicitly converts each UTF-16 argument into Kryndel UTF-8.
+        imports = array_push(imports, ["KERNEL32.dll", "GetCommandLineW"])
+        imports = array_push(imports, ["SHELL32.dll", "CommandLineToArgvW"])
+        imports = array_push(imports, ["KERNEL32.dll", "LocalFree"])
+        imports = array_push(imports, ["KERNEL32.dll", "WideCharToMultiByte"])
     }
     return imports
 }
@@ -3598,7 +3607,86 @@ fn emit_string_chars_runtime(state: EmitState) -> Result[EmitState, String] {
     return ok(append_code(result_unwrap(bound_done), [u8(72), u8(137), u8(216), u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)]))
 }
 
+fn emit_process_args_runtime_windows(state: EmitState) -> Result[EmitState, String] {
+    let bound: Result[EmitState, String] = bind_label(state, host_process_args_label(state))
+    if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind Windows process_args runtime")) }
+    // Windows x64 calls arrive with RSP % 16 == 8. Preserve the nonvolatile
+    // registers used by the argv loop, then reserve an aligned frame containing
+    // Win64 shadow space, four stack arguments, and its local values.
+    let mut current: EmitState = append_code(result_unwrap(bound), [
+        u8(85), u8(72), u8(137), u8(229), u8(83), u8(65), u8(84), u8(65), u8(85), u8(65), u8(86), u8(65), u8(87),
+        u8(72), u8(129), u8(236), u8(8), u8(1), u8(0), u8(0)
+    ])
+    current = emit_pe_import_transfer(current, 5, false) // GetCommandLineW()
+    current = append_code(current, [
+        u8(199), u8(68), u8(36), u8(64), u8(0), u8(0), u8(0), u8(0), // argc = 0
+        u8(72), u8(137), u8(193), // RCX = command line
+        u8(72), u8(141), u8(84), u8(36), u8(64) // RDX = &argc
+    ])
+    current = emit_pe_import_transfer(current, 6, false) // CommandLineToArgvW
+    current = append_code(current, [u8(72), u8(133), u8(192)])
+    current = emit_jump(current, current.env.trap_label, true, u8(132))
+    current = append_code(current, [
+        u8(68), u8(139), u8(100), u8(36), u8(64), // R12D = argc
+        u8(73), u8(137), u8(197), // R13 = argv
+        u8(77), u8(133), u8(228) // argc must include argv[0]
+    ])
+    current = emit_jump(current, current.env.trap_label, true, u8(142))
+    current = append_code(current, [u8(76), u8(137), u8(231), u8(72), u8(255), u8(207)]) // RDI = argc - 1
+    current = emit_relative_call(current, current.assembler.array_alloc_label)
+    current = append_code(current, [u8(73), u8(137), u8(198), u8(65), u8(191), u8(1), u8(0), u8(0), u8(0)]) // R14 = result, R15 = argv index 1
+
+    let loop_label: LabelState = new_label(current)
+    let done_label: LabelState = new_label(loop_label.state)
+    let bound_loop: Result[EmitState, String] = bind_label(done_label.state, loop_label.label)
+    if is_err(bound_loop) { return err(unwrap_or(result_error(bound_loop), "dynamic backend: cannot bind Windows process_args loop")) }
+    current = append_code(result_unwrap(bound_loop), [u8(77), u8(57), u8(231)]) // cmp r15, r12
+    current = emit_jump(current, done_label.label, true, u8(141)) // jge done
+    current = append_code(current, [
+        u8(76), u8(137), u8(248), u8(72), u8(193), u8(224), u8(3), u8(76), u8(1), u8(232), u8(72), u8(139), u8(24),
+        u8(72), u8(137), u8(92), u8(36), u8(96) // save current LPCWSTR
+    ])
+    current = append_code(current, [
+        u8(185), u8(233), u8(253), u8(0), u8(0), u8(49), u8(210), u8(76), u8(139), u8(68), u8(36), u8(96), u8(65), u8(185), u8(255), u8(255), u8(255), u8(255),
+        u8(72), u8(199), u8(68), u8(36), u8(32), u8(0), u8(0), u8(0), u8(0),
+        u8(72), u8(199), u8(68), u8(36), u8(40), u8(0), u8(0), u8(0), u8(0),
+        u8(72), u8(199), u8(68), u8(36), u8(48), u8(0), u8(0), u8(0), u8(0),
+        u8(72), u8(199), u8(68), u8(36), u8(56), u8(0), u8(0), u8(0), u8(0)
+    ])
+    current = emit_pe_import_transfer(current, 8, false) // WideCharToMultiByte size query
+    current = append_code(current, [u8(137), u8(68), u8(36), u8(104), u8(133), u8(192)])
+    current = emit_jump(current, current.env.trap_label, true, u8(142)) // jle on API failure
+    current = append_code(current, [u8(72), u8(137), u8(199), u8(72), u8(131), u8(199), u8(8)]) // capacity includes NUL
+    current = emit_heap_alloc(current)
+    current = append_code(current, [
+        u8(72), u8(137), u8(195), // RBX = Kryndel String allocation
+        u8(185), u8(233), u8(253), u8(0), u8(0), u8(49), u8(210), u8(76), u8(139), u8(68), u8(36), u8(96),
+        u8(65), u8(185), u8(255), u8(255), u8(255), u8(255),
+        u8(72), u8(141), u8(67), u8(8), u8(72), u8(137), u8(68), u8(36), u8(32),
+        u8(72), u8(139), u8(68), u8(36), u8(104), u8(72), u8(137), u8(68), u8(36), u8(40),
+        u8(72), u8(199), u8(68), u8(36), u8(48), u8(0), u8(0), u8(0), u8(0),
+        u8(72), u8(199), u8(68), u8(36), u8(56), u8(0), u8(0), u8(0), u8(0)
+    ])
+    current = emit_pe_import_transfer(current, 8, false) // convert into the String payload
+    current = append_code(current, [u8(133), u8(192)])
+    current = emit_jump(current, current.env.trap_label, true, u8(142))
+    current = append_code(current, [
+        u8(131), u8(232), u8(1), u8(72), u8(137), u8(3), // String length excludes NUL
+        u8(76), u8(137), u8(248), u8(72), u8(255), u8(200), u8(72), u8(193), u8(224), u8(3), u8(73), u8(141), u8(78), u8(8),
+        u8(72), u8(1), u8(193), u8(72), u8(137), u8(25), // array[index - 1] = String
+        u8(73), u8(255), u8(199)
+    ])
+    current = emit_jump(current, loop_label.label, false, u8(0))
+    let bound_done: Result[EmitState, String] = bind_label(current, done_label.label)
+    if is_err(bound_done) { return err(unwrap_or(result_error(bound_done), "dynamic backend: cannot bind Windows process_args completion")) }
+    current = append_code(result_unwrap(bound_done), [u8(76), u8(137), u8(233)]) // RCX = argv
+    current = emit_pe_import_transfer(current, 7, false) // LocalFree(argv)
+    current = append_code(current, [u8(76), u8(137), u8(240), u8(72), u8(129), u8(196), u8(8), u8(1), u8(0), u8(0), u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(91), u8(93), u8(195)])
+    return ok(current)
+}
+
 fn emit_process_args_runtime(state: EmitState) -> Result[EmitState, String] {
+    if state.assembler.windows_abi { return emit_process_args_runtime_windows(state) }
     let bound: Result[EmitState, String] = bind_label(state, host_process_args_label(state))
     if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind process_args runtime")) }
     let mut current: EmitState = append_code(result_unwrap(bound), [
@@ -5317,7 +5405,9 @@ fn pe_supported_local_type(enums: Json, structs: Json, type_name: String) -> Boo
 }
 
 fn pe_is_function_call(expression: Json) -> Bool {
-    return text(field(expression, "kind")) == "call" && starts_with(text(field(expression, "call_target")), "function:")
+    if text(field(expression, "kind")) != "call" { return false }
+    let target: String = text(field(expression, "call_target"))
+    return starts_with(target, "function:") || target == "builtin:process_args"
 }
 
 fn pe_validate_function_arguments(expression: Json, enums: Json, structs: Json) -> Result[Bool, String] {
@@ -5642,6 +5732,10 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
         let count: Int = result_unwrap(json_array_len(args))
         if starts_with(target, "function:") {
             return pe_validate_function_arguments(expression, enums, structs)
+        }
+        if target == "builtin:process_args" {
+            if count != 0 || type_name != "Array[String]" { return err("PE backend: process_args expects no arguments and returns Array[String]") }
+            return ok(true)
         }
         if target == "builtin:int" {
             if count != 1 { return err("PE backend: int expects one scalar integer argument") }
@@ -6019,7 +6113,7 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
             import_patches = array_push(import_patches, [patch.displacement, patch.instruction_end, patch.import_index])
         }
         let needs_heap: Bool = result.assembler.string_concat_used || result.assembler.array_runtime_used || result.assembler.box_runtime_used || result.assembler.host_runtime_used
-        let imports: Array[Array[String]] = pe_dynamic_imports(needs_heap)
+        let imports: Array[Array[String]] = pe_dynamic_imports(needs_heap, result.assembler.host_runtime_used)
         return emit_pe32plus_with_imports_and_data_patches(result.assembler.code, result.assembler.data, imports, data_patches, import_patches, result.assembler.function_ranges)
     }
     return ok(emit_dynamic_elf(result.assembler.code, result.assembler.data))
