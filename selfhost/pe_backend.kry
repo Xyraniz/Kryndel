@@ -1,10 +1,11 @@
 // Self-hosted PE32+ AMD64 image writer.
 //
 // Input code is a single .text section beginning at RVA 0x1000. Data is
-// copied into .rdata. IAT references are `[dispOffset, instructionEnd,
-// importIndex]`, where importIndex is GetStdHandle=0, WriteFile=1, or
-// ExitProcess=2. Data references for the extended entry point are
-// `[dispOffset, instructionEnd, dataOffset]`. Function ranges are
+// copied into .rdata. A private absolute pointer anchor in .rdata exercises
+// the DIR64 relocation path; generated code references remain RIP-relative.
+// IAT references are `[dispOffset, instructionEnd, importIndex]`, where
+// importIndex is GetStdHandle=0, WriteFile=1, or ExitProcess=2. Data references
+// are `[dispOffset, instructionEnd, dataOffset]`. Function ranges are
 // `[begin, end, frameSize]`; ranges must describe the standard RBP frame
 // prolog emitted by the current x64 backend.
 
@@ -42,6 +43,10 @@ fn pe_i32(value: Int) -> Array[UInt8] {
         return pe_u32(value)
     }
     return pe_u32(4294967296 + value)
+}
+
+fn pe_preferred_image_base() -> Int {
+    return 5368709120
 }
 
 fn pe_append(left: Array[UInt8], right: Array[UInt8]) -> Array[UInt8] {
@@ -355,6 +360,26 @@ fn pe_build_pdata(ranges: Array[Array[Int]], pdata_rva: Int) -> Result[Array[UIn
     return ok(pdata)
 }
 
+fn pe_build_reloc(rdata_rva: Int, anchor_offset: Int) -> Result[Array[UInt8], String] {
+    if rdata_rva < 0 || anchor_offset < 0 || anchor_offset > 4294967295 - rdata_rva - 8 {
+        return err("PE: base relocation anchor is outside the image")
+    }
+    let page_rva: Int = rdata_rva + (anchor_offset / 4096) * 4096
+    let page_offset: Int = anchor_offset % 4096
+    if page_rva > 4294963200 || page_rva % 4096 != 0 || page_offset < 0 || page_offset > 4088 {
+        return err("PE: base relocation anchor cannot be represented")
+    }
+    // IMAGE_REL_BASED_DIR64 plus an ABSOLUTE pad to make SizeOfBlock a
+    // four-byte multiple. The Windows loader adjusts this pointer if the
+    // image is not loaded at its preferred ImageBase.
+    let relocation: Int = 40960 + page_offset
+    let mut block: Array[UInt8] = pe_u32(page_rva)
+    block = pe_append(block, pe_u32(12))
+    block = pe_append(block, pe_u16(relocation))
+    block = pe_append(block, pe_u16(0))
+    return ok(block)
+}
+
 fn pe_import_data(idata_rva: Int) -> Result[Array[UInt8], String] {
     let dll_offset: Int = 40
     let ilt_offset: Int = 56
@@ -423,14 +448,17 @@ fn pe_optional_header(layout: Array[Int]) -> Array[UInt8] {
     let data_raw_size: Int = unwrap_or(array_get(layout, 1), 0)
     let idata_raw_size: Int = unwrap_or(array_get(layout, 2), 0)
     let pdata_raw_size: Int = unwrap_or(array_get(layout, 3), 0)
-    let image_size: Int = unwrap_or(array_get(layout, 4), 0)
-    let rdata_rva: Int = unwrap_or(array_get(layout, 5), 0)
-    let idata_rva: Int = unwrap_or(array_get(layout, 6), 0)
-    let pdata_rva: Int = unwrap_or(array_get(layout, 7), 0)
-    let exception_size: Int = unwrap_or(array_get(layout, 8), 0)
-    let iat_rva: Int = unwrap_or(array_get(layout, 9), 0)
+    let reloc_raw_size: Int = unwrap_or(array_get(layout, 4), 0)
+    let image_size: Int = unwrap_or(array_get(layout, 5), 0)
+    let rdata_rva: Int = unwrap_or(array_get(layout, 6), 0)
+    let idata_rva: Int = unwrap_or(array_get(layout, 7), 0)
+    let pdata_rva: Int = unwrap_or(array_get(layout, 8), 0)
+    let exception_size: Int = unwrap_or(array_get(layout, 9), 0)
+    let iat_rva: Int = unwrap_or(array_get(layout, 10), 0)
+    let reloc_rva: Int = unwrap_or(array_get(layout, 11), 0)
+    let reloc_size: Int = unwrap_or(array_get(layout, 12), 0)
     let code_aligned: Int = result_unwrap(pe_aligned_size(code_size, 512))
-    let initialized_size: Int = data_raw_size + idata_raw_size + pdata_raw_size
+    let initialized_size: Int = data_raw_size + idata_raw_size + pdata_raw_size + reloc_raw_size
     let mut optional: Array[UInt8] = []
     optional = pe_append(optional, pe_u16(523))
     optional = pe_append(optional, [u8(1), u8(0)])
@@ -439,7 +467,7 @@ fn pe_optional_header(layout: Array[Int]) -> Array[UInt8] {
     optional = pe_append(optional, pe_u32(0))
     optional = pe_append(optional, pe_u32(4096))
     optional = pe_append(optional, pe_u32(4096))
-    optional = pe_append(optional, pe_u64(5368709120))
+    optional = pe_append(optional, pe_u64(pe_preferred_image_base()))
     optional = pe_append(optional, pe_u32(4096))
     optional = pe_append(optional, pe_u32(512))
     optional = pe_append(optional, pe_u16(6))
@@ -453,7 +481,7 @@ fn pe_optional_header(layout: Array[Int]) -> Array[UInt8] {
     optional = pe_append(optional, pe_u32(1024))
     optional = pe_append(optional, pe_u32(0))
     optional = pe_append(optional, pe_u16(3))
-    optional = pe_append(optional, pe_u16(256))
+    optional = pe_append(optional, pe_u16(352))
     optional = pe_append(optional, pe_u64(1048576))
     optional = pe_append(optional, pe_u64(4096))
     optional = pe_append(optional, pe_u64(1048576))
@@ -468,6 +496,9 @@ fn pe_optional_header(layout: Array[Int]) -> Array[UInt8] {
         } else if directory_index == 3 {
             optional = pe_append(optional, pe_u32(pdata_rva))
             optional = pe_append(optional, pe_u32(exception_size))
+        } else if directory_index == 5 {
+            optional = pe_append(optional, pe_u32(reloc_rva))
+            optional = pe_append(optional, pe_u32(reloc_size))
         } else if directory_index == 12 {
             optional = pe_append(optional, pe_u32(iat_rva))
             optional = pe_append(optional, pe_u32(32))
@@ -484,22 +515,26 @@ fn pe_build_headers(layout: Array[Int]) -> Result[Array[UInt8], String] {
     let data_size: Int = unwrap_or(array_get(layout, 1), 0)
     let idata_size: Int = unwrap_or(array_get(layout, 2), 0)
     let pdata_size: Int = unwrap_or(array_get(layout, 3), 0)
-    let exception_size: Int = unwrap_or(array_get(layout, 4), 0)
+    let reloc_size: Int = unwrap_or(array_get(layout, 4), 0)
+    let exception_size: Int = unwrap_or(array_get(layout, 5), 0)
     let code_raw_size_result: Result[Int, String] = pe_aligned_size(code_size, 512)
     let data_raw_size_result: Result[Int, String] = pe_aligned_size(data_size, 512)
     let idata_raw_size_result: Result[Int, String] = pe_aligned_size(idata_size, 512)
     let pdata_raw_size_result: Result[Int, String] = pe_aligned_size(pdata_size, 512)
-    if is_err(code_raw_size_result) || is_err(data_raw_size_result) || is_err(idata_raw_size_result) || is_err(pdata_raw_size_result) {
+    let reloc_raw_size_result: Result[Int, String] = pe_aligned_size(reloc_size, 512)
+    if is_err(code_raw_size_result) || is_err(data_raw_size_result) || is_err(idata_raw_size_result) || is_err(pdata_raw_size_result) || is_err(reloc_raw_size_result) {
         return err("PE: section raw size exceeds the file range")
     }
     let code_raw: Int = 1024
     let data_raw: Int = code_raw + result_unwrap(code_raw_size_result)
     let idata_raw: Int = data_raw + result_unwrap(data_raw_size_result)
     let pdata_raw: Int = idata_raw + result_unwrap(idata_raw_size_result)
+    let reloc_raw: Int = pdata_raw + result_unwrap(pdata_raw_size_result)
     let rdata_rva: Int = 4096 + result_unwrap(pe_aligned_size(code_size, 4096))
     let idata_rva: Int = rdata_rva + result_unwrap(pe_aligned_size(data_size, 4096))
     let pdata_rva: Int = idata_rva + result_unwrap(pe_aligned_size(idata_size, 4096))
-    let image_size: Int = pdata_rva + result_unwrap(pe_aligned_size(pdata_size, 4096))
+    let reloc_rva: Int = pdata_rva + result_unwrap(pe_aligned_size(pdata_size, 4096))
+    let image_size: Int = reloc_rva + result_unwrap(pe_aligned_size(reloc_size, 4096))
     let iat_rva: Int = idata_rva + 88
     let mut header: Array[UInt8] = pe_zeros(128)
     let magic0: Result[Array[UInt8], String] = array_set(header, 0, u8(77))
@@ -514,13 +549,13 @@ fn pe_build_headers(layout: Array[Int]) -> Result[Array[UInt8], String] {
     if len(header) != 128 { return err("PE: DOS header size is invalid") }
     header = pe_append(header, [u8(80), u8(69), u8(0), u8(0)])
     header = pe_append(header, pe_u16(34404))
-    header = pe_append(header, pe_u16(4))
+    header = pe_append(header, pe_u16(5))
     header = pe_append(header, pe_u32(0))
     header = pe_append(header, pe_u32(0))
     header = pe_append(header, pe_u32(0))
     header = pe_append(header, pe_u16(240))
     header = pe_append(header, pe_u16(34))
-    let optional_layout: Array[Int] = [code_size, result_unwrap(data_raw_size_result), result_unwrap(idata_raw_size_result), result_unwrap(pdata_raw_size_result), image_size, rdata_rva, idata_rva, pdata_rva, exception_size, iat_rva]
+    let optional_layout: Array[Int] = [code_size, result_unwrap(data_raw_size_result), result_unwrap(idata_raw_size_result), result_unwrap(pdata_raw_size_result), result_unwrap(reloc_raw_size_result), image_size, rdata_rva, idata_rva, pdata_rva, exception_size, iat_rva, reloc_rva, reloc_size]
     let optional: Array[UInt8] = pe_optional_header(optional_layout)
     if len(optional) != 240 { return err("PE: optional header size is invalid") }
     header = pe_append(header, optional)
@@ -528,6 +563,7 @@ fn pe_build_headers(layout: Array[Int]) -> Result[Array[UInt8], String] {
     header = pe_append(header, pe_section_header(".rdata", rdata_rva, data_size, result_unwrap(data_raw_size_result), data_raw, 1073741888))
     header = pe_append(header, pe_section_header(".idata", idata_rva, idata_size, result_unwrap(idata_raw_size_result), idata_raw, 3221225536))
     header = pe_append(header, pe_section_header(".pdata", pdata_rva, pdata_size, result_unwrap(pdata_raw_size_result), pdata_raw, 1073741888))
+    header = pe_append(header, pe_section_header(".reloc", reloc_rva, reloc_size, result_unwrap(reloc_raw_size_result), reloc_raw, 1107296320))
     if len(header) > 1024 { return err("PE: headers exceed the configured 0x400-byte header area") }
     header = pe_append(header, pe_zeros(1024 - len(header)))
     return ok(header)
@@ -574,6 +610,13 @@ pub fn emit_pe32plus_with_data_patches(code: Array[UInt8], data: Array[UInt8], d
     }
     let mut actual_data: Array[UInt8] = data
     if len(actual_data) == 0 { actual_data = [u8(0)] }
+    let user_data_size: Int = len(actual_data)
+    actual_data = pe_pad_to(actual_data, 8)
+    if len(actual_data) % 4096 > 4088 {
+        actual_data = pe_append(actual_data, pe_zeros(4096 - (len(actual_data) % 4096)))
+    }
+    let relocation_anchor_offset: Int = len(actual_data)
+    actual_data = pe_append(actual_data, pe_u64(pe_preferred_image_base() + 4096))
     let ranges_result: Result[Array[Array[Int]], String] = pe_validate_ranges(code, function_ranges)
     if is_err(ranges_result) { return err(unwrap_or(result_error(ranges_result), "PE: invalid function unwind ranges")) }
     let sorted_ranges: Array[Array[Int]] = result_unwrap(ranges_result)
@@ -587,7 +630,7 @@ pub fn emit_pe32plus_with_data_patches(code: Array[UInt8], data: Array[UInt8], d
     let mut patch_index: Int = 0
     while patch_index < len(data_patches) {
         let patch: Array[Int] = unwrap_or(array_get(data_patches, patch_index), [])
-        if unwrap_or(array_get(patch, 2), -1) > len(actual_data) {
+        if unwrap_or(array_get(patch, 2), -1) > user_data_size {
             return err("PE: .rdata reference points past the data section")
         }
         patch_index = patch_index + 1
@@ -612,30 +655,40 @@ pub fn emit_pe32plus_with_data_patches(code: Array[UInt8], data: Array[UInt8], d
     let pdata: Array[UInt8] = result_unwrap(pdata_result)
     let pdata_virtual_result: Result[Int, String] = pe_aligned_size(len(pdata), 4096)
     if is_err(pdata_virtual_result) { return err(unwrap_or(result_error(pdata_virtual_result), "PE: .pdata alignment failed")) }
-    let image_size: Int = pdata_rva + result_unwrap(pdata_virtual_result)
+    let reloc_rva: Int = pdata_rva + result_unwrap(pdata_virtual_result)
+    if reloc_rva > 4294967295 { return err("PE: .reloc RVA exceeds the 32-bit image range") }
+    let reloc_result: Result[Array[UInt8], String] = pe_build_reloc(rdata_rva, relocation_anchor_offset)
+    if is_err(reloc_result) { return err(unwrap_or(result_error(reloc_result), "PE: base relocation generation failed")) }
+    let reloc: Array[UInt8] = result_unwrap(reloc_result)
+    let reloc_virtual_result: Result[Int, String] = pe_aligned_size(len(reloc), 4096)
+    if is_err(reloc_virtual_result) { return err(unwrap_or(result_error(reloc_virtual_result), "PE: .reloc alignment failed")) }
+    let image_size: Int = reloc_rva + result_unwrap(reloc_virtual_result)
     if image_size > 4294967295 { return err("PE: image size exceeds the 32-bit range") }
 
     let code_raw_result: Result[Int, String] = pe_aligned_size(len(code), 512)
     let data_raw_result: Result[Int, String] = pe_aligned_size(len(actual_data), 512)
     let idata_raw_result: Result[Int, String] = pe_aligned_size(len(idata), 512)
     let pdata_raw_result: Result[Int, String] = pe_aligned_size(len(pdata), 512)
-    if is_err(code_raw_result) || is_err(data_raw_result) || is_err(idata_raw_result) || is_err(pdata_raw_result) {
+    let reloc_raw_result: Result[Int, String] = pe_aligned_size(len(reloc), 512)
+    if is_err(code_raw_result) || is_err(data_raw_result) || is_err(idata_raw_result) || is_err(pdata_raw_result) || is_err(reloc_raw_result) {
         return err("PE: file section alignment failed")
     }
     let code_raw: Int = result_unwrap(code_raw_result)
     let data_raw: Int = result_unwrap(data_raw_result)
     let idata_raw: Int = result_unwrap(idata_raw_result)
     let pdata_raw: Int = result_unwrap(pdata_raw_result)
+    let reloc_raw: Int = result_unwrap(reloc_raw_result)
     let rdata_pointer: Int = 1024 + code_raw
     let idata_pointer: Int = rdata_pointer + data_raw
     let pdata_pointer: Int = idata_pointer + idata_raw
-    let file_size: Int = pdata_pointer + pdata_raw
+    let reloc_pointer: Int = pdata_pointer + pdata_raw
+    let file_size: Int = reloc_pointer + reloc_raw
     if file_size > 2147483647 { return err("PE: executable exceeds the supported in-memory file size") }
 
     let patched_code_result: Result[Array[UInt8], String] = pe_apply_patches(code, actual_data, rdata_rva, import_patches, data_patches, idata_rva)
     if is_err(patched_code_result) { return err(unwrap_or(result_error(patched_code_result), "PE: code relocation failed")) }
     let patched_code: Array[UInt8] = result_unwrap(patched_code_result)
-    let header_layout: Array[Int] = [len(code), len(actual_data), len(idata), len(pdata), len(sorted_ranges) * 12]
+    let header_layout: Array[Int] = [len(code), len(actual_data), len(idata), len(pdata), len(reloc), len(sorted_ranges) * 12]
     let headers_result: Result[Array[UInt8], String] = pe_build_headers(header_layout)
     if is_err(headers_result) { return err(unwrap_or(result_error(headers_result), "PE: header generation failed")) }
     let mut file: Array[UInt8] = result_unwrap(headers_result)
@@ -647,6 +700,8 @@ pub fn emit_pe32plus_with_data_patches(code: Array[UInt8], data: Array[UInt8], d
     file = pe_append(file, pe_zeros(idata_raw - len(idata)))
     file = pe_append(file, pdata)
     file = pe_append(file, pe_zeros(pdata_raw - len(pdata)))
+    file = pe_append(file, reloc)
+    file = pe_append(file, pe_zeros(reloc_raw - len(reloc)))
     if len(file) != file_size { return err("PE: generated file size does not match its headers") }
     return ok(bytes_from_u8(file))
 }

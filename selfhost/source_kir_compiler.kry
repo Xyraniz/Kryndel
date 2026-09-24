@@ -26,8 +26,12 @@ struct SourceFunction {
 }
 
 struct SourceStruct {
+    symbol: String,
+    module_id: String,
+    public: Bool,
     fields: Map[String, String],
     names: Array[String],
+    public_fields: Map[String, Bool],
 }
 
 struct SourceParser {
@@ -59,6 +63,7 @@ struct ParsedProgram {
     statements: String,
     functions: String,
     structs: String,
+    enums: String,
 }
 
 struct ParsedFunction {
@@ -77,6 +82,11 @@ struct ParsedStruct {
     json: String,
 }
 
+struct ParsedEnum {
+    parser: SourceParser,
+    json: String,
+}
+
 struct SourceModule {
     path: String,
     tokens: Array[SourceToken],
@@ -87,6 +97,9 @@ struct SourceModuleContext {
     module_id: String,
     functions: Map[String, SourceFunction],
     public_names: Array[String],
+    structs: Map[String, SourceStruct],
+    struct_names: Array[String],
+    public_struct_names: Array[String],
 }
 
 struct SourceModules {
@@ -279,7 +292,7 @@ fn lex(source: String) -> Result[Array[SourceToken], String] {
             continue
         }
         let next: String = char_at(chars, index + 1)
-        if (current == "=" && next == "=") || (current == "!" && next == "=") || (current == "<" && next == "=") || (current == ">" && next == "=") || (current == "&" && next == "&") || (current == "|" && next == "|") || (current == "<" && next == "<") || (current == ">" && next == ">") || (current == "-" && next == ">") {
+        if (current == "=" && next == "=") || (current == "!" && next == "=") || (current == "<" && next == "=") || (current == ">" && next == "=") || (current == "&" && next == "&") || (current == "|" && next == "|") || (current == "<" && next == "<") || (current == ">" && next == ">") || (current == "-" && next == ">") || (current == ":" && next == ":") {
             tokens = push_token(tokens, "symbol", current + next)
             if len(tokens) >= 128 {
                 token_chunks = array_push(token_chunks, tokens)
@@ -399,6 +412,14 @@ fn parse_type(parser: SourceParser) -> Result[ParsedType, String] {
     if token.kind != "identifier" { return err("parser: expected a type name") }
     let mut current: SourceParser = advance(parser)
     let mut name: String = token.text
+    let declared: Option[SourceStruct] = map_get(parser.structs, token.text)
+    if !is_none(declared) {
+        name = unwrap_or(declared, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} }).symbol
+    } else if map_contains_key(parser.structs, "private:" + token.text) {
+        let hidden: SourceStruct = unwrap_or(map_get(parser.structs, "private:" + token.text), SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} })
+        if source_type_is_enum(hidden) { return err("parser: imported enum '" + token.text + "' is private") }
+        return err("parser: imported struct '" + token.text + "' is private")
+    }
     if current_token(current).text == "[" {
         current = advance(current)
         let mut arguments: String = ""
@@ -425,23 +446,58 @@ fn parse_type(parser: SourceParser) -> Result[ParsedType, String] {
     return ok(ParsedType{ parser: current, name: name })
 }
 
+fn source_struct_symbol(module_id: String, name: String) -> String {
+    // The @ prefix cannot be produced by the source lexer, so internal type
+    // identities cannot be named directly by user code to bypass visibility.
+    return "@kry_type_module_" + module_id + "_" + name
+}
+
+fn source_enum_symbol(module_id: String, name: String) -> String {
+    // Keep enum identities outside the source identifier alphabet as well.
+    return "@kry_enum_module_" + module_id + "_" + name
+}
+
+fn source_type_is_enum(definition: SourceStruct) -> Bool {
+    return starts_with(definition.symbol, "@kry_enum_module_")
+}
+
+fn source_string_array_contains(items: Array[String], value: String) -> Bool {
+    let mut index: Int = 0
+    while index < len(items) {
+        if unwrap_or(array_get(items, index), "") == value { return true }
+        index = index + 1
+    }
+    return false
+}
+
+fn source_module_name(path: String, directory: String) -> String {
+    if !starts_with(path, directory) { return path }
+    let path_length: Int = len(string_chars(path))
+    let directory_length: Int = len(string_chars(directory))
+    return result_unwrap(substring(path, directory_length, path_length - directory_length))
+}
+
 fn parse_struct(parser: SourceParser, public: Bool) -> Result[ParsedStruct, String] {
     let opened: Result[SourceParser, String] = expect(parser, "struct")
     if is_err(opened) { return err(parser_error(opened)) }
     let named: SourceParser = result_unwrap(opened)
     let name: SourceToken = current_token(named)
     if name.kind != "identifier" { return err("parser: expected a struct name") }
+    let declaration: Option[SourceStruct] = map_get(parser.structs, name.text)
+    if is_none(declaration) { return err("parser: struct '" + name.text + "' was not declared in this module context") }
+    let declared_shape: SourceStruct = unwrap_or(declaration, SourceStruct{ symbol: "", module_id: parser.module_id, public: public, fields: {}, names: [], public_fields: {} })
     let brace: Result[SourceParser, String] = expect(advance(named), "{")
     if is_err(brace) { return err(parser_error(brace)) }
     let mut current: SourceParser = skip_separators(result_unwrap(brace))
     let mut fields: Map[String, String] = {}
+    let mut public_fields: Map[String, Bool] = {}
     let mut names: Array[String] = []
     let mut fields_json: String = "["
     let mut first: Bool = true
     while current_token(current).text != "}" {
-        let mut field_public: Bool = false
-        if current_token(current).text == "pub" {
-            field_public = true
+        let mut field_public: Bool = true
+        if current_token(current).text == "private" {
+            field_public = false
             current = advance(current)
         }
         let field_name: SourceToken = current_token(current)
@@ -452,8 +508,9 @@ fn parse_struct(parser: SourceParser, public: Bool) -> Result[ParsedStruct, Stri
         let parsed_type: Result[ParsedType, String] = parse_type(result_unwrap(colon))
         if is_err(parsed_type) { return err(unwrap_or(result_error(parsed_type), "parser: expected a struct field type")) }
         let field_type: String = result_unwrap(parsed_type).name
-        if !source_type_supported(parser, field_type) && field_type != name.text { return err("parser: unsupported struct field type '" + field_type + "'") }
+        if !source_type_supported(parser, field_type) { return err("parser: unsupported struct field type '" + field_type + "'") }
         fields = map_insert(fields, field_name.text, field_type)
+        public_fields = map_insert(public_fields, field_name.text, field_public)
         names = array_push(names, field_name.text)
         if !first { fields_json = fields_json + "," }
         fields_json = fields_json + "{\"name\":" + json_quote(field_name.text) + ",\"public\":" + bool_text(field_public) + ",\"type\":" + json_quote(field_type) + "}"
@@ -465,12 +522,66 @@ fn parse_struct(parser: SourceParser, public: Bool) -> Result[ParsedStruct, Stri
             return err("parser: expected ',' or '}' after struct field")
         }
     }
+    if public {
+        let mut field_index: Int = 0
+        while field_index < len(names) {
+            let public_field_name: String = unwrap_or(array_get(names, field_index), "")
+            let public_field_type: String = unwrap_or(map_get(fields, public_field_name), "")
+            if source_type_exposes_private(parser.structs, public_field_type) { return err("parser: public struct '" + name.text + "' exposes a private field type") }
+            field_index = field_index + 1
+        }
+    }
     let closed: Result[SourceParser, String] = expect(current, "}")
     if is_err(closed) { return err(parser_error(closed)) }
-    let definition: SourceStruct = SourceStruct{ fields: fields, names: names }
+    let definition: SourceStruct = SourceStruct{ symbol: declared_shape.symbol, module_id: declared_shape.module_id, public: declared_shape.public, fields: fields, names: names, public_fields: public_fields }
     let after: SourceParser = result_unwrap(closed)
-    let updated: SourceParser = SourceParser{ tokens: after.tokens, position: after.position, module_id: after.module_id, bindings: after.bindings, functions: after.functions, structs: map_insert(after.structs, name.text, definition) }
-    return ok(ParsedStruct{ parser: updated, json: "{\"name\":" + json_quote(name.text) + ",\"public\":" + bool_text(public) + ",\"module\":\"\",\"fields\":" + fields_json + "]}" })
+    let updated_structs: Map[String, SourceStruct] = map_insert(map_insert(after.structs, name.text, definition), definition.symbol, definition)
+    let updated: SourceParser = SourceParser{ tokens: after.tokens, position: after.position, module_id: after.module_id, bindings: after.bindings, functions: after.functions, structs: updated_structs }
+    return ok(ParsedStruct{ parser: updated, json: "{\"name\":" + json_quote(definition.symbol) + ",\"public\":" + bool_text(public) + ",\"module\":\"\",\"fields\":" + fields_json + "]}" })
+}
+
+fn parse_enum(parser: SourceParser, public: Bool, module_name: String) -> Result[ParsedEnum, String] {
+    let opened: Result[SourceParser, String] = expect(parser, "enum")
+    if is_err(opened) { return err(parser_error(opened)) }
+    let named: SourceParser = result_unwrap(opened)
+    let name: SourceToken = current_token(named)
+    if name.kind != "identifier" { return err("parser: expected an enum name") }
+    let declaration: Option[SourceStruct] = map_get(parser.structs, name.text)
+    if is_none(declaration) { return err("parser: enum '" + name.text + "' was not declared in this module context") }
+    let declared_shape: SourceStruct = unwrap_or(declaration, SourceStruct{ symbol: "", module_id: parser.module_id, public: public, fields: {}, names: [], public_fields: {} })
+    if !source_type_is_enum(declared_shape) { return err("parser: '" + name.text + "' was not declared as an enum") }
+    let brace: Result[SourceParser, String] = expect(advance(named), "{")
+    if is_err(brace) { return err(parser_error(brace)) }
+    let mut current: SourceParser = skip_separators(result_unwrap(brace))
+    let mut variants: Array[String] = []
+    let mut variants_json: String = "["
+    let mut first: Bool = true
+    while current_token(current).text != "}" {
+        let variant: SourceToken = current_token(current)
+        if variant.kind != "identifier" { return err("parser: expected an enum variant name") }
+        if source_string_array_contains(variants, variant.text) { return err("parser: duplicate enum variant '" + variant.text + "'") }
+        variants = array_push(variants, variant.text)
+        if !first { variants_json = variants_json + "," }
+        variants_json = variants_json + json_quote(variant.text)
+        first = false
+        current = advance(current)
+        if current_token(current).text == "," {
+            current = skip_separators(advance(current))
+        } else if current_token(current).text == ";" {
+            current = skip_separators(current)
+        } else if current_token(current).text != "}" {
+            return err("parser: expected ',' or '}' after enum variant")
+        }
+    }
+    if len(variants) == 0 { return err("parser: enum '" + name.text + "' must declare at least one variant") }
+    let closed: Result[SourceParser, String] = expect(current, "}")
+    if is_err(closed) { return err(parser_error(closed)) }
+    let definition: SourceStruct = SourceStruct{ symbol: declared_shape.symbol, module_id: declared_shape.module_id, public: declared_shape.public, fields: {}, names: variants, public_fields: {} }
+    let after: SourceParser = result_unwrap(closed)
+    let updated_enums: Map[String, SourceStruct] = map_insert(map_insert(after.structs, name.text, definition), definition.symbol, definition)
+    let updated: SourceParser = SourceParser{ tokens: after.tokens, position: after.position, module_id: after.module_id, bindings: after.bindings, functions: after.functions, structs: updated_enums }
+    let json: String = "{\"name\":" + json_quote(definition.symbol) + ",\"public\":" + bool_text(public) + ",\"module\":" + json_quote(module_name) + ",\"variants\":" + variants_json + "]}"
+    return ok(ParsedEnum{ parser: updated, json: json })
 }
 
 fn json_quote(value: String) -> String {
@@ -516,8 +627,15 @@ fn source_type_supported(parser: SourceParser, type_name: String) -> Bool {
 fn source_struct_field_type(parser: SourceParser, type_name: String, field_name: String) -> String {
     let definition: Option[SourceStruct] = map_get(parser.structs, type_name)
     if is_none(definition) { return "" }
-    let fields: Map[String, String] = unwrap_or(definition, SourceStruct{ fields: {}, names: [] }).fields
+    let fields: Map[String, String] = unwrap_or(definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} }).fields
     return unwrap_or(map_get(fields, field_name), "")
+}
+
+fn source_struct_field_is_public(parser: SourceParser, type_name: String, field_name: String) -> Bool {
+    let definition: Option[SourceStruct] = map_get(parser.structs, type_name)
+    if is_none(definition) { return false }
+    let visibility: Map[String, Bool] = unwrap_or(definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} }).public_fields
+    return unwrap_or(map_get(visibility, field_name), false)
 }
 
 fn generic_inner(type_name: String, prefix: String) -> String {
@@ -712,6 +830,15 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr) -> Resu
     if left.type_name != right.type_name {
         return err("parser: binary operands must have the same type")
     }
+    if starts_with(left.type_name, "@kry_enum_module_") {
+        if operator != "==" && operator != "!=" { return err("parser: enum values support only equality") }
+        return ok(SourceExpr{
+            json: "{\"kind\":\"binary\",\"type\":\"Bool\",\"const\":null,\"operator\":" + json_quote(operator) + ",\"left\":" + left.json + ",\"right\":" + right.json + "}",
+            type_name: "Bool",
+            known: false,
+            display: "",
+        })
+    }
     if operator == "+" && is_array_type(left.type_name) {
         return ok(SourceExpr{
             json: "{\"kind\":\"binary\",\"type\":" + json_quote(left.type_name) + ",\"const\":null,\"operator\":\"+\",\"left\":" + left.json + ",\"right\":" + right.json + "}",
@@ -799,7 +926,7 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr) -> Resu
 fn parse_struct_literal(parser: SourceParser, type_name: String) -> Result[ParsedExpr, String] {
     let definition: Option[SourceStruct] = map_get(parser.structs, type_name)
     if is_none(definition) { return err("parser: unknown struct '" + type_name + "'") }
-    let shape: SourceStruct = unwrap_or(definition, SourceStruct{ fields: {}, names: [] })
+    let shape: SourceStruct = unwrap_or(definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} })
     let opened: Result[SourceParser, String] = expect(parser, "{")
     if is_err(opened) { return err(parser_error(opened)) }
     let mut current: SourceParser = skip_separators(result_unwrap(opened))
@@ -812,6 +939,7 @@ fn parse_struct_literal(parser: SourceParser, type_name: String) -> Result[Parse
         let field_name: SourceToken = current_token(current)
         if field_name.kind != "identifier" { return err("parser: expected a struct field name in literal") }
         if !map_contains_key(shape.fields, field_name.text) { return err("parser: unknown field '" + field_name.text + "' in struct '" + type_name + "'") }
+        if shape.module_id != parser.module_id && !source_struct_field_is_public(parser, shape.symbol, field_name.text) { return err("parser: field '" + field_name.text + "' is private in struct '" + type_name + "'") }
         if map_contains_key(seen, field_name.text) { return err("parser: duplicate field '" + field_name.text + "' in struct literal") }
         let colon: Result[SourceParser, String] = expect(advance(current), ":")
         if is_err(colon) { return err(parser_error(colon)) }
@@ -846,8 +974,26 @@ fn parse_struct_literal(parser: SourceParser, type_name: String) -> Result[Parse
     }
     let closed: Result[SourceParser, String] = expect(current, "}")
     if is_err(closed) { return err(parser_error(closed)) }
-    let json: String = "{\"kind\":\"struct\",\"type\":" + json_quote(type_name) + ",\"const\":null,\"struct_name\":" + json_quote(type_name) + ",\"fields\":" + names + "],\"values\":" + values + "]}"
-    return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: type_name, known: false, display: "" } })
+    let json: String = "{\"kind\":\"struct\",\"type\":" + json_quote(shape.symbol) + ",\"const\":null,\"struct_name\":" + json_quote(shape.symbol) + ",\"fields\":" + names + "],\"values\":" + values + "]}"
+    return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: shape.symbol, known: false, display: "" } })
+}
+
+fn parse_enum_variant(parser: SourceParser, enum_name: String) -> Result[ParsedExpr, String] {
+    let declaration: Option[SourceStruct] = map_get(parser.structs, enum_name)
+    if is_none(declaration) {
+        if map_contains_key(parser.structs, "private:" + enum_name) { return err("parser: imported enum '" + enum_name + "' is private") }
+        return err("parser: unknown enum '" + enum_name + "'")
+    }
+    let shape: SourceStruct = unwrap_or(declaration, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} })
+    if !source_type_is_enum(shape) { return err("parser: type '" + enum_name + "' is not an enum") }
+    let separator: Result[SourceParser, String] = expect(parser, "::")
+    if is_err(separator) { return err(parser_error(separator)) }
+    let variant: SourceToken = current_token(result_unwrap(separator))
+    if variant.kind != "identifier" { return err("parser: expected an enum variant after '::'") }
+    if !source_string_array_contains(shape.names, variant.text) { return err("parser: unknown enum variant '" + enum_name + "::" + variant.text + "'") }
+    let next: SourceParser = advance(result_unwrap(separator))
+    let json: String = "{\"kind\":\"enum\",\"type\":" + json_quote(shape.symbol) + ",\"const\":null,\"enum_type\":" + json_quote(shape.symbol) + ",\"enum_variant\":" + json_quote(variant.text) + "}"
+    return ok(ParsedExpr{ parser: next, expression: SourceExpr{ json: json, type_name: shape.symbol, known: false, display: "" } })
 }
 
 fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
@@ -874,6 +1020,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
     }
     if token.kind == "identifier" {
         let after_name: SourceParser = advance(parser)
+        if current_token(after_name).text == "::" { return parse_enum_variant(after_name, token.text) }
         if current_token(after_name).text == "(" {
             let mut return_type: String = ""
             let mut expected: Array[String] = []
@@ -1207,6 +1354,10 @@ fn parse_postfix(parser: SourceParser) -> Result[ParsedExpr, String] {
             if field_token.kind != "identifier" { return err("parser: expected a struct field name after '.'") }
             let field_type: String = source_struct_field_type(parsed.parser, parsed.expression.type_name, field_token.text)
             if field_type == "" { return err("parser: unknown field '" + field_token.text + "' in struct '" + parsed.expression.type_name + "'") }
+            let struct_definition: Option[SourceStruct] = map_get(parsed.parser.structs, parsed.expression.type_name)
+            if !is_none(struct_definition) && unwrap_or(struct_definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} }).module_id != parsed.parser.module_id && !source_struct_field_is_public(parsed.parser, parsed.expression.type_name, field_token.text) {
+                return err("parser: field '" + field_token.text + "' is private in struct '" + parsed.expression.type_name + "'")
+            }
             let json: String = "{\"kind\":\"field\",\"type\":" + json_quote(field_type) + ",\"const\":null,\"base\":" + parsed.expression.json + ",\"field\":" + json_quote(field_token.text) + "}"
             parsed = ParsedExpr{ parser: advance(advance(parsed.parser)), expression: SourceExpr{ json: json, type_name: field_type, known: false, display: "" } }
             continue
@@ -1584,10 +1735,135 @@ fn parse_function_header(parser: SourceParser) -> Result[ParsedFunctionHeader, S
     return ok(header)
 }
 
-fn collect_module_context(module: SourceModule, module_index: Int, is_root: Bool) -> Result[SourceModuleContext, String] {
+fn collect_module_type_headers(module: SourceModule, module_index: Int, is_root: Bool) -> Result[SourceModuleContext, String] {
     let mut module_id: String = str(module_index)
     if is_root { module_id = "root" }
     let mut parser: SourceParser = SourceParser{ tokens: module.tokens, position: 0, module_id: module_id, bindings: {}, functions: {}, structs: {} }
+    let mut structs: Map[String, SourceStruct] = {}
+    let mut struct_names: Array[String] = []
+    let mut public_struct_names: Array[String] = []
+    while current_token(parser).kind != "eof" {
+        parser = skip_separators(parser)
+        let mut declaration: SourceParser = parser
+        let mut public: Bool = false
+        if current_token(declaration).text == "pub" {
+            public = true
+            declaration = advance(declaration)
+        }
+        if current_token(declaration).text == "struct" {
+            let name: SourceToken = current_token(advance(declaration))
+            if name.kind != "identifier" { return err("module: expected a struct name in '" + module.path + "'") }
+            if map_contains_key(structs, name.text) { return err("module: duplicate type '" + name.text + "' in '" + module.path + "'") }
+            let definition: SourceStruct = SourceStruct{ symbol: source_struct_symbol(module_id, name.text), module_id: module_id, public: public, fields: {}, names: [], public_fields: {} }
+            structs = map_insert(structs, name.text, definition)
+            struct_names = array_push(struct_names, name.text)
+            if public { public_struct_names = array_push(public_struct_names, name.text) }
+            parser = skip_source_block(advance(advance(declaration)))
+            continue
+        }
+        if current_token(declaration).text == "enum" {
+            let enum_name: SourceToken = current_token(advance(declaration))
+            if enum_name.kind != "identifier" { return err("module: expected an enum name in '" + module.path + "'") }
+            if map_contains_key(structs, enum_name.text) { return err("module: duplicate type '" + enum_name.text + "' in '" + module.path + "'") }
+            let definition: SourceStruct = SourceStruct{ symbol: source_enum_symbol(module_id, enum_name.text), module_id: module_id, public: public, fields: {}, names: [], public_fields: {} }
+            structs = map_insert(structs, enum_name.text, definition)
+            struct_names = array_push(struct_names, enum_name.text)
+            if public { public_struct_names = array_push(public_struct_names, enum_name.text) }
+            parser = skip_source_block(advance(advance(declaration)))
+            continue
+        }
+        if current_token(declaration).text == "fn" {
+            let header: Result[ParsedFunctionHeader, String] = parse_function_header(SourceParser{ tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: {}, structs: structs })
+            if is_err(header) { return err(unwrap_or(result_error(header), "invalid function header")) }
+            let parsed_header: ParsedFunctionHeader = result_unwrap(header)
+            if current_token(parsed_header.parser).text != "{" { return err("module: expected a body for '" + parsed_header.name + "'") }
+            parser = skip_source_block(parsed_header.parser)
+            continue
+        }
+        if current_token(declaration).kind == "eof" { break }
+        if current_token(parser).text == "{" { parser = skip_source_block(parser) }
+        else { parser = advance(parser) }
+    }
+    return ok(SourceModuleContext{ module_id: module_id, functions: {}, public_names: [], structs: structs, struct_names: struct_names, public_struct_names: public_struct_names })
+}
+
+fn source_type_exposes_private(structs: Map[String, SourceStruct], type_name: String) -> Bool {
+    if is_array_type(type_name) { return source_type_exposes_private(structs, array_inner(type_name)) }
+    if starts_with(type_name, "Option[") { return source_type_exposes_private(structs, generic_inner(type_name, "Option[")) }
+    if starts_with(type_name, "Result[") {
+        return source_type_exposes_private(structs, generic_inner(type_name, "Result[")) || source_type_exposes_private(structs, generic_error(type_name))
+    }
+    if starts_with(type_name, "Map[") {
+        return source_type_exposes_private(structs, generic_inner(type_name, "Map[")) || source_type_exposes_private(structs, generic_value(type_name, "Map["))
+    }
+    if source_is_scalar_type(type_name) { return false }
+    let definition: Option[SourceStruct] = map_get(structs, type_name)
+    if is_none(definition) { return false }
+    return !unwrap_or(definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} }).public
+}
+
+fn source_module_type_scope(modules: Array[SourceModule], contexts: Array[SourceModuleContext], module_index: Int, directory: String) -> Result[Map[String, SourceStruct], String] {
+    let module: SourceModule = unwrap_or(array_get(modules, module_index), SourceModule{ path: "", tokens: [], imports: [] })
+    let mut scope: Map[String, SourceStruct] = {}
+    let mut visible_names: Map[String, Bool] = {}
+    let mut all_index: Int = 0
+    while all_index < len(contexts) {
+        let context: SourceModuleContext = unwrap_or(array_get(contexts, all_index), SourceModuleContext{ module_id: "", functions: {}, public_names: [], structs: {}, struct_names: [], public_struct_names: [] })
+        let mut type_index: Int = 0
+        while type_index < len(context.struct_names) {
+            let own_type_name: String = unwrap_or(array_get(context.struct_names, type_index), "")
+            let own_definition: Option[SourceStruct] = map_get(context.structs, own_type_name)
+            if is_none(own_definition) { return err("module: missing struct header '" + own_type_name + "'") }
+            let own_shape: SourceStruct = unwrap_or(own_definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} })
+            scope = map_insert(scope, own_shape.symbol, own_shape)
+            if all_index == module_index {
+                if map_contains_key(visible_names, own_type_name) { return err("module: duplicate type '" + own_type_name + "' in '" + module.path + "'") }
+                visible_names = map_insert(visible_names, own_type_name, true)
+                scope = map_insert(scope, own_type_name, own_shape)
+            }
+            type_index = type_index + 1
+        }
+        all_index = all_index + 1
+    }
+    let mut seen: Map[String, Bool] = {}
+    let mut import_index: Int = 0
+    while import_index < len(module.imports) {
+        let imported_name: String = unwrap_or(array_get(module.imports, import_index), "")
+        let imported_path: String = directory + imported_name + ".kry"
+        if !map_contains_key(seen, imported_path) {
+            let target_index: Int = find_source_module(modules, imported_path)
+            if target_index < 0 { return err("module: import resolver lost module '" + imported_name + "'") }
+            let imported: SourceModuleContext = unwrap_or(array_get(contexts, target_index), SourceModuleContext{ module_id: "", functions: {}, public_names: [], structs: {}, struct_names: [], public_struct_names: [] })
+            let mut public_index: Int = 0
+            while public_index < len(imported.public_struct_names) {
+                let imported_public_type_name: String = unwrap_or(array_get(imported.public_struct_names, public_index), "")
+                if map_contains_key(visible_names, imported_public_type_name) { return err("module: duplicate visible type '" + imported_public_type_name + "' in '" + module.path + "'") }
+                let public_definition: Option[SourceStruct] = map_get(imported.structs, imported_public_type_name)
+                if is_none(public_definition) { return err("module: missing export '" + imported_public_type_name + "' from '" + imported_name + "'") }
+                let public_shape: SourceStruct = unwrap_or(public_definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} })
+                visible_names = map_insert(visible_names, imported_public_type_name, true)
+                scope = map_insert(scope, imported_public_type_name, public_shape)
+                public_index = public_index + 1
+            }
+            let mut private_index: Int = 0
+            while private_index < len(imported.struct_names) {
+                let imported_private_type_name: String = unwrap_or(array_get(imported.struct_names, private_index), "")
+                let private_definition: Option[SourceStruct] = map_get(imported.structs, imported_private_type_name)
+                if !is_none(private_definition) && !unwrap_or(private_definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} }).public {
+                    scope = map_insert(scope, "private:" + imported_private_type_name, unwrap_or(private_definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} }))
+                }
+                private_index = private_index + 1
+            }
+            seen = map_insert(seen, imported_path, true)
+        }
+        import_index = import_index + 1
+    }
+    return ok(scope)
+}
+
+fn collect_module_context(module: SourceModule, headers: SourceModuleContext, type_scope: Map[String, SourceStruct]) -> Result[SourceModuleContext, String] {
+    let module_id: String = headers.module_id
+    let mut parser: SourceParser = SourceParser{ tokens: module.tokens, position: 0, module_id: module_id, bindings: {}, functions: {}, structs: type_scope }
     let mut functions: Map[String, SourceFunction] = {}
     let mut public_names: Array[String] = []
     while current_token(parser).kind != "eof" {
@@ -1599,10 +1875,19 @@ fn collect_module_context(module: SourceModule, module_index: Int, is_root: Bool
             declaration = advance(declaration)
         }
         if current_token(declaration).text == "fn" {
-            let parsed: Result[ParsedFunctionHeader, String] = parse_function_header(declaration)
+            let parsed: Result[ParsedFunctionHeader, String] = parse_function_header(SourceParser{ tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: {}, structs: parser.structs })
             if is_err(parsed) { return err(unwrap_or(result_error(parsed), "invalid function header")) }
             let header: ParsedFunctionHeader = result_unwrap(parsed)
             if map_contains_key(functions, header.name) { return err("module: duplicate function '" + header.name + "' in '" + module.path + "'") }
+            if public {
+                let mut parameter_index: Int = 0
+                while parameter_index < len(header.signature.parameters) {
+                    let parameter_type: String = unwrap_or(array_get(header.signature.parameters, parameter_index), "")
+                    if source_type_exposes_private(parser.structs, parameter_type) { return err("module: public function '" + header.name + "' exposes a private type") }
+                    parameter_index = parameter_index + 1
+                }
+                if source_type_exposes_private(parser.structs, header.signature.return_type) { return err("module: public function '" + header.name + "' exposes a private return type") }
+            }
             functions = map_insert(functions, header.name, header.signature)
             if public { public_names = array_push(public_names, header.name) }
             if current_token(header.parser).text != "{" { return err("module: expected a body for '" + header.name + "'") }
@@ -1610,19 +1895,33 @@ fn collect_module_context(module: SourceModule, module_index: Int, is_root: Bool
             continue
         }
         if current_token(declaration).text == "struct" {
-            parser = advance(declaration)
-            if current_token(parser).kind == "identifier" { parser = advance(parser) }
-            if current_token(parser).text == "{" { parser = skip_source_block(parser) }
+            let parsed_struct: Result[ParsedStruct, String] = parse_struct(SourceParser{ tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: functions, structs: parser.structs }, public)
+            if is_err(parsed_struct) { return err("module '" + module.path + "': " + unwrap_or(result_error(parsed_struct), "invalid struct declaration")) }
+            let completed: ParsedStruct = result_unwrap(parsed_struct)
+            parser = completed.parser
+            continue
+        }
+        if current_token(declaration).text == "enum" {
+            let parsed_enum: Result[ParsedEnum, String] = parse_enum(SourceParser{ tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: functions, structs: parser.structs }, public, source_module_name(module.path, source_directory(module.path)))
+            if is_err(parsed_enum) { return err("module '" + module.path + "': " + unwrap_or(result_error(parsed_enum), "invalid enum declaration")) }
+            let completed_enum: ParsedEnum = result_unwrap(parsed_enum)
+            parser = completed_enum.parser
             continue
         }
         if current_token(declaration).kind == "eof" { break }
-        if current_token(parser).text == "{" {
-            parser = skip_source_block(parser)
-        } else {
-            parser = advance(parser)
-        }
+        if current_token(parser).text == "{" { parser = skip_source_block(parser) }
+        else { parser = advance(parser) }
     }
-    return ok(SourceModuleContext{ module_id: module_id, functions: functions, public_names: public_names })
+    let mut own_structs: Map[String, SourceStruct] = {}
+    let mut struct_index: Int = 0
+    while struct_index < len(headers.struct_names) {
+        let name: String = unwrap_or(array_get(headers.struct_names, struct_index), "")
+        let definition: Option[SourceStruct] = map_get(parser.structs, name)
+        if is_none(definition) { return err("module: type '" + name + "' was not parsed in '" + module.path + "'") }
+        own_structs = map_insert(own_structs, name, unwrap_or(definition, SourceStruct{ symbol: "", module_id: module_id, public: false, fields: {}, names: [], public_fields: {} }))
+        struct_index = struct_index + 1
+    }
+    return ok(SourceModuleContext{ module_id: module_id, functions: functions, public_names: public_names, structs: own_structs, struct_names: headers.struct_names, public_struct_names: headers.public_struct_names })
 }
 
 fn find_source_module(modules: Array[SourceModule], path: String) -> Int {
@@ -1637,7 +1936,7 @@ fn find_source_module(modules: Array[SourceModule], path: String) -> Int {
 
 fn source_module_scope(modules: Array[SourceModule], contexts: Array[SourceModuleContext], module_index: Int, directory: String) -> Result[Map[String, SourceFunction], String] {
     let module: SourceModule = unwrap_or(array_get(modules, module_index), SourceModule{ path: "", tokens: [], imports: [] })
-    let own: SourceModuleContext = unwrap_or(array_get(contexts, module_index), SourceModuleContext{ module_id: "", functions: {}, public_names: [] })
+    let own: SourceModuleContext = unwrap_or(array_get(contexts, module_index), SourceModuleContext{ module_id: "", functions: {}, public_names: [], structs: {}, struct_names: [], public_struct_names: [] })
     let mut scope: Map[String, SourceFunction] = own.functions
     let mut seen: Map[String, Bool] = {}
     let mut import_index: Int = 0
@@ -1647,7 +1946,7 @@ fn source_module_scope(modules: Array[SourceModule], contexts: Array[SourceModul
         if !map_contains_key(seen, imported_path) {
             let target_index: Int = find_source_module(modules, imported_path)
             if target_index < 0 { return err("module: import resolver lost module '" + imported_name + "'") }
-            let imported: SourceModuleContext = unwrap_or(array_get(contexts, target_index), SourceModuleContext{ module_id: "", functions: {}, public_names: [] })
+            let imported: SourceModuleContext = unwrap_or(array_get(contexts, target_index), SourceModuleContext{ module_id: "", functions: {}, public_names: [], structs: {}, struct_names: [], public_struct_names: [] })
             let mut public_index: Int = 0
             while public_index < len(imported.public_names) {
                 let name: String = unwrap_or(array_get(imported.public_names, public_index), "")
@@ -1843,13 +2142,14 @@ fn parse_statement(parser: SourceParser) -> Result[ParsedStatements, String] {
     return err("parser: unsupported statement '" + token.text + "'")
 }
 
-fn parse_program(parser: SourceParser) -> Result[ParsedProgram, String] {
+fn parse_program(parser: SourceParser, module_path: String) -> Result[ParsedProgram, String] {
     let declarations: Result[SourceParser, String] = predeclare_functions(parser)
     if is_err(declarations) { return err(unwrap_or(result_error(declarations), "parser: failed to collect function declarations")) }
     let mut current: SourceParser = skip_separators(result_unwrap(declarations))
     let mut statement_items: Array[String] = []
     let mut function_items: Array[String] = []
     let mut struct_items: Array[String] = []
+    let mut enum_items: Array[String] = []
     while current_token(current).kind != "eof" {
         let mut function_parser: SourceParser = current
         let mut public: Bool = false
@@ -1863,6 +2163,14 @@ fn parse_program(parser: SourceParser) -> Result[ParsedProgram, String] {
             let parsed_struct: ParsedStruct = result_unwrap(definition)
             struct_items = array_push(struct_items, parsed_struct.json)
             current = skip_separators(parsed_struct.parser)
+            continue
+        }
+        if current_token(function_parser).text == "enum" {
+            let definition: Result[ParsedEnum, String] = parse_enum(function_parser, public, module_path)
+            if is_err(definition) { return err(unwrap_or(result_error(definition), "enum parser error")) }
+            let parsed_enum: ParsedEnum = result_unwrap(definition)
+            enum_items = array_push(enum_items, parsed_enum.json)
+            current = skip_separators(parsed_enum.parser)
             continue
         }
         if current_token(function_parser).text == "fn" {
@@ -1883,7 +2191,8 @@ fn parse_program(parser: SourceParser) -> Result[ParsedProgram, String] {
     let statements: String = "[" + join_json_items(statement_items, 0, len(statement_items)) + "]"
     let functions: String = "[" + join_json_items(function_items, 0, len(function_items)) + "]"
     let structs: String = "[" + join_json_items(struct_items, 0, len(struct_items)) + "]"
-    return ok(ParsedProgram{ parser: current, statements: statements, functions: functions, structs: structs })
+    let enums: String = "[" + join_json_items(enum_items, 0, len(enum_items)) + "]"
+    return ok(ParsedProgram{ parser: current, statements: statements, functions: functions, structs: structs, enums: enums })
 }
 
 fn json_array_items(value: String) -> String {
@@ -1901,30 +2210,47 @@ fn compile_path(path: String, target_os: String, target_arch: String) -> Result[
     let mut contexts: Array[SourceModuleContext] = []
     let mut index: Int = 0
     while index < len(modules) {
-        let declaration_module: SourceModule = unwrap_or(array_get(modules, index), SourceModule{ path: "", tokens: [], imports: [] })
-        let declaration_context: Result[SourceModuleContext, String] = collect_module_context(declaration_module, index, index == len(modules) - 1)
-        if is_err(declaration_context) { return err(unwrap_or(result_error(declaration_context), "module declaration error")) }
-        contexts = array_push(contexts, result_unwrap(declaration_context))
+        let header_module: SourceModule = unwrap_or(array_get(modules, index), SourceModule{ path: "", tokens: [], imports: [] })
+        let header_result: Result[SourceModuleContext, String] = collect_module_type_headers(header_module, index, index == len(modules) - 1)
+        if is_err(header_result) { return err(unwrap_or(result_error(header_result), "module declaration error")) }
+        contexts = array_push(contexts, result_unwrap(header_result))
+        index = index + 1
+    }
+    index = 0
+    while index < len(modules) {
+        let implementation_module: SourceModule = unwrap_or(array_get(modules, index), SourceModule{ path: "", tokens: [], imports: [] })
+        let headers: SourceModuleContext = unwrap_or(array_get(contexts, index), SourceModuleContext{ module_id: "", functions: {}, public_names: [], structs: {}, struct_names: [], public_struct_names: [] })
+        let implementation_scope: Result[Map[String, SourceStruct], String] = source_module_type_scope(modules, contexts, index, source_directory(path))
+        if is_err(implementation_scope) { return err(unwrap_or(result_error(implementation_scope), "module type scope error")) }
+        let implementation_result: Result[SourceModuleContext, String] = collect_module_context(implementation_module, headers, result_unwrap(implementation_scope))
+        if is_err(implementation_result) { return err(unwrap_or(result_error(implementation_result), "module declaration error")) }
+        let replaced: Result[Array[SourceModuleContext], String] = array_set(contexts, index, result_unwrap(implementation_result))
+        if is_err(replaced) { return err(unwrap_or(result_error(replaced), "module context update failed")) }
+        contexts = result_unwrap(replaced)
         index = index + 1
     }
     let mut function_items: Array[String] = []
     let mut struct_items: Array[String] = []
+    let mut enum_items: Array[String] = []
     let mut source_items: Array[String] = []
     let mut import_items: Array[String] = []
     let mut statements: String = "[]"
     index = 0
     while index < len(modules) {
         let module: SourceModule = unwrap_or(array_get(modules, index), SourceModule{ path: "", tokens: [], imports: [] })
-        let context: SourceModuleContext = unwrap_or(array_get(contexts, index), SourceModuleContext{ module_id: "", functions: {}, public_names: [] })
+        let context: SourceModuleContext = unwrap_or(array_get(contexts, index), SourceModuleContext{ module_id: "", functions: {}, public_names: [], structs: {}, struct_names: [], public_struct_names: [] })
         let scope: Result[Map[String, SourceFunction], String] = source_module_scope(modules, contexts, index, source_directory(path))
         if is_err(scope) { return err(unwrap_or(result_error(scope), "module scope error")) }
-        let parser: SourceParser = SourceParser{ tokens: module.tokens, position: 0, module_id: context.module_id, bindings: {}, functions: result_unwrap(scope), structs: {} }
-        let program: Result[ParsedProgram, String] = parse_program(parser)
+        let emission_type_scope: Result[Map[String, SourceStruct], String] = source_module_type_scope(modules, contexts, index, source_directory(path))
+        if is_err(emission_type_scope) { return err(unwrap_or(result_error(emission_type_scope), "module type scope error")) }
+        let parser: SourceParser = SourceParser{ tokens: module.tokens, position: 0, module_id: context.module_id, bindings: {}, functions: result_unwrap(scope), structs: result_unwrap(emission_type_scope) }
+        let program: Result[ParsedProgram, String] = parse_program(parser, source_module_name(module.path, source_directory(path)))
         if is_err(program) { return err("module '" + module.path + "': " + program_error(program)) }
         let parsed: ParsedProgram = result_unwrap(program)
         if index != len(modules) - 1 && parsed.statements != "[]" { return err("module '" + module.path + "': imported modules cannot contain top-level statements") }
         if parsed.functions != "[]" { function_items = array_push(function_items, json_array_items(parsed.functions)) }
         if parsed.structs != "[]" { struct_items = array_push(struct_items, json_array_items(parsed.structs)) }
+        if parsed.enums != "[]" { enum_items = array_push(enum_items, json_array_items(parsed.enums)) }
         source_items = array_push(source_items, json_quote(module.path))
         if index == len(modules) - 1 {
             statements = parsed.statements
@@ -1936,7 +2262,7 @@ fn compile_path(path: String, target_os: String, target_arch: String) -> Result[
         }
         index = index + 1
     }
-    let document_text: String = "{\"format\":\"kry-ir\",\"version\":2,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":" + json_quote(path) + ",\"target\":{\"os\":" + json_quote(target_os) + ",\"arch\":" + json_quote(target_arch) + ",\"gui\":false},\"imports\":[" + join_json_items(import_items, 0, len(import_items)) + "],\"sources\":[" + join_json_items(source_items, 0, len(source_items)) + "],\"structs\":[" + join_json_items(struct_items, 0, len(struct_items)) + "],\"enums\":[],\"functions\":[" + join_json_items(function_items, 0, len(function_items)) + "],\"statements\":" + statements + "}"
+    let document_text: String = "{\"format\":\"kry-ir\",\"version\":2,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":" + json_quote(path) + ",\"target\":{\"os\":" + json_quote(target_os) + ",\"arch\":" + json_quote(target_arch) + ",\"gui\":false},\"imports\":[" + join_json_items(import_items, 0, len(import_items)) + "],\"sources\":[" + join_json_items(source_items, 0, len(source_items)) + "],\"structs\":[" + join_json_items(struct_items, 0, len(struct_items)) + "],\"enums\":[" + join_json_items(enum_items, 0, len(enum_items)) + "],\"functions\":[" + join_json_items(function_items, 0, len(function_items)) + "],\"statements\":" + statements + "}"
     let document: Result[Json, String] = json_parse(document_text)
     if is_err(document) { return err(unwrap_or(result_error(document), "source frontend produced invalid KIR")) }
     let lowered: Result[Bytes, String] = compile_document(result_unwrap(document))

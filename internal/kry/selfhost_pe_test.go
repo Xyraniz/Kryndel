@@ -192,8 +192,20 @@ func TestSelfhostSourceCompilerBuildsWindowsPE(t *testing.T) {
 	}
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "app.kry")
+	modePath := filepath.Join(dir, "modes.kry")
 	outputPath := filepath.Join(dir, "app.exe")
+	if err := os.WriteFile(modePath, []byte(`pub enum Mode { Idle, Active }
+
+pub fn score(mode: Mode, first: Int, second: Int, third: Int, fourth: Int, fifth: Int) -> Int {
+    if mode == Mode::Active { return fifth }
+    return 0
+}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	source := `
+import "modes"
+
 fn twice(value: Int) -> Int {
     return value * 2
 }
@@ -206,7 +218,8 @@ fn main() -> Nil {
     }
     if index == 3 ||
         index == 4 { println("continued condition") }
-    println(int(u64(17)))
+	println(int(u64(17)))
+	println(score(Mode::Active, 1, 2, 3, 4, 42))
     println("compiled from Kryndel source")
 }
 `
@@ -237,7 +250,7 @@ fn main() -> Nil {
 	if err != nil {
 		t.Fatalf("selfhost-source-generated PE failed: %v; output: %s", err, output)
 	}
-	want := "2\n4\n6\ncontinued condition\n17\ncompiled from Kryndel source\n"
+	want := "2\n4\n6\ncontinued condition\n17\n42\ncompiled from Kryndel source\n"
 	if string(output) != want {
 		t.Fatalf("unexpected source-compiled PE output %q", output)
 	}

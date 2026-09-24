@@ -721,6 +721,22 @@ fn emit_jump(state: EmitState, label: Int, conditional: Bool, condition: UInt8) 
     return state_with_jumps(updated, chunked_jump_push(updated.assembler.jumps, JumpPatch{ label: label, position: position, function: state.env.current_function }))
 }
 
+fn emit_relative_call(state: EmitState, label: Int) -> EmitState {
+    let position: Int = state.assembler.code_length + 1
+    let updated: EmitState = append_code(state, [u8(232), u8(0), u8(0), u8(0), u8(0)])
+    return state_with_jumps(updated, chunked_jump_push(updated.assembler.jumps, JumpPatch{ label: label, position: position, function: state.env.current_function }))
+}
+
+fn emit_windows_stack_adjust(state: EmitState, subtract: Bool, amount: Int) -> EmitState {
+    if amount == 0 { return state }
+    let mut operation: UInt8 = u8(196)
+    if subtract { operation = u8(236) }
+    if amount <= 127 {
+        return append_code(state, [u8(72), u8(131), operation, u8(amount)])
+    }
+    return append_code(state, array_concat([u8(72), u8(129), operation], i32_bytes(amount)))
+}
+
 fn emit_call(state: EmitState, name: String) -> Result[EmitState, String] {
     let label: Option[Int] = map_get(state.env.function_labels, name)
     if is_none(label) { return err("dynamic backend: unknown function '" + name + "'") }
@@ -732,9 +748,7 @@ fn emit_call(state: EmitState, name: String) -> Result[EmitState, String] {
         if remainder != 0 { adjustment = adjustment + (16 - remainder) }
         current = append_code(current, [u8(72), u8(131), u8(236), u8(adjustment)])
     }
-    let position: Int = current.assembler.code_length + 1
-    let updated: EmitState = append_code(current, [u8(232), u8(0), u8(0), u8(0), u8(0)])
-    let called: EmitState = state_with_jumps(updated, chunked_jump_push(updated.assembler.jumps, JumpPatch{ label: unwrap_or(label, -1), position: position, function: state.env.current_function }))
+    let called: EmitState = emit_relative_call(current, unwrap_or(label, -1))
     if current.assembler.windows_abi { return ok(append_code(called, [u8(72), u8(131), u8(196), u8(adjustment)])) }
     return ok(called)
 }
@@ -748,9 +762,7 @@ fn emit_label_call(state: EmitState, label: Int) -> EmitState {
         if remainder != 0 { adjustment = adjustment + (16 - remainder) }
         current = append_code(current, [u8(72), u8(131), u8(236), u8(adjustment)])
     }
-    let position: Int = current.assembler.code_length + 1
-    let updated: EmitState = append_code(current, [u8(232), u8(0), u8(0), u8(0), u8(0)])
-    let called: EmitState = state_with_jumps(updated, chunked_jump_push(updated.assembler.jumps, JumpPatch{ label: label, position: position, function: state.env.current_function }))
+    let called: EmitState = emit_relative_call(current, label)
     if current.assembler.windows_abi { return append_code(called, [u8(72), u8(131), u8(196), u8(adjustment)]) }
     return called
 }
@@ -771,7 +783,7 @@ fn emit_move_arg(state: EmitState, index: Int) -> Result[EmitState, String] {
         if index == 1 { return ok(append_code(state, [u8(72), u8(137), u8(194)])) }
         if index == 2 { return ok(append_code(state, [u8(73), u8(137), u8(192)])) }
         if index == 3 { return ok(append_code(state, [u8(73), u8(137), u8(193)])) }
-        return err("dynamic backend: Win64 supports at most four scalar register arguments")
+        return err("dynamic backend: Win64 register argument index must be between zero and three")
     }
     if index == 0 { return ok(append_code(state, [u8(72), u8(137), u8(199)])) }
     if index == 1 { return ok(append_code(state, [u8(72), u8(137), u8(198)])) }
@@ -789,7 +801,10 @@ fn emit_store_arg(state: EmitState, index: Int, slot: Int) -> Result[EmitState, 
         else if index == 1 { moved = append_code(moved, [u8(72), u8(137), u8(208)]) }
         else if index == 2 { moved = append_code(moved, [u8(76), u8(137), u8(192)]) }
         else if index == 3 { moved = append_code(moved, [u8(76), u8(137), u8(200)]) }
-        else { return err("dynamic backend: Win64 supports at most four scalar register arguments") }
+        else if index >= 4 {
+            let caller_stack_offset: Int = 48 + (index - 4) * 8
+            moved = append_code(moved, array_concat([u8(72), u8(139), u8(133)], i32_bytes(caller_stack_offset)))
+        } else { return err("dynamic backend: Win64 parameter index is invalid") }
         return ok(emit_store_slot(moved, slot))
     }
     if index == 0 { moved = append_code(moved, [u8(72), u8(137), u8(248)]) }
@@ -3736,12 +3751,19 @@ fn is_supported_type(env: CompileEnv, type_name: String) -> Bool {
     return is_scalar_type(type_name) || map_contains_key(env.struct_fields, type_name)
 }
 
+fn is_enum_type(type_fields: Map[String, Json], type_name: String) -> Bool {
+    let variants: Option[Json] = map_get(type_fields, type_name)
+    if is_none(variants) { return false }
+    let values: Json = unwrap_or(variants, result_unwrap(json_parse("[]")))
+    if result_unwrap(json_array_len(values)) == 0 { return false }
+    return json_kind(result_unwrap(json_array_get(values, 0))) == "string"
+}
+
 fn emit_function_call(state: EmitState, expression: Json) -> Result[EmitState, String] {
     let arguments: Json = field(expression, "args")
     let count_result: Result[Int, String] = json_array_len(arguments)
     if is_err(count_result) { return err("dynamic backend: function argument list is not an array: " + unwrap_or(result_error(count_result), "unknown error")) }
     let count: Int = result_unwrap(count_result)
-    if state.assembler.windows_abi && count > 4 { return err("dynamic backend: Win64 supports at most four scalar register arguments") }
     if !state.assembler.windows_abi && count > 6 { return err("dynamic backend: at most six scalar arguments are supported") }
     let mut index: Int = 0
     let mut current: EmitState = state
@@ -3751,6 +3773,9 @@ fn emit_function_call(state: EmitState, expression: Json) -> Result[EmitState, S
         if is_err(emitted) { return err(expression_error(emitted)) }
         current = emit_push_rax(result_unwrap(emitted))
         index = index + 1
+    }
+    if state.assembler.windows_abi {
+        return emit_windows_function_call(current, text(field(expression, "name")), count)
     }
     let mut reverse: Int = count - 1
     while reverse >= 0 {
@@ -3762,6 +3787,63 @@ fn emit_function_call(state: EmitState, expression: Json) -> Result[EmitState, S
     return emit_call(current, text(field(expression, "name")))
 }
 
+fn emit_windows_rsp_load_rax(state: EmitState, offset: Int) -> EmitState {
+    return append_code(state, array_concat([u8(72), u8(139), u8(132), u8(36)], i32_bytes(offset)))
+}
+
+fn emit_windows_rsp_store_rax(state: EmitState, offset: Int) -> EmitState {
+    return append_code(state, array_concat([u8(72), u8(137), u8(132), u8(36)], i32_bytes(offset)))
+}
+
+fn emit_windows_rsp_load_argument(state: EmitState, index: Int, offset: Int) -> Result[EmitState, String] {
+    let mut instruction: Array[UInt8] = []
+    if index == 0 { instruction = [u8(72), u8(139), u8(140), u8(36)] }
+    else if index == 1 { instruction = [u8(72), u8(139), u8(148), u8(36)] }
+    else if index == 2 { instruction = [u8(76), u8(139), u8(132), u8(36)] }
+    else if index == 3 { instruction = [u8(76), u8(139), u8(140), u8(36)] }
+    else { return err("dynamic backend: Win64 register argument index must be between zero and three") }
+    return ok(append_code(state, array_concat(instruction, i32_bytes(offset))))
+}
+
+fn emit_windows_function_call(state: EmitState, name: String, count: Int) -> Result[EmitState, String] {
+    let label: Option[Int] = map_get(state.env.function_labels, name)
+    if is_none(label) { return err("dynamic backend: unknown function '" + name + "'") }
+    let staged_bytes: Int = count * 8
+    if state.assembler.windows_stack_depth < staged_bytes { return err("dynamic backend: Win64 argument stack underflow") }
+
+    let mut stack_argument_count: Int = count - 4
+    if stack_argument_count < 0 { stack_argument_count = 0 }
+    let outgoing_bytes: Int = 32 + stack_argument_count * 8
+    let alignment: Int = (state.assembler.windows_stack_depth + outgoing_bytes) % 16
+    let mut adjustment: Int = outgoing_bytes
+    if alignment != 0 { adjustment = adjustment + (16 - alignment) }
+    let mut current: EmitState = emit_windows_stack_adjust(state, true, adjustment)
+
+    // The fifth and later arguments are placed after the 32-byte shadow area.
+    // Their staged source values remain above the reserved outgoing area.
+    let mut index: Int = 4
+    while index < count {
+        let stack_source_offset: Int = adjustment + (count - index - 1) * 8
+        current = emit_windows_rsp_load_rax(current, stack_source_offset)
+        current = emit_windows_rsp_store_rax(current, 32 + (index - 4) * 8)
+        index = index + 1
+    }
+
+    index = 0
+    while index < count && index < 4 {
+        let register_source_offset: Int = adjustment + (count - index - 1) * 8
+        let loaded: Result[EmitState, String] = emit_windows_rsp_load_argument(current, index, register_source_offset)
+        if is_err(loaded) { return err(unwrap_or(result_error(loaded), "dynamic backend: Win64 register argument load failed")) }
+        current = result_unwrap(loaded)
+        index = index + 1
+    }
+
+    current = emit_relative_call(current, unwrap_or(label, -1))
+    current = emit_windows_stack_adjust(current, false, adjustment + staged_bytes)
+    current = state_with_windows_stack_depth(current, state.assembler.windows_stack_depth - staged_bytes)
+    return ok(current)
+}
+
 fn emit_pop_arg(state: EmitState, index: Int) -> Result[EmitState, String] {
     if state.assembler.windows_abi {
         if state.assembler.windows_stack_depth < 8 { return err("dynamic backend: Win64 argument stack underflow") }
@@ -3770,7 +3852,7 @@ fn emit_pop_arg(state: EmitState, index: Int) -> Result[EmitState, String] {
         else if index == 1 { popped = append_code(state, [u8(90)]) }
         else if index == 2 { popped = append_code(state, [u8(65), u8(88)]) }
         else if index == 3 { popped = append_code(state, [u8(65), u8(89)]) }
-        else { return err("dynamic backend: Win64 supports at most four scalar register arguments") }
+        else { return err("dynamic backend: Win64 register argument index must be between zero and three") }
         return ok(state_with_windows_stack_depth(popped, state.assembler.windows_stack_depth - 8))
     }
     if index == 0 { return ok(append_code(state, [u8(95)])) }
@@ -3790,7 +3872,7 @@ fn emit_assert_call(state: EmitState, expression: Json, equal: Bool) -> Result[E
         let left: Json = result_unwrap(json_array_get(arguments, 0))
         let right: Json = result_unwrap(json_array_get(arguments, 1))
         let type_name: String = expr_type(left)
-        if type_name != expr_type(right) || (type_name != "Int" && type_name != "Bool" && !starts_with(type_name, "UInt")) { return err("dynamic backend: assert_eq supports matching Int, UInt, or Bool values") }
+        if type_name != expr_type(right) || (!is_enum_type(state.env.struct_fields, type_name) && type_name != "Int" && type_name != "Bool" && !starts_with(type_name, "UInt")) { return err("dynamic backend: assert_eq supports matching Int, UInt, Bool, or enum values") }
         let first: Result[EmitState, String] = emit_expression(state, left)
         if is_err(first) { return err(expression_error(first)) }
         let pushed: EmitState = emit_push_rax(result_unwrap(first))
@@ -3936,6 +4018,13 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
     }
     if kind == "string" {
         return ok(emit_string(state, text(field(expression, "string"))))
+    }
+    if kind == "enum" {
+        let enum_name: String = text(field(expression, "enum_type"))
+        let variant_name: String = text(field(expression, "enum_variant"))
+        let variant: Int = enum_variant_index(state.env.struct_fields, enum_name, variant_name)
+        if variant < 0 || expr_type(expression) != enum_name { return err("dynamic backend: unknown enum variant '" + enum_name + "::" + variant_name + "'") }
+        return ok(emit_int(state, variant))
     }
     if kind == "struct" {
         return emit_struct_literal(state, expression)
@@ -4769,6 +4858,31 @@ fn collect_struct_fields(structs: Json) -> Map[String, Json] {
     return result
 }
 
+fn collect_type_fields(structs: Json, enums: Json) -> Map[String, Json] {
+    let mut result: Map[String, Json] = collect_struct_fields(structs)
+    let count: Int = result_unwrap(json_array_len(enums))
+    let mut index: Int = 0
+    while index < count {
+        let definition: Json = result_unwrap(json_array_get(enums, index))
+        result = map_insert(result, text(field(definition, "name")), field(definition, "variants"))
+        index = index + 1
+    }
+    return result
+}
+
+fn enum_variant_index(type_fields: Map[String, Json], enum_name: String, variant_name: String) -> Int {
+    let variants: Option[Json] = map_get(type_fields, enum_name)
+    if is_none(variants) { return -1 }
+    let values: Json = unwrap_or(variants, result_unwrap(json_parse("[]")))
+    let count: Int = result_unwrap(json_array_len(values))
+    let mut index: Int = 0
+    while index < count {
+        if text(result_unwrap(json_array_get(values, index))) == variant_name { return index }
+        index = index + 1
+    }
+    return -1
+}
+
 fn entry_statements(document: Json) -> Json {
     let statements: Json = field(document, "statements")
     if result_unwrap(json_array_len(statements)) > 0 {
@@ -4802,7 +4916,6 @@ fn prepare_function_labels(state: EmitState, functions: Json) -> Result[EmitStat
             if map_contains_key(current.env.function_labels, name) { return err("dynamic backend: duplicate function '" + name + "'") }
             let parameters: Json = field(function, "params")
             let parameter_count: Int = result_unwrap(json_array_len(parameters))
-            if state.assembler.windows_abi && parameter_count > 4 { return err("dynamic backend: Win64 function '" + name + "' has too many parameters") }
             if !state.assembler.windows_abi && parameter_count > 6 { return err("dynamic backend: function '" + name + "' has too many parameters") }
             let return_type: String = text(field(function, "return"))
             if return_type != "Nil" && !is_supported_type(state.env, return_type) { return err("dynamic backend: function '" + name + "' has unsupported return type '" + return_type + "'") }
@@ -5008,7 +5121,67 @@ fn pe_scalar_type(type_name: String) -> Bool {
     return type_name == "Int" || type_name == "Bool" || type_name == "String" || type_name == "UInt8" || type_name == "UInt16" || type_name == "UInt32" || type_name == "UInt64"
 }
 
-fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool) -> Result[Bool, String] {
+fn pe_is_enum_type(enums: Json, type_name: String) -> Bool {
+    let count: Int = result_unwrap(json_array_len(enums))
+    let mut index: Int = 0
+    while index < count {
+        let definition: Json = result_unwrap(json_array_get(enums, index))
+        if text(field(definition, "name")) == type_name { return true }
+        index = index + 1
+    }
+    return false
+}
+
+fn pe_supported_type(enums: Json, type_name: String) -> Bool {
+    return pe_scalar_type(type_name) || pe_is_enum_type(enums, type_name)
+}
+
+fn pe_has_enum_variant(enums: Json, type_name: String, variant_name: String) -> Bool {
+    let count: Int = result_unwrap(json_array_len(enums))
+    let mut index: Int = 0
+    while index < count {
+        let definition: Json = result_unwrap(json_array_get(enums, index))
+        if text(field(definition, "name")) == type_name {
+            let variants: Json = field(definition, "variants")
+            let variant_count: Int = result_unwrap(json_array_len(variants))
+            let mut variant_index: Int = 0
+            while variant_index < variant_count {
+                if text(result_unwrap(json_array_get(variants, variant_index))) == variant_name { return true }
+                variant_index = variant_index + 1
+            }
+            return false
+        }
+        index = index + 1
+    }
+    return false
+}
+
+fn pe_validate_enums(enums: Json) -> Result[Bool, String] {
+    let count: Int = result_unwrap(json_array_len(enums))
+    let mut names: Map[String, Bool] = {}
+    let mut index: Int = 0
+    while index < count {
+        let definition: Json = result_unwrap(json_array_get(enums, index))
+        let name: String = text(field(definition, "name"))
+        if name == "" || map_contains_key(names, name) { return err("PE backend: enum names must be non-empty and unique") }
+        names = map_insert(names, name, true)
+        let variants: Json = field(definition, "variants")
+        let variant_count: Int = result_unwrap(json_array_len(variants))
+        if variant_count == 0 { return err("PE backend: enum '" + name + "' must declare at least one variant") }
+        let mut seen: Map[String, Bool] = {}
+        let mut variant_index: Int = 0
+        while variant_index < variant_count {
+            let variant: String = text(result_unwrap(json_array_get(variants, variant_index)))
+            if variant == "" || map_contains_key(seen, variant) { return err("PE backend: enum '" + name + "' has an empty or duplicate variant") }
+            seen = map_insert(seen, variant, true)
+            variant_index = variant_index + 1
+        }
+        index = index + 1
+    }
+    return ok(true)
+}
+
+fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool, enums: Json) -> Result[Bool, String] {
     if json_kind(expression) == "null" { return err("PE backend: missing expression") }
     let kind: String = text(field(expression, "kind"))
     let type_name: String = expr_type(expression)
@@ -5019,12 +5192,18 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool)
     let mut call_target: String = ""
     if kind == "call" { call_target = text(field(expression, "call_target")) }
     let nil_builtin: Bool = kind == "call" && (call_target == "builtin:print" || call_target == "builtin:println" || call_target == "builtin:assert" || call_target == "builtin:assert_eq" || starts_with(call_target, "function:"))
-    if !pe_scalar_type(type_name) && !nil_builtin { return err("PE backend: unsupported expression type '" + type_name + "'") }
+    if kind == "enum" {
+        let enum_name: String = text(field(expression, "enum_type"))
+        let variant_name: String = text(field(expression, "enum_variant"))
+        if type_name != enum_name || !pe_has_enum_variant(enums, enum_name, variant_name) { return err("PE backend: unknown enum variant '" + enum_name + "::" + variant_name + "'") }
+        return ok(true)
+    }
+    if !pe_supported_type(enums, type_name) && !nil_builtin { return err("PE backend: unsupported expression type '" + type_name + "'") }
     if kind == "int" || kind == "uint" || kind == "bool" || kind == "string" || kind == "var" { return ok(true) }
     if kind == "unary" {
         let operator: String = text(field(expression, "operator"))
         if operator != "+" && operator != "-" && operator != "!" && operator != "~" { return err("PE backend: unsupported unary operator '" + operator + "'") }
-        return pe_validate_expression(field(expression, "operand"), false, false)
+        return pe_validate_expression(field(expression, "operand"), false, false, enums)
     }
     if kind == "binary" {
         if type_name == "String" || expr_type(field(expression, "left")) == "String" { return err("PE backend: String binary operations are not supported") }
@@ -5032,20 +5211,19 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool)
         if operator != "+" && operator != "-" && operator != "*" && operator != "/" && operator != "%" && operator != "&" && operator != "^" && operator != "|" && operator != "<<" && operator != ">>" && operator != "&&" && operator != "||" && operator != "==" && operator != "!=" && operator != "<" && operator != "<=" && operator != ">" && operator != ">=" {
             return err("PE backend: unsupported binary operator '" + operator + "'")
         }
-        let left: Result[Bool, String] = pe_validate_expression(field(expression, "left"), false, false)
+        let left: Result[Bool, String] = pe_validate_expression(field(expression, "left"), false, false, enums)
         if is_err(left) { return left }
-        return pe_validate_expression(field(expression, "right"), false, false)
+        return pe_validate_expression(field(expression, "right"), false, false, enums)
     }
     if kind == "call" {
         let target: String = call_target
         let args: Json = field(expression, "args")
         let count: Int = result_unwrap(json_array_len(args))
         if starts_with(target, "function:") {
-            if count > 4 { return err("PE backend: Win64 supports at most four scalar arguments") }
             let mut index: Int = 0
             while index < count {
                 let argument: Json = result_unwrap(json_array_get(args, index))
-                let checked: Result[Bool, String] = pe_validate_expression(argument, false, false)
+                let checked: Result[Bool, String] = pe_validate_expression(argument, false, false, enums)
                 if is_err(checked) { return checked }
                 index = index + 1
             }
@@ -5055,33 +5233,35 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool)
             if count != 1 { return err("PE backend: int expects one scalar integer argument") }
             let integer_argument: Json = result_unwrap(json_array_get(args, 0))
             if expr_type(integer_argument) != "Int" && expr_type(integer_argument) != "Bool" && !starts_with(expr_type(integer_argument), "UInt") { return err("PE backend: int supports Int, Bool, and UInt, but not String parsing") }
-            return pe_validate_expression(integer_argument, false, false)
+            return pe_validate_expression(integer_argument, false, false, enums)
         }
         if target == "builtin:u8" || target == "builtin:u16" || target == "builtin:u32" || target == "builtin:u64" {
             if count != 1 { return err("PE backend: unsigned conversion expects one argument") }
             if !starts_with(expr_type(result_unwrap(json_array_get(args, 0))), "UInt") && expr_type(result_unwrap(json_array_get(args, 0))) != "Int" { return err("PE backend: unsigned conversion requires an integer") }
-            return pe_validate_expression(result_unwrap(json_array_get(args, 0)), false, false)
+            return pe_validate_expression(result_unwrap(json_array_get(args, 0)), false, false, enums)
         }
         if target == "builtin:assert" {
             if count != 1 || expr_type(result_unwrap(json_array_get(args, 0))) != "Bool" { return err("PE backend: assert expects one Bool") }
-            return pe_validate_expression(result_unwrap(json_array_get(args, 0)), false, false)
+            return pe_validate_expression(result_unwrap(json_array_get(args, 0)), false, false, enums)
         }
         if target == "builtin:assert_eq" {
             if count != 2 { return err("PE backend: assert_eq expects two scalar arguments") }
             let left: Json = result_unwrap(json_array_get(args, 0))
             let right: Json = result_unwrap(json_array_get(args, 1))
-            if expr_type(left) != expr_type(right) || (expr_type(left) != "Int" && expr_type(left) != "Bool" && !starts_with(expr_type(left), "UInt")) { return err("PE backend: assert_eq supports matching Int, UInt, or Bool arguments") }
-            let checked_left: Result[Bool, String] = pe_validate_expression(left, false, false)
+            if expr_type(left) != expr_type(right) || !pe_supported_type(enums, expr_type(left)) || expr_type(left) == "String" { return err("PE backend: assert_eq supports matching scalar or enum arguments") }
+            let checked_left: Result[Bool, String] = pe_validate_expression(left, false, false, enums)
             if is_err(checked_left) { return checked_left }
-            return pe_validate_expression(right, false, false)
+            return pe_validate_expression(right, false, false, enums)
         }
         if !allow_output || (target != "builtin:print" && target != "builtin:println") || count != 1 { return err("PE backend: only statement-form print(value) and println(value) are supported") }
-        return pe_validate_expression(result_unwrap(json_array_get(args, 0)), false, false)
+        let output: Json = result_unwrap(json_array_get(args, 0))
+        if pe_is_enum_type(enums, expr_type(output)) { return err("PE backend: printing enum values is not supported") }
+        return pe_validate_expression(output, false, false, enums)
     }
     return err("PE backend: unsupported expression kind '" + kind + "'")
 }
 
-fn pe_validate_statements(statements: Json) -> Result[Bool, String] {
+fn pe_validate_statements(statements: Json, enums: Json) -> Result[Bool, String] {
     let count: Int = result_unwrap(json_array_len(statements))
     let mut index: Int = 0
     while index < count {
@@ -5089,40 +5269,40 @@ fn pe_validate_statements(statements: Json) -> Result[Bool, String] {
         let kind: String = text(field(statement, "kind"))
         if kind == "let" || kind == "const" {
             let init: Json = field(statement, "init")
-            if !pe_scalar_type(expr_type(init)) { return err("PE backend: binding '" + text(field(statement, "name")) + "' has an unsupported type") }
-            let checked: Result[Bool, String] = pe_validate_expression(init, false, false)
+            if !pe_supported_type(enums, expr_type(init)) { return err("PE backend: binding '" + text(field(statement, "name")) + "' has an unsupported type") }
+            let checked: Result[Bool, String] = pe_validate_expression(init, false, false, enums)
             if is_err(checked) { return checked }
         } else if kind == "assign" {
             let target: Json = field(statement, "target")
-            if text(field(target, "kind")) != "var" || !pe_scalar_type(expr_type(field(statement, "value"))) { return err("PE backend: assignment requires a scalar or String local") }
-            let checked: Result[Bool, String] = pe_validate_expression(field(statement, "value"), false, false)
+            if text(field(target, "kind")) != "var" || !pe_supported_type(enums, expr_type(field(statement, "value"))) { return err("PE backend: assignment requires a scalar or enum local") }
+            let checked: Result[Bool, String] = pe_validate_expression(field(statement, "value"), false, false, enums)
             if is_err(checked) { return checked }
         } else if kind == "expr" {
             let expression: Json = field(statement, "expr")
             if text(field(expression, "kind")) != "call" { return err("PE backend: expression statements must be direct calls") }
             let target: String = text(field(expression, "call_target"))
-            let checked: Result[Bool, String] = pe_validate_expression(expression, false, target == "builtin:print" || target == "builtin:println")
+            let checked: Result[Bool, String] = pe_validate_expression(expression, false, target == "builtin:print" || target == "builtin:println", enums)
             if is_err(checked) { return checked }
         } else if kind == "if" {
             let condition: Json = field(statement, "cond")
             if expr_type(condition) != "Bool" { return err("PE backend: if condition must be Bool") }
-            let checked_condition: Result[Bool, String] = pe_validate_expression(condition, false, false)
+            let checked_condition: Result[Bool, String] = pe_validate_expression(condition, false, false, enums)
             if is_err(checked_condition) { return checked_condition }
-            let checked_then: Result[Bool, String] = pe_validate_statements(field(statement, "then"))
+            let checked_then: Result[Bool, String] = pe_validate_statements(field(statement, "then"), enums)
             if is_err(checked_then) { return checked_then }
-            let checked_else: Result[Bool, String] = pe_validate_statements(field(statement, "else"))
+            let checked_else: Result[Bool, String] = pe_validate_statements(field(statement, "else"), enums)
             if is_err(checked_else) { return checked_else }
         } else if kind == "while" {
             let condition: Json = field(statement, "cond")
             if expr_type(condition) != "Bool" { return err("PE backend: while condition must be Bool") }
-            let checked_condition: Result[Bool, String] = pe_validate_expression(condition, false, false)
+            let checked_condition: Result[Bool, String] = pe_validate_expression(condition, false, false, enums)
             if is_err(checked_condition) { return checked_condition }
-            let checked_body: Result[Bool, String] = pe_validate_statements(field(statement, "body"))
+            let checked_body: Result[Bool, String] = pe_validate_statements(field(statement, "body"), enums)
             if is_err(checked_body) { return checked_body }
         } else if kind == "return" {
             let value: Json = field(statement, "return")
             if json_kind(value) != "null" {
-                let checked: Result[Bool, String] = pe_validate_expression(value, true, false)
+                let checked: Result[Bool, String] = pe_validate_expression(value, true, false, enums)
                 if is_err(checked) { return checked }
             }
         } else if kind != "break" && kind != "continue" {
@@ -5138,10 +5318,11 @@ fn pe_validate_document(document: Json) -> Result[Bool, String] {
     if text(field(target, "os")) != "windows" || text(field(target, "arch")) != "amd64" || result_unwrap(json_bool(field(target, "gui"))) {
         return err("PE backend: target must be windows-amd64 console")
     }
-    if result_unwrap(json_array_len(field(document, "imports"))) != 0 || result_unwrap(json_array_len(field(document, "structs"))) != 0 || result_unwrap(json_array_len(field(document, "enums"))) != 0 {
-        return err("PE backend: modules, structs, and enums are not supported yet")
-    }
-    let checked_top: Result[Bool, String] = pe_validate_statements(field(document, "statements"))
+    let enums: Json = field(document, "enums")
+    let enum_valid: Result[Bool, String] = pe_validate_enums(enums)
+    if is_err(enum_valid) { return enum_valid }
+    if result_unwrap(json_array_len(field(document, "structs"))) != 0 { return err("PE backend: structs are not supported yet") }
+    let checked_top: Result[Bool, String] = pe_validate_statements(field(document, "statements"), enums)
     if is_err(checked_top) { return checked_top }
     let functions: Json = field(document, "functions")
     let function_count: Int = result_unwrap(json_array_len(functions))
@@ -5157,18 +5338,17 @@ fn pe_validate_document(document: Json) -> Result[Bool, String] {
             has_main = true
             if result_unwrap(json_array_len(field(function, "params"))) != 0 || text(field(function, "return")) != "Nil" { return err("PE backend: main must have no arguments and return Nil") }
         } else {
-            if !pe_scalar_type(text(field(function, "return"))) && text(field(function, "return")) != "Nil" { return err("PE backend: function '" + name + "' has an unsupported return type") }
+            if !pe_supported_type(enums, text(field(function, "return"))) && text(field(function, "return")) != "Nil" { return err("PE backend: function '" + name + "' has an unsupported return type") }
         }
         let parameters: Json = field(function, "params")
         let parameter_count: Int = result_unwrap(json_array_len(parameters))
-        if parameter_count > 4 { return err("PE backend: Win64 functions support at most four parameters") }
         let mut parameter_index: Int = 0
         while parameter_index < parameter_count {
             let parameter: Json = result_unwrap(json_array_get(parameters, parameter_index))
-            if !pe_scalar_type(text(field(parameter, "type"))) || json_kind(field(parameter, "default")) != "null" { return err("PE backend: function parameters require scalar types and no defaults") }
+            if !pe_supported_type(enums, text(field(parameter, "type"))) || json_kind(field(parameter, "default")) != "null" { return err("PE backend: function parameters require scalar or enum types and no defaults") }
             parameter_index = parameter_index + 1
         }
-        let checked_body: Result[Bool, String] = pe_validate_statements(field(function, "body"))
+        let checked_body: Result[Bool, String] = pe_validate_statements(field(function, "body"), enums)
         if is_err(checked_body) { return checked_body }
         index = index + 1
     }
@@ -5186,7 +5366,7 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
     }
     let functions: Json = field(document, "functions")
     let function_count: Int = result_unwrap(json_array_len(functions))
-    let struct_fields: Map[String, Json] = collect_struct_fields(field(document, "structs"))
+    let struct_fields: Map[String, Json] = collect_type_fields(field(document, "structs"), field(document, "enums"))
     let statements: Json = entry_statements(document)
     let uses_int_to_string: Bool = document_uses_runtime(document, "builtin:str")
     let uses_int_from_string: Bool = document_uses_runtime(document, "builtin:int")

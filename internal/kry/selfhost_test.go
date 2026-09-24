@@ -36,6 +36,57 @@ func assertLinuxAMD64ELF(t *testing.T, data []byte, label string) {
 	}
 }
 
+func runStage37ModuleTypeFixture(t *testing.T, compiler, label string) {
+	t.Helper()
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "main.kry")
+	geometryPath := filepath.Join(dir, "geometry.kry")
+	modesPath := filepath.Join(dir, "modes.kry")
+	outputPath := filepath.Join(dir, "module-types")
+	files := map[string]string{
+		mainPath: `import "geometry"
+import "modes"
+
+fn main() -> Nil {
+    let point: Point = translate(Point{x: 40, y: 1})
+    println(score(Mode::Ready, point.x + point.y))
+}
+`,
+		geometryPath: `pub struct Point { x: Int, y: Int }
+
+pub fn translate(point: Point) -> Point {
+    return Point{x: point.x + 1, y: point.y}
+}
+`,
+		modesPath: `pub enum Mode { Idle, Ready }
+
+pub fn score(mode: Mode, value: Int) -> Int {
+    if mode == Mode::Ready { return value }
+    return 0
+}
+`,
+	}
+	for path, source := range files {
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compiledOutput, err := exec.Command(compiler, mainPath, outputPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s compiler rejected imported struct/enum fixture: %v; output: %s", label, err, compiledOutput)
+	}
+	if err := os.Chmod(outputPath, 0o700); err != nil {
+		t.Fatalf("make %s compiler's imported struct/enum program executable: %v", label, err)
+	}
+	programOutput, err := exec.Command(outputPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s compiler's imported struct/enum program failed: %v; output: %s", label, err, programOutput)
+	}
+	if string(programOutput) != "42\n" {
+		t.Fatalf("%s compiler's imported struct/enum output = %q, want %q", label, programOutput, "42\n")
+	}
+}
+
 type bootstrapLock struct {
 	SchemaVersion             int               `json:"schema_version"`
 	SourceRevision            string            `json:"source_revision"`
@@ -840,6 +891,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatalf("unexpected stage35 generated fixture output %q", programOutput)
 	}
 	t.Log("stage35 generated compiler compiled and ran the fixture")
+	runStage37ModuleTypeFixture(t, generatedCompiler, "stage1")
 
 	frontendSource, err := os.ReadFile(compilerPath)
 	if err != nil {
@@ -916,6 +968,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatalf("unexpected stage36 second-level fixture output %q", secondProgramOutput)
 	}
 	t.Log("stage36 second-level compiler compiled and ran the fixture")
+	runStage37ModuleTypeFixture(t, secondCompiler, "stage2")
 
 	if err := os.WriteFile(invalidPath, []byte("match value { }\n"), 0o600); err != nil {
 		t.Fatal(err)

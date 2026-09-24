@@ -4,20 +4,20 @@
   "target": "linux-amd64",
   "host_go": "go1.26.0",
   "stage0_build": "CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry",
-  "source_compiler_kir_bytes": 67200306,
+  "source_compiler_kir_bytes": 70633386,
   "source_compiler_kir_max_bytes": 134217728,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
-    "stage0-host-kry-linux-amd64": "fe34a03963c1b0bfb4359011918c242afe40fdd9451280772eea53075d8d0373",
-    "source-compiler.kir": "7054167b263bbfe32e21c3f8b04572ac867418c41683e9217cf8a62ae83f523d",
-    "stage1-source-kir-compiler.elf": "8e019e8dac11b5ba9d591f2fe2965dffd0ca1c14c9ac565b8899adc3a86fa680",
-    "source_kir_compiler.kry": "356d2c8d7c26afc5ccf53522e840967e90f8ee9b63e8ba85626ba6aacd917560",
-    "dynamic_backend.kry": "43beaa8f20cb62e6eee4d928013069aff16721a1c495f2489f83464271cd112b",
+    "stage0-host-kry-linux-amd64": "9ed77446d2a68306e746d022301f5d392873c52f8cfee69b849dc06df9918bca",
+    "source-compiler.kir": "f54ee353cdb2c75515ea0455b97772fa4819d2a135ebcfcfb0a60172d3523fd6",
+    "stage1-source-kir-compiler.elf": "43ad0bb80b56c92426e8e774b6f98391d906cf1c8fd631bdfe7e5cb1527f19c5",
+    "source_kir_compiler.kry": "3accb69ba0f1e9e750c9011898d721ed5ba126935c81ec2d6836631b69ed949b",
+    "dynamic_backend.kry": "d28f024407e50895ec49210b0b2d022c13792bde17c1171411e4a1bee2a83bbf",
     "elf_backend.kry": "0348e0230050815a2d5c5d37ead0e3216f831e65f6ce00ddd49c98067a5eaf57",
     "kir_backend.kry": "3a1be5137d9d8fa08f86e310adde81c83a3269ad156b89258f2a02fe1e37331a",
-    "pe_backend.kry": "8e50b8723a5554b256d45665a2a63af28564fd85416feba19b66a7fab4a6c9d0",
+    "pe_backend.kry": "10013b6bbd03f9f87777c6f01790035cc24090152203b181e87254055cb85812",
     "bootstrap-fixture.kry": "eb24d52f08ffb85bba3946c15273abd8f2c85a2b3b2b91018e91800533206c0d",
-    "stage2-source-kir-compiler.elf": "3f2dedcfc1542ed3b35a36e1d8a82e33035024ddb51065d70aca9ad25a2f7606",
-    "stage3-source-kir-compiler.elf": "3f2dedcfc1542ed3b35a36e1d8a82e33035024ddb51065d70aca9ad25a2f7606"
+    "stage2-source-kir-compiler.elf": "14f310737d622c892bac5853199ff87fb8cd10a2688fa2cbcb327ee8c6c0b19e",
+    "stage3-source-kir-compiler.elf": "14f310737d622c892bac5853199ff87fb8cd10a2688fa2cbcb327ee8c6c0b19e"
   }
 }
