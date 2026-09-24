@@ -2,6 +2,23 @@
 
 Kryndel is implemented by one coherent Go 1.22 toolchain. Go was selected over Zig because the repository needs a portable standard-library implementation of UTF-8 handling, process cancellation, filesystem operations, deterministic serialization, fuzzing, and cross-compilation without C headers, POSIX threads, or a host interpreter. Released binaries are statically linked where the target platform permits and require no Go installation or external runtime.
 
+## Supported toolchains and build modes
+
+These workflows share source code, but they have different toolchain and proof
+requirements. Passing one does not imply that another mode or target is
+supported.
+
+| Mode | Host toolchain | Command / CI job | Supported scope and what it proves |
+| --- | --- | --- | --- |
+| Normal compiler build and tests | Go 1.22 or newer, as declared by `go.mod`; CI pins Go `1.22.x`. Go modules must be available locally or downloadable. | `go build ./cmd/kry`, `go test ./...`, or `make test-static`; CI `go` and `windows` jobs. `make test` additionally needs a C compiler for its C-backed ELF smoke build. | Builds and tests the Go reference compiler. CI tests it on Linux and Windows amd64. This does not verify the self-hosted compiler. |
+| Bootstrap verification | Exactly Go `1.26.0`, Linux amd64, as pinned by `selfhost/bootstrap.lock.json`; `CGO_ENABLED=0` for the locked Stage 0 build. | `KRY_REQUIRE_LOCKED_BOOTSTRAP=1 bash scripts/bootstrap-stage3.sh`; CI `bootstrap` job. | Rebuilds the locked Stage 0 compiler and verifies the tested Stage 1–3 Linux amd64 source-compiler slice, including byte-identical Stage 2/3 artifacts. The source frontend and target coverage remain bounded; this is not full-language self-hosting. The bootstrap KIR limit is 128 MiB. |
+| Release build | Go `1.22.x` in the release workflow, `CGO_ENABLED=0`; cross-compilation runs on Ubuntu. | `make release` locally, or the release workflow's verification and target matrix. | Produces Go compiler binaries for Linux amd64/arm64, macOS amd64/arm64, and Windows amd64. The self-host bootstrap is a separate release prerequisite. This matrix does not claim that Kryndel-generated native binaries support the same targets. |
+| Self-host development | The checked-in Go `kry` executable is Stage 0 for initial KIR emission and for running the current source compiler during development. The tested source-compiler output is Linux amd64 ELF. | Start with the commands in [`selfhost/README.md`](../selfhost/README.md); `bash scripts/bootstrap-stage3.sh` runs the locked verification. | After Stage 0 has produced and launched Stage 1, the tested Stage 1–3 fixture path does not invoke Go, C, an assembler, or a linker. The current proof covers a subset and does not establish full compiler or Windows native-output parity. |
+
+Keep changes to these modes explicit: a Go version change must update the
+module declaration and relevant CI/release jobs, while a bootstrap lock change
+must be reproduced with its pinned host and target before it is accepted.
+
 The implementation is split into source, diagnostics, lexer, parser/AST, types and copy analysis, modules, control-flow checking, builtin registry, validated bytecode, VM, sandbox filesystem, concurrency, artifacts, formatter, REPL, and CLI packages under `internal/kry`. Compiler and execution state is explicit per invocation; no mutable package-level program state is used.
 
 The frontend produces a validated bytecode program. The VM executes only validated instructions and carries an `ExecContext` with cancellation, instruction, wall-clock, call-depth, stack, memory, source, and output budgets. Every host-facing operation returns a typed error. Go panics are not used for language failures and are converted at the CLI boundary only for unexpected host failures.
