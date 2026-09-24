@@ -4,7 +4,9 @@
 
 The Discord Gateway now retains session IDs and dispatch sequences, resumes sessions after transient disconnects, reconnects after server requests, validates shard configuration, and reports permanent close codes. Gateway dispatches update a bounded cache of recent Discord objects. The Discord package now includes Ed25519 interaction signature checks, unauthenticated interaction callback and follow-up helpers, global and guild command registration, and multipart file uploads. REST rate-limit buckets and global limits are coordinated across routes and worker runtimes, and multipart request bodies are replayed on retries.
 
-The Discord package archive is version 1.2.0 and its manifest, source, and pinned registry checksum are kept together. The earlier registry archives for `async`, `crypto`, `fs`, and `json` remain unchanged. Gateway events and voice-state updates are exposed, but voice media transport and DAVE encryption are not implemented.
+The Discord package source is organized into model, validation, REST, interaction, Gateway, and cache modules. `Bot` and `Webhook` credentials are now private fields; this breaking API change is versioned as Discord package 2.0.0. The current archive, package manifest, and registry checksum are kept in sync.
+
+Gateway events and voice-state updates are exposed, but voice media transport and DAVE encryption are not implemented.
 
 The previous Discord Gateway did not reconnect after an explicit reconnect request and did not preserve resumable session state. The earlier REST layer retried 429 responses independently and could resend an empty file body. These issues are fixed. Current permanent Gateway failures and malformed interaction signatures now surface as explicit errors.
 

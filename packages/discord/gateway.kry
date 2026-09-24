@@ -1,0 +1,439 @@
+// Discord Gateway connection, heartbeat, and dispatch handling.
+
+fn discord_internal_ignore_event_v10(event_json: String) -> String {
+    return ""
+}
+
+fn discord_internal_ignore_message_v10(message_json: String) -> String {
+    return ""
+}
+
+fn gateway_frame(raw: String) -> Result[Json, String] {
+    return json_parse(raw)
+}
+
+fn gateway_opcode(frame: Json) -> Result[Int, String] {
+    let raw_opcode: Result[Json, String] = json_field(frame, "op")
+    match raw_opcode {
+        ok(value) => { return json_int(value) }
+        err(problem) => { return err("Gateway frame has no opcode: " + problem) }
+    }
+}
+
+fn gateway_heartbeat_interval(frame: Json) -> Result[Int, String] {
+    let raw_data: Result[Json, String] = json_field(frame, "d")
+    match raw_data {
+        err(problem) => { return err("Gateway HELLO has no data object: " + problem) }
+        ok(data) => {
+            let raw_interval: Result[Json, String] = json_field(data, "heartbeat_interval")
+            match raw_interval {
+                ok(value) => { return json_int(value) }
+                err(problem) => { return err("Gateway HELLO has no heartbeat interval: " + problem) }
+            }
+        }
+    }
+}
+
+fn heartbeat_payload(sequence: Int) -> String {
+    if sequence < 0 { return "{\"op\":1,\"d\":null}" }
+    return "{\"op\":1,\"d\":" + str(sequence) + "}"
+}
+
+impl Bot {
+
+    // Establishes a real Gateway v10 session, sends Identify, maintains
+    // heartbeat/ack state, and remains connected until Discord or the caller's
+    // runtime ends the connection. Gateway dispatches are routed to the
+    // generic event slot; MESSAGE_CREATE also supports a reply-specific slot.
+    pub fn run() -> Result[Nil, String] {
+        let event_fallback: Result[Nil, String] = poly_register("discord.on_event", "discord_internal_ignore_event_v10", -1000000)
+        match event_fallback {
+            ok(_) => {}
+            err(problem) => {
+                if problem != "handler already registered in slot" {
+                    return err("could not install Discord event handler fallback: " + problem)
+                }
+            }
+        }
+        let message_fallback: Result[Nil, String] = poly_register("discord.on_message", "discord_internal_ignore_message_v10", -1000000)
+        match message_fallback {
+            ok(_) => {}
+            err(problem) => {
+                if problem != "handler already registered in slot" {
+                    return err("could not install Discord message handler fallback: " + problem)
+                }
+            }
+        }
+        let info_result: Result[Json, String] = response_json(self.request("GET", "/gateway/bot", ""))
+        let mut info: Json = result_unwrap(json_parse("null"))
+        match info_result {
+            ok(value) => { info = value }
+            err(problem) => { return err(problem) }
+        }
+        let raw_gateway: Result[Json, String] = json_field(info, "url")
+        let mut gateway: String = ""
+        match raw_gateway {
+            ok(value) => {
+                match json_string(value) {
+                    ok(url) => { gateway = url }
+                    err(problem) => { return err("Gateway URL is invalid: " + problem) }
+                }
+            }
+            err(problem) => { return err("Gateway discovery response has no URL: " + problem) }
+        }
+        if !trusted_gateway_url(gateway) { return err("Discord returned an untrusted Gateway URL") }
+        let mut session_id: String = ""
+        let mut sequence: Int = -1
+        let mut resume_url: String = gateway
+        let mut reconnect_delay: Int = 1000
+        let mut reconnecting: Bool = true
+        while reconnecting {
+            let use_resume: Bool = session_id != "" && sequence >= 0 && trusted_gateway_url(resume_url)
+            let mut connect_url: String = gateway
+            if use_resume { connect_url = resume_url }
+            let socket_result: Result[WebSocket, String] = websocket_connect(connect_url + "?v=10&encoding=json")
+            match socket_result {
+                err(problem) => {
+                    if starts_with(problem, "WebSocket handshake rejected:") {
+                        return err("Discord Gateway rejected the WebSocket handshake: " + problem)
+                    }
+                    println("Discord Gateway connection failed; retrying: " + problem)
+                    let pause: Result[Nil, String] = sleep_ms(reconnect_delay)
+                    match pause { ok(_) => {} err(wait_problem) => { return err(wait_problem) } }
+                    reconnect_delay = reconnect_delay * 2
+                    if reconnect_delay > 30000 { reconnect_delay = 30000 }
+                }
+                ok(value) => {
+                    let connection: Result[GatewaySessionState, String] = run_gateway_session(value, self, session_id, sequence, resume_url, use_resume)
+                    websocket_close(value)
+                    match connection {
+                        ok(state) => {
+                            if !state.reconnect { return err("Discord Gateway session ended unexpectedly") }
+                            session_id = state.session_id
+                            sequence = state.sequence
+                            resume_url = state.resume_url
+                            if session_id == "" || sequence < 0 || !trusted_gateway_url(resume_url) {
+                                session_id = ""
+                                sequence = -1
+                                resume_url = gateway
+                            }
+                            reconnect_delay = 1000
+                            let pause: Result[Nil, String] = sleep_ms(reconnect_delay)
+                            match pause { ok(_) => {} err(wait_problem) => { return err(wait_problem) } }
+                        }
+                        err(problem) => { return err(problem) }
+                    }
+                }
+            }
+        }
+        return ok(nil)
+    }
+
+}
+
+fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String, previous_sequence: Int, resume_url: String, should_resume: Bool) -> Result[GatewaySessionState, String] {
+        let hello_result: Result[String, String] = websocket_receive_timeout(socket, 30000)
+        let mut hello_raw: String = ""
+        match hello_result {
+            ok(value) => { hello_raw = value }
+            err(problem) => {
+                websocket_close(socket)
+                return err("Gateway HELLO receive failed: " + problem)
+            }
+        }
+        let hello_parse: Result[Json, String] = gateway_frame(hello_raw)
+        let mut hello: Json = result_unwrap(json_parse("null"))
+        match hello_parse {
+            ok(value) => { hello = value }
+            err(problem) => {
+                websocket_close(socket)
+                return err("Gateway sent invalid HELLO JSON: " + problem)
+            }
+        }
+        let hello_op: Result[Int, String] = gateway_opcode(hello)
+        let mut hello_code: Int = 0
+        match hello_op {
+            ok(value) => { hello_code = value }
+            err(problem) => {
+                websocket_close(socket)
+                return err(problem)
+            }
+        }
+        if hello_code != 10 {
+            websocket_close(socket)
+            return err("Discord Gateway did not begin with HELLO")
+        }
+        let interval_result: Result[Int, String] = gateway_heartbeat_interval(hello)
+        let mut heartbeat_interval: Int = 0
+        match interval_result {
+            ok(value) => { heartbeat_interval = value }
+            err(problem) => {
+                websocket_close(socket)
+                return err(problem)
+            }
+        }
+        if heartbeat_interval < 1000 || heartbeat_interval > 300000 {
+            websocket_close(socket)
+            return err("Discord Gateway returned an invalid heartbeat interval")
+        }
+
+        let intents_result: Result[Int, String] = intent_mask(bot.intents)
+        let mut intents_value: Int = 0
+        match intents_result {
+            ok(value) => { intents_value = value }
+            err(problem) => {
+                websocket_close(socket)
+                return err(problem)
+            }
+        }
+        let token_json: Result[String, String] = json_quote(bot.token)
+        let mut encoded_token: String = ""
+        match token_json {
+            ok(value) => { encoded_token = value }
+            err(problem) => {
+                websocket_close(socket)
+                return err(problem)
+            }
+        }
+        let mut identify: String = ""
+        if should_resume && previous_session_id != "" && previous_sequence >= 0 {
+            let session_json: Result[String, String] = json_quote(previous_session_id)
+            match session_json {
+                ok(encoded_session) => { identify = "{\"op\":6,\"d\":{\"token\":" + encoded_token + ",\"session_id\":" + encoded_session + ",\"seq\":" + str(previous_sequence) + "}}" }
+                err(problem) => { websocket_close(socket); return err(problem) }
+            }
+        } else {
+            identify = "{\"op\":2,\"d\":{\"token\":" + encoded_token + ",\"intents\":" + str(intents_value) + ",\"shard\":[" + str(bot.shard_id) + "," + str(bot.shard_count) + "],\"properties\":{\"$os\":\"kryndel\",\"$browser\":\"kryndel\",\"$device\":\"kryndel\"}}}"
+        }
+        let sent: Result[Nil, String] = websocket_send(socket, identify)
+        match sent {
+            err(problem) => {
+                websocket_close(socket)
+                return err("Gateway Identify failed: " + problem)
+            }
+            ok(_) => {}
+        }
+
+        let mut sequence: Int = previous_sequence
+        let mut current_session_id: String = previous_session_id
+        let mut current_resume_url: String = resume_url
+        let mut awaiting_ack: Bool = false
+        let mut ready: Bool = false
+        let mut heartbeat_wait: Int = datetime_unix_ms() % heartbeat_interval
+        if heartbeat_wait < 1 { heartbeat_wait = 1 }
+        let mut next_heartbeat_at: Int = datetime_unix_ms() + heartbeat_wait
+        let mut connected: Bool = true
+        while connected {
+            let mut receive_wait: Int = next_heartbeat_at - datetime_unix_ms()
+            if receive_wait < 1 { receive_wait = 1 }
+            let received: Result[String, String] = websocket_receive_timeout(socket, receive_wait)
+            match received {
+                err(problem) => {
+                    if problem != "WebSocket receive timed out" {
+                        if starts_with(problem, "WebSocket peer closed with code 4001") || starts_with(problem, "WebSocket peer closed with code 4002") || starts_with(problem, "WebSocket peer closed with code 4003") || starts_with(problem, "WebSocket peer closed with code 4004") || starts_with(problem, "WebSocket peer closed with code 4005") || starts_with(problem, "WebSocket peer closed with code 4010") || starts_with(problem, "WebSocket peer closed with code 4011") || starts_with(problem, "WebSocket peer closed with code 4012") || starts_with(problem, "WebSocket peer closed with code 4013") || starts_with(problem, "WebSocket peer closed with code 4014") {
+                            return err("Discord Gateway closed this shard permanently: " + problem)
+                        }
+                        if starts_with(problem, "WebSocket peer closed with code 4007") || starts_with(problem, "WebSocket peer closed with code 4009") {
+                            println("Discord Gateway session expired; starting a new session: " + problem)
+                            return ok(GatewaySessionState{reconnect: true, session_id: "", sequence: -1, resume_url: resume_url})
+                        }
+                        println("Discord Gateway receive failed; attempting to resume: " + problem)
+                        return ok(GatewaySessionState{reconnect: true, session_id: current_session_id, sequence: sequence, resume_url: current_resume_url})
+                    }
+                    if awaiting_ack {
+                        println("Discord Gateway heartbeat acknowledgement timed out; attempting to resume")
+                        return ok(GatewaySessionState{reconnect: true, session_id: current_session_id, sequence: sequence, resume_url: current_resume_url})
+                    }
+                    let heartbeat: Result[Nil, String] = websocket_send(socket, heartbeat_payload(sequence))
+                    match heartbeat {
+                        ok(_) => {
+                            awaiting_ack = true
+                            next_heartbeat_at = datetime_unix_ms() + heartbeat_interval
+                        }
+                        err(send_problem) => {
+                            println("Discord Gateway heartbeat failed; attempting to resume: " + send_problem)
+                            return ok(GatewaySessionState{reconnect: true, session_id: current_session_id, sequence: sequence, resume_url: current_resume_url})
+                        }
+                    }
+                }
+                ok(raw_frame) => {
+                    let parsed_frame: Result[Json, String] = gateway_frame(raw_frame)
+                    let mut frame: Json = result_unwrap(json_parse("null"))
+                    match parsed_frame {
+                        ok(value) => { frame = value }
+                        err(problem) => { return err("Discord Gateway sent invalid JSON: " + problem) }
+                    }
+                    let op_result: Result[Int, String] = gateway_opcode(frame)
+                    let mut op: Int = -1
+                    match op_result {
+                        ok(value) => { op = value }
+                        err(problem) => { return err(problem) }
+                    }
+                    if op == 0 {
+                        let raw_sequence: Result[Json, String] = json_field(frame, "s")
+                        match raw_sequence {
+                            ok(value) => {
+                                match json_int(value) {
+                                    ok(number) => { sequence = number }
+                                    err(problem) => { return err("Gateway dispatch has an invalid sequence: " + problem) }
+                                }
+                            }
+                            err(problem) => { return err("Gateway dispatch has no sequence: " + problem) }
+                        }
+                        let raw_event: Result[Json, String] = json_field(frame, "t")
+                        match raw_event {
+                            ok(value) => {
+                                match json_string(value) {
+                                    ok(event_name) => {
+                                        let raw_data: Result[Json, String] = json_field(frame, "d")
+                                        let mut event_data: Json = result_unwrap(json_parse("null"))
+                                        match raw_data {
+                                            ok(value) => { event_data = value }
+                                            err(problem) => { return err("Gateway dispatch has no data: " + problem) }
+                                        }
+                                        let event_name_json: Result[String, String] = json_quote(event_name)
+                                        let mut encoded_event_name: String = ""
+                                        match event_name_json {
+                                            ok(value) => { encoded_event_name = value }
+                                            err(problem) => { return err(problem) }
+                                        }
+                                        let event_payload: String = "{\"name\":" + encoded_event_name + ",\"data\":" + json_stringify(event_data) + "}"
+                                        let cache_result: Result[Nil, String] = discord_cache_ingest(event_name, json_stringify(event_data))
+                                        match cache_result {
+                                            ok(_) => {}
+                                            err(problem) => { println("Discord cache update skipped: " + problem) }
+                                        }
+                                        let event_handler_result: Result[String, String] = poly_dispatch("discord.on_event", event_payload)
+                                        let mut reply: String = ""
+                                        match event_handler_result {
+                                            ok(value) => { reply = value }
+                                            err(problem) => { return err("Discord event handler failed: " + problem) }
+                                        }
+                                        if event_name == "READY" && !ready {
+                                            let raw_session_id: Result[Json, String] = json_field(event_data, "session_id")
+                                            match raw_session_id {
+                                                ok(value) => {
+                                                    match json_string(value) {
+                                                        ok(value) => { current_session_id = value }
+                                                        err(problem) => { return err("Discord READY session_id is invalid: " + problem) }
+                                                    }
+                                                }
+                                                err(problem) => { return err("Discord READY has no session_id: " + problem) }
+                                            }
+                                            let raw_resume_url: Result[Json, String] = json_field(event_data, "resume_gateway_url")
+                                            match raw_resume_url {
+                                                ok(value) => {
+                                                    match json_string(value) {
+                                                        ok(value) => {
+                                                            if !trusted_gateway_url(value) { return err("Discord READY supplied an untrusted resume URL") }
+                                                            current_resume_url = value
+                                                        }
+                                                        err(problem) => { return err("Discord READY resume URL is invalid: " + problem) }
+                                                    }
+                                                }
+                                                err(problem) => { return err("Discord READY has no resume URL: " + problem) }
+                                            }
+                                            println("Discord Gateway is ready")
+                                            ready = true
+                                        }
+                                        if event_name == "MESSAGE_CREATE" {
+                                            let raw_author: Result[Json, String] = json_field(event_data, "author")
+                                            let mut author: Json = result_unwrap(json_parse("null"))
+                                            match raw_author {
+                                                ok(value) => { author = value }
+                                                err(problem) => { return err("MESSAGE_CREATE has no author: " + problem) }
+                                            }
+                                            let mut from_bot: Bool = false
+                                            let raw_bot_flag: Result[Json, String] = json_field(author, "bot")
+                                            match raw_bot_flag {
+                                                ok(value) => {
+                                                    match json_bool(value) {
+                                                        ok(flag) => { from_bot = flag }
+                                                        err(problem) => { return err("MESSAGE_CREATE author has an invalid bot flag: " + problem) }
+                                                    }
+                                                }
+                                                err(_) => {}
+                                            }
+                                            if !from_bot {
+                                                if reply == "" {
+                                                    let encoded_event: String = json_stringify(event_data)
+                                                    let handler_result: Result[String, String] = poly_dispatch("discord.on_message", encoded_event)
+                                                    match handler_result {
+                                                        ok(value) => { reply = value }
+                                                        err(problem) => { return err("Discord on_message handler failed: " + problem) }
+                                                    }
+                                                }
+                                                if reply != "" {
+                                                    let raw_channel: Result[Json, String] = json_field(event_data, "channel_id")
+                                                    let mut channel_id: String = ""
+                                                    match raw_channel {
+                                                        ok(value) => {
+                                                            match json_string(value) {
+                                                                ok(id) => { channel_id = id }
+                                                                err(problem) => { return err("MESSAGE_CREATE channel_id is invalid: " + problem) }
+                                                            }
+                                                        }
+                                                        err(problem) => { return err("MESSAGE_CREATE has no channel_id: " + problem) }
+                                                    }
+                                                    let sent_reply: Result[Json, String] = bot.send_message(channel_id, reply)
+                                                    match sent_reply {
+                                                        ok(_) => {}
+                                                        err(problem) => { return err("Discord message reply failed: " + problem) }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    err(problem) => { return err("Gateway dispatch has an invalid event name: " + problem) }
+                                }
+                            }
+                            err(problem) => { return err("Gateway dispatch has no event name: " + problem) }
+                        }
+                    }
+                    if op == 1 {
+                        if awaiting_ack {
+                            println("Discord Gateway requested a heartbeat before acknowledging the previous one; attempting to resume")
+                            return ok(GatewaySessionState{reconnect: true, session_id: current_session_id, sequence: sequence, resume_url: current_resume_url})
+                        }
+                        let heartbeat: Result[Nil, String] = websocket_send(socket, heartbeat_payload(sequence))
+                        match heartbeat {
+                            ok(_) => {
+                                awaiting_ack = true
+                                next_heartbeat_at = datetime_unix_ms() + heartbeat_interval
+                            }
+                            err(problem) => {
+                                println("Discord Gateway heartbeat failed; attempting to resume: " + problem)
+                                return ok(GatewaySessionState{reconnect: true, session_id: current_session_id, sequence: sequence, resume_url: current_resume_url})
+                            }
+                        }
+                    }
+                    if op == 7 {
+                        println("Discord Gateway requested a reconnect")
+                        return ok(GatewaySessionState{reconnect: true, session_id: current_session_id, sequence: sequence, resume_url: current_resume_url})
+                    }
+                    if op == 9 {
+                        let raw_resumable: Result[Json, String] = json_field(frame, "d")
+                        let mut resumable: Bool = false
+                        match raw_resumable {
+                            ok(value) => {
+                                match json_bool(value) {
+                                    ok(value) => { resumable = value }
+                                    err(problem) => { return err("Discord invalid-session flag is invalid: " + problem) }
+                                }
+                            }
+                            err(problem) => { return err("Discord invalid-session frame has no resumable flag: " + problem) }
+                        }
+                        if resumable {
+                            println("Discord Gateway invalidated the session temporarily; retrying resume")
+                            return ok(GatewaySessionState{reconnect: true, session_id: current_session_id, sequence: sequence, resume_url: current_resume_url})
+                        }
+                        println("Discord Gateway invalidated the session; starting a new session")
+                        return ok(GatewaySessionState{reconnect: true, session_id: "", sequence: -1, resume_url: resume_url})
+                    }
+                    if op == 10 { return err("Discord Gateway sent HELLO more than once") }
+                    if op == 11 { awaiting_ack = false }
+                }
+            }
+        }
+        return ok(GatewaySessionState{reconnect: false, session_id: current_session_id, sequence: sequence, resume_url: current_resume_url})
+}

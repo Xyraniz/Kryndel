@@ -1,0 +1,148 @@
+// Validation and JSON helpers shared by the Discord modules.
+
+fn valid_token(value: String) -> Bool {
+    if value == "" { return false }
+    for point in codepoints(value) {
+        if point < 32 || point == 127 { return false }
+    }
+    return true
+}
+
+fn valid_snowflake(value: String) -> Bool {
+    if len(value) < 1 || len(value) > 20 { return false }
+    for point in codepoints(value) {
+        if point < 48 || point > 57 { return false }
+    }
+    return true
+}
+
+fn valid_cache_id(value: String) -> Bool {
+    let mut separators: Int = 0
+    let mut digits_before_separator: Int = 0
+    let mut digits_after_separator: Int = 0
+    for point in codepoints(value) {
+        if point >= 48 && point <= 57 {
+            if separators == 1 { digits_after_separator = digits_after_separator + 1 }
+            else { digits_before_separator = digits_before_separator + 1 }
+        } else if point == 58 {
+            separators = separators + 1
+            if separators > 1 || digits_before_separator == 0 { return false }
+        } else { return false }
+    }
+    if separators == 0 { return valid_snowflake(value) }
+    return digits_after_separator > 0 && len(value) <= 41
+}
+
+fn valid_interaction_token(value: String) -> Bool {
+    if len(value) < 1 || len(value) > 256 { return false }
+    for point in codepoints(value) {
+        let safe: Bool = (point >= 48 && point <= 57) || (point >= 65 && point <= 90) || (point >= 97 && point <= 122) || point == 45 || point == 46 || point == 95
+        if !safe { return false }
+    }
+    return true
+}
+
+fn trusted_gateway_url(value: String) -> Bool {
+    if !starts_with(value, "wss://") { return false }
+    let raw_host: Result[String, String] = substring(value, 6, len(value) - 6)
+    let mut host: String = ""
+    match raw_host { ok(raw) => { host = raw } err(_) => { return false } }
+    let standard: Bool = host == "gateway.discord.gg"
+    let regional: Bool = starts_with(host, "gateway-") && ends_with(host, ".discord.gg")
+    return (standard || regional) && !contains(host, "/") && !contains(host, "?") && !contains(host, "#") && !contains(host, "@") && !contains(host, "\\")
+}
+
+fn discord_text_length(value: String) -> Int {
+    let mut count: Int = 0
+    for point in codepoints(value) {
+        if point > 65535 { count = count + 2 }
+        else { count = count + 1 }
+    }
+    return count
+}
+
+fn intent_bit(intent: String) -> Int {
+    if intent == "Guilds" { return 1 }
+    if intent == "GuildMembers" { return 2 }
+    if intent == "GuildModeration" { return 4 }
+    if intent == "GuildExpressions" { return 8 }
+    if intent == "GuildIntegrations" { return 16 }
+    if intent == "GuildWebhooks" { return 32 }
+    if intent == "GuildInvites" { return 64 }
+    if intent == "GuildVoiceStates" { return 128 }
+    if intent == "GuildPresences" { return 256 }
+    if intent == "GuildMessages" { return 512 }
+    if intent == "GuildMessageReactions" { return 1024 }
+    if intent == "GuildMessageTyping" { return 2048 }
+    if intent == "DirectMessages" { return 4096 }
+    if intent == "DirectMessageReactions" { return 8192 }
+    if intent == "DirectMessageTyping" { return 16384 }
+    if intent == "MessageContent" { return 32768 }
+    if intent == "GuildScheduledEvents" { return 65536 }
+    if intent == "AutoModerationConfiguration" { return 1048576 }
+    if intent == "AutoModerationExecution" { return 2097152 }
+    if intent == "GuildMessagePolls" { return 4194304 }
+    if intent == "DirectMessagePolls" { return 8388608 }
+    return 0
+}
+
+fn intent_mask(intents: Array[String]) -> Result[Int, String] {
+    let mut seen: Array[String] = []
+    let mut mask: Int = 0
+    for intent in intents {
+        let bit: Int = intent_bit(intent)
+        if bit == 0 { return err("unknown Discord Gateway intent: " + intent) }
+        if array_contains(seen, intent) { return err("duplicate Discord Gateway intent: " + intent) }
+        seen = array_push(seen, intent)
+        mask = mask + bit
+    }
+    return ok(mask)
+}
+
+pub fn json_quote(value: String) -> Result[String, String] {
+    for point in codepoints(value) {
+        if point < 32 && point != 9 && point != 10 && point != 13 {
+            return err("JSON text contains an unsupported control character")
+        }
+    }
+    let mut escaped: String = replace(value, "\\", "\\\\")
+    escaped = replace(escaped, "\"", "\\\"")
+    escaped = replace(escaped, "\n", "\\n")
+    escaped = replace(escaped, "\r", "\\r")
+    escaped = replace(escaped, "\t", "\\t")
+    return ok("\"" + escaped + "\"")
+}
+
+fn json_field(value: Json, key: String) -> Result[Json, String] {
+    return json_object_get(value, key)
+}
+
+fn response_json(value: Result[String, String]) -> Result[Json, String] {
+    match value {
+        ok(text) => { return json_parse(text) }
+        err(problem) => { return err(problem) }
+    }
+}
+
+fn webhook_thread_query(thread_id: String) -> Result[String, String] {
+    if thread_id == "" { return ok("") }
+    if !valid_snowflake(thread_id) { return err("thread_id must be a Discord snowflake") }
+    return ok("thread_id=" + thread_id)
+}
+
+fn webhook_files_payload(content: String, filenames: Array[String]) -> Result[String, String] {
+    if len(filenames) == 0 || len(filenames) > 10 { return err("webhook send_files requires 1 to 10 files") }
+    if discord_text_length(content) > 2000 { return err("webhook content must be at most 2000 UTF-16 code units") }
+    let indices: Array[String] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    let mut attachments: String = ""
+    let mut index: Int = 0
+    for filename in filenames {
+        let encoded_filename: String = json_quote(filename)?
+        if index > 0 { attachments = attachments + "," }
+        attachments = attachments + "{\"id\":" + indices[index] + ",\"filename\":" + encoded_filename + "}"
+        index = index + 1
+    }
+    let encoded_content: String = json_quote(content)?
+    let payload: String = "{\"content\":" + encoded_content + ",\"attachments\":[" + attachments + "],\"allowed_mentions\":{\"parse\":[]}}"
+    return ok(payload)
+}

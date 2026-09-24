@@ -20,8 +20,41 @@ type discordWebhookRequest struct {
 	body   string
 }
 
+func writeDiscordTestFixture(t *testing.T, source string) string {
+	t.Helper()
+	fixtureDir := filepath.Join("..", "..", "examples")
+	fixture, err := os.CreateTemp(fixtureDir, ".discord-test-*.kry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixturePath := fixture.Name()
+	t.Cleanup(func() { _ = os.Remove(fixturePath) })
+	if _, err := fixture.WriteString(source); err != nil {
+		_ = fixture.Close()
+		t.Fatal(err)
+	}
+	if err := fixture.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return fixturePath
+}
+
+func loadDiscordTestProgram(t *testing.T, source string) (*Program, *Checker) {
+	t.Helper()
+	fixturePath := writeDiscordTestFixture(t, source)
+	program, diagnostic := LoadProgram(fixturePath, DefaultLimits(), "")
+	if diagnostic != nil {
+		t.Fatalf("load Discord test program: %s", diagnostic.Message)
+	}
+	checker, diagnostic := Check(program, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("type-check Discord test program at %d:%d: %s", diagnostic.Line, diagnostic.Column, diagnostic.Message)
+	}
+	return program, checker
+}
+
 func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
-	const version = "1.8.0"
+	const version = "2.0.0"
 	archivePath := filepath.Join("..", "..", "registry", "packages", "discord-"+version+".tar.gz")
 	archive, err := os.ReadFile(archivePath)
 	if err != nil {
@@ -65,6 +98,11 @@ func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
 	if err != nil || manifest.Name != "discord" || manifest.Version != version {
 		t.Fatalf("published Discord package manifest = %#v, %v", manifest, err)
 	}
+	for _, module := range []string{"models.kry", "validation.kry", "rest.kry", "interactions.kry", "gateway.kry", "cache.kry"} {
+		if _, err := os.Stat(filepath.Join(extracted, module)); err != nil {
+			t.Fatalf("published Discord package is missing %s: %v", module, err)
+		}
+	}
 
 	project := t.TempDir()
 	vendorPackage := filepath.Join(project, "vendor", "discord")
@@ -96,6 +134,24 @@ func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
 	}
 	if !reflect.DeepEqual(rebuiltArchive, archive) {
 		t.Fatal("published Discord package archive is not reproducible from packages/discord")
+	}
+}
+
+func TestDiscordCredentialsArePrivateToThePackage(t *testing.T) {
+	fixture := writeDiscordTestFixture(t, `import "packages/discord"
+fn main() -> Result[Nil, String] {
+    let client: Bot = bot("synthetic-token", [])?
+    println(client.token)
+    return ok(nil)
+}
+`)
+	program, diagnostic := LoadProgram(fixture, DefaultLimits(), "")
+	if diagnostic != nil {
+		t.Fatalf("load Discord credential visibility fixture: %s", diagnostic.Message)
+	}
+	_, diagnostic = Check(program, DefaultLimits())
+	if diagnostic == nil || !strings.Contains(diagnostic.Message, "private") {
+		t.Fatalf("reading Bot.token outside its package produced diagnostic %#v, want private-field rejection", diagnostic)
 	}
 }
 
@@ -141,12 +197,7 @@ func TestDiscordWebhookMethodsUseUnauthenticatedRoutesAndSafeTextDefaults(t *tes
 	}))
 	defer server.Close()
 
-	modulePath := filepath.Join("..", "..", "packages", "discord", "main.kry")
-	module, err := os.ReadFile(modulePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := string(module) + `
+	source := `import "packages/discord"
 fn main() -> Result[Nil, String] {
     let invalid_webhook: Result[Webhook, String] = webhook("not-a-snowflake", "token")
     assert_eq(is_err(invalid_webhook), true)
@@ -191,15 +242,7 @@ fn main() -> Result[Nil, String] {
 }
 
 `
-	p, diagnostic := Parse(&Source{Name: "discord_webhook_test.kry", Text: source}, DefaultLimits())
-	if diagnostic != nil {
-		t.Fatalf("parse Discord module and webhook fixture: %s", diagnostic.Message)
-	}
-	checker, diagnostic := Check(p, DefaultLimits())
-	if diagnostic != nil {
-		lines := strings.Split(source, "\n")
-		t.Fatalf("type-check Discord module and webhook fixture at %d:%d (%s): %s", diagnostic.Line, diagnostic.Column, lines[diagnostic.Line-1], diagnostic.Message)
-	}
+	p, checker := loadDiscordTestProgram(t, source)
 	runtime, diagnostic := NewRuntime(p, checker, DefaultLimits(), Sandbox{})
 	if diagnostic != nil {
 		t.Fatal(diagnostic.Message)
@@ -283,11 +326,7 @@ func TestDiscordWebhookMultipartUploadAndBotUploadAuth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	module, err := os.ReadFile(filepath.Join("..", "..", "packages", "discord", "main.kry"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := string(module) + `
+	source := `import "packages/discord"
 fn main() -> Result[Nil, String] {
     let hook: Webhook = webhook("123", "short-upload-token")?
     let filenames: Array[String] = ["alpha.txt", "beta.bin"]
@@ -312,14 +351,7 @@ fn main() -> Result[Nil, String] {
     return ok(nil)
 }
 `
-	p, diagnostic := Parse(&Source{Name: "discord_webhook_upload_test.kry", Text: source}, DefaultLimits())
-	if diagnostic != nil {
-		t.Fatalf("parse Discord webhook upload fixture: %s", diagnostic.Message)
-	}
-	checker, diagnostic := Check(p, DefaultLimits())
-	if diagnostic != nil {
-		t.Fatalf("type-check Discord webhook upload fixture at %d:%d: %s", diagnostic.Line, diagnostic.Column, diagnostic.Message)
-	}
+	p, checker := loadDiscordTestProgram(t, source)
 	runtime, diagnostic := NewRuntime(p, checker, DefaultLimits(), Sandbox{})
 	if diagnostic != nil {
 		t.Fatal(diagnostic.Message)
@@ -423,11 +455,7 @@ func TestDiscordBotCanCreateAndManageWebhooks(t *testing.T) {
 	}))
 	defer server.Close()
 
-	module, err := os.ReadFile(filepath.Join("..", "..", "packages", "discord", "main.kry"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := string(module) + `
+	source := `import "packages/discord"
 fn main() -> Result[Nil, String] {
     let client: Bot = bot("bot-test-token", [])?
     assert_eq(is_err(client.create_webhook("bad", "Build notifications")), true)
@@ -443,14 +471,7 @@ fn main() -> Result[Nil, String] {
     return ok(nil)
 }
 `
-	p, diagnostic := Parse(&Source{Name: "discord_bot_webhook_test.kry", Text: source}, DefaultLimits())
-	if diagnostic != nil {
-		t.Fatalf("parse Discord webhook management fixture: %s", diagnostic.Message)
-	}
-	checker, diagnostic := Check(p, DefaultLimits())
-	if diagnostic != nil {
-		t.Fatalf("type-check Discord webhook management fixture at %d:%d: %s", diagnostic.Line, diagnostic.Column, diagnostic.Message)
-	}
+	p, checker := loadDiscordTestProgram(t, source)
 	runtime, diagnostic := NewRuntime(p, checker, DefaultLimits(), Sandbox{})
 	if diagnostic != nil {
 		t.Fatal(diagnostic.Message)

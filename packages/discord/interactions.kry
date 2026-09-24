@@ -1,0 +1,103 @@
+// Discord interaction responses and application command endpoints.
+
+impl Bot {
+
+    pub fn interaction_request(method: String, route: String, body: String) -> Result[String, String] {
+        return discord_interaction_request(method, route, body)
+    }
+
+    pub fn verify_interaction(public_key: String, timestamp: String, body: String, signature: String) -> Result[Bool, String] {
+        return discord_verify_interaction(public_key, timestamp, body, signature)
+    }
+
+    pub fn respond_interaction(interaction_id: String, interaction_token: String, body: String) -> Result[Nil, String] {
+        if !valid_snowflake(interaction_id) || !valid_interaction_token(interaction_token) { return err("invalid interaction ID or token") }
+        let result: Result[String, String] = discord_interaction_request("POST", "/interactions/" + interaction_id + "/" + interaction_token + "/callback", body)
+        match result { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+    }
+
+    pub fn create_followup(application_id: String, interaction_token: String, body: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) || !valid_interaction_token(interaction_token) { return err("invalid application ID or interaction token") }
+        return response_json(discord_interaction_request("POST", "/webhooks/" + application_id + "/" + interaction_token, body))
+    }
+
+    pub fn edit_original_response(application_id: String, interaction_token: String, body: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) || !valid_interaction_token(interaction_token) { return err("invalid application ID or interaction token") }
+        return response_json(discord_interaction_request("PATCH", "/webhooks/" + application_id + "/" + interaction_token + "/messages/@original", body))
+    }
+
+    pub fn delete_original_response(application_id: String, interaction_token: String) -> Result[Nil, String] {
+        if !valid_snowflake(application_id) || !valid_interaction_token(interaction_token) { return err("invalid application ID or interaction token") }
+        let result: Result[String, String] = discord_interaction_request("DELETE", "/webhooks/" + application_id + "/" + interaction_token + "/messages/@original", "")
+        match result { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+    }
+
+    pub fn get_followup(application_id: String, interaction_token: String, message_id: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) || !valid_snowflake(message_id) || !valid_interaction_token(interaction_token) { return err("invalid application ID, interaction token, or message ID") }
+        return response_json(discord_interaction_request("GET", "/webhooks/" + application_id + "/" + interaction_token + "/messages/" + message_id, ""))
+    }
+
+    pub fn edit_followup(application_id: String, interaction_token: String, message_id: String, body: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) || !valid_snowflake(message_id) || !valid_interaction_token(interaction_token) { return err("invalid application ID, interaction token, or message ID") }
+        return response_json(discord_interaction_request("PATCH", "/webhooks/" + application_id + "/" + interaction_token + "/messages/" + message_id, body))
+    }
+
+    pub fn delete_followup(application_id: String, interaction_token: String, message_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(application_id) || !valid_snowflake(message_id) || !valid_interaction_token(interaction_token) { return err("invalid application ID, interaction token, or message ID") }
+        let result: Result[String, String] = discord_interaction_request("DELETE", "/webhooks/" + application_id + "/" + interaction_token + "/messages/" + message_id, "")
+        match result { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+    }
+
+    pub fn create_global_command(application_id: String, command_json: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) { return err("application_id must be a Discord snowflake") }
+        return response_json(self.request("POST", "/applications/" + application_id + "/commands", command_json))
+    }
+
+    pub fn bulk_overwrite_global_commands(application_id: String, commands_json: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) { return err("application_id must be a Discord snowflake") }
+        return response_json(self.request("PUT", "/applications/" + application_id + "/commands", commands_json))
+    }
+
+    pub fn upsert_global_command(application_id: String, command_id: String, command_json: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) || !valid_snowflake(command_id) { return err("application_id and command_id must be Discord snowflakes") }
+        return response_json(self.request("PATCH", "/applications/" + application_id + "/commands/" + command_id, command_json))
+    }
+
+    pub fn list_global_commands(application_id: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) { return err("application_id must be a Discord snowflake") }
+        return response_json(self.request("GET", "/applications/" + application_id + "/commands", ""))
+    }
+
+    pub fn delete_global_command(application_id: String, command_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(application_id) || !valid_snowflake(command_id) { return err("application_id and command_id must be Discord snowflakes") }
+        let result: Result[String, String] = self.request("DELETE", "/applications/" + application_id + "/commands/" + command_id, "")
+        match result { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+    }
+
+    pub fn create_guild_command(application_id: String, guild_id: String, command_json: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) || !valid_snowflake(guild_id) { return err("application_id and guild_id must be Discord snowflakes") }
+        return response_json(self.request("POST", "/applications/" + application_id + "/guilds/" + guild_id + "/commands", command_json))
+    }
+
+    pub fn bulk_overwrite_guild_commands(application_id: String, guild_id: String, commands_json: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) || !valid_snowflake(guild_id) { return err("application_id and guild_id must be Discord snowflakes") }
+        return response_json(self.request("PUT", "/applications/" + application_id + "/guilds/" + guild_id + "/commands", commands_json))
+    }
+
+    pub fn list_guild_commands(application_id: String, guild_id: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) || !valid_snowflake(guild_id) { return err("application_id and guild_id must be Discord snowflakes") }
+        return response_json(self.request("GET", "/applications/" + application_id + "/guilds/" + guild_id + "/commands", ""))
+    }
+
+    pub fn update_guild_command(application_id: String, guild_id: String, command_id: String, command_json: String) -> Result[Json, String] {
+        if !valid_snowflake(application_id) || !valid_snowflake(guild_id) || !valid_snowflake(command_id) { return err("application_id, guild_id, and command_id must be Discord snowflakes") }
+        return response_json(self.request("PATCH", "/applications/" + application_id + "/guilds/" + guild_id + "/commands/" + command_id, command_json))
+    }
+
+    pub fn delete_guild_command(application_id: String, guild_id: String, command_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(application_id) || !valid_snowflake(guild_id) || !valid_snowflake(command_id) { return err("application_id, guild_id, and command_id must be Discord snowflakes") }
+        let result: Result[String, String] = self.request("DELETE", "/applications/" + application_id + "/guilds/" + guild_id + "/commands/" + command_id, "")
+        match result { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+    }
+
+}

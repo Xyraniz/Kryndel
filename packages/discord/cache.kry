@@ -1,0 +1,25 @@
+// Discord object-cache accessors.
+
+impl Bot {
+
+    pub fn cache_get(kind: String, id: String) -> Result[Json, String] {
+        if !valid_cache_id(id) { return err("cache ID must be a Discord snowflake or guild:snowflake pair") }
+        return response_json(discord_cache_get(kind, id))
+    }
+
+    pub fn cache_put(kind: String, id: String, object_json: String) -> Result[Nil, String] {
+        if !valid_cache_id(id) { return err("cache ID must be a Discord snowflake or guild:snowflake pair") }
+        return discord_cache_put(kind, id, object_json)
+    }
+
+    pub fn cache_delete(kind: String, id: String) -> Nil {
+        if valid_cache_id(id) { discord_cache_delete(kind, id) }
+        return nil
+    }
+
+    pub fn cache_clear() -> Nil {
+        discord_cache_clear()
+        return nil
+    }
+
+}
