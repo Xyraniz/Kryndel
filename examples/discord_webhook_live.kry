@@ -1,0 +1,96 @@
+// Live Discord API probe. Set KRYND_DISCORD_WEBHOOK_URL before running;
+// the probe sends one temporary message and deletes it before returning.
+import "std/env"
+import "packages/discord"
+
+fn cleanup_webhook_probe_message(hook: Webhook, message_id: String) -> Nil {
+    let result: Result[Nil, String] = hook.delete_message(message_id, "")
+    match result {
+        ok(_) => {}
+        err(_) => {}
+    }
+    return nil
+}
+
+fn webhook_message_content(message: Json) -> Result[String, String] {
+    let raw_content: Json = json_object_get(message, "content")?
+    return json_string(raw_content)
+}
+
+fn main() -> Result[Nil, String] {
+    let url: String = require("KRYND_DISCORD_WEBHOOK_URL")?
+    let hook: Webhook = webhook_from_url(url)?
+    let original_content: String = "Kryndel live webhook probe (temporary; deletion follows)"
+    let updated_content: String = "Kryndel live webhook probe edit verified; deleting this message."
+    let sent: Json = hook.send(original_content)?
+    let message_id: String = json_string(result_unwrap(json_object_get(sent, "id")))?
+
+    let edited_result: Result[Json, String] = hook.edit_message_json(message_id, "{\"content\":\"Kryndel live webhook probe edit verified; deleting this message.\"}", "")
+    match edited_result {
+        ok(edited) => {
+            let edited_content: Result[String, String] = webhook_message_content(edited)
+            match edited_content {
+                ok(text) => {
+                    if text != updated_content {
+                        let ignored: Nil = cleanup_webhook_probe_message(hook, message_id)
+                        return err("Discord returned unexpected content after editing the probe message")
+                    }
+                }
+                err(problem) => {
+                    let ignored: Nil = cleanup_webhook_probe_message(hook, message_id)
+                    return err(problem)
+                }
+            }
+        }
+        err(problem) => {
+            let ignored: Nil = cleanup_webhook_probe_message(hook, message_id)
+            return err("Discord webhook message edit failed: " + problem)
+        }
+    }
+
+    let fetched_result: Result[Json, String] = hook.fetch_message(message_id, "")
+    match fetched_result {
+        ok(fetched) => {
+            let fetched_content: Result[String, String] = webhook_message_content(fetched)
+            match fetched_content {
+                ok(text) => {
+                    if text != updated_content {
+                        let ignored: Nil = cleanup_webhook_probe_message(hook, message_id)
+                        return err("Discord GET did not return the edited probe message")
+                    }
+                }
+                err(problem) => {
+                    let ignored: Nil = cleanup_webhook_probe_message(hook, message_id)
+                    return err(problem)
+                }
+            }
+        }
+        err(problem) => {
+            let ignored: Nil = cleanup_webhook_probe_message(hook, message_id)
+            return err("Discord webhook message fetch failed: " + problem)
+        }
+    }
+
+    let deleted: Result[Nil, String] = hook.delete_message(message_id, "")
+    match deleted {
+        ok(_) => {}
+        err(problem) => {
+            let ignored: Nil = cleanup_webhook_probe_message(hook, message_id)
+            return err("Discord webhook message delete failed: " + problem)
+        }
+    }
+    let after_delete: Result[Json, String] = hook.fetch_message(message_id, "")
+    match after_delete {
+        err(problem) => {
+            if contains(problem, "404") {
+                println("Discord live webhook flow passed: message created, edited, fetched, and deleted.")
+                return ok(nil)
+            }
+            return err("could not verify message deletion: " + problem)
+        }
+        ok(_) => {
+            let ignored: Nil = cleanup_webhook_probe_message(hook, message_id)
+            return err("Discord still returned the probe message after DELETE")
+        }
+    }
+}
