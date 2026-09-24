@@ -69,7 +69,7 @@ Command definitions and callback payloads are JSON strings and are validated bef
 - `Webhook.execute_json(payload_json, wait, thread_id)` exposes Discord's JSON execute payload, including embeds, components, polls, and future fields. Set `wait` to receive the created message; an empty `thread_id` targets the webhook's default channel. This method preserves the caller's `allowed_mentions` payload, so specify it when the payload could contain mentions.
 - `Webhook.upload_files_json(payload_json, filenames, file_data, thread_id)` sends one to ten files as `files[0]` through `files[9]` multipart fields and waits for the created message. Pass matching filename and `Bytes` arrays, include corresponding `attachments` entries in the JSON payload, and use an empty thread ID for the default channel. Uploads use the same runtime size limit as other Discord API bodies.
 - `fetch()` and `edit_json(payload_json)` retrieve or edit the webhook; `delete()` removes it.
-- `fetch_message`, `edit_message_json`, and `delete_message` operate on a webhook message. Pass an empty `thread_id` for a normal message or a valid snowflake for a thread message.
+- `fetch_message`, `edit_message_json`, and `delete_message` operate on a webhook message. Pass an empty `thread_id` for a normal message or a valid snowflake for a thread message. `edit_message_files_json(message_id, payload_json, filenames, file_data, thread_id)` edits a message with new multipart files; include the retained and new attachment metadata in `payload_json`.
 
 JSON methods retain Discord's evolving request schema without pretending Kryndel has typed models for every embed, component, poll, and attachment variant. The client validates the JSON body, route, IDs, and request/response size before sending it.
 

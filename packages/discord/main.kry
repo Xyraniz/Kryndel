@@ -314,6 +314,24 @@ impl Webhook {
         }
     }
 
+    pub fn edit_message_files_json(message_id: String, payload_json: String, filenames: Array[String], file_data: Array[Bytes], thread_id: String) -> Result[Json, String] {
+        if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+        if len(filenames) == 0 || len(filenames) > 10 || len(filenames) != len(file_data) {
+            return err("webhook edit requires matching filename and byte arrays with 1 to 10 files")
+        }
+        let query: Result[String, String] = webhook_thread_query(thread_id)
+        match query {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut suffix: String = ""
+                if thread_query != "" { suffix = "?" + thread_query }
+                let route: String = "/webhooks/" + self.id + "/" + self.token + "/messages/" + message_id + suffix
+                let response: Result[String, String] = discord_webhook_upload("PATCH", route, payload_json, filenames, file_data, self.token)
+                return response_json(response)
+            }
+        }
+    }
+
     pub fn delete_message(message_id: String, thread_id: String) -> Result[Nil, String] {
         if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
         let query: Result[String, String] = webhook_thread_query(thread_id)
