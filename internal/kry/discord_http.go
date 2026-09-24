@@ -19,7 +19,7 @@ import (
 )
 
 const discordAPIBase = "https://discord.com/api/v10"
-const discordMaxWebhookFiles = 10
+const discordMaxUploadFiles = 10
 
 type discordRateBucket struct {
 	remaining int64
@@ -243,6 +243,10 @@ func (r *Runtime) discordAPIUpload(method, route, payload, filename string, data
 	return r.discordMultipartUpload(method, route, payload, files, token, true)
 }
 
+func (r *Runtime) discordAPIUploadFiles(method, route, payload string, files []discordUploadFile, token string) (Value, *Diagnostic) {
+	return r.discordMultipartUpload(method, route, payload, files, token, true)
+}
+
 func (r *Runtime) discordWebhookUpload(method, route, payload string, files []discordUploadFile, token string) (Value, *Diagnostic) {
 	return r.discordMultipartUpload(method, route, payload, files, token, false)
 }
@@ -251,7 +255,7 @@ func (r *Runtime) discordMultipartUpload(method, route, payload string, files []
 	if method != "POST" && method != "PUT" && method != "PATCH" {
 		return resVal(false, stringVal("Discord uploads require POST, PUT, or PATCH")), nil
 	}
-	if !validDiscordRoute(route) || token == "" || (!botAuth && !strings.HasPrefix(route, "/webhooks/")) || len(files) == 0 || len(files) > discordMaxWebhookFiles {
+	if !validDiscordRoute(route) || token == "" || (!botAuth && !strings.HasPrefix(route, "/webhooks/")) || len(files) == 0 || len(files) > discordMaxUploadFiles {
 		return resVal(false, stringVal("invalid Discord upload route, token, or filename")), nil
 	}
 	if !json.Valid([]byte(payload)) {
@@ -309,7 +313,7 @@ func (r *Runtime) discordHTTPRequest(method, route string, body io.Reader, conte
 	}
 	routeKey := discordRouteKey(route)
 	client := &http.Client{
-		Timeout:       time.Duration(r.Lim.MaxWallTimeMS) * time.Millisecond,
+		Timeout:       networkTimeout(r.Lim.MaxWallTimeMS),
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	if redact == "" {

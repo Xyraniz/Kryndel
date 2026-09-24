@@ -35,7 +35,7 @@ impl Webhook {
     }
 
     pub fn send_files(content: String, filenames: Array[String], file_data: Array[Bytes], thread_id: String) -> Result[Json, String] {
-        let payload: String = webhook_files_payload(content, filenames)?
+        let payload: String = discord_files_payload(content, filenames)?
         let response: Result[String, String] = self.upload_files_json(payload, filenames, file_data, thread_id)
         return response_json(response)
     }
@@ -149,6 +149,23 @@ impl Bot {
 
     pub fn upload(method: String, route: String, payload_json: String, filename: String, data: Bytes) -> Result[String, String] {
         return discord_api_upload(method, route, payload_json, filename, data, self.token)
+    }
+
+    // Raw Bot-authenticated multipart access for routes that accept attachments.
+    // The caller supplies payload_json, including attachment metadata.
+    pub fn upload_files(method: String, route: String, payload_json: String, filenames: Array[String], file_data: Array[Bytes]) -> Result[String, String] {
+        if len(filenames) == 0 || len(filenames) > 10 || len(filenames) != len(file_data) {
+            return err("Bot upload_files requires matching filename and byte arrays with 1 to 10 files")
+        }
+        return discord_api_upload_files(method, route, payload_json, filenames, file_data, self.token)
+    }
+
+    // Sends a channel message with files and suppresses mentions by default.
+    pub fn send_files(channel_id: String, content: String, filenames: Array[String], file_data: Array[Bytes]) -> Result[Json, String] {
+        if !valid_snowflake(channel_id) { return err("channel_id must be a Discord snowflake") }
+        let payload: String = discord_files_payload(content, filenames)?
+        let response: Result[String, String] = self.upload_files("POST", "/channels/" + channel_id + "/messages", payload, filenames, file_data)
+        return response_json(response)
     }
 
     pub fn create_webhook(channel_id: String, name: String) -> Result[Webhook, String] {

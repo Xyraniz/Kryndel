@@ -2,7 +2,7 @@
 
 `packages/discord` is a bot-account client for Discord API v10. It exposes bounded REST helpers, interaction callbacks, command registration, a Gateway client with reconnect/resume support, configurable single-shard connections, and a bounded event cache. It never automates normal user accounts.
 
-The package source is split into `models.kry`, `validation.kry`, `rest.kry`, `interactions.kry`, `gateway.kry`, and `cache.kry`; `main.kry` imports these modules as the package entry point. `Bot` and `Webhook` credential fields are private, so callers must use their validated constructors and methods. This privacy change is a breaking API change and is released as package version 2.0.0.
+The package source is split into `models.kry`, `validation.kry`, `rest.kry`, `interactions.kry`, `application_commands.kry`, `gateway.kry`, and `cache.kry`; `main.kry` imports these modules as the package entry point. `Bot` and `Webhook` credential fields are private, so callers must use their validated constructors and methods. This privacy change is a breaking API change and was released as package version 2.0.0.
 
 ## Create a bot
 
@@ -44,7 +44,7 @@ fn main() -> Result[Nil, String] {
 
 `bot(token, intents)` rejects empty or header-unsafe tokens, unknown intent names, and duplicate intents. Supported Gateway intents are `Guilds`, `GuildMembers`, `GuildModeration`, `GuildExpressions`, `GuildIntegrations`, `GuildWebhooks`, `GuildInvites`, `GuildVoiceStates`, `GuildPresences`, `GuildMessages`, `GuildMessageReactions`, `GuildMessageTyping`, `DirectMessages`, `DirectMessageReactions`, `DirectMessageTyping`, `MessageContent`, `GuildScheduledEvents`, `AutoModerationConfiguration`, `AutoModerationExecution`, `GuildMessagePolls`, and `DirectMessagePolls`. Discord's privileged intents must also be enabled in the Developer Portal.
 
-`Bot.with_shard(shard_id, shard_count)` validates shard configuration. Each `Bot.run()` opens one shard; run one configured Bot process per shard. The client discovers the Gateway, validates its secure Discord host, sends Identify or Resume, tracks sequence numbers, maintains heartbeats, and reconnects when Discord asks it to. It uses `resume_gateway_url`, `session_id`, and the last dispatch sequence when a session can be resumed. Permanent Gateway close codes and handshake rejections are returned as errors instead of being retried indefinitely.
+`Bot.with_shard(shard_id, shard_count)` validates shard configuration. Each `Bot.run()` opens one shard; run one configured Bot process per shard. The client discovers the Gateway, validates its secure Discord host, sends Identify or Resume, tracks sequence numbers, maintains heartbeats, and reconnects when Discord asks it to. It uses `resume_gateway_url`, `session_id`, and the last dispatch sequence when a session can be resumed. Invalid credentials and unsupported shard/intent configurations stop with an error; reconnectable close codes trigger the recovery path. The CLI's normal ten-second execution limit still applies to all programs. Run a persistent bot with `kry --max-wall-ms 0 run examples/discord_bot.kry` to disable the process-wide wall-clock limit; individual network operations retain a ten-second timeout. Ctrl+C stops the process.
 
 Every dispatch reaches `discord.on_event` as `{"name":"READY","data":{...}}`. `MESSAGE_CREATE` additionally reaches `discord.on_message` when the generic handler returns an empty string; a non-empty return sends a message reply. Bot-authored messages are ignored for automatic replies. Kryndel installs low-priority no-op handlers so an unused callback does not stop the connection. Since Kryndel has named dispatch slots rather than function decorators or closures, register top-level `String -> String` functions with `poly_register`.
 
@@ -60,6 +60,8 @@ Incoming interaction requests should be verified with `Bot.verify_interaction(pu
 - `Bot.create_guild_command`, `Bot.update_guild_command`, `Bot.list_guild_commands`, and `Bot.delete_guild_command` manage guild commands; `Bot.bulk_overwrite_guild_commands` replaces a guild command set.
 
 Command definitions and callback payloads are JSON strings and are validated before they are sent. Register `discord.on_event` to dispatch incoming `INTERACTION_CREATE` events to the application code.
+
+`slash_command_json(name, description, options_json)`, `user_context_command_json(name)`, and `message_context_command_json(name)` build the three common command payloads. The slash helper accepts Discord's ASCII name subset and at most 25 option objects; Discord still validates each option's full schema. `Bot.sync_global_commands(application_id, commands_json)` requires an array of objects and performs the existing authenticated bulk overwrite. This is a payload builder and sync helper, not discord.py's local `CommandTree`, typed callback dispatch, checks, or autocomplete framework.
 
 ## Webhooks
 
@@ -84,6 +86,8 @@ JSON methods retain Discord's evolving request schema without pretending Kryndel
 
 `Bot.upload(method, route, payload_json, filename, data)` sends one bounded file as a multipart request with `payload_json`. Request bodies are replayed safely across retries. The runtime uses Discord's rate-limit bucket headers and global 429 information to coordinate waits across routes and worker runtimes. It makes an initial request and allows up to five retries, with a five-minute maximum wait per retry. API response sizes and upload sizes are limited by the runtime's configured input limit; credentials and long interaction tokens are redacted from returned HTTP errors.
 
+`Bot.upload_files(method, route, payload_json, filenames, file_data)` sends one to ten files to a caller-selected Bot-authenticated API v10 route; the JSON payload must include matching attachment metadata. `Bot.send_files(channel_id, content, filenames, file_data)` sends a channel message with those files and suppresses implicit mentions. Both require equally sized filename and byte arrays, use `files[0]` through `files[9]`, and honor the same total upload limit and REST retry policy.
+
 ## Object cache
 
 `Bot.cache_get(kind, id)`, `Bot.cache_put(kind, id, object_json)`, `Bot.cache_delete(kind, id)`, and `Bot.cache_clear()` access a runtime-local cache capped at 10,000 objects with a 30-minute sliding lifetime. The Gateway automatically caches recent users, guilds, channels, threads, roles, members, messages, voice states, and other supported dispatch objects. Use `guild_id:user_id` for member and role cache keys. Cache misses and expired objects return an error result.
@@ -96,6 +100,6 @@ Gateway `VOICE_STATE_UPDATE` and `VOICE_SERVER_UPDATE` events are available thro
 
 ## Runtime support
 
-`discord_api_request` performs bounded API v10 requests with Bot authentication, JSON validation, a shared rate-limit scheduler, and bounded retries. `discord_interaction_request` calls interaction and webhook routes without Bot authentication. `discord_api_upload` supports one Bot-authenticated multipart file and `Webhook.upload_files_json` supports up to ten token-authenticated webhook files. `discord_verify_interaction` checks Ed25519 signatures and replay age, and `discord_cache_*` provides bounded storage and dispatch ingestion. Text and binary WebSocket helpers support fragmented frames, payload limits, and timeout-safe reads; binary helpers provide the framing needed to build protocol integrations. These primitives do not implement the DAVE cryptographic session.
+`discord_api_request` performs bounded API v10 requests with Bot authentication, JSON validation, a shared rate-limit scheduler, and bounded retries. `discord_interaction_request` calls interaction and webhook routes without Bot authentication. `discord_api_upload` supports one Bot-authenticated multipart file; `Bot.upload_files`, `Bot.send_files`, and `Webhook.upload_files_json` support up to ten files. `discord_verify_interaction` checks Ed25519 signatures and replay age, and `discord_cache_*` provides bounded storage and dispatch ingestion. Text and binary WebSocket helpers support fragmented frames, payload limits, and timeout-safe reads; binary helpers provide the framing needed to build protocol integrations. These primitives do not implement the DAVE cryptographic session.
 
 Load bot tokens from environment variables through `std/env.kry`; never write them into source code or commit them. Self-bots are unsupported.

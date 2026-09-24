@@ -54,7 +54,7 @@ func loadDiscordTestProgram(t *testing.T, source string) (*Program, *Checker) {
 }
 
 func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
-	const version = "2.0.0"
+	const version = "2.1.0"
 	archivePath := filepath.Join("..", "..", "registry", "packages", "discord-"+version+".tar.gz")
 	archive, err := os.ReadFile(archivePath)
 	if err != nil {
@@ -98,7 +98,7 @@ func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
 	if err != nil || manifest.Name != "discord" || manifest.Version != version {
 		t.Fatalf("published Discord package manifest = %#v, %v", manifest, err)
 	}
-	for _, module := range []string{"models.kry", "validation.kry", "rest.kry", "interactions.kry", "gateway.kry", "cache.kry"} {
+	for _, module := range []string{"models.kry", "validation.kry", "rest.kry", "interactions.kry", "application_commands.kry", "gateway.kry", "cache.kry"} {
 		if _, err := os.Stat(filepath.Join(extracted, module)); err != nil {
 			t.Fatalf("published Discord package is missing %s: %v", module, err)
 		}
@@ -411,14 +411,144 @@ fn main() -> Result[Nil, String] {
 	}
 }
 
-func TestDiscordWebhookUploadRejectsMoreThanTenFilesBeforeNetwork(t *testing.T) {
-	files := make([]discordUploadFile, discordMaxWebhookFiles+1)
-	value, diagnostic := (&Runtime{Lim: DefaultLimits()}).discordWebhookUpload("POST", "/webhooks/123/token?wait=true", "{}", files, "token")
-	if diagnostic != nil {
-		t.Fatalf("unexpected diagnostic: %v", diagnostic)
+func TestDiscordMultipartUploadRejectsMoreThanTenFilesBeforeNetwork(t *testing.T) {
+	files := make([]discordUploadFile, discordMaxUploadFiles+1)
+	for _, upload := range []func() (Value, *Diagnostic){
+		func() (Value, *Diagnostic) {
+			return (&Runtime{Lim: DefaultLimits()}).discordWebhookUpload("POST", "/webhooks/123/token?wait=true", "{}", files, "token")
+		},
+		func() (Value, *Diagnostic) {
+			return (&Runtime{Lim: DefaultLimits()}).discordAPIUploadFiles("POST", "/channels/123/messages", "{}", files, "token")
+		},
+	} {
+		value, diagnostic := upload()
+		if diagnostic != nil {
+			t.Fatalf("unexpected diagnostic: %v", diagnostic)
+		}
+		if value.Kind != VResult || value.OK {
+			t.Fatalf("upload result = %#v, want an error Result", value)
+		}
 	}
-	if value.Kind != VResult || value.OK {
-		t.Fatalf("upload result = %#v, want an error Result", value)
+}
+
+func TestDiscordBotUploadFilesAndSendFiles(t *testing.T) {
+	type uploadRequest struct {
+		method        string
+		path          string
+		authorization string
+		contentType   string
+		payload       string
+		filenames     map[string]string
+		files         map[string]string
+	}
+	var seen []uploadRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if err := request.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse multipart request: %v", err)
+			http.Error(w, "invalid multipart", http.StatusBadRequest)
+			return
+		}
+		got := uploadRequest{
+			method:        request.Method,
+			path:          request.URL.RequestURI(),
+			authorization: request.Header.Get("Authorization"),
+			contentType:   request.Header.Get("Content-Type"),
+			payload:       request.FormValue("payload_json"),
+			filenames:     make(map[string]string),
+			files:         make(map[string]string),
+		}
+		if request.MultipartForm != nil {
+			defer request.MultipartForm.RemoveAll()
+			for name, headers := range request.MultipartForm.File {
+				if len(headers) != 1 {
+					t.Errorf("multipart field %s has %d files, want 1", name, len(headers))
+					continue
+				}
+				got.filenames[name] = headers[0].Filename
+				file, err := headers[0].Open()
+				if err != nil {
+					t.Errorf("open multipart field %s: %v", name, err)
+					continue
+				}
+				data, err := io.ReadAll(file)
+				_ = file.Close()
+				if err != nil {
+					t.Errorf("read multipart field %s: %v", name, err)
+					continue
+				}
+				got.files[name] = string(data)
+			}
+		}
+		seen = append(seen, got)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"987"}`)
+	}))
+	defer server.Close()
+
+	source := `import "packages/discord"
+fn main() -> Result[Nil, String] {
+    let client: Bot = bot("bot-multi-token", [])?
+    let names: Array[String] = ["file0.bin", "file1.bin", "file2.bin", "file3.bin", "file4.bin", "file5.bin", "file6.bin", "file7.bin", "file8.bin", "file9.bin"]
+    let files: Array[Bytes] = [bytes_from_u8([u8(65)]), bytes_from_u8([u8(66)]), bytes_from_u8([u8(67)]), bytes_from_u8([u8(68)]), bytes_from_u8([u8(69)]), bytes_from_u8([u8(70)]), bytes_from_u8([u8(71)]), bytes_from_u8([u8(72)]), bytes_from_u8([u8(73)]), bytes_from_u8([u8(74)])]
+    let raw: String = client.upload_files("PATCH", "/channels/101/messages/202", "{\"attachments\":[{\"id\":0,\"filename\":\"file0.bin\"},{\"id\":1,\"filename\":\"file1.bin\"},{\"id\":2,\"filename\":\"file2.bin\"},{\"id\":3,\"filename\":\"file3.bin\"},{\"id\":4,\"filename\":\"file4.bin\"},{\"id\":5,\"filename\":\"file5.bin\"},{\"id\":6,\"filename\":\"file6.bin\"},{\"id\":7,\"filename\":\"file7.bin\"},{\"id\":8,\"filename\":\"file8.bin\"},{\"id\":9,\"filename\":\"file9.bin\"}]}", names, files)?
+    assert_eq(raw, "{\"id\":\"987\"}")
+    let sent: Json = client.send_files("101", "hello <@123456>", ["safe-report.txt", "safe-image.bin"], [bytes_from_u8([u8(0), u8(255)]), bytes_from_u8([u8(65)])])?
+    let sent_id: String = json_string(result_unwrap(json_object_get(sent, "id")))?
+    assert_eq(sent_id, "987")
+    assert_eq(is_err(client.upload_files("POST", "/channels/101/messages", "{}", ["a.txt", "b.txt"], [files[0]])), true)
+    assert_eq(is_err(client.upload_files("POST", "/channels/101/messages", "{}", ["../bad"], [files[0]])), true)
+    assert_eq(is_err(client.send_files("bad", "", ["a.txt"], [files[0]])), true)
+    let too_many_names: Array[String] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+    let too_many_files: Array[Bytes] = [files[0], files[1], files[2], files[3], files[4], files[5], files[6], files[7], files[8], files[9], files[0]]
+    assert_eq(is_err(client.upload_files("POST", "/channels/101/messages", "{}", too_many_names, too_many_files)), true)
+    return ok(nil)
+}
+`
+	p, checker := loadDiscordTestProgram(t, source)
+	runtime, diagnostic := NewRuntime(p, checker, DefaultLimits(), Sandbox{})
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	runtime.discordAPIBaseURL = server.URL + "/api/v10"
+	if diagnostic := runtime.run(); diagnostic != nil {
+		t.Fatalf("run Discord Bot multi-file upload fixture: %s", diagnostic.Message)
+	}
+
+	want := []uploadRequest{
+		{
+			method:        http.MethodPatch,
+			path:          "/api/v10/channels/101/messages/202",
+			authorization: "Bot bot-multi-token",
+			contentType:   "multipart/form-data; boundary=",
+			payload:       `{"attachments":[{"id":0,"filename":"file0.bin"},{"id":1,"filename":"file1.bin"},{"id":2,"filename":"file2.bin"},{"id":3,"filename":"file3.bin"},{"id":4,"filename":"file4.bin"},{"id":5,"filename":"file5.bin"},{"id":6,"filename":"file6.bin"},{"id":7,"filename":"file7.bin"},{"id":8,"filename":"file8.bin"},{"id":9,"filename":"file9.bin"}]}`,
+			filenames: map[string]string{
+				"files[0]": "file0.bin", "files[1]": "file1.bin", "files[2]": "file2.bin", "files[3]": "file3.bin", "files[4]": "file4.bin",
+				"files[5]": "file5.bin", "files[6]": "file6.bin", "files[7]": "file7.bin", "files[8]": "file8.bin", "files[9]": "file9.bin",
+			},
+			files: map[string]string{
+				"files[0]": "A", "files[1]": "B", "files[2]": "C", "files[3]": "D", "files[4]": "E",
+				"files[5]": "F", "files[6]": "G", "files[7]": "H", "files[8]": "I", "files[9]": "J",
+			},
+		},
+		{
+			method:        http.MethodPost,
+			path:          "/api/v10/channels/101/messages",
+			authorization: "Bot bot-multi-token",
+			contentType:   "multipart/form-data; boundary=",
+			payload:       `{"content":"hello <@123456>","attachments":[{"id":0,"filename":"safe-report.txt"},{"id":1,"filename":"safe-image.bin"}],"allowed_mentions":{"parse":[]}}`,
+			filenames:     map[string]string{"files[0]": "safe-report.txt", "files[1]": "safe-image.bin"},
+			files:         map[string]string{"files[0]": string([]byte{0, 255}), "files[1]": "A"},
+		},
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("received %d multipart requests, want %d: %#v", len(seen), len(want), seen)
+	}
+	for index := range want {
+		if seen[index].method != want[index].method || seen[index].path != want[index].path || seen[index].authorization != want[index].authorization || !strings.HasPrefix(seen[index].contentType, want[index].contentType) || seen[index].payload != want[index].payload || !reflect.DeepEqual(seen[index].filenames, want[index].filenames) || !reflect.DeepEqual(seen[index].files, want[index].files) {
+			got, _ := json.MarshalIndent(seen[index], "", "  ")
+			wantJSON, _ := json.MarshalIndent(want[index], "", "  ")
+			t.Fatalf("multipart request %d differs\ngot:\n%s\nwant:\n%s", index, got, wantJSON)
+		}
 	}
 }
 

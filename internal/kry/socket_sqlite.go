@@ -145,10 +145,14 @@ func sqliteQuery(h *sqliteHandle, query string, maxRows int) ([][]string, error)
 }
 
 func socketDeadline(maxWallMS int64) time.Time {
+	return time.Now().Add(networkTimeout(maxWallMS))
+}
+
+func networkTimeout(maxWallMS int64) time.Duration {
 	if maxWallMS <= 0 {
-		return time.Time{}
+		maxWallMS = DefaultLimits().MaxWallTimeMS
 	}
-	return time.Now().Add(time.Duration(maxWallMS) * time.Millisecond)
+	return time.Duration(maxWallMS) * time.Millisecond
 }
 
 func validPort(port int64, allowZero bool) error {

@@ -1,5 +1,9 @@
 # Changelog
 
+## Discord package 2.1.0
+
+The Discord client adds Bot-authenticated multi-file uploads and message sends (up to ten files), builders for slash and context-menu command payloads, and validated global command bulk sync. Gateway close-code handling now retries reconnectable closures and starts a fresh session when the old session is invalid. `kry --max-wall-ms 0` supports persistent programs while network operations remain bounded individually. Previous Discord package archives are removed from the active registry so 2.1.0 is the sole installable release; projects pinned to an exact earlier Discord version must update their dependency constraint. This release still does not provide full discord.py parity: typed `CommandTree` dispatch/UI/prefix command frameworks and voice/DAVE remain unimplemented.
+
 ## Unreleased — Discord Gateway, interactions, and REST
 
 The Discord Gateway now retains session IDs and dispatch sequences, resumes sessions after transient disconnects, reconnects after server requests, validates shard configuration, and reports permanent close codes. Gateway dispatches update a bounded cache of recent Discord objects. The Discord package now includes Ed25519 interaction signature checks, unauthenticated interaction callback and follow-up helpers, global and guild command registration, and multipart file uploads. REST rate-limit buckets and global limits are coordinated across routes and worker runtimes, and multipart request bodies are replayed on retries.

@@ -130,9 +130,9 @@ fn webhook_thread_query(thread_id: String) -> Result[String, String] {
     return ok("thread_id=" + thread_id)
 }
 
-fn webhook_files_payload(content: String, filenames: Array[String]) -> Result[String, String] {
-    if len(filenames) == 0 || len(filenames) > 10 { return err("webhook send_files requires 1 to 10 files") }
-    if discord_text_length(content) > 2000 { return err("webhook content must be at most 2000 UTF-16 code units") }
+fn discord_files_payload(content: String, filenames: Array[String]) -> Result[String, String] {
+    if len(filenames) == 0 || len(filenames) > 10 { return err("send_files requires 1 to 10 files") }
+    if discord_text_length(content) > 2000 { return err("message content must be at most 2000 UTF-16 code units") }
     let indices: Array[String] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
     let mut attachments: String = ""
     let mut index: Int = 0

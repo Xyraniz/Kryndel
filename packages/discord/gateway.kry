@@ -39,6 +39,40 @@ fn heartbeat_payload(sequence: Int) -> String {
     return "{\"op\":1,\"d\":" + str(sequence) + "}"
 }
 
+fn gateway_close_code(problem: String) -> Int {
+    if starts_with(problem, "WebSocket peer closed with code 4001:") { return 4001 }
+    if starts_with(problem, "WebSocket peer closed with code 4002:") { return 4002 }
+    if starts_with(problem, "WebSocket peer closed with code 4003:") { return 4003 }
+    if starts_with(problem, "WebSocket peer closed with code 4004:") { return 4004 }
+    if starts_with(problem, "WebSocket peer closed with code 4005:") { return 4005 }
+    if starts_with(problem, "WebSocket peer closed with code 4007:") { return 4007 }
+    if starts_with(problem, "WebSocket peer closed with code 4009:") { return 4009 }
+    if starts_with(problem, "WebSocket peer closed with code 4010:") { return 4010 }
+    if starts_with(problem, "WebSocket peer closed with code 4011:") { return 4011 }
+    if starts_with(problem, "WebSocket peer closed with code 4012:") { return 4012 }
+    if starts_with(problem, "WebSocket peer closed with code 4013:") { return 4013 }
+    if starts_with(problem, "WebSocket peer closed with code 4014:") { return 4014 }
+    return 0
+}
+
+fn gateway_close_is_terminal(code: Int) -> Bool {
+    return code == 4004 || code == 4010 || code == 4011 || code == 4012 || code == 4013 || code == 4014
+}
+
+fn gateway_close_state(code: Int, session_id: String, sequence: Int, resume_url: String) -> GatewaySessionState {
+    if code == 4003 || code == 4007 || code == 4009 {
+        return GatewaySessionState{reconnect: true, session_id: "", sequence: -1, resume_url: resume_url}
+    }
+    return GatewaySessionState{reconnect: true, session_id: session_id, sequence: sequence, resume_url: resume_url}
+}
+
+fn gateway_close_transition(code: Int, session_id: String, sequence: Int, resume_url: String, problem: String) -> Result[GatewaySessionState, String] {
+    if gateway_close_is_terminal(code) {
+        return err("Discord Gateway closed this shard permanently: " + problem)
+    }
+    return ok(gateway_close_state(code, session_id, sequence, resume_url))
+}
+
 impl Bot {
 
     // Establishes a real Gateway v10 session, sends Identify, maintains
@@ -230,12 +264,22 @@ fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String,
             match received {
                 err(problem) => {
                     if problem != "WebSocket receive timed out" {
-                        if starts_with(problem, "WebSocket peer closed with code 4001") || starts_with(problem, "WebSocket peer closed with code 4002") || starts_with(problem, "WebSocket peer closed with code 4003") || starts_with(problem, "WebSocket peer closed with code 4004") || starts_with(problem, "WebSocket peer closed with code 4005") || starts_with(problem, "WebSocket peer closed with code 4010") || starts_with(problem, "WebSocket peer closed with code 4011") || starts_with(problem, "WebSocket peer closed with code 4012") || starts_with(problem, "WebSocket peer closed with code 4013") || starts_with(problem, "WebSocket peer closed with code 4014") {
-                            return err("Discord Gateway closed this shard permanently: " + problem)
-                        }
-                        if starts_with(problem, "WebSocket peer closed with code 4007") || starts_with(problem, "WebSocket peer closed with code 4009") {
-                            println("Discord Gateway session expired; starting a new session: " + problem)
-                            return ok(GatewaySessionState{reconnect: true, session_id: "", sequence: -1, resume_url: resume_url})
+                        let close_code: Int = gateway_close_code(problem)
+                        if close_code != 0 {
+                            let next_state: Result[GatewaySessionState, String] = gateway_close_transition(close_code, current_session_id, sequence, current_resume_url, problem)
+                            match next_state {
+                                ok(state) => {
+                                    if close_code == 4003 {
+                                        println("Discord Gateway session is unauthenticated or invalid; starting a new session")
+                                    } else if close_code == 4007 || close_code == 4009 {
+                                        println("Discord Gateway session expired; starting a new session: " + problem)
+                                    } else {
+                                        println("Discord Gateway closed with code " + str(close_code) + "; reconnecting")
+                                    }
+                                    return ok(state)
+                                }
+                                err(close_problem) => { return err(close_problem) }
+                            }
                         }
                         println("Discord Gateway receive failed; attempting to resume: " + problem)
                         return ok(GatewaySessionState{reconnect: true, session_id: current_session_id, sequence: sequence, resume_url: current_resume_url})
