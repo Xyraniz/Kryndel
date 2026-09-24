@@ -136,20 +136,218 @@ fn main() -> Nil {
 	}
 }
 
-func TestSelfhostPEBackendRejectsOutsideSubset(t *testing.T) {
-	image, d := runSelfhostPEBackend(t, `
-fn main() -> Nil {
-    let values: Array[Int] = [1, 2]
-    println(len(values))
+func TestSelfhostPEBackendIntArrayLocalsLiteralLenAndIndex(t *testing.T) {
+	source := `
+fn inspect(seed: Int) -> Int {
+    let values: Array[Int] = [seed, seed + 2]
+    return len(values) + values[1]
 }
-`)
-	if d == nil {
-		t.Fatalf("unsupported array program unexpectedly emitted %d bytes", len(image))
+
+fn main() -> Nil {
+    let values: Array[Int] = [17, -42, 5]
+    let alias: Array[Int] = values
+    let empty: Array[Int] = []
+    println(len(alias))
+    println(alias[0])
+    println(alias[1])
+    println(alias[2])
+    println(len(empty))
+    println(inspect(5))
+}
+`
+	image, d := runSelfhostPEBackend(t, source)
+	if d != nil {
+		t.Fatalf("selfhost PE backend rejected the supported Array[Int] subset: %v", d)
 	}
-	if !strings.Contains(d.Error(), "PE backend: binding 'values' has an unsupported type") {
-		t.Fatalf("unexpected unsupported-feature diagnostic: %v", d)
+	if len(image) < 0x100 || string(image[:2]) != "MZ" || string(image[0x80:0x84]) != "PE\x00\x00" {
+		t.Fatalf("selfhost backend did not emit a PE32+ image (size %d)", len(image))
 	}
-	image, d = runSelfhostPEBackend(t, `fn main() -> Nil { println(str("already a String")) }`)
+	peImage, err := pe.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatalf("Go PE parser rejected the Array[Int] image: %v", err)
+	}
+	imports, err := peImage.ImportedSymbols()
+	peImage.Close()
+	if err != nil {
+		t.Fatalf("could not read Array[Int] PE imports: %v", err)
+	}
+	processHeapImports, heapAllocImports := 0, 0
+	for _, symbol := range imports {
+		if strings.HasPrefix(symbol, "GetProcessHeap:") {
+			processHeapImports++
+		}
+		if strings.HasPrefix(symbol, "HeapAlloc:") {
+			heapAllocImports++
+		}
+	}
+	if processHeapImports != 1 || heapAllocImports != 1 {
+		t.Fatalf("expected one GetProcessHeap and one HeapAlloc PE import, got %d and %d (%v)", processHeapImports, heapAllocImports, imports)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("native PE execution requires Windows amd64")
+	}
+	executable := filepath.Join(t.TempDir(), "int-arrays.exe")
+	if err := os.WriteFile(executable, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(executable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated Array[Int] PE failed: %v; output: %s", err, output)
+	}
+	want := "3\n17\n-42\n5\n0\n9\n"
+	if string(output) != want {
+		t.Fatalf("unexpected Array[Int] PE output %q; want %q", output, want)
+	}
+}
+
+func TestSelfhostPEBackendIntArrayBoundsChecks(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+	}{
+		{
+			name: "negative index",
+			source: `fn main() -> Nil {
+    let values: Array[Int] = [10, 20]
+    let index: Int = -1
+    println(values[index])
+}`,
+		},
+		{
+			name: "index at length",
+			source: `fn main() -> Nil {
+    let values: Array[Int] = [10, 20]
+    let index: Int = len(values)
+    println(values[index])
+}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			image, err := runSelfhostPEBackend(t, tc.source)
+			if err != nil {
+				t.Fatalf("selfhost PE backend failed to compile bounds-check fixture: %v", err)
+			}
+			if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+				t.Skip("native PE execution requires Windows amd64")
+			}
+			executable := filepath.Join(t.TempDir(), "bad-array-index.exe")
+			if err := os.WriteFile(executable, image, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command(executable).CombinedOutput()
+			if err == nil {
+				t.Fatalf("out-of-bounds Array[Int] access unexpectedly succeeded with output %q", output)
+			}
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 {
+				t.Fatalf("out-of-bounds Array[Int] access exited with %v and output %q; want ExitProcess(1)", err, output)
+			}
+			if len(output) != 0 {
+				t.Fatalf("out-of-bounds Array[Int] access wrote output before trapping: %q", output)
+			}
+		})
+	}
+}
+
+func TestSelfhostPEBackendRejectsUnsupportedCollectionShapes(t *testing.T) {
+	cases := []struct {
+		name, source, diagnostic string
+	}{
+		{
+			name: "maps",
+			source: `fn main() -> Nil {
+    let values: Map[String, Int] = {}
+    println(len(values))
+}`,
+			diagnostic: "PE backend: maps are not supported",
+		},
+		{
+			name:       "map builtin",
+			source:     `fn main() -> Nil { map_get({"key": 1}, "key") }`,
+			diagnostic: "PE backend: map builtins are not supported",
+		},
+		{
+			name: "non Int array elements",
+			source: `fn main() -> Nil {
+    let values: Array[String] = ["value"]
+    println(len(values))
+}`,
+			diagnostic: "PE backend: only Array[Int] locals are supported",
+		},
+		{
+			name: "array push",
+			source: `fn main() -> Nil {
+    let values: Array[Int] = [1]
+    let pushed: Array[Int] = array_push(values, 2)
+    println(len(pushed))
+}`,
+			diagnostic: "PE backend: array builtins are not supported",
+		},
+		{
+			name: "array concatenation",
+			source: `fn main() -> Nil {
+    let values: Array[Int] = [1] + [2]
+    println(len(values))
+}`,
+			diagnostic: "PE backend: Array[Int] binary operations are not supported",
+		},
+		{
+			name: "array reassignment",
+			source: `fn main() -> Nil {
+    let mut values: Array[Int] = [1]
+    values = [2]
+}`,
+			diagnostic: "PE backend: Array[Int] mutation and reassignment are not supported",
+		},
+		{
+			name: "array set mutation builtin",
+			source: `fn main() -> Nil {
+	let values: Array[Int] = [1]
+	array_set(values, 0, 2)
+}`,
+			diagnostic: "PE backend: array builtins are not supported",
+		},
+		{
+			name:       "temporary literal indexing",
+			source:     `fn main() -> Nil { println([1, 2][0]) }`,
+			diagnostic: "PE backend: indexing is supported only through a local Array[Int] variable",
+		},
+		{
+			name: "array function parameter",
+			source: `fn read(values: Array[Int]) -> Int { return len(values) }
+fn main() -> Nil { println(read([1])) }`,
+			diagnostic: "PE backend: Array[Int] function parameters are not supported",
+		},
+		{
+			name: "array function return",
+			source: `fn make() -> Array[Int] { return [1] }
+fn main() -> Nil { println(len(make())) }`,
+			diagnostic: "PE backend: Array[Int] function returns are not supported",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			image, d := runSelfhostPEBackend(t, tc.source)
+			if d == nil {
+				t.Fatalf("unsupported collection shape unexpectedly emitted %d bytes", len(image))
+			}
+			if !strings.Contains(d.Error(), tc.diagnostic) {
+				t.Fatalf("unexpected unsupported-feature diagnostic: got %v, want %q", d, tc.diagnostic)
+			}
+		})
+	}
+	program, d := Parse(&Source{Name: "ambiguous-empty-array.kry", Text: `fn main() -> Nil { let values = [] }`}, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if _, d = Check(program, DefaultLimits()); d == nil || !strings.Contains(d.Message, "empty array requires Array[T] context") {
+		t.Fatalf("untyped empty array should be rejected by the frontend, got %v", d)
+	}
+}
+
+func TestSelfhostPEBackendRejectsOutsideSubset(t *testing.T) {
+	image, d := runSelfhostPEBackend(t, `fn main() -> Nil { println(str("already a String")) }`)
 	if d == nil {
 		t.Fatalf("PE backend unexpectedly accepted a non-integer str conversion and emitted %d bytes", len(image))
 	}

@@ -5185,6 +5185,14 @@ fn pe_scalar_type(type_name: String) -> Bool {
     return type_name == "Int" || type_name == "Bool" || type_name == "String" || type_name == "UInt8" || type_name == "UInt16" || type_name == "UInt32" || type_name == "UInt64"
 }
 
+fn pe_is_int_array_type(type_name: String) -> Bool {
+    return type_name == "Array[Int]"
+}
+
+fn pe_supported_local_type(enums: Json, structs: Json, type_name: String) -> Bool {
+    return pe_supported_type_with_structs(enums, structs, type_name) || pe_is_int_array_type(type_name)
+}
+
 fn pe_is_enum_type(enums: Json, type_name: String) -> Bool {
     let count: Int = result_unwrap(json_array_len(enums))
     let mut index: Int = 0
@@ -5319,6 +5327,8 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
     let mut call_target: String = ""
     if kind == "call" { call_target = text(field(expression, "call_target")) }
     let nil_builtin: Bool = kind == "call" && (call_target == "builtin:print" || call_target == "builtin:println" || call_target == "builtin:assert" || call_target == "builtin:assert_eq" || starts_with(call_target, "function:"))
+    if starts_with(call_target, "builtin:map_") { return err("PE backend: map builtins are not supported") }
+    if starts_with(call_target, "builtin:array_") { return err("PE backend: array builtins are not supported except len(Array[Int]) and local indexing") }
     if kind == "enum" {
         let enum_name: String = text(field(expression, "enum_type"))
         let variant_name: String = text(field(expression, "enum_variant"))
@@ -5363,7 +5373,40 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
         if expected_type == "" || expected_type != type_name { return err("PE backend: unknown or mismatched field '" + field_name + "' in struct '" + base_type + "'") }
         return ok(true)
     }
-    if !pe_supported_type_with_structs(enums, structs, type_name) && !nil_builtin { return err("PE backend: unsupported expression type '" + type_name + "'") }
+    if kind == "binary" && (pe_is_int_array_type(expr_type(field(expression, "left"))) || pe_is_int_array_type(expr_type(field(expression, "right")))) {
+        return err("PE backend: Array[Int] binary operations are not supported")
+    }
+    if starts_with(type_name, "Map[") { return err("PE backend: maps are not supported") }
+    if starts_with(type_name, "Array[") && !pe_is_int_array_type(type_name) { return err("PE backend: only Array[Int] is supported") }
+    if pe_is_int_array_type(type_name) && kind != "array" && kind != "var" {
+        return err("PE backend: Array[Int] values are only supported as literals and local variables")
+    }
+    if !pe_supported_type_with_structs(enums, structs, type_name) && !pe_is_int_array_type(type_name) && !nil_builtin { return err("PE backend: unsupported expression type '" + type_name + "'") }
+    if kind == "array" {
+        if !pe_is_int_array_type(type_name) { return err("PE backend: only Array[Int] literals are supported") }
+        let items: Json = field(expression, "items")
+        let count: Int = result_unwrap(json_array_len(items))
+        let mut item_index: Int = 0
+        while item_index < count {
+            let item: Json = result_unwrap(json_array_get(items, item_index))
+            if expr_type(item) != "Int" { return err("PE backend: Array[Int] literal elements must be Int") }
+            let checked_item: Result[Bool, String] = pe_validate_expression(item, false, false, enums, structs)
+            if is_err(checked_item) { return checked_item }
+            item_index = item_index + 1
+        }
+        return ok(true)
+    }
+    if kind == "index" {
+        let base: Json = field(expression, "base")
+        let index: Json = field(expression, "left")
+        if text(field(base, "kind")) != "var" || !pe_is_int_array_type(expr_type(base)) {
+            return err("PE backend: indexing is supported only through a local Array[Int] variable")
+        }
+        if type_name != "Int" || expr_type(index) != "Int" { return err("PE backend: Array[Int] indexing requires an Int index and returns Int") }
+        let checked_base: Result[Bool, String] = pe_validate_expression(base, false, false, enums, structs)
+        if is_err(checked_base) { return checked_base }
+        return pe_validate_expression(index, false, false, enums, structs)
+    }
     if kind == "int" || kind == "uint" || kind == "bool" || kind == "string" || kind == "var" { return ok(true) }
     if kind == "unary" {
         if pe_is_struct_type(structs, expr_type(field(expression, "operand"))) { return err("PE backend: struct values are not unary operands") }
@@ -5391,6 +5434,7 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
             let mut index: Int = 0
             while index < count {
                 let argument: Json = result_unwrap(json_array_get(args, index))
+                if pe_is_int_array_type(expr_type(argument)) { return err("PE backend: Array[Int] function arguments are not supported") }
                 if pe_is_struct_type(structs, expr_type(argument)) { return err("PE backend: struct function arguments are not supported") }
                 let checked: Result[Bool, String] = pe_validate_expression(argument, false, false, enums, structs)
                 if is_err(checked) { return checked }
@@ -5410,6 +5454,14 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
             let display_type: String = expr_type(display_argument)
             if display_type != "Int" && display_type != "Bool" && !starts_with(display_type, "UInt") { return err("PE backend: str supports Int, Bool, and UInt values") }
             return pe_validate_expression(display_argument, false, false, enums, structs)
+        }
+        if target == "builtin:len" {
+            if count != 1 { return err("PE backend: len expects one Array[Int] argument") }
+            let array_argument: Json = result_unwrap(json_array_get(args, 0))
+            if !pe_is_int_array_type(expr_type(array_argument)) { return err("PE backend: len supports only Array[Int]") }
+            let checked_array: Result[Bool, String] = pe_validate_expression(array_argument, false, false, enums, structs)
+            if is_err(checked_array) { return checked_array }
+            return ok(true)
         }
         if target == "builtin:u8" || target == "builtin:u16" || target == "builtin:u32" || target == "builtin:u64" {
             if count != 1 { return err("PE backend: unsigned conversion expects one argument") }
@@ -5433,6 +5485,7 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
         let output: Json = result_unwrap(json_array_get(args, 0))
         if pe_is_enum_type(enums, expr_type(output)) { return err("PE backend: printing enum values is not supported") }
         if pe_is_struct_type(structs, expr_type(output)) { return err("PE backend: printing structs is not supported") }
+        if pe_is_int_array_type(expr_type(output)) { return err("PE backend: printing Array[Int] is not supported") }
         return pe_validate_expression(output, false, false, enums, structs)
     }
     return err("PE backend: unsupported expression kind '" + kind + "'")
@@ -5446,13 +5499,20 @@ fn pe_validate_statements(statements: Json, enums: Json, structs: Json) -> Resul
         let kind: String = text(field(statement, "kind"))
         if kind == "let" || kind == "const" {
             let init: Json = field(statement, "init")
-            if !pe_supported_type_with_structs(enums, structs, expr_type(init)) { return err("PE backend: binding '" + text(field(statement, "name")) + "' has an unsupported type") }
+            if starts_with(expr_type(init), "Map[") { return err("PE backend: maps are not supported") }
+            if starts_with(expr_type(init), "Array[") && !pe_is_int_array_type(expr_type(init)) { return err("PE backend: only Array[Int] locals are supported") }
+            if !pe_supported_local_type(enums, structs, expr_type(init)) { return err("PE backend: binding '" + text(field(statement, "name")) + "' has an unsupported type") }
+            if text(field(init, "kind")) == "call" && starts_with(text(field(init, "call_target")), "builtin:array_") { return err("PE backend: array builtins are not supported except len(Array[Int]) and local indexing") }
+            if pe_is_int_array_type(expr_type(init)) && text(field(init, "kind")) == "binary" { return err("PE backend: Array[Int] binary operations are not supported") }
+            if pe_is_int_array_type(expr_type(init)) && text(field(init, "kind")) != "array" && text(field(init, "kind")) != "var" { return err("PE backend: Array[Int] locals require a literal or an existing local array") }
             if pe_is_struct_type(structs, expr_type(init)) && text(field(init, "kind")) != "struct" { return err("PE backend: struct bindings require a local struct literal") }
             let checked: Result[Bool, String] = pe_validate_expression(init, false, false, enums, structs)
             if is_err(checked) { return checked }
         } else if kind == "assign" {
             let target: Json = field(statement, "target")
             let value: Json = field(statement, "value")
+            if pe_is_int_array_type(expr_type(target)) || pe_is_int_array_type(expr_type(value)) { return err("PE backend: Array[Int] mutation and reassignment are not supported") }
+            if text(field(target, "kind")) == "index" && pe_is_int_array_type(expr_type(field(target, "base"))) { return err("PE backend: Array[Int] element mutation is not supported") }
             if text(field(target, "kind")) != "var" || pe_is_struct_type(structs, expr_type(value)) || !pe_supported_type(enums, expr_type(value)) { return err("PE backend: assignment requires a scalar or enum local") }
             let checked: Result[Bool, String] = pe_validate_expression(value, false, false, enums, structs)
             if is_err(checked) { return checked }
@@ -5521,6 +5581,7 @@ fn pe_validate_document(document: Json) -> Result[Bool, String] {
             if result_unwrap(json_array_len(field(function, "params"))) != 0 || text(field(function, "return")) != "Nil" { return err("PE backend: main must have no arguments and return Nil") }
         } else {
             if pe_is_struct_type(structs, text(field(function, "return"))) { return err("PE backend: struct function returns are not supported") }
+            if pe_is_int_array_type(text(field(function, "return"))) { return err("PE backend: Array[Int] function returns are not supported") }
             if !pe_supported_type(enums, text(field(function, "return"))) && text(field(function, "return")) != "Nil" { return err("PE backend: function '" + name + "' has an unsupported return type") }
         }
         let parameters: Json = field(function, "params")
@@ -5528,6 +5589,7 @@ fn pe_validate_document(document: Json) -> Result[Bool, String] {
         let mut parameter_index: Int = 0
         while parameter_index < parameter_count {
             let parameter: Json = result_unwrap(json_array_get(parameters, parameter_index))
+            if pe_is_int_array_type(text(field(parameter, "type"))) { return err("PE backend: Array[Int] function parameters are not supported") }
             if pe_is_struct_type(structs, text(field(parameter, "type"))) || !pe_supported_type(enums, text(field(parameter, "type"))) || json_kind(field(parameter, "default")) != "null" { return err("PE backend: function parameters require scalar or enum types and no defaults") }
             parameter_index = parameter_index + 1
         }
