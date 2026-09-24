@@ -4,8 +4,9 @@
 // copied into .rdata. A private absolute pointer anchor in .rdata exercises
 // the DIR64 relocation path; generated code references remain RIP-relative.
 // IAT references are `[dispOffset, instructionEnd, importIndex]`, where
-// importIndex is GetStdHandle=0, WriteFile=1, or ExitProcess=2. Data references
-// are `[dispOffset, instructionEnd, dataOffset]`. Function ranges are
+// importIndex selects a `(dll, symbol)` row supplied to the generalized writer.
+// The compatibility wrappers keep the console imports in their original order.
+// Data references are `[dispOffset, instructionEnd, dataOffset]`. Function ranges are
 // `[begin, end, frameSize]`; ranges must describe the standard RBP frame
 // prolog emitted by the current x64 backend.
 
@@ -238,7 +239,7 @@ fn pe_validate_ranges(code: Array[UInt8], ranges: Array[Array[Int]]) -> Result[A
     return ok(sorted)
 }
 
-fn pe_validate_patches(code_size: Int, patches: Array[Array[Int]], imports: Bool) -> Result[Bool, String] {
+fn pe_validate_patches(code_size: Int, patches: Array[Array[Int]], imports: Bool, import_count: Int) -> Result[Bool, String] {
     let mut index: Int = 0
     while index < len(patches) {
         let patch_option: Option[Array[Int]] = array_get(patches, index)
@@ -258,7 +259,7 @@ fn pe_validate_patches(code_size: Int, patches: Array[Array[Int]], imports: Bool
             return err("PE: code patch displacement or instruction boundary is invalid")
         }
         if imports {
-            if target < 0 || target > 2 { return err("PE: import index must be 0, 1, or 2") }
+            if target < 0 || target >= import_count { return err("PE: import patch index is outside the import table") }
         } else if target < 0 {
             return err("PE: data offset cannot be negative")
         }
@@ -380,54 +381,262 @@ fn pe_build_reloc(rdata_rva: Int, anchor_offset: Int) -> Result[Array[UInt8], St
     return ok(block)
 }
 
-fn pe_import_data(idata_rva: Int) -> Result[Array[UInt8], String] {
-    let dll_offset: Int = 40
-    let ilt_offset: Int = 56
-    let iat_offset: Int = 88
-    let name0_offset: Int = 120
-    let name1_offset: Int = 136
-    let name2_offset: Int = 148
-    if idata_rva < 0 || idata_rva + 168 > 4294967295 {
+fn pe_import_field(imports: Array[Array[String]], index: Int, field: Int) -> Result[String, String] {
+    if index < 0 || index >= len(imports) || field < 0 || field > 1 {
+        return err("PE: malformed import descriptor")
+    }
+    let descriptor: Array[String] = unwrap_or(array_get(imports, index), [])
+    if len(descriptor) != 2 { return err("PE: imports must be [dll, symbol] pairs") }
+    let value: Option[String] = array_get(descriptor, field)
+    if is_none(value) { return err("PE: malformed import descriptor") }
+    return ok(unwrap_or(value, ""))
+}
+
+fn pe_validate_imports(imports: Array[Array[String]]) -> Result[Bool, String] {
+    let mut index: Int = 0
+    while index < len(imports) {
+        let dll_result: Result[String, String] = pe_import_field(imports, index, 0)
+        let symbol_result: Result[String, String] = pe_import_field(imports, index, 1)
+        if is_err(dll_result) || is_err(symbol_result) {
+            return err("PE: imports must be [dll, symbol] pairs")
+        }
+        let dll: String = result_unwrap(dll_result)
+        let symbol: String = result_unwrap(symbol_result)
+        let dll_bytes: Array[UInt8] = u8_array(string_to_bytes(dll))
+        let symbol_bytes: Array[UInt8] = u8_array(string_to_bytes(symbol))
+        if len(dll_bytes) == 0 || len(symbol_bytes) == 0 {
+            return err("PE: import DLL and symbol names cannot be empty")
+        }
+        let mut byte_index: Int = 0
+        while byte_index < len(dll_bytes) {
+            if unwrap_or(array_get(dll_bytes, byte_index), u8(0)) == u8(0) {
+                return err("PE: import DLL names cannot contain NUL")
+            }
+            byte_index = byte_index + 1
+        }
+        byte_index = 0
+        while byte_index < len(symbol_bytes) {
+            if unwrap_or(array_get(symbol_bytes, byte_index), u8(0)) == u8(0) {
+                return err("PE: import symbol names cannot contain NUL")
+            }
+            byte_index = byte_index + 1
+        }
+        index = index + 1
+    }
+    return ok(true)
+}
+
+fn pe_import_unique_dlls(imports: Array[Array[String]]) -> Result[Array[String], String] {
+    let mut dlls: Array[String] = []
+    let mut index: Int = 0
+    while index < len(imports) {
+        let dll_result: Result[String, String] = pe_import_field(imports, index, 0)
+        if is_err(dll_result) { return err("PE: malformed import descriptor") }
+        let dll: String = result_unwrap(dll_result)
+        let mut seen: Bool = false
+        let mut prior: Int = 0
+        while prior < len(dlls) {
+            if unwrap_or(array_get(dlls, prior), "") == dll { seen = true }
+            prior = prior + 1
+        }
+        if !seen { dlls = array_push(dlls, dll) }
+        index = index + 1
+    }
+    return ok(dlls)
+}
+
+fn pe_import_layout(imports: Array[Array[String]]) -> Result[Array[Int], String] {
+    let dlls_result: Result[Array[String], String] = pe_import_unique_dlls(imports)
+    if is_err(dlls_result) { return err("PE: malformed import table") }
+    let dlls: Array[String] = result_unwrap(dlls_result)
+    let dll_count: Int = len(dlls)
+    let directory_size: Int = (dll_count + 1) * 20
+    if len(imports) == 0 { return ok([directory_size, 0, 0]) }
+    let mut dll_names_size: Int = 0
+    let mut group: Int = 0
+    while group < dll_count {
+        let dll_bytes: Array[UInt8] = u8_array(string_to_bytes(unwrap_or(array_get(dlls, group), "")))
+        dll_names_size = dll_names_size + len(dll_bytes) + 1
+        group = group + 1
+    }
+    let names_and_dlls: Result[Int, String] = pe_aligned_size(directory_size + dll_names_size, 8)
+    if is_err(names_and_dlls) { return err("PE: import table exceeds the supported size") }
+    let thunk_size: Int = (len(imports) + dll_count) * 8
+    let iat_offset: Int = result_unwrap(names_and_dlls) + thunk_size
+    let iat_size: Int = thunk_size
+    if iat_offset > 2147483647 - iat_size || iat_offset + iat_size > 4294967295 {
+        return err("PE: import address table exceeds the image range")
+    }
+    return ok([directory_size, iat_offset, iat_size])
+}
+
+fn pe_import_iat_slots(imports: Array[Array[String]]) -> Result[Array[Int], String] {
+    let dlls_result: Result[Array[String], String] = pe_import_unique_dlls(imports)
+    if is_err(dlls_result) { return err("PE: malformed import table") }
+    let dlls: Array[String] = result_unwrap(dlls_result)
+    let mut slots: Array[Int] = []
+    let mut index: Int = 0
+    while index < len(imports) {
+        slots = array_push(slots, 0)
+        index = index + 1
+    }
+    let mut group_base: Int = 0
+    let mut group: Int = 0
+    while group < len(dlls) {
+        let group_dll: String = unwrap_or(array_get(dlls, group), "")
+        let mut group_count: Int = 0
+        index = 0
+        while index < len(imports) {
+            let import_dll: Result[String, String] = pe_import_field(imports, index, 0)
+            if is_err(import_dll) { return err("PE: malformed import table") }
+            if result_unwrap(import_dll) == group_dll {
+                let save_slot: Result[Array[Int], String] = array_set(slots, index, group_base + group_count)
+                if is_err(save_slot) { return err("PE: failed to save import address slot") }
+                slots = result_unwrap(save_slot)
+                group_count = group_count + 1
+            }
+            index = index + 1
+        }
+        group_base = group_base + group_count + 1
+        group = group + 1
+    }
+    return ok(slots)
+}
+
+fn pe_import_data(idata_rva: Int, imports: Array[Array[String]]) -> Result[Array[UInt8], String] {
+    let validation: Result[Bool, String] = pe_validate_imports(imports)
+    if is_err(validation) { return err("PE: invalid import descriptors") }
+    let layout_result: Result[Array[Int], String] = pe_import_layout(imports)
+    if is_err(layout_result) { return err("PE: import table layout failed") }
+    let layout: Array[Int] = result_unwrap(layout_result)
+    let directory_size: Int = unwrap_or(array_get(layout, 0), 0)
+    let iat_offset: Int = unwrap_or(array_get(layout, 1), 0)
+    let iat_size: Int = unwrap_or(array_get(layout, 2), 0)
+    if idata_rva < 0 || idata_rva > 4294967295 - directory_size - iat_offset - iat_size {
         return err("PE: import section exceeds the 32-bit RVA range")
     }
-    let name0_rva: Int = idata_rva + name0_offset
-    let name1_rva: Int = idata_rva + name1_offset
-    let name2_rva: Int = idata_rva + name2_offset
-    let mut idata: Array[UInt8] = []
-    idata = pe_append(idata, pe_u32(idata_rva + ilt_offset))
-    idata = pe_append(idata, pe_zeros(8))
-    idata = pe_append(idata, pe_u32(idata_rva + dll_offset))
-    idata = pe_append(idata, pe_u32(idata_rva + iat_offset))
-    idata = pe_append(idata, pe_zeros(20))
-    idata = pe_append(idata, u8_array(string_to_bytes("KERNEL32.dll")))
-    idata = array_push(idata, u8(0))
+    let dlls_result: Result[Array[String], String] = pe_import_unique_dlls(imports)
+    if is_err(dlls_result) { return err("PE: malformed import table") }
+    let dlls: Array[String] = result_unwrap(dlls_result)
+    let dll_count: Int = len(dlls)
+    let mut idata: Array[UInt8] = pe_zeros(directory_size)
+    let mut dll_offsets: Array[Int] = []
+    let mut dll_names: Array[UInt8] = []
+    let mut group: Int = 0
+    while group < dll_count {
+        let dll_for_name: String = unwrap_or(array_get(dlls, group), "")
+        dll_offsets = array_push(dll_offsets, directory_size + len(dll_names))
+        dll_names = pe_append(dll_names, u8_array(string_to_bytes(dll_for_name)))
+        dll_names = array_push(dll_names, u8(0))
+        group = group + 1
+    }
+    idata = pe_append(idata, dll_names)
+    if len(imports) == 0 { return ok(idata) }
     idata = pe_pad_to(idata, 8)
-    if len(idata) != ilt_offset { return err("PE: import lookup table offset is inconsistent") }
-    idata = pe_append(idata, pe_u64(name0_rva))
-    idata = pe_append(idata, pe_u64(name1_rva))
-    idata = pe_append(idata, pe_u64(name2_rva))
-    idata = pe_append(idata, pe_u64(0))
-    if len(idata) != iat_offset { return err("PE: import address table offset is inconsistent") }
-    idata = pe_append(idata, pe_u64(name0_rva))
-    idata = pe_append(idata, pe_u64(name1_rva))
-    idata = pe_append(idata, pe_u64(name2_rva))
-    idata = pe_append(idata, pe_u64(0))
-    if len(idata) != name0_offset { return err("PE: import names offset is inconsistent") }
-    idata = pe_append(idata, [u8(0), u8(0)])
-    idata = pe_append(idata, u8_array(string_to_bytes("GetStdHandle")))
-    idata = array_push(idata, u8(0))
-    idata = pe_pad_to(idata, 2)
-    if len(idata) != name1_offset { return err("PE: GetStdHandle import record size is invalid") }
-    idata = pe_append(idata, [u8(0), u8(0)])
-    idata = pe_append(idata, u8_array(string_to_bytes("WriteFile")))
-    idata = array_push(idata, u8(0))
-    idata = pe_pad_to(idata, 2)
-    if len(idata) != name2_offset { return err("PE: WriteFile import record size is invalid") }
-    idata = pe_append(idata, [u8(0), u8(0)])
-    idata = pe_append(idata, u8_array(string_to_bytes("ExitProcess")))
-    idata = array_push(idata, u8(0))
-    idata = pe_pad_to(idata, 8)
-    if len(idata) != 168 { return err("PE: import section size is invalid") }
+    let ilt_offset: Int = len(idata)
+    let thunk_region_size: Int = (len(imports) + dll_count) * 8
+    let name_data_offset: Int = iat_offset + iat_size
+    if len(imports) > 0 && (ilt_offset + thunk_region_size != iat_offset || name_data_offset < iat_offset) {
+        return err("PE: import lookup table layout is inconsistent")
+    }
+    let mut import_name_offsets: Array[Int] = []
+    let mut index: Int = 0
+    while index < len(imports) {
+        import_name_offsets = array_push(import_name_offsets, 0)
+        index = index + 1
+    }
+    let mut name_records: Array[UInt8] = []
+    group = 0
+    while group < dll_count {
+        let dll_for_symbols: String = unwrap_or(array_get(dlls, group), "")
+        index = 0
+        while index < len(imports) {
+            let import_dll_for_symbols: Result[String, String] = pe_import_field(imports, index, 0)
+            if is_err(import_dll_for_symbols) { return err("PE: malformed import table") }
+            if result_unwrap(import_dll_for_symbols) == dll_for_symbols {
+                let symbol_name_offset: Int = name_data_offset + len(name_records)
+                let save_offset: Result[Array[Int], String] = array_set(import_name_offsets, index, symbol_name_offset)
+                if is_err(save_offset) { return err("PE: failed to save import name offset") }
+                import_name_offsets = result_unwrap(save_offset)
+                let symbol: Result[String, String] = pe_import_field(imports, index, 1)
+                if is_err(symbol) { return err("PE: malformed import table") }
+                name_records = pe_append(name_records, pe_u16(0))
+                name_records = pe_append(name_records, u8_array(string_to_bytes(result_unwrap(symbol))))
+                name_records = array_push(name_records, u8(0))
+                name_records = pe_pad_to(name_records, 2)
+            }
+            index = index + 1
+        }
+        group = group + 1
+    }
+
+    let mut first_thunk: Int = 0
+    let mut descriptor_index: Int = 0
+    group = 0
+    while group < dll_count {
+        let dll_for_descriptors: String = unwrap_or(array_get(dlls, group), "")
+        let group_first: Int = first_thunk
+        index = 0
+        while index < len(imports) {
+            let import_dll_for_lookup: Result[String, String] = pe_import_field(imports, index, 0)
+            if is_err(import_dll_for_lookup) { return err("PE: malformed import table") }
+            if result_unwrap(import_dll_for_lookup) == dll_for_descriptors {
+                let lookup_name_offset: Int = unwrap_or(array_get(import_name_offsets, index), -1)
+                if lookup_name_offset < 0 { return err("PE: import name offset is invalid") }
+                let name_rva: Int = idata_rva + lookup_name_offset
+                let thunk: Array[UInt8] = pe_u64(name_rva)
+                idata = pe_append(idata, thunk)
+                index = index + 1
+            } else {
+                index = index + 1
+            }
+        }
+        idata = pe_append(idata, pe_u64(0))
+        let descriptor_offset: Int = descriptor_index * 20
+        let ilt_rva: Int = idata_rva + ilt_offset + group_first * 8
+        let iat_rva: Int = idata_rva + iat_offset + group_first * 8
+        let original_patch: Result[Array[UInt8], String] = pe_patch_u32(idata, descriptor_offset, ilt_rva)
+        if is_err(original_patch) { return err("PE: failed to write import lookup descriptor") }
+        idata = result_unwrap(original_patch)
+        let name_patch: Result[Array[UInt8], String] = pe_patch_u32(idata, descriptor_offset + 12, idata_rva + unwrap_or(array_get(dll_offsets, group), 0))
+        if is_err(name_patch) { return err("PE: failed to write import DLL descriptor") }
+        idata = result_unwrap(name_patch)
+        let address_patch: Result[Array[UInt8], String] = pe_patch_u32(idata, descriptor_offset + 16, iat_rva)
+        if is_err(address_patch) { return err("PE: failed to write import address descriptor") }
+        idata = result_unwrap(address_patch)
+        let mut members: Int = 0
+        index = 0
+        while index < len(imports) {
+            let import_dll_for_count: Result[String, String] = pe_import_field(imports, index, 0)
+            if is_err(import_dll_for_count) { return err("PE: malformed import table") }
+            if result_unwrap(import_dll_for_count) == dll_for_descriptors { members = members + 1 }
+            index = index + 1
+        }
+        first_thunk = first_thunk + members + 1
+        descriptor_index = descriptor_index + 1
+        group = group + 1
+    }
+    if len(idata) != iat_offset { return err("PE: import lookup table size is inconsistent") }
+    group = 0
+    while group < dll_count {
+        let dll_for_iat: String = unwrap_or(array_get(dlls, group), "")
+        index = 0
+        while index < len(imports) {
+            let import_dll_for_iat: Result[String, String] = pe_import_field(imports, index, 0)
+            if is_err(import_dll_for_iat) { return err("PE: malformed import table") }
+            if result_unwrap(import_dll_for_iat) == dll_for_iat {
+                let iat_name_offset: Int = unwrap_or(array_get(import_name_offsets, index), -1)
+                if iat_name_offset < 0 { return err("PE: import name offset is invalid") }
+                idata = pe_append(idata, pe_u64(idata_rva + iat_name_offset))
+            }
+            index = index + 1
+        }
+        idata = pe_append(idata, pe_u64(0))
+        group = group + 1
+    }
+    if len(idata) != name_data_offset { return err("PE: import address table size is inconsistent") }
+    idata = pe_append(idata, name_records)
+    if len(idata) > 4294967295 - idata_rva { return err("PE: import data exceeds the 32-bit RVA range") }
     return ok(idata)
 }
 
@@ -457,6 +666,8 @@ fn pe_optional_header(layout: Array[Int]) -> Array[UInt8] {
     let iat_rva: Int = unwrap_or(array_get(layout, 10), 0)
     let reloc_rva: Int = unwrap_or(array_get(layout, 11), 0)
     let reloc_size: Int = unwrap_or(array_get(layout, 12), 0)
+    let import_directory_size: Int = unwrap_or(array_get(layout, 13), 0)
+    let iat_size: Int = unwrap_or(array_get(layout, 14), 0)
     let code_aligned: Int = result_unwrap(pe_aligned_size(code_size, 512))
     let initialized_size: Int = data_raw_size + idata_raw_size + pdata_raw_size + reloc_raw_size
     let mut optional: Array[UInt8] = []
@@ -492,7 +703,7 @@ fn pe_optional_header(layout: Array[Int]) -> Array[UInt8] {
     while directory_index < 16 {
         if directory_index == 1 {
             optional = pe_append(optional, pe_u32(idata_rva))
-            optional = pe_append(optional, pe_u32(40))
+            optional = pe_append(optional, pe_u32(import_directory_size))
         } else if directory_index == 3 {
             optional = pe_append(optional, pe_u32(pdata_rva))
             optional = pe_append(optional, pe_u32(exception_size))
@@ -501,7 +712,7 @@ fn pe_optional_header(layout: Array[Int]) -> Array[UInt8] {
             optional = pe_append(optional, pe_u32(reloc_size))
         } else if directory_index == 12 {
             optional = pe_append(optional, pe_u32(iat_rva))
-            optional = pe_append(optional, pe_u32(32))
+            optional = pe_append(optional, pe_u32(iat_size))
         } else {
             optional = pe_append(optional, pe_zeros(8))
         }
@@ -517,6 +728,9 @@ fn pe_build_headers(layout: Array[Int]) -> Result[Array[UInt8], String] {
     let pdata_size: Int = unwrap_or(array_get(layout, 3), 0)
     let reloc_size: Int = unwrap_or(array_get(layout, 4), 0)
     let exception_size: Int = unwrap_or(array_get(layout, 5), 0)
+    let import_directory_size: Int = unwrap_or(array_get(layout, 6), 0)
+    let iat_offset: Int = unwrap_or(array_get(layout, 7), 0)
+    let iat_size: Int = unwrap_or(array_get(layout, 8), 0)
     let code_raw_size_result: Result[Int, String] = pe_aligned_size(code_size, 512)
     let data_raw_size_result: Result[Int, String] = pe_aligned_size(data_size, 512)
     let idata_raw_size_result: Result[Int, String] = pe_aligned_size(idata_size, 512)
@@ -535,7 +749,8 @@ fn pe_build_headers(layout: Array[Int]) -> Result[Array[UInt8], String] {
     let pdata_rva: Int = idata_rva + result_unwrap(pe_aligned_size(idata_size, 4096))
     let reloc_rva: Int = pdata_rva + result_unwrap(pe_aligned_size(pdata_size, 4096))
     let image_size: Int = reloc_rva + result_unwrap(pe_aligned_size(reloc_size, 4096))
-    let iat_rva: Int = idata_rva + 88
+    let mut iat_rva: Int = 0
+    if iat_size > 0 { iat_rva = idata_rva + iat_offset }
     let mut header: Array[UInt8] = pe_zeros(128)
     let magic0: Result[Array[UInt8], String] = array_set(header, 0, u8(77))
     if is_err(magic0) { return err("PE: failed to write DOS signature") }
@@ -555,7 +770,7 @@ fn pe_build_headers(layout: Array[Int]) -> Result[Array[UInt8], String] {
     header = pe_append(header, pe_u32(0))
     header = pe_append(header, pe_u16(240))
     header = pe_append(header, pe_u16(34))
-    let optional_layout: Array[Int] = [code_size, result_unwrap(data_raw_size_result), result_unwrap(idata_raw_size_result), result_unwrap(pdata_raw_size_result), result_unwrap(reloc_raw_size_result), image_size, rdata_rva, idata_rva, pdata_rva, exception_size, iat_rva, reloc_rva, reloc_size]
+    let optional_layout: Array[Int] = [code_size, result_unwrap(data_raw_size_result), result_unwrap(idata_raw_size_result), result_unwrap(pdata_raw_size_result), result_unwrap(reloc_raw_size_result), image_size, rdata_rva, idata_rva, pdata_rva, exception_size, iat_rva, reloc_rva, reloc_size, import_directory_size, iat_size]
     let optional: Array[UInt8] = pe_optional_header(optional_layout)
     if len(optional) != 240 { return err("PE: optional header size is invalid") }
     header = pe_append(header, optional)
@@ -569,7 +784,11 @@ fn pe_build_headers(layout: Array[Int]) -> Result[Array[UInt8], String] {
     return ok(header)
 }
 
-fn pe_apply_patches(code: Array[UInt8], data: Array[UInt8], data_rva: Int, import_patches: Array[Array[Int]], data_patches: Array[Array[Int]], idata_rva: Int) -> Result[Array[UInt8], String] {
+fn pe_apply_patches(code: Array[UInt8], data: Array[UInt8], patch_layout: Array[Int], iat_slots: Array[Int], import_patches: Array[Array[Int]], data_patches: Array[Array[Int]]) -> Result[Array[UInt8], String] {
+    let data_rva: Int = unwrap_or(array_get(patch_layout, 0), -1)
+    let idata_rva: Int = unwrap_or(array_get(patch_layout, 1), -1)
+    let iat_offset: Int = unwrap_or(array_get(patch_layout, 2), -1)
+    if data_rva < 0 || idata_rva < 0 || iat_offset < 0 { return err("PE: patch layout is malformed") }
     let mut patched: Array[UInt8] = code
     let mut data_index: Int = 0
     while data_index < len(data_patches) {
@@ -590,7 +809,9 @@ fn pe_apply_patches(code: Array[UInt8], data: Array[UInt8], data_rva: Int, impor
         let import_displacement: Int = unwrap_or(array_get(import_patch, 0), -1)
         let import_instruction_end: Int = unwrap_or(array_get(import_patch, 1), -1)
         let import_number: Int = unwrap_or(array_get(import_patch, 2), -1)
-        let iat_rva: Int = idata_rva + 88 + import_number * 8
+        let iat_slot: Option[Int] = array_get(iat_slots, import_number)
+        if is_none(iat_slot) { return err("PE: import patch index is outside the import table") }
+        let iat_rva: Int = idata_rva + iat_offset + unwrap_or(iat_slot, -1) * 8
         let import_delta: Int = iat_rva - 4096 - import_instruction_end
         let import_update: Result[Array[UInt8], String] = pe_patch_i32(patched, import_displacement, import_delta)
         if is_err(import_update) { return err(unwrap_or(result_error(import_update), "PE: IAT reference cannot be encoded")) }
@@ -601,13 +822,30 @@ fn pe_apply_patches(code: Array[UInt8], data: Array[UInt8], data_rva: Int, impor
 }
 
 pub fn emit_pe32plus(code: Array[UInt8], data: Array[UInt8], import_patches: Array[Array[Int]], function_ranges: Array[Array[Int]]) -> Result[Bytes, String] {
-    return emit_pe32plus_with_data_patches(code, data, [], import_patches, function_ranges)
+    return emit_pe32plus_with_imports_and_data_patches(code, data, pe_console_imports(), [], import_patches, function_ranges)
 }
 
 pub fn emit_pe32plus_with_data_patches(code: Array[UInt8], data: Array[UInt8], data_patches: Array[Array[Int]], import_patches: Array[Array[Int]], function_ranges: Array[Array[Int]]) -> Result[Bytes, String] {
+    return emit_pe32plus_with_imports_and_data_patches(code, data, pe_console_imports(), data_patches, import_patches, function_ranges)
+}
+
+pub fn emit_pe32plus_with_imports(code: Array[UInt8], data: Array[UInt8], imports: Array[Array[String]], import_patches: Array[Array[Int]], function_ranges: Array[Array[Int]]) -> Result[Bytes, String] {
+    return emit_pe32plus_with_imports_and_data_patches(code, data, imports, [], import_patches, function_ranges)
+}
+
+fn pe_console_imports() -> Array[Array[String]] {
+    return [["KERNEL32.dll", "GetStdHandle"], ["KERNEL32.dll", "WriteFile"], ["KERNEL32.dll", "ExitProcess"]]
+}
+
+pub fn emit_pe32plus_with_imports_and_data_patches(code: Array[UInt8], data: Array[UInt8], imports: Array[Array[String]], data_patches: Array[Array[Int]], import_patches: Array[Array[Int]], function_ranges: Array[Array[Int]]) -> Result[Bytes, String] {
     if len(code) == 0 || len(code) > 2147483000 || len(data) > 2147483000 {
         return err("PE: code or data section has an invalid size")
     }
+    let imports_valid: Result[Bool, String] = pe_validate_imports(imports)
+    if is_err(imports_valid) { return err(unwrap_or(result_error(imports_valid), "PE: invalid import descriptors")) }
+    let iat_slots_result: Result[Array[Int], String] = pe_import_iat_slots(imports)
+    if is_err(iat_slots_result) { return err(unwrap_or(result_error(iat_slots_result), "PE: import slot mapping failed")) }
+    let iat_slots: Array[Int] = result_unwrap(iat_slots_result)
     let mut actual_data: Array[UInt8] = data
     if len(actual_data) == 0 { actual_data = [u8(0)] }
     let user_data_size: Int = len(actual_data)
@@ -620,9 +858,9 @@ pub fn emit_pe32plus_with_data_patches(code: Array[UInt8], data: Array[UInt8], d
     let ranges_result: Result[Array[Array[Int]], String] = pe_validate_ranges(code, function_ranges)
     if is_err(ranges_result) { return err(unwrap_or(result_error(ranges_result), "PE: invalid function unwind ranges")) }
     let sorted_ranges: Array[Array[Int]] = result_unwrap(ranges_result)
-    let import_valid: Result[Bool, String] = pe_validate_patches(len(code), import_patches, true)
+    let import_valid: Result[Bool, String] = pe_validate_patches(len(code), import_patches, true, len(imports))
     if is_err(import_valid) { return err(unwrap_or(result_error(import_valid), "PE: invalid import patches")) }
-    let data_valid: Result[Bool, String] = pe_validate_patches(len(code), data_patches, false)
+    let data_valid: Result[Bool, String] = pe_validate_patches(len(code), data_patches, false, 0)
     if is_err(data_valid) { return err(unwrap_or(result_error(data_valid), "PE: invalid data patches")) }
     let all_patches: Array[Array[Int]] = array_concat(import_patches, data_patches)
     let disjoint_patches: Result[Bool, String] = pe_validate_patch_sets(all_patches)
@@ -643,7 +881,13 @@ pub fn emit_pe32plus_with_data_patches(code: Array[UInt8], data: Array[UInt8], d
     let rdata_rva: Int = 4096 + result_unwrap(code_virtual_result)
     let idata_rva: Int = rdata_rva + result_unwrap(data_virtual_result)
     if idata_rva > 4294967295 { return err("PE: .idata RVA exceeds the 32-bit image range") }
-    let idata_result: Result[Array[UInt8], String] = pe_import_data(idata_rva)
+    let import_layout_result: Result[Array[Int], String] = pe_import_layout(imports)
+    if is_err(import_layout_result) { return err(unwrap_or(result_error(import_layout_result), "PE: import table layout failed")) }
+    let import_layout: Array[Int] = result_unwrap(import_layout_result)
+    let import_directory_size: Int = unwrap_or(array_get(import_layout, 0), 0)
+    let iat_offset: Int = unwrap_or(array_get(import_layout, 1), 0)
+    let iat_size: Int = unwrap_or(array_get(import_layout, 2), 0)
+    let idata_result: Result[Array[UInt8], String] = pe_import_data(idata_rva, imports)
     if is_err(idata_result) { return err(unwrap_or(result_error(idata_result), "PE: import table generation failed")) }
     let idata: Array[UInt8] = result_unwrap(idata_result)
     let idata_virtual_result: Result[Int, String] = pe_aligned_size(len(idata), 4096)
@@ -685,10 +929,11 @@ pub fn emit_pe32plus_with_data_patches(code: Array[UInt8], data: Array[UInt8], d
     let file_size: Int = reloc_pointer + reloc_raw
     if file_size > 2147483647 { return err("PE: executable exceeds the supported in-memory file size") }
 
-    let patched_code_result: Result[Array[UInt8], String] = pe_apply_patches(code, actual_data, rdata_rva, import_patches, data_patches, idata_rva)
+    let patch_layout: Array[Int] = [rdata_rva, idata_rva, iat_offset]
+    let patched_code_result: Result[Array[UInt8], String] = pe_apply_patches(code, actual_data, patch_layout, iat_slots, import_patches, data_patches)
     if is_err(patched_code_result) { return err(unwrap_or(result_error(patched_code_result), "PE: code relocation failed")) }
     let patched_code: Array[UInt8] = result_unwrap(patched_code_result)
-    let header_layout: Array[Int] = [len(code), len(actual_data), len(idata), len(pdata), len(reloc), len(sorted_ranges) * 12]
+    let header_layout: Array[Int] = [len(code), len(actual_data), len(idata), len(pdata), len(reloc), len(sorted_ranges) * 12, import_directory_size, iat_offset, iat_size]
     let headers_result: Result[Array[UInt8], String] = pe_build_headers(header_layout)
     if is_err(headers_result) { return err(unwrap_or(result_error(headers_result), "PE: header generation failed")) }
     let mut file: Array[UInt8] = result_unwrap(headers_result)

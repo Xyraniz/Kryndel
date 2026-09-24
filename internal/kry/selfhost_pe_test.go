@@ -2,6 +2,7 @@ package kry
 
 import (
 	"bytes"
+	"debug/pe"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -148,6 +149,13 @@ fn main() -> Nil {
 	if !strings.Contains(d.Error(), "PE backend: binding 'values' has an unsupported type") {
 		t.Fatalf("unexpected unsupported-feature diagnostic: %v", d)
 	}
+	image, d = runSelfhostPEBackend(t, `fn main() -> Nil { println(str("already a String")) }`)
+	if d == nil {
+		t.Fatalf("PE backend unexpectedly accepted a non-integer str conversion and emitted %d bytes", len(image))
+	}
+	if !strings.Contains(d.Error(), "PE backend: str supports Int, Bool, and UInt values") {
+		t.Fatalf("unexpected str-subset diagnostic: %v", d)
+	}
 }
 
 func TestSelfhostPEBackendTrapsOutOfRangeShift(t *testing.T) {
@@ -210,6 +218,18 @@ fn twice(value: Int) -> Int {
     return value * 2
 }
 
+fn negative_value() -> Int {
+    return -42
+}
+
+fn zero_value() -> Int {
+    return 0
+}
+
+fn truth_value() -> Bool {
+    return true
+}
+
 fn main() -> Nil {
     let mut index: Int = 0
     while index < 3 {
@@ -219,7 +239,12 @@ fn main() -> Nil {
     if index == 3 ||
         index == 4 { println("continued condition") }
 	println(int(u64(17)))
-	println(score(Mode::Active, 1, 2, 3, 4, 42))
+    println(score(Mode::Active, 1, 2, 3, 4, 42))
+    println(str(-42))
+    println(str(negative_value()))
+    println(str(zero_value()))
+    println(str(truth_value()))
+    println(str(u64(17)))
     println("compiled from Kryndel source")
 }
 `
@@ -242,6 +267,27 @@ fn main() -> Nil {
 	if len(image) < 0x100 || string(image[:2]) != "MZ" || string(image[0x80:0x84]) != "PE\x00\x00" {
 		t.Fatalf("selfhost source compiler did not emit a PE32+ image (size %d)", len(image))
 	}
+	peImage, err := pe.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatalf("Go PE parser rejected source-compiled image: %v", err)
+	}
+	imports, err := peImage.ImportedSymbols()
+	peImage.Close()
+	if err != nil {
+		t.Fatalf("could not read source-compiled PE imports: %v", err)
+	}
+	processHeapImports, heapAllocImports := 0, 0
+	for _, symbol := range imports {
+		if strings.HasPrefix(symbol, "GetProcessHeap:") {
+			processHeapImports++
+		}
+		if strings.HasPrefix(symbol, "HeapAlloc:") {
+			heapAllocImports++
+		}
+	}
+	if processHeapImports != 1 || heapAllocImports != 1 {
+		t.Fatalf("expected one GetProcessHeap and one HeapAlloc PE import, got %d and %d (%v)", processHeapImports, heapAllocImports, imports)
+	}
 	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
 		t.Skip("native PE execution requires Windows amd64")
 	}
@@ -250,7 +296,7 @@ fn main() -> Nil {
 	if err != nil {
 		t.Fatalf("selfhost-source-generated PE failed: %v; output: %s", err, output)
 	}
-	want := "2\n4\n6\ncontinued condition\n17\n42\ncompiled from Kryndel source\n"
+	want := "2\n4\n6\ncontinued condition\n17\n42\n-42\n-42\n0\ntrue\n17\ncompiled from Kryndel source\n"
 	if string(output) != want {
 		t.Fatalf("unexpected source-compiled PE output %q", output)
 	}
