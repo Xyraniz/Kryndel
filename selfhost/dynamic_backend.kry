@@ -777,6 +777,29 @@ fn emit_pe_import_transfer(state: EmitState, import_index: Int, jump: Bool) -> E
     return state_with_import_patches(with_code, array_push(with_code.assembler.import_patches, patch))
 }
 
+fn pe_get_process_heap_import_index() -> Int {
+    return 3
+}
+
+fn pe_heap_alloc_import_index() -> Int {
+    return 4
+}
+
+fn pe_dynamic_imports(needs_heap: Bool) -> Array[Array[String]] {
+    let mut imports: Array[Array[String]] = [
+        ["KERNEL32.dll", "GetStdHandle"],
+        ["KERNEL32.dll", "WriteFile"],
+        ["KERNEL32.dll", "ExitProcess"]
+    ]
+    if needs_heap {
+        // Keep indexes 0-2 stable for console I/O and process exit.
+        // The Win32 process heap allocator occupies indexes 3 and 4.
+        imports = array_push(imports, ["KERNEL32.dll", "GetProcessHeap"])
+        imports = array_push(imports, ["KERNEL32.dll", "HeapAlloc"])
+    }
+    return imports
+}
+
 fn emit_move_arg(state: EmitState, index: Int) -> Result[EmitState, String] {
     if state.assembler.windows_abi {
         if index == 0 { return ok(append_code(state, [u8(72), u8(137), u8(193)])) }
@@ -840,9 +863,16 @@ fn emit_prologue(state: EmitState) -> EmitState {
 
 fn emit_exit(state: EmitState, status: UInt8) -> EmitState {
     if state.assembler.windows_abi {
-        let mut adjustment: Int = 32
-        if state.assembler.windows_stack_depth % 16 != 0 { adjustment = 40 }
-        let mut current: EmitState = append_code(state, [u8(72), u8(131), u8(236), u8(adjustment), u8(185), status, u8(0), u8(0), u8(0)])
+        // The trap target is also reachable from runtime helpers with literal
+        // pushes that are not reflected in windows_stack_depth. Align using
+        // the live RSP before making the non-returning Win32 call.
+        let mut current: EmitState = append_code(state, [
+            u8(73), u8(137), u8(227),
+            u8(72), u8(131), u8(228), u8(240),
+            u8(72), u8(131), u8(236), u8(48),
+            u8(76), u8(137), u8(92), u8(36), u8(32),
+            u8(185), status, u8(0), u8(0), u8(0)
+        ])
         current = emit_pe_import_transfer(current, 2, false)
         return append_code(current, [u8(15), u8(11)])
     }
@@ -1041,6 +1071,40 @@ fn emit_string_concat_call(state: EmitState) -> EmitState {
 }
 
 fn emit_heap_alloc(state: EmitState) -> EmitState {
+    if state.assembler.windows_abi {
+        // Runtime helpers have different literal push prologues, so align from
+        // the live RSP at each Win32 call instead of assuming a fixed depth.
+        // Keep the saved RSP after the 32-byte shadow space and restore it
+        // without relying on volatile registers across the API call.
+        let mut current: EmitState = append_code(state, [
+            u8(73), u8(137), u8(227),
+            u8(72), u8(131), u8(228), u8(240),
+            u8(72), u8(131), u8(236), u8(48),
+            u8(76), u8(137), u8(92), u8(36), u8(32)
+        ])
+        current = emit_pe_import_transfer(current, pe_get_process_heap_import_index(), false)
+        current = append_code(current, [
+            u8(72), u8(139), u8(100), u8(36), u8(32),
+            u8(72), u8(133), u8(192)
+        ])
+        current = emit_jump(current, current.env.trap_label, true, u8(132))
+        current = append_code(current, [
+            u8(72), u8(137), u8(193),
+            u8(72), u8(49), u8(210),
+            u8(73), u8(137), u8(248),
+            u8(73), u8(137), u8(227),
+            u8(72), u8(131), u8(228), u8(240),
+            u8(72), u8(131), u8(236), u8(48),
+            u8(76), u8(137), u8(92), u8(36), u8(32)
+        ])
+        current = emit_pe_import_transfer(current, pe_heap_alloc_import_index(), false)
+        current = append_code(current, [
+            u8(72), u8(139), u8(100), u8(36), u8(32),
+            u8(72), u8(133), u8(192)
+        ])
+        current = emit_jump(current, current.env.trap_label, true, u8(132))
+        return current
+    }
     // rdi=requested bytes; return a 16-byte-aligned block from the process
     // break. A shared heap avoids one page mapping per small runtime object.
     let mut current: EmitState = append_code(state, [
@@ -5235,6 +5299,15 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
             if expr_type(integer_argument) != "Int" && expr_type(integer_argument) != "Bool" && !starts_with(expr_type(integer_argument), "UInt") { return err("PE backend: int supports Int, Bool, and UInt, but not String parsing") }
             return pe_validate_expression(integer_argument, false, false, enums)
         }
+        if target == "builtin:str" {
+            if count != 1 { return err("PE backend: str expects one integer or Bool argument") }
+            let display_argument: Json = result_unwrap(json_array_get(args, 0))
+            let display_type: String = expr_type(display_argument)
+            if display_type != "Int" && display_type != "Bool" && !starts_with(display_type, "UInt") {
+                return err("PE backend: str supports Int, Bool, and UInt values")
+            }
+            return pe_validate_expression(display_argument, false, false, enums)
+        }
         if target == "builtin:u8" || target == "builtin:u16" || target == "builtin:u32" || target == "builtin:u64" {
             if count != 1 { return err("PE backend: unsigned conversion expects one argument") }
             if !starts_with(expr_type(result_unwrap(json_array_get(args, 0))), "UInt") && expr_type(result_unwrap(json_array_get(args, 0))) != "Int" { return err("PE backend: unsigned conversion requires an integer") }
@@ -5573,7 +5646,9 @@ fn compile_dynamic(document: Json) -> Result[Bytes, String] {
             let patch: PEImportPatch = unwrap_or(array_get(result.assembler.import_patches, index), PEImportPatch{ displacement: -1, instruction_end: -1, import_index: -1 })
             import_patches = array_push(import_patches, [patch.displacement, patch.instruction_end, patch.import_index])
         }
-        return emit_pe32plus_with_data_patches(result.assembler.code, result.assembler.data, data_patches, import_patches, result.assembler.function_ranges)
+        let needs_heap: Bool = result.assembler.string_concat_used || result.assembler.array_runtime_used || result.assembler.box_runtime_used || result.assembler.host_runtime_used
+        let imports: Array[Array[String]] = pe_dynamic_imports(needs_heap)
+        return emit_pe32plus_with_imports_and_data_patches(result.assembler.code, result.assembler.data, imports, data_patches, import_patches, result.assembler.function_ranges)
     }
     return ok(emit_dynamic_elf(result.assembler.code, result.assembler.data))
 }
