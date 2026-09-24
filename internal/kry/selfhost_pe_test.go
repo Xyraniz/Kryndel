@@ -200,6 +200,52 @@ fn main() -> Nil {
 	}
 }
 
+func TestSelfhostPEBackendScalarArrayElements(t *testing.T) {
+	source := `
+enum Mode { Idle, Active }
+fn main() -> Nil {
+    let flags: Array[Bool] = [false, true]
+    let flag_alias: Array[Bool] = flags
+    println(len(flag_alias))
+    println(flag_alias[0])
+    println(flag_alias[1])
+
+    let labels: Array[String] = ["first", "second"]
+    println(labels[1])
+
+    let ids: Array[UInt64] = [u64(42)]
+    println(str(int(ids[0])))
+
+    let modes: Array[Mode] = [Mode::Idle, Mode::Active]
+    if modes[1] == Mode::Active {
+        println("enum-array-ok")
+    }
+
+    let empty: Array[String] = []
+    println(len(empty))
+}
+`
+	image, d := runSelfhostPEBackend(t, source)
+	if d != nil {
+		t.Fatalf("selfhost PE backend rejected scalar-element arrays: %v", d)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("native PE execution requires Windows amd64")
+	}
+	executable := filepath.Join(t.TempDir(), "scalar-arrays.exe")
+	if err := os.WriteFile(executable, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(executable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated scalar-array PE failed: %v; output: %s", err, output)
+	}
+	want := "2\nfalse\ntrue\nsecond\n42\nenum-array-ok\n0\n"
+	if string(output) != want {
+		t.Fatalf("unexpected scalar-array PE output %q; want %q", output, want)
+	}
+}
+
 func TestSelfhostPEBackendIntArrayBoundsChecks(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -410,12 +456,12 @@ fn main() -> Nil {}`,
 			diagnostic: "PE backend: map function returns are not supported",
 		},
 		{
-			name: "non Int array elements",
+			name: "nested array elements",
 			source: `fn main() -> Nil {
-    let values: Array[String] = ["value"]
-    println(len(values))
+	let values: Array[Array[Int]] = [[1]]
+	println(len(values))
 }`,
-			diagnostic: "PE backend: only Array[Int] locals are supported",
+			diagnostic: "PE backend: arrays require scalar or fieldless-enum element types",
 		},
 		{
 			name: "array push",
@@ -432,7 +478,7 @@ fn main() -> Nil {}`,
     let values: Array[Int] = [1] + [2]
     println(len(values))
 }`,
-			diagnostic: "PE backend: Array[Int] binary operations are not supported",
+			diagnostic: "PE backend: array binary operations are not supported",
 		},
 		{
 			name: "array reassignment",
@@ -440,7 +486,7 @@ fn main() -> Nil {}`,
     let mut values: Array[Int] = [1]
     values = [2]
 }`,
-			diagnostic: "PE backend: Array[Int] mutation and reassignment are not supported",
+			diagnostic: "PE backend: array mutation and reassignment are not supported",
 		},
 		{
 			name: "array set mutation builtin",
@@ -453,19 +499,19 @@ fn main() -> Nil {}`,
 		{
 			name:       "temporary literal indexing",
 			source:     `fn main() -> Nil { println([1, 2][0]) }`,
-			diagnostic: "PE backend: indexing is supported only through a local Array[Int] variable",
+			diagnostic: "PE backend: indexing is supported only through a local supported array variable",
 		},
 		{
 			name: "array function parameter",
 			source: `fn read(values: Array[Int]) -> Int { return len(values) }
 fn main() -> Nil { println(read([1])) }`,
-			diagnostic: "PE backend: Array[Int] function parameters are not supported",
+			diagnostic: "PE backend: array function parameters are not supported",
 		},
 		{
 			name: "array function return",
 			source: `fn make() -> Array[Int] { return [1] }
 fn main() -> Nil { println(len(make())) }`,
-			diagnostic: "PE backend: Array[Int] function returns are not supported",
+			diagnostic: "PE backend: array function returns are not supported",
 		},
 	}
 	for _, tc := range cases {
@@ -602,6 +648,16 @@ fn main() -> Nil {
     }
     let empty_flags: Map[String, Bool] = {}
     println(map_contains_key(empty_flags, "missing"))
+    let ready: Array[Bool] = [true, false]
+    println(ready[0])
+    let labels_array: Array[String] = ["from-array"]
+    println(labels_array[0])
+    let modes_array: Array[Mode] = [Mode::Idle, Mode::Active]
+    if modes_array[1] == Mode::Active {
+        println("enum-array-ok")
+    }
+    let empty_labels: Array[String] = []
+    println(len(empty_labels))
     println("compiled from Kryndel source")
 }
 `
@@ -653,7 +709,7 @@ fn main() -> Nil {
 	if err != nil {
 		t.Fatalf("selfhost-source-generated PE failed: %v; output: %s", err, output)
 	}
-	want := "2\n4\n6\ncontinued condition\n17\n42\n-42\n-42\n0\ntrue\n17\n2\n4\ntrue\n-8\ntrue\nKryndel\nenum-map-ok\nfalse\ncompiled from Kryndel source\n"
+	want := "2\n4\n6\ncontinued condition\n17\n42\n-42\n-42\n0\ntrue\n17\n2\n4\ntrue\n-8\ntrue\nKryndel\nenum-map-ok\nfalse\ntrue\nfrom-array\nenum-array-ok\n0\ncompiled from Kryndel source\n"
 	if string(output) != want {
 		t.Fatalf("unexpected source-compiled PE output %q", output)
 	}
