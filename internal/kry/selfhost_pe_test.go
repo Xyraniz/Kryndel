@@ -304,6 +304,52 @@ fn main() -> Nil {
 	}
 }
 
+func TestSelfhostPEBackendStringMapScalarValues(t *testing.T) {
+	source := `
+enum Mode { Idle, Active }
+fn main() -> Nil {
+    let flags: Map[String, Bool] = {"enabled": true, "disabled": false}
+    let found: Bool = map_contains_key(flags, "enabled")
+    println(found)
+    println(unwrap_or(map_get(flags, "disabled"), true))
+
+    let labels: Map[String, String] = {"name": "Kryndel"}
+    println(unwrap_or(map_get(labels, "name"), "missing"))
+    println(unwrap_or(map_get(labels, "absent"), "fallback"))
+
+    let ids: Map[String, UInt64] = {"answer": u64(42)}
+    println(str(int(unwrap_or(map_get(ids, "answer"), u64(0)))))
+
+    let modes: Map[String, Mode] = {"current": Mode::Active}
+    if unwrap_or(map_get(modes, "current"), Mode::Idle) == Mode::Active {
+        println("enum-map-ok")
+    }
+
+    let empty: Map[String, Bool] = {}
+    println(map_contains_key(empty, "missing"))
+}
+`
+	image, d := runSelfhostPEBackend(t, source)
+	if d != nil {
+		t.Fatalf("selfhost PE backend rejected scalar-valued String maps: %v", d)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("native PE execution requires Windows amd64")
+	}
+	executable := filepath.Join(t.TempDir(), "string-map-values.exe")
+	if err := os.WriteFile(executable, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(executable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated String map PE failed: %v; output: %s", err, output)
+	}
+	want := "true\nfalse\nKryndel\nfallback\n42\nenum-map-ok\nfalse\n"
+	if string(output) != want {
+		t.Fatalf("unexpected String map PE output %q; want %q", output, want)
+	}
+}
+
 func TestSelfhostPEBackendRejectsUnsupportedCollectionShapes(t *testing.T) {
 	cases := []struct {
 		name, source, diagnostic string
@@ -313,7 +359,7 @@ func TestSelfhostPEBackendRejectsUnsupportedCollectionShapes(t *testing.T) {
 			source: `fn main() -> Nil {
     let values: Map[Int, Int] = {1: 2}
 }`,
-			diagnostic: "PE backend: only Map[String,Int] locals are supported",
+			diagnostic: "PE backend: maps require String keys and scalar or fieldless-enum values",
 		},
 		{
 			name:       "map builtin",
@@ -334,14 +380,14 @@ func TestSelfhostPEBackendRejectsUnsupportedCollectionShapes(t *testing.T) {
     let mut values: Map[String, Int] = {"key": 1}
     values = {"new": 2}
 }`,
-			diagnostic: "PE backend: Map[String,Int] reassignment is not supported",
+			diagnostic: "PE backend: map reassignment is not supported",
 		},
 		{
-			name: "map values must be Int",
+			name: "map values cannot be collections",
 			source: `fn main() -> Nil {
-    let values: Map[String, Bool] = {"key": true}
+    let values: Map[String, Array[Int]] = {"key": [1]}
 }`,
-			diagnostic: "PE backend: only Map[String,Int] locals are supported",
+			diagnostic: "PE backend: maps require String keys and scalar or fieldless-enum values",
 		},
 		{
 			name: "map keys must be literals",
@@ -349,7 +395,7 @@ func TestSelfhostPEBackendRejectsUnsupportedCollectionShapes(t *testing.T) {
     let key: String = "key"
     let values: Map[String, Int] = {key: 1}
 }`,
-			diagnostic: "PE backend: Map[String,Int] literal keys must be String literals",
+			diagnostic: "PE backend: map literal keys must be String literals",
 		},
 		{
 			name: "map function parameter",
@@ -546,6 +592,16 @@ fn main() -> Nil {
     let score_alias: Map[String, Int] = scores
     println(map_contains_key(score_alias, "source"))
     println(unwrap_or(map_get(score_alias, "compiled"), 0))
+    let flags: Map[String, Bool] = {"ready": true}
+    println(unwrap_or(map_get(flags, "ready"), false))
+    let labels: Map[String, String] = {"name": "Kryndel"}
+    println(unwrap_or(map_get(labels, "name"), "missing"))
+    let modes: Map[String, Mode] = {"current": Mode::Active}
+    if unwrap_or(map_get(modes, "current"), Mode::Idle) == Mode::Active {
+        println("enum-map-ok")
+    }
+    let empty_flags: Map[String, Bool] = {}
+    println(map_contains_key(empty_flags, "missing"))
     println("compiled from Kryndel source")
 }
 `
@@ -597,7 +653,7 @@ fn main() -> Nil {
 	if err != nil {
 		t.Fatalf("selfhost-source-generated PE failed: %v; output: %s", err, output)
 	}
-	want := "2\n4\n6\ncontinued condition\n17\n42\n-42\n-42\n0\ntrue\n17\n2\n4\ntrue\n-8\ncompiled from Kryndel source\n"
+	want := "2\n4\n6\ncontinued condition\n17\n42\n-42\n-42\n0\ntrue\n17\n2\n4\ntrue\n-8\ntrue\nKryndel\nenum-map-ok\nfalse\ncompiled from Kryndel source\n"
 	if string(output) != want {
 		t.Fatalf("unexpected source-compiled PE output %q", output)
 	}
