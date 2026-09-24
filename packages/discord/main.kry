@@ -199,6 +199,15 @@ pub fn webhook(id: String, token: String) -> Result[Webhook, String] {
     return ok(Webhook{id: id, token: token})
 }
 
+pub fn webhook_from_url(value: String) -> Result[Webhook, String] {
+    let parts: Array[String] = split(value, "/")
+    if len(parts) != 7 { return err("webhook URL must be https://discord.com/api/webhooks/{id}/{token}") }
+    if parts[0] != "https:" || parts[1] != "" || parts[2] != "discord.com" || parts[3] != "api" || parts[4] != "webhooks" {
+        return err("webhook URL must use Discord's HTTPS API host and webhook path")
+    }
+    return webhook(parts[5], parts[6])
+}
+
 pub fn webhook_from_json(value: Json) -> Result[Webhook, String] {
     let id_value: Json = json_object_get(value, "id")?
     let id: String = json_string(id_value)?

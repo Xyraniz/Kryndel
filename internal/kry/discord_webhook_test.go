@@ -21,7 +21,7 @@ type discordWebhookRequest struct {
 }
 
 func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
-	const version = "1.4.0"
+	const version = "1.5.0"
 	archivePath := filepath.Join("..", "..", "registry", "packages", "discord-"+version+".tar.gz")
 	archive, err := os.ReadFile(archivePath)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
 		t.Fatalf("install published Discord package into project fixture: %v", err)
 	}
 	root := filepath.Join(project, "main.kry")
-	if err := os.WriteFile(root, []byte("import \"discord\"\nfn main() -> Result[Nil, String] {\n    let client: Bot = bot(\"test-token\", [])?\n    let hook: Webhook = client.create_webhook(\"123\", \"build notifications\")?\n    return hook.delete()\n}\n"), 0o600); err != nil {
+	if err := os.WriteFile(root, []byte("import \"discord\"\nfn main() -> Result[Nil, String] {\n    let hook: Webhook = webhook_from_url(\"https://discord.com/api/webhooks/123/token\")?\n    return hook.delete()\n}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	program, diagnostic := LoadProgram(root, DefaultLimits(), "")
@@ -147,6 +147,13 @@ func TestDiscordWebhookMethodsUseUnauthenticatedRoutesAndSafeTextDefaults(t *tes
 fn main() -> Result[Nil, String] {
     let invalid_webhook: Result[Webhook, String] = webhook("not-a-snowflake", "token")
     assert_eq(is_err(invalid_webhook), true)
+    let parsed_url: Webhook = webhook_from_url("https://discord.com/api/webhooks/123/token")?
+    assert_eq(is_err(webhook_from_url("http://discord.com/api/webhooks/123/token")), true)
+    assert_eq(is_err(webhook_from_url("https://evil.example/api/webhooks/123/token")), true)
+    assert_eq(is_err(webhook_from_url("https://discord.com:443/api/webhooks/123/token")), true)
+    assert_eq(is_err(webhook_from_url("https://discord.com/api/webhooks/123/token/extra")), true)
+    assert_eq(is_err(webhook_from_url("https://discord.com/api/webhooks/123/token?wait=true")), true)
+    let parsed_response: Json = parsed_url.fetch()?
     let hook: Webhook = webhook("123", "token")?
     let invalid_thread: Result[String, String] = hook.execute_json("{}", true, "bad")
     assert_eq(is_err(invalid_thread), true)
@@ -195,6 +202,7 @@ fn main() -> Result[Nil, String] {
 	}
 
 	want := []discordWebhookRequest{
+		{method: "GET", path: "/api/v10/webhooks/123/token", body: ""},
 		{method: "POST", path: "/api/v10/webhooks/123/token?wait=true", body: `{"content":"hello <@456>","allowed_mentions":{"parse":[]}}`},
 		{method: "POST", path: "/api/v10/webhooks/123/token?wait=true&thread_id=456", body: `{"embeds":[]}`},
 		{method: "POST", path: "/api/v10/webhooks/123/token?wait=false", body: `{"content":"no wait"}`},
