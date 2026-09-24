@@ -22,6 +22,24 @@ jobs:
         run: make verify
         timeout-minutes: 45
 
+  bootstrap:
+    name: Locked Linux amd64 self-host bootstrap
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source and bootstrap revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up locked Go toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+      - name: Rebuild and verify bootstrap stages
+        env:
+          KRY_REQUIRE_LOCKED_BOOTSTRAP: '1'
+        run: bash scripts/bootstrap-stage3.sh
+        timeout-minutes: 30
+
   race:
     name: Go race detector
     runs-on: ubuntu-latest

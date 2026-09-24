@@ -94,4 +94,4 @@ and generated Stage 1, Stage 2, and Stage 3 compiler ELFs against that lock.
 Stage 2 and Stage 3 must also be byte-identical. This remains a bounded subset
 bootstrap rather than full self-hosting.
 
-On non-Linux hosts, this test still emits KIR and validates the first compiler ELF, then skips Linux executable checks. A Windows run therefore does not establish either compiler's execution; both levels must pass on Linux amd64 before this stage is considered complete.
+On non-Linux hosts, `TestStage36KryndelSecondCompilerBootstrap` skips before emitting KIR or validating an ELF. Cross-platform compile checks do not establish execution of this bootstrap; both levels must pass on Linux amd64 before this stage is considered complete.

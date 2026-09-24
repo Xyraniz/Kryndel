@@ -1,6 +1,6 @@
 # Testing
 
-The test suite runs from the repository root with only Go 1.22+ for source builds. `make test` builds the self-contained executable, checks the shipped examples, and runs native Go tests over the compiler and runtime APIs.
+The Go source build requires Go 1.22+ and downloads the modules listed in `go.mod`. `make test` builds the self-contained CLI, checks the shipped examples, runs the Go tests, and performs a C-backed ELF smoke build; it therefore also requires a C compiler. The Linux amd64 bootstrap lock has a separate Go 1.26.0 job. `make test-static` and `go test ./...` do not run the C-backed `make test` smoke-build commands.
 
 ```bash
 make test
@@ -12,7 +12,7 @@ make benchmark
 make check-docs
 ```
 
-The native Go tests cover recursive functions, `if`, `while`, mutable bindings, checked operators, homogeneous arrays, Unicode strings including embedded NUL bytes, bytes, assertions, static diagnostics, modules, enums, exhaustive options and results, bounded threads and channels, worker failure propagation, deterministic artifacts, formatter behavior, malformed input, sandbox traversal, resource limits, and REPL state. The race target exercises the worker and channel fixtures; fuzz smoke uses bounded deterministic malformed inputs and the Go fuzzing API is available for extension.
+The native Go tests cover recursive functions, `if`, `while`, mutable bindings, checked operators, homogeneous arrays, Unicode strings including embedded NUL bytes, bytes, assertions, static diagnostics, modules, enums, exhaustive options and results, bounded threads and channels, worker failure propagation, deterministic artifacts, formatter behavior, malformed input, sandbox traversal, resource limits, and REPL state. The race target exercises the worker and channel fixtures. `make fuzz-smoke` runs four real Go fuzz targets for two seconds each over the lexer, parser/checker, artifact decoder, and KIR decoder; longer local runs can use Go's `-fuzztime` flag.
 
 | Area | Required coverage |
 | --- | --- |
@@ -31,4 +31,4 @@ The native Go tests cover recursive functions, `if`, `while`, mutable bindings, 
 | Memory | Representative success and failure paths, worker-local contexts, channel cleanup, worker joins, and bounded shutdown under the race detector. |
 | Documentation | English-only audit and synchronization between documented and implemented commands and builtins. |
 
-Go vet and the race detector are used as the applicable strict and concurrency checks. Fuzz smoke uses bounded malformed inputs and reproducible seeds; full fuzz targets are run with explicit time budgets in CI. Tests do not require network access. A syntax change must include a positive example and a stable negative assertion where appropriate. An artifact change must include identical builds, dependency removal, version mutation, and a length or payload mutation.
+Go vet and the race detector are used as the applicable strict and concurrency checks. Fuzz smoke uses bounded inputs, reproducible seeds, and explicit time budgets in CI. Tests do not require network access after the Go module cache is populated. A syntax change must include a positive example and a stable negative assertion where appropriate. An artifact change must include identical builds, dependency removal, version mutation, and a length or payload mutation.
