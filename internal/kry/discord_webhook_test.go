@@ -21,7 +21,7 @@ type discordWebhookRequest struct {
 }
 
 func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
-	const version = "1.3.0"
+	const version = "1.4.0"
 	archivePath := filepath.Join("..", "..", "registry", "packages", "discord-"+version+".tar.gz")
 	archive, err := os.ReadFile(archivePath)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
 		t.Fatalf("install published Discord package into project fixture: %v", err)
 	}
 	root := filepath.Join(project, "main.kry")
-	if err := os.WriteFile(root, []byte("import \"discord\"\nfn main() -> Result[Nil, String] {\n    let hook: Webhook = webhook(\"123\", \"token\")?\n    return hook.delete()\n}\n"), 0o600); err != nil {
+	if err := os.WriteFile(root, []byte("import \"discord\"\nfn main() -> Result[Nil, String] {\n    let client: Bot = bot(\"test-token\", [])?\n    let hook: Webhook = client.create_webhook(\"123\", \"build notifications\")?\n    return hook.delete()\n}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	program, diagnostic := LoadProgram(root, DefaultLimits(), "")
@@ -174,6 +174,7 @@ fn main() -> Result[Nil, String] {
     assert_eq(contains(error_text, "synthetic-webhook-token-with-more-than-thirty-two-characters"), false)
     return ok(nil)
 }
+
 `
 	p, diagnostic := Parse(&Source{Name: "discord_webhook_test.kry", Text: source}, DefaultLimits())
 	if diagnostic != nil {
@@ -209,5 +210,89 @@ fn main() -> Result[Nil, String] {
 		got, _ := json.MarshalIndent(seen, "", "  ")
 		wantJSON, _ := json.MarshalIndent(want, "", "  ")
 		t.Fatalf("Discord webhook requests differ\ngot:\n%s\nwant:\n%s", got, wantJSON)
+	}
+}
+func TestDiscordBotCanCreateAndManageWebhooks(t *testing.T) {
+	type request struct {
+		method        string
+		path          string
+		body          string
+		authorization string
+	}
+	var seen []request
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Errorf("read bot webhook request body: %v", err)
+		}
+		seen = append(seen, request{method: req.Method, path: req.URL.RequestURI(), body: string(body), authorization: req.Header.Get("Authorization")})
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case req.Method == http.MethodPost && req.URL.Path == "/api/v10/channels/101/webhooks":
+			_, _ = io.WriteString(w, `{"id":"202","token":"created-webhook-token","type":1}`)
+		case req.Method == http.MethodGet && (req.URL.Path == "/api/v10/channels/101/webhooks" || req.URL.Path == "/api/v10/guilds/201/webhooks"):
+			_, _ = io.WriteString(w, `[{"id":"202","type":1}]`)
+		case req.Method == http.MethodGet && req.URL.Path == "/api/v10/webhooks/202":
+			_, _ = io.WriteString(w, `{"id":"202","name":"Build notifications"}`)
+		case req.Method == http.MethodPatch && req.URL.Path == "/api/v10/webhooks/202":
+			_, _ = io.WriteString(w, `{"id":"202","name":"renamed"}`)
+		case req.Method == http.MethodDelete && req.URL.Path == "/api/v10/webhooks/202":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected bot webhook request: %s %s", req.Method, req.URL.RequestURI())
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	module, err := os.ReadFile(filepath.Join("..", "..", "packages", "discord", "main.kry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(module) + `
+fn main() -> Result[Nil, String] {
+    let client: Bot = bot("bot-test-token", [])?
+    assert_eq(is_err(client.create_webhook("bad", "Build notifications")), true)
+    assert_eq(is_err(client.create_webhook("101", "")), true)
+    let missing_token: Result[Webhook, String] = webhook_from_json(json_parse("{\"id\":\"202\"}")?)
+    assert_eq(is_err(missing_token), true)
+    let created: Webhook = client.create_webhook("101", "Build \\\"notifications\\\"")?
+    let channel_webhooks: Json = client.list_channel_webhooks("101")?
+    let guild_webhooks: Json = client.list_guild_webhooks("201")?
+    let existing: Json = client.fetch_webhook("202")?
+    let renamed: Json = client.edit_webhook_json("202", "{\"name\":\"renamed\"}")?
+    client.delete_webhook("202")?
+    return ok(nil)
+}
+`
+	p, diagnostic := Parse(&Source{Name: "discord_bot_webhook_test.kry", Text: source}, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("parse Discord webhook management fixture: %s", diagnostic.Message)
+	}
+	checker, diagnostic := Check(p, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("type-check Discord webhook management fixture at %d:%d: %s", diagnostic.Line, diagnostic.Column, diagnostic.Message)
+	}
+	runtime, diagnostic := NewRuntime(p, checker, DefaultLimits(), Sandbox{})
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	runtime.discordAPIBaseURL = server.URL + "/api/v10"
+	if diagnostic := runtime.run(); diagnostic != nil {
+		t.Fatalf("run Discord webhook management fixture: %s", diagnostic.Message)
+	}
+
+	want := []request{
+		{method: "POST", path: "/api/v10/channels/101/webhooks", body: `{"name":"Build \\\"notifications\\\""}`, authorization: "Bot bot-test-token"},
+		{method: "GET", path: "/api/v10/channels/101/webhooks", authorization: "Bot bot-test-token"},
+		{method: "GET", path: "/api/v10/guilds/201/webhooks", authorization: "Bot bot-test-token"},
+		{method: "GET", path: "/api/v10/webhooks/202", authorization: "Bot bot-test-token"},
+		{method: "PATCH", path: "/api/v10/webhooks/202", body: `{"name":"renamed"}`, authorization: "Bot bot-test-token"},
+		{method: "DELETE", path: "/api/v10/webhooks/202", authorization: "Bot bot-test-token"},
+	}
+	if !reflect.DeepEqual(seen, want) {
+		got, _ := json.MarshalIndent(seen, "", "  ")
+		wantJSON, _ := json.MarshalIndent(want, "", "  ")
+		t.Fatalf("Discord bot webhook requests differ\ngot:\n%s\nwant:\n%s", got, wantJSON)
 	}
 }
