@@ -1,6 +1,6 @@
 //go:build linux
 
-package kry
+package platform
 
 import (
 	"bytes"
@@ -17,7 +17,7 @@ import (
 	"github.com/blackjack/webcam"
 )
 
-func cameraCapture(ctx context.Context, device string, width, height int64, maxBytes int64) ([]byte, error) {
+func CaptureCamera(ctx context.Context, device string, width, height int64, maxBytes int64) ([]byte, error) {
 	if err := validateCameraCapture(device, width, height, maxBytes); err != nil {
 		return nil, err
 	}
@@ -37,6 +37,9 @@ func cameraCapture(ctx context.Context, device string, width, height int64, maxB
 	actual, actualWidth, actualHeight, err := wc.SetImageFormat(format, uint32(width), uint32(height))
 	if err != nil {
 		return nil, fmt.Errorf("configure V4L2 camera format: %w", err)
+	}
+	if err := validateCameraCapture(device, int64(actualWidth), int64(actualHeight), maxBytes); err != nil {
+		return nil, fmt.Errorf("camera returned invalid frame dimensions: %w", err)
 	}
 	if err := wc.StartStreaming(); err != nil {
 		return nil, fmt.Errorf("start V4L2 camera stream: %w", err)
@@ -109,22 +112,25 @@ func fourCC(value string) webcam.PixelFormat {
 }
 
 func decodeV4L2Frame(frame []byte, format webcam.PixelFormat, width, height int) (image.Image, error) {
-	if width < 1 || height < 1 {
+	if width < 1 || height < 1 || width > maxCameraDimension || height > maxCameraDimension || width > maxCameraPixels/height {
 		return nil, fmt.Errorf("camera returned invalid frame dimensions")
 	}
 	switch format {
 	case fourCC("YUYV"):
-		if len(frame) < width*height*2 {
+		rowBytes := ((width + 1) / 2) * 4
+		if len(frame) < rowBytes*height {
 			return nil, fmt.Errorf("truncated YUYV camera frame")
 		}
 		img := image.NewRGBA(image.Rect(0, 0, width, height))
-		for i, p := 0, 0; i < width*height; i, p = i+2, p+4 {
-			y0, u, y1, v := int(frame[p])-16, int(frame[p+1])-128, int(frame[p+2])-16, int(frame[p+3])-128
-			x := i % width
-			y := i / width
-			img.SetRGBA(x, y, yuvPixel(y0, u, v))
-			if x+1 < width {
-				img.SetRGBA(x+1, y, yuvPixel(y1, u, v))
+		for y := 0; y < height; y++ {
+			rowStart := y * rowBytes
+			for x := 0; x < width; x += 2 {
+				p := rowStart + (x/2)*4
+				y0, u, y1, v := int(frame[p])-16, int(frame[p+1])-128, int(frame[p+2])-16, int(frame[p+3])-128
+				img.SetRGBA(x, y, yuvPixel(y0, u, v))
+				if x+1 < width {
+					img.SetRGBA(x+1, y, yuvPixel(y1, u, v))
+				}
 			}
 		}
 		return img, nil

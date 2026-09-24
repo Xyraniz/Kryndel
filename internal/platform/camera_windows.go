@@ -1,6 +1,6 @@
 //go:build windows
 
-package kry
+package platform
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-func cameraCapture(ctx context.Context, device string, width, height int64, maxBytes int64) ([]byte, error) {
+func CaptureCamera(ctx context.Context, device string, width, height int64, maxBytes int64) ([]byte, error) {
 	if err := validateCameraCapture(device, width, height, maxBytes); err != nil {
 		return nil, err
 	}

@@ -125,6 +125,7 @@ Kryndel uses a bounded runtime. Source size, artifact size, instruction count, w
 | `cmd/kry` | CLI, REPL, formatter, and release entry point. |
 | `cmd/kry-installer` | Windows installer with `.kry` and `.kexe` associations. |
 | `internal/kry` | Lexer, parser, checker, IR, runtime, modules, artifacts, builtins, and package tooling. |
+| `internal/platform` | Bounded camera and display capture with target-specific implementations. |
 | `std/` | Typed standard-library wrappers. |
 | `examples/` | Small programs covering the language and runtime features. |
 | `tools/` | Repository launcher and desktop association installer. |

@@ -1,4 +1,4 @@
-package kry
+package platform
 
 import (
 	"image"

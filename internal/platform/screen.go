@@ -1,4 +1,4 @@
-package kry
+package platform
 
 import (
 	"bytes"
@@ -42,7 +42,7 @@ func encodeScreenImage(img image.Image, maxBytes int64) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-func screenCapturePNG(x, y, width, height int64, maxBytes int64) ([]byte, error) {
+func CaptureScreenPNG(x, y, width, height int64, maxBytes int64) ([]byte, error) {
 	if err := validateScreenRegion(x, y, width, height); err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func screenCapturePNG(x, y, width, height int64, maxBytes int64) ([]byte, error)
 	return encodeScreenImage(img, maxBytes)
 }
 
-func screenDisplayCount() (int, error) {
+func ScreenDisplayCount() (int, error) {
 	count := screenshot.NumActiveDisplays()
 	if count < 1 {
 		return 0, fmt.Errorf("no active displays found")
@@ -64,11 +64,11 @@ func screenDisplayCount() (int, error) {
 	return count, nil
 }
 
-func screenDisplayBoundsJSON(index int64) (string, error) {
+func ScreenDisplayBoundsJSON(index int64) (string, error) {
 	if index < 0 || index > int64(^uint(0)>>1) {
 		return "", fmt.Errorf("display index is out of range")
 	}
-	count, err := screenDisplayCount()
+	count, err := ScreenDisplayCount()
 	if err != nil {
 		return "", err
 	}
@@ -88,14 +88,14 @@ func screenDisplayBoundsJSON(index int64) (string, error) {
 	return string(value), nil
 }
 
-func screenCaptureDisplayPNG(index int64, maxBytes int64) ([]byte, error) {
+func CaptureScreenDisplayPNG(index int64, maxBytes int64) ([]byte, error) {
 	if index < 0 || index > int64(^uint(0)>>1) {
 		return nil, fmt.Errorf("display index is out of range")
 	}
 	if maxBytes < 1 {
 		return nil, fmt.Errorf("output limit must be positive")
 	}
-	count, err := screenDisplayCount()
+	count, err := ScreenDisplayCount()
 	if err != nil {
 		return nil, err
 	}
