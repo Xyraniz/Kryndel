@@ -19,6 +19,7 @@ import (
 )
 
 const discordAPIBase = "https://discord.com/api/v10"
+const discordMaxWebhookFiles = 10
 
 type discordRateBucket struct {
 	remaining int64
@@ -250,7 +251,7 @@ func (r *Runtime) discordMultipartUpload(method, route, payload string, files []
 	if method != "POST" && method != "PUT" && method != "PATCH" {
 		return resVal(false, stringVal("Discord uploads require POST, PUT, or PATCH")), nil
 	}
-	if !validDiscordRoute(route) || token == "" || (!botAuth && !strings.HasPrefix(route, "/webhooks/")) || len(files) == 0 || len(files) > 10 {
+	if !validDiscordRoute(route) || token == "" || (!botAuth && !strings.HasPrefix(route, "/webhooks/")) || len(files) == 0 || len(files) > discordMaxWebhookFiles {
 		return resVal(false, stringVal("invalid Discord upload route, token, or filename")), nil
 	}
 	if !json.Valid([]byte(payload)) {

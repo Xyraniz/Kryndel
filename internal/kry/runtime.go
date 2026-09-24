@@ -2396,7 +2396,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if a[3].Kind != VArray || a[4].Kind != VArray {
 			return resVal(false, stringVal("Discord webhook upload expects arrays of filenames and bytes")), nil
 		}
-		if arrayLength(a[3]) == 0 || arrayLength(a[3]) > 10 || arrayLength(a[3]) != arrayLength(a[4]) {
+		if arrayLength(a[3]) == 0 || arrayLength(a[3]) > discordMaxWebhookFiles || arrayLength(a[3]) != arrayLength(a[4]) {
 			return resVal(false, stringVal("Discord webhook upload needs matching arrays with 1 to 10 files")), nil
 		}
 		filenames, fileData := arrayValues(a[3]), arrayValues(a[4])

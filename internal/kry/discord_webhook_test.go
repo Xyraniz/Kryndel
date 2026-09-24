@@ -21,7 +21,7 @@ type discordWebhookRequest struct {
 }
 
 func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
-	const version = "1.6.0"
+	const version = "1.7.0"
 	archivePath := filepath.Join("..", "..", "registry", "packages", "discord-"+version+".tar.gz")
 	archive, err := os.ReadFile(archivePath)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
 		t.Fatalf("install published Discord package into project fixture: %v", err)
 	}
 	root := filepath.Join(project, "main.kry")
-	if err := os.WriteFile(root, []byte("import \"discord\"\nfn main() -> Result[Nil, String] {\n    let hook: Webhook = webhook_from_url(\"https://discord.com/api/webhooks/123/token\")?\n    let filenames: Array[String] = [\"fixture.txt\"]\n    let files: Array[Bytes] = [bytes_from_u8([u8(65)])]\n    let uploaded: String = hook.upload_files_json(\"{\\\"attachments\\\":[{\\\"id\\\":0,\\\"filename\\\":\\\"fixture.txt\\\"}]}\", filenames, files, \"\")?\n    return ok(nil)\n}\n"), 0o600); err != nil {
+	if err := os.WriteFile(root, []byte("import \"discord\"\nfn main() -> Result[Nil, String] {\n    let hook: Webhook = webhook_from_url(\"https://discord.com/api/webhooks/123/token\")?\n    let filenames: Array[String] = [\"fixture.txt\"]\n    let files: Array[Bytes] = [bytes_from_u8([u8(65)])]\n    let uploaded: String = hook.upload_files_json(\"{\\\"attachments\\\":[{\\\"id\\\":0,\\\"filename\\\":\\\"fixture.txt\\\"}]}\", filenames, files, \"\")?\n    let edited: Json = hook.edit_message_files_json(\"456\", \"{\\\"attachments\\\":[{\\\"id\\\":0,\\\"filename\\\":\\\"fixture.txt\\\"}] }\", filenames, files, \"\")?\n    return ok(nil)\n}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	program, diagnostic := LoadProgram(root, DefaultLimits(), "")
@@ -295,8 +295,12 @@ fn main() -> Result[Nil, String] {
     assert_eq(is_err(hook.upload_files_json("{}", filenames, [files[0]], "")), true)
     assert_eq(is_err(hook.upload_files_json("{}", filenames, files, "bad-thread")), true)
     assert_eq(is_err(hook.upload_files_json("{}", ["../bad"], [files[0]], "")), true)
+    assert_eq(is_err(hook.edit_message_files_json("bad", "{}", ["edit.txt"], [files[0]], "")), true)
     let uploaded: String = hook.upload_files_json("{\"content\":\"files\",\"attachments\":[{\"id\":0,\"filename\":\"alpha.txt\"},{\"id\":1,\"filename\":\"beta.bin\"}]}", filenames, files, "456")?
     assert_eq(uploaded, "{\"id\":\"987\"}")
+    let edited_files: Json = hook.edit_message_files_json("789", "{\"attachments\":[{\"id\":0,\"filename\":\"edit.txt\"}]}", ["edit.txt"], [bytes_from_u8([u8(68)])], "456")?
+    let edited_id: String = json_string(result_unwrap(json_object_get(edited_files, "id")))?
+    assert_eq(edited_id, "987")
     let client: Bot = bot("bot-test-token", [])?
     let bot_result: String = client.upload("POST", "/channels/101/messages", "{\"content\":\"bot file\"}", "bot.txt", bytes_from_u8([u8(67)]))?
     assert_eq(bot_result, "{\"id\":\"987\"}")
@@ -331,6 +335,15 @@ fn main() -> Result[Nil, String] {
 			files:         map[string]string{"files[0]": "AB", "files[1]": string([]byte{0, 255})},
 		},
 		{
+			method:        http.MethodPatch,
+			path:          "/api/v10/webhooks/123/short-upload-token/messages/789?thread_id=456",
+			authorization: "",
+			contentType:   "multipart/form-data; boundary=",
+			payload:       `{"attachments":[{"id":0,"filename":"edit.txt"}]}`,
+			filenames:     map[string]string{"files[0]": "edit.txt"},
+			files:         map[string]string{"files[0]": "D"},
+		},
+		{
 			method:        http.MethodPost,
 			path:          "/api/v10/channels/101/messages",
 			authorization: "Bot bot-test-token",
@@ -349,6 +362,17 @@ fn main() -> Result[Nil, String] {
 			wantJSON, _ := json.MarshalIndent(want[index], "", "  ")
 			t.Fatalf("multipart request %d differs\ngot:\n%s\nwant:\n%s", index, got, wantJSON)
 		}
+	}
+}
+
+func TestDiscordWebhookUploadRejectsMoreThanTenFilesBeforeNetwork(t *testing.T) {
+	files := make([]discordUploadFile, discordMaxWebhookFiles+1)
+	value, diagnostic := (&Runtime{Lim: DefaultLimits()}).discordWebhookUpload("POST", "/webhooks/123/token?wait=true", "{}", files, "token")
+	if diagnostic != nil {
+		t.Fatalf("unexpected diagnostic: %v", diagnostic)
+	}
+	if value.Kind != VResult || value.OK {
+		t.Fatalf("upload result = %#v, want an error Result", value)
 	}
 }
 
