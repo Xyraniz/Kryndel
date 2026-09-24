@@ -5,7 +5,7 @@ Kryndel uses `kry.toml` as the project manifest and `kry.lock` as the resolution
 | Command | Result | Guarantee |
 | --- | --- | --- |
 | `kry new app` | Creates a project with `kry.toml` and `main.kry`. | Does not introduce an external runtime. |
-| `kry add discord ^1.4.0` | Adds the current Discord API library release to `[dependencies]`. | The manifest is serialized deterministically. |
+| `kry add discord ^1.5.0` | Adds the current Discord API library release to `[dependencies]`. | The manifest is serialized deterministically. |
 | `kry install` | Resolves, downloads, verifies, extracts, and writes `kry.lock`. | Hashes and URLs remain recorded. |
 | `kry update` | Repeats resolution from the configured registry. | The installation can be audited from the lockfile. |
 | `kry uninstall name [name ...]` | Removes direct dependencies and prunes `vendor/`. | Reachable transitive dependencies are preserved and the global cache is not deleted. |
@@ -18,3 +18,5 @@ By default, the client uses Kryndel's static public registry at `https://raw.git
 > The installer rejects absolute paths, alternate separators that escape the root, `..`, symbolic links, directories in the archive, duplicate entries, and files larger than the per-file limit. Cryptographic verification happens before extraction.
 
 Packages are imported with `import "name"` and resolved from `vendor/name/main.kry`. Only declarations marked `pub` cross the package boundary. Official libraries include `discord`, `async`, `crypto`, `fs`, and `json`; these expose structured concurrency, standard cryptography, sandboxed filesystem operations, and safe JSON over typed runtime primitives.
+
+See [Discord package usage](discord.md) for webhook URL parsing, execution, message management, and the current API boundaries.

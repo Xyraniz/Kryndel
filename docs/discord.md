@@ -61,7 +61,7 @@ Command definitions and callback payloads are JSON strings and are validated bef
 
 ## Webhooks
 
-`Bot.create_webhook(channel_id, name)` creates a webhook with bot authentication and returns a token-authenticated `Webhook` when Discord includes its token in the create response. `webhook_from_json(value)` validates and converts a JSON webhook object that includes both its ID and token; `webhook(id, token)` constructs one directly. The token is a credential; keep it out of source control and logs. Token-authenticated `Webhook` requests use the token in the fixed Discord API path and never send a bot `Authorization` header.
+`Bot.create_webhook(channel_id, name)` creates a webhook with bot authentication and returns a token-authenticated `Webhook` when Discord includes its token in the create response. `webhook_from_json(value)` validates and converts a JSON webhook object that includes both its ID and token; `webhook(id, token)` constructs one directly. Version 1.5.0 adds `webhook_from_url(value)`, which accepts exactly `https://discord.com/api/webhooks/{id}/{token}` and rejects other hosts, HTTP, extra path segments, query strings, and invalid IDs or tokens. The token is a credential; keep it out of source control and logs. Token-authenticated `Webhook` requests use the token in the fixed Discord API path and never send a bot `Authorization` header.
 
 `Bot.list_channel_webhooks`, `Bot.list_guild_webhooks`, `Bot.fetch_webhook`, `Bot.edit_webhook_json`, and `Bot.delete_webhook` cover management routes that use bot authentication. Edit payloads remain raw JSON so Discord can add webhook fields without waiting for new wrappers.
 
