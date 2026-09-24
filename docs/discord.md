@@ -59,6 +59,17 @@ Incoming interaction requests should be verified with `Bot.verify_interaction(pu
 
 Command definitions and callback payloads are JSON strings and are validated before they are sent. Register `discord.on_event` to dispatch incoming `INTERACTION_CREATE` events to the application code.
 
+## Webhooks
+
+`webhook(id, token)` creates a token-authenticated `Webhook` after checking the webhook snowflake and token characters. The token is a credential; keep it out of source control and logs. Webhook requests use the token in the fixed Discord API path and never send a bot `Authorization` header.
+
+- `Webhook.send(content)` sends plain text, waits for the created message, escapes JSON, enforces Discord's 2,000 UTF-16-unit content limit, and disables mentions by default.
+- `Webhook.execute_json(payload_json, wait, thread_id)` exposes Discord's JSON execute payload, including embeds, components, polls, and future fields. Set `wait` to receive the created message; an empty `thread_id` targets the webhook's default channel. This method preserves the caller's `allowed_mentions` payload, so specify it when the payload could contain mentions. Binary file uploads are not yet supported by `Webhook`.
+- `fetch()` and `edit_json(payload_json)` retrieve or edit the webhook; `delete()` removes it.
+- `fetch_message`, `edit_message_json`, and `delete_message` operate on a webhook message. Pass an empty `thread_id` for a normal message or a valid snowflake for a thread message.
+
+JSON methods retain Discord's evolving request schema without pretending Kryndel has typed models for every embed, component, poll, and attachment variant. The client validates the JSON body, route, IDs, and request/response size before sending it.
+
 ## REST, attachments, and rate limits
 
 `Bot.request(method, route, body)` exposes the full REST API v10 route surface on a fixed `https://discord.com/api/v10` origin with Bot authentication. Common helpers include users, guilds, channels, messages, roles, moderation actions, and application commands. Snowflake IDs are checked by typed helpers, message bodies are JSON-escaped, message length is limited to 2,000 UTF-16 code units, and implicit mentions are disabled by default.

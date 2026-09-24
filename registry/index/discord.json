@@ -15,6 +15,11 @@
       "version": "1.2.0",
       "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.2.0.tar.gz",
       "sha256": "96c71c5f2c91ee13000d0d611663cc487247ffb57b04c6419404249af8df9d68"
+    },
+    {
+      "version": "1.3.0",
+      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.3.0.tar.gz",
+      "sha256": "1af94119eeee79e8c2676c72af4f48e6054d93424814cae673b542c44c1598e0"
     }
   ]
 }

@@ -15,6 +15,11 @@ pub struct GatewaySessionState {
     resume_url: String,
 }
 
+pub struct Webhook {
+    id: String,
+    token: String,
+}
+
 fn discord_internal_ignore_event_v10(event_json: String) -> String {
     return ""
 }
@@ -186,6 +191,109 @@ pub fn bot(token: String, intents: Array[String]) -> Result[Bot, String] {
         ok(_) => {}
     }
     return ok(Bot{token: token, intents: intents, gateway: "https://discord.com/api/v10/gateway/bot", shard_id: 0, shard_count: 1})
+}
+
+pub fn webhook(id: String, token: String) -> Result[Webhook, String] {
+    if !valid_snowflake(id) { return err("webhook ID must be a Discord snowflake") }
+    if !valid_interaction_token(token) { return err("invalid webhook token") }
+    return ok(Webhook{id: id, token: token})
+}
+
+fn webhook_thread_query(thread_id: String) -> Result[String, String] {
+    if thread_id == "" { return ok("") }
+    if !valid_snowflake(thread_id) { return err("thread_id must be a Discord snowflake") }
+    return ok("thread_id=" + thread_id)
+}
+
+impl Webhook {
+    // Raw JSON exposes Discord's complete execute/edit payload surface, including
+    // embeds, components, polls, allowed_mentions, and future API fields.
+    pub fn execute_json(payload_json: String, wait: Bool, thread_id: String) -> Result[String, String] {
+        let checked_thread: Result[String, String] = webhook_thread_query(thread_id)
+        match checked_thread {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut query: String = "?wait=false"
+                if wait { query = "?wait=true" }
+                if thread_query != "" { query = query + "&" + thread_query }
+                let route: String = "/webhooks/" + self.id + "/" + self.token + query
+                return discord_interaction_request("POST", route, payload_json)
+            }
+        }
+    }
+
+    // Plain-text sends suppress mentions unless the caller uses execute_json
+    // and explicitly supplies allowed_mentions.
+    pub fn send(content: String) -> Result[Json, String] {
+        if discord_text_length(content) == 0 || discord_text_length(content) > 2000 {
+            return err("webhook content must contain 1 to 2000 UTF-16 code units")
+        }
+        let quoted: Result[String, String] = json_quote(content)
+        match quoted {
+            err(problem) => { return err(problem) }
+            ok(encoded) => {
+                let payload: String = "{\"content\":" + encoded + ",\"allowed_mentions\":{\"parse\":[]}}"
+                let response: Result[String, String] = self.execute_json(payload, true, "")
+                return response_json(response)
+            }
+        }
+    }
+
+    pub fn fetch() -> Result[Json, String] {
+        return response_json(discord_interaction_request("GET", "/webhooks/" + self.id + "/" + self.token, ""))
+    }
+
+    pub fn edit_json(payload_json: String) -> Result[Json, String] {
+        return response_json(discord_interaction_request("PATCH", "/webhooks/" + self.id + "/" + self.token, payload_json))
+    }
+
+    pub fn delete() -> Result[Nil, String] {
+        let result: Result[String, String] = discord_interaction_request("DELETE", "/webhooks/" + self.id + "/" + self.token, "")
+        match result { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+    }
+
+    pub fn fetch_message(message_id: String, thread_id: String) -> Result[Json, String] {
+        if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+        let query: Result[String, String] = webhook_thread_query(thread_id)
+        match query {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut suffix: String = ""
+                if thread_query != "" { suffix = "?" + thread_query }
+                let route: String = "/webhooks/" + self.id + "/" + self.token + "/messages/" + message_id + suffix
+                return response_json(discord_interaction_request("GET", route, ""))
+            }
+        }
+    }
+
+    pub fn edit_message_json(message_id: String, payload_json: String, thread_id: String) -> Result[Json, String] {
+        if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+        let query: Result[String, String] = webhook_thread_query(thread_id)
+        match query {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut suffix: String = ""
+                if thread_query != "" { suffix = "?" + thread_query }
+                let route: String = "/webhooks/" + self.id + "/" + self.token + "/messages/" + message_id + suffix
+                return response_json(discord_interaction_request("PATCH", route, payload_json))
+            }
+        }
+    }
+
+    pub fn delete_message(message_id: String, thread_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+        let query: Result[String, String] = webhook_thread_query(thread_id)
+        match query {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut suffix: String = ""
+                if thread_query != "" { suffix = "?" + thread_query }
+                let route: String = "/webhooks/" + self.id + "/" + self.token + "/messages/" + message_id + suffix
+                let result: Result[String, String] = discord_interaction_request("DELETE", route, "")
+                match result { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+            }
+        }
+    }
 }
 
 impl Bot {

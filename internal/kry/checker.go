@@ -1064,9 +1064,9 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "'?' is only valid inside a function returning Option or Result")
 			break
 		}
-		if inner.Kind == TyOption && c.currentReturn.Kind == TyOption && compatible(inner.A, c.currentReturn.A) {
+		if inner.Kind == TyOption && c.currentReturn.Kind == TyOption {
 			t = inner.A
-		} else if inner.Kind == TyResult && c.currentReturn.Kind == TyResult && compatible(inner.A, c.currentReturn.A) && compatible(inner.B, c.currentReturn.B) {
+		} else if inner.Kind == TyResult && c.currentReturn.Kind == TyResult && compatible(inner.B, c.currentReturn.B) {
 			t = inner.A
 		} else {
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "'?' requires an Option or Result matching the enclosing function return type")

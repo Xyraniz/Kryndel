@@ -5,7 +5,7 @@ Kryndel uses `kry.toml` as the project manifest and `kry.lock` as the resolution
 | Command | Result | Guarantee |
 | --- | --- | --- |
 | `kry new app` | Creates a project with `kry.toml` and `main.kry`. | Does not introduce an external runtime. |
-| `kry add discord ^1.0.0` | Updates `[dependencies]`. | The manifest is serialized deterministically. |
+| `kry add discord ^1.3.0` | Adds the current Discord API library release to `[dependencies]`. | The manifest is serialized deterministically. |
 | `kry install` | Resolves, downloads, verifies, extracts, and writes `kry.lock`. | Hashes and URLs remain recorded. |
 | `kry update` | Repeats resolution from the configured registry. | The installation can be audited from the lockfile. |
 | `kry uninstall name [name ...]` | Removes direct dependencies and prunes `vendor/`. | Reachable transitive dependencies are preserved and the global cache is not deleted. |

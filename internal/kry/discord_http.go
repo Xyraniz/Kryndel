@@ -301,7 +301,11 @@ func (r *Runtime) discordHTTPRequest(method, route string, body io.Reader, conte
 		if body != nil {
 			requestBody = bytes.NewReader(requestBytes)
 		}
-		req, err := http.NewRequestWithContext(r.Ctx.Ctx, method, discordAPIBase+route, requestBody)
+		baseURL := r.discordAPIBaseURL
+		if baseURL == "" {
+			baseURL = discordAPIBase
+		}
+		req, err := http.NewRequestWithContext(r.Ctx.Ctx, method, baseURL+route, requestBody)
 		if err != nil {
 			return resVal(false, stringVal("invalid Discord API request")), nil
 		}
