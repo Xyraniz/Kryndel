@@ -38,6 +38,13 @@ KIR v2 is intentionally typed and lossless for the checked frontend representati
 - Function parameters, defaults, declarations, control-flow bodies, match patterns, and source names are preserved.
 - Constant-folded expressions contain a `const` value, including the width and value of `UInt8/16/32/64`.
 
+For a program loaded from files, `module`, `source`, declaration modules, source
+coordinates, and `sources` use slash-separated paths relative to the resolved
+project root. `imports` preserves the root file's declared import paths. The
+emitter also uses these logical module names when hashing overloaded call
+targets. Identical source trees therefore produce identical KIR after being
+moved to another checkout directory; absolute host paths are not embedded.
+
 The encoder uses ordered structs and source order, not Go maps, so identical checked input and target produce byte-identical output. `DecodeKIR` rejects malformed JSON, trailing data, incomplete or unsupported targets, unknown fields, unsupported versions, and documents over the configured byte limit. It also checks declaration names and references, required expression types, operator and node kinds, call targets, struct and map shape, statement and match shape, and recursive node, nesting, and list limits. These checks enforce KIR's structural contract; they do not rerun source overload resolution or prove that a backend implements a node's semantics. KIR v1 is accepted and assigned language version 1.0.0 because v1 predates that field. A backend must explicitly opt into a future KIR version before consuming a changed schema.
 
 The interpreter exposes JSON as a validated value plus typed field, array, string, integer, unsigned-integer, float, boolean, and null accessors. A compiler written in Kryndel can therefore traverse this document without a Go helper. LLVM output is not advertised yet: the former placeholder emitted a constant-returning function and has been removed rather than treated as a compiler backend.

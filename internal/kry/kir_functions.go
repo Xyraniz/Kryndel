@@ -7,7 +7,7 @@ import (
 	"strconv"
 )
 
-func kirFunctionTargets(program *Program) map[*Function]string {
+func kirFunctionTargets(program *Program, paths kirPathNames) map[*Function]string {
 	targets := make(map[*Function]string, len(program.Functions))
 	counts := make(map[string]int, len(program.Functions))
 	for _, function := range program.Functions {
@@ -27,7 +27,7 @@ func kirFunctionTargets(program *Program) map[*Function]string {
 		for _, parameter := range function.Params {
 			parameters = append(parameters, typeSpecString(parameter.Type))
 		}
-		targets[function] = kirFunctionIdentity(function.Name, function.Module, typeSpecString(function.Receiver), parameters)
+		targets[function] = kirFunctionIdentity(function.Name, paths.name(function.Module), typeSpecString(function.Receiver), parameters)
 	}
 	return targets
 }
