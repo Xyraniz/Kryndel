@@ -3328,7 +3328,7 @@ fn emit_fs_read_text_runtime(state: EmitState) -> Result[EmitState, String] {
     current = append_code(current, [
         u8(73), u8(137), u8(197), u8(73), u8(139), u8(77), u8(0), u8(76), u8(1), u8(233), u8(198), u8(65), u8(8), u8(0),
         u8(72), u8(129), u8(236), u8(144), u8(0), u8(0), u8(0), u8(73), u8(141), u8(125), u8(8),
-        u8(72), u8(49), u8(246), u8(72), u8(49), u8(210), u8(184), u8(2), u8(0), u8(0), u8(0), u8(15), u8(5), u8(72), u8(133), u8(192)
+        u8(190), u8(0), u8(0), u8(2), u8(0), u8(72), u8(49), u8(210), u8(184), u8(2), u8(0), u8(0), u8(0), u8(15), u8(5), u8(72), u8(133), u8(192)
     ])
     let open_fail: LabelState = new_label(current)
     let close_fail: LabelState = new_label(open_fail.state)

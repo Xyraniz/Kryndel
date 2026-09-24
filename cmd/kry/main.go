@@ -501,7 +501,7 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "native build failed: %v", err), jsonMode)
 	}
 	if out == "" {
-		if format == "exe" || format == "pe" {
+		if format == "exe" || format == "pe" || format == "pe-direct" {
 			out = strings.TrimSuffix(src, ".kry") + ".exe"
 		} else if format == "c" {
 			out = strings.TrimSuffix(src, ".kry") + ".c"
@@ -514,7 +514,7 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	}
 	// Native executables must be runnable even when the output path has no
 	// extension (the default for ELF targets).
-	if format == "exe" || format == "pe" || format == "elf" || format == "elf-direct" {
+	if format == "exe" || format == "pe" || format == "pe-direct" || format == "elf" || format == "elf-direct" {
 		_ = os.Chmod(out, 0o755)
 	}
 	fmt.Printf("built %s (backend=%s; external-toolchain=%s)\n", out, backend.Name, backend.ExternalToolchain)
@@ -897,7 +897,7 @@ func printHelp() {
 	fmt.Println("       kry [global-options] FILE.kry|FILE.kexe")
 	fmt.Println("commands: check, run, build, emit, inspect, capabilities, fmt, repl, doctor, version")
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
-	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (limited machine backend); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
+	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (Linux subset); pe-direct (Windows x64 scalar/function subset); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
 	fmt.Println("check options: -Werror, -Werror=KRYW002,KRYW004, -Wno=KRYW003")
 	fmt.Println("global options: --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-instructions N, --max-wall-ms N")
