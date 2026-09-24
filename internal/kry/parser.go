@@ -18,7 +18,7 @@ func Parse(src *Source, lim Limits) (*Program, *Diagnostic) {
 		return nil, d
 	}
 	p := &Parser{Tokens: ts, Lim: lim}
-	prog := &Program{Source: src, Module: src.Name, Sources: []*Source{src}}
+	prog := &Program{Source: src, Module: src.Name, VisibilityScope: sourceVisibilityScope(src), Sources: []*Source{src}}
 	for !p.check(EOF) && p.Err == nil {
 		pub := p.match(PUB)
 		private := p.match(PRIVATE)
@@ -138,7 +138,7 @@ func (p *Parser) typeSpec() *TypeSpec {
 func (p *Parser) function(pub bool) *Function {
 	t := p.expect(FN, "expected 'fn'")
 	n := p.expect(ID, "expected a function name")
-	f := &Function{Name: n.Text(), Public: pub, Tok: t, Return: &TypeSpec{Name: "Nil", Tok: t}, Module: t.Source.Name}
+	f := &Function{Name: n.Text(), Public: pub, Tok: t, Return: &TypeSpec{Name: "Nil", Tok: t}, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
 	if p.match(LBRACKET) {
 		if !p.check(RBRACKET) {
 			for {
@@ -185,7 +185,7 @@ func (p *Parser) function(pub bool) *Function {
 func (p *Parser) structDecl(pub bool) *StructDecl {
 	t := p.expect(STRUCT, "expected 'struct'")
 	n := p.expect(ID, "expected a struct name")
-	d := &StructDecl{Name: n.Text(), Public: pub, Tok: t, Module: t.Source.Name}
+	d := &StructDecl{Name: n.Text(), Public: pub, Tok: t, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
 	p.expect(LBRACE, "expected '{' after struct name")
 	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
 		public := !p.match(PRIVATE)
@@ -218,7 +218,7 @@ func (p *Parser) implDecl() []*Function {
 func (p *Parser) enumDecl(pub bool) *EnumDecl {
 	t := p.expect(ENUM, "expected 'enum'")
 	n := p.expect(ID, "expected an enum name")
-	d := &EnumDecl{Name: n.Text(), Public: pub, Tok: t, Module: t.Source.Name}
+	d := &EnumDecl{Name: n.Text(), Public: pub, Tok: t, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
 	p.expect(LBRACE, "expected '{' after enum name")
 	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
 		v := p.expect(ID, "expected an enum variant")

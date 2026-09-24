@@ -13,16 +13,20 @@ import (
 )
 
 const (
-	artifactMagic       = "KRYNATIVE4\x00"
-	legacyArtifactMagic = "KRYNATIVE3\x00"
-	compilerIdentity    = "kryndel-go-1.3.0"
-	legacyCompilerID    = "kryndel-go-1.2.0"
+	artifactMagic            = "KRYNATIVE5\x00"
+	previousArtifactMagic    = "KRYNATIVE4\x00"
+	legacyArtifactMagic      = "KRYNATIVE3\x00"
+	compilerIdentity         = "kryndel-go-1.3.0"
+	previousCompilerIdentity = "kryndel-go-1.3.0"
+	legacyCompilerID         = "kryndel-go-1.2.0"
+	artifactRootScope        = "<root>"
 )
 
 type ArtifactEntry struct {
-	Path string
-	Data []byte
-	Hash [32]byte
+	Path            string
+	VisibilityScope string
+	Data            []byte
+	Hash            [32]byte
 }
 type Artifact struct {
 	Compiler, Target, LanguageVersion string
@@ -35,10 +39,51 @@ func safeArtifactPath(p string) bool {
 	}
 	return p != "." && p != ".."
 }
+
+func safeArtifactScope(scope string) bool {
+	return scope == artifactRootScope || safeArtifactPath(scope)
+}
+
+func relativeArtifactScope(base, scope string) (string, error) {
+	if scope == artifactRootScope {
+		return artifactRootScope, nil
+	}
+	if !filepath.IsAbs(scope) {
+		scope = filepath.Join(base, scope)
+	}
+	absScope, err := filepath.Abs(scope)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(base, absScope)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("scope escapes artifact root")
+	}
+	if rel == "." {
+		return artifactRootScope, nil
+	}
+	rel = filepath.ToSlash(rel)
+	if !safeArtifactPath(rel) {
+		return "", fmt.Errorf("unsafe module scope")
+	}
+	return rel, nil
+}
+
 func BuildArtifact(prog *Program, root string) ([]byte, *Diagnostic) {
-	entries := []ArtifactEntry{{Path: "<root>", Data: []byte(prog.Source.Text)}}
 	absRoot, _ := filepath.Abs(root)
 	base := filepath.Dir(absRoot)
+	rootScope := sourceVisibilityScope(prog.Source)
+	if rootScope == "" {
+		rootScope = prog.VisibilityScope
+	}
+	if rootScope == "" {
+		rootScope = prog.Module
+	}
+	rootScopePath, err := relativeArtifactScope(base, rootScope)
+	if err != nil {
+		return nil, Diag(CatArtifact, prog.Source, 1, 1, "module visibility scope is outside artifact root")
+	}
+	entries := []ArtifactEntry{{Path: "<root>", VisibilityScope: rootScopePath, Data: []byte(prog.Source.Text)}}
 	seen := map[string]bool{"<root>": true}
 	for _, s := range prog.Sources[1:] {
 		rel, err := filepath.Rel(base, s.Name)
@@ -52,11 +97,16 @@ func BuildArtifact(prog *Program, root string) ([]byte, *Diagnostic) {
 		if !safeArtifactPath(rel) {
 			return nil, Diag(CatArtifact, s, 1, 1, "unsafe artifact path '%s'", rel)
 		}
+		scope := sourceVisibilityScope(s)
+		scopePath, err := relativeArtifactScope(base, scope)
+		if err != nil {
+			return nil, Diag(CatArtifact, s, 1, 1, "module visibility scope is outside artifact root")
+		}
 		if seen[rel] {
 			continue
 		}
 		seen[rel] = true
-		entries = append(entries, ArtifactEntry{Path: rel, Data: []byte(s.Text)})
+		entries = append(entries, ArtifactEntry{Path: rel, VisibilityScope: scopePath, Data: []byte(s.Text)})
 	}
 	for i := range entries {
 		entries[i].Hash = sha256.Sum256(entries[i].Data)
@@ -64,7 +114,7 @@ func BuildArtifact(prog *Program, root string) ([]byte, *Diagnostic) {
 	sort.Slice(entries[1:], func(i, j int) bool { return entries[i+1].Path < entries[j+1].Path })
 	var b bytes.Buffer
 	b.WriteString(artifactMagic)
-	writeU32(&b, 4)
+	writeU32(&b, 5)
 	writeString(&b, compilerIdentity)
 	writeString(&b, LanguageVersion)
 	b.Write([]byte{'K', 'R', 'Y'})
@@ -72,6 +122,7 @@ func BuildArtifact(prog *Program, root string) ([]byte, *Diagnostic) {
 	writeU32(&b, uint32(len(entries)))
 	for _, e := range entries {
 		writeString(&b, e.Path)
+		writeString(&b, e.VisibilityScope)
 		writeU64(&b, uint64(len(e.Data)))
 		b.Write(e.Hash[:])
 		b.Write(e.Data)
@@ -99,13 +150,16 @@ func DecodeArtifact(data []byte, lim Limits) (*Artifact, *Diagnostic) {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: truncated header")
 	}
 	formatVersion := uint32(0)
-	legacy := false
+	expectedCompiler := compilerIdentity
 	switch string(magic) {
 	case artifactMagic:
+		formatVersion = 5
+	case previousArtifactMagic:
 		formatVersion = 4
+		expectedCompiler = previousCompilerIdentity
 	case legacyArtifactMagic:
 		formatVersion = 3
-		legacy = true
+		expectedCompiler = legacyCompilerID
 	default:
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid header")
 	}
@@ -114,15 +168,11 @@ func DecodeArtifact(data []byte, lim Limits) (*Artifact, *Diagnostic) {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: unsupported version")
 	}
 	compiler, ok := readString(r, 256)
-	expectedCompiler := compilerIdentity
-	if legacy {
-		expectedCompiler = legacyCompilerID
-	}
 	if !ok || compiler != expectedCompiler {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: incompatible compiler or invalid length")
 	}
 	languageVersion := LanguageVersion
-	if !legacy {
+	if formatVersion >= 4 {
 		languageVersion, ok = readString(r, 64)
 		if !ok {
 			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid language version")
@@ -160,6 +210,13 @@ func DecodeArtifact(data []byte, lim Limits) (*Artifact, *Diagnostic) {
 			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: duplicate entry")
 		}
 		seen[path] = true
+		scope := ""
+		if formatVersion >= 5 {
+			scope, ok = readString(r, lim.MaxSourceBytes)
+			if !ok || !safeArtifactScope(scope) {
+				return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: unsafe module visibility scope")
+			}
+		}
 		size, ok := readU64(r)
 		if !ok || size > uint64(lim.MaxSourceBytes) || size > uint64(r.Len())-32 {
 			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid length")
@@ -178,7 +235,7 @@ func DecodeArtifact(data []byte, lim Limits) (*Artifact, *Diagnostic) {
 		if !validUTF8(payload) {
 			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid UTF-8")
 		}
-		a.Entries = append(a.Entries, ArtifactEntry{Path: path, Data: payload, Hash: hash})
+		a.Entries = append(a.Entries, ArtifactEntry{Path: path, VisibilityScope: scope, Data: payload, Hash: hash})
 	}
 	if r.Len() != 0 {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: trailing bytes")
@@ -261,14 +318,14 @@ func ProgramFromArtifact(a *Artifact, lim Limits) (*Program, *Diagnostic) {
 	if len(a.Entries) == 0 {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: missing root")
 	}
-	rootSrc := &Source{Name: "<artifact-root>", Text: string(a.Entries[0].Data)}
+	rootSrc := &Source{Name: "<artifact-root>", Text: string(a.Entries[0].Data), VisibilityScope: a.Entries[0].VisibilityScope}
 	root, d := Parse(rootSrc, lim)
 	if d != nil {
 		return nil, d
 	}
-	out := &Program{Source: rootSrc, Module: rootSrc.Name, Statements: root.Statements, Functions: append([]*Function{}, root.Functions...), Structs: append([]*StructDecl{}, root.Structs...), Enums: append([]*EnumDecl{}, root.Enums...), Sources: []*Source{rootSrc}}
+	out := &Program{Source: rootSrc, Module: rootSrc.Name, VisibilityScope: root.VisibilityScope, Statements: root.Statements, Functions: append([]*Function{}, root.Functions...), Structs: append([]*StructDecl{}, root.Structs...), Enums: append([]*EnumDecl{}, root.Enums...), Sources: []*Source{rootSrc}}
 	for _, e := range a.Entries[1:] {
-		s := &Source{Name: e.Path, Text: string(e.Data)}
+		s := &Source{Name: e.Path, Text: string(e.Data), VisibilityScope: e.VisibilityScope}
 		p, d := Parse(s, lim)
 		if d != nil {
 			return nil, d

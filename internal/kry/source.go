@@ -35,8 +35,19 @@ func DefaultLimits() Limits {
 }
 
 type Source struct {
-	Name string
-	Text string
+	Name            string
+	Text            string
+	VisibilityScope string
+}
+
+func sourceVisibilityScope(src *Source) string {
+	if src == nil {
+		return ""
+	}
+	if src.VisibilityScope != "" {
+		return src.VisibilityScope
+	}
+	return src.Name
 }
 
 type Category string

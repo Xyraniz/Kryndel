@@ -130,17 +130,18 @@ type Param struct {
 	Default *Expr
 }
 type Function struct {
-	Name       string
-	Public     bool
-	Worker     bool
-	TypeParams []TypeParam
-	Params     []Param
-	Return     *TypeSpec
-	Receiver   *TypeSpec
-	Unsafe     bool
-	Body       []*Stmt
-	Tok        Token
-	Module     string
+	Name            string
+	Public          bool
+	Worker          bool
+	TypeParams      []TypeParam
+	Params          []Param
+	Return          *TypeSpec
+	Receiver        *TypeSpec
+	Unsafe          bool
+	Body            []*Stmt
+	Tok             Token
+	Module          string
+	VisibilityScope string
 }
 type FieldDecl struct {
 	Name   string
@@ -150,32 +151,35 @@ type FieldDecl struct {
 	Type   *Type
 }
 type StructDecl struct {
-	Name   string
-	Public bool
-	Fields []FieldDecl
-	Tok    Token
-	Module string
-	Type   *Type
+	Name            string
+	Public          bool
+	Fields          []FieldDecl
+	Tok             Token
+	Module          string
+	VisibilityScope string
+	Type            *Type
 }
 type EnumDecl struct {
-	Name     string
-	Public   bool
-	Variants []string
-	Tok      Token
-	Module   string
-	Type     *Type
+	Name            string
+	Public          bool
+	Variants        []string
+	Tok             Token
+	Module          string
+	VisibilityScope string
+	Type            *Type
 }
 type ImportDecl struct {
 	Path string
 	Tok  Token
 }
 type Program struct {
-	Source     *Source
-	Statements []*Stmt
-	Functions  []*Function
-	Structs    []*StructDecl
-	Enums      []*EnumDecl
-	Imports    []ImportDecl
-	Sources    []*Source
-	Module     string
+	Source          *Source
+	Statements      []*Stmt
+	Functions       []*Function
+	Structs         []*StructDecl
+	Enums           []*EnumDecl
+	Imports         []ImportDecl
+	Sources         []*Source
+	Module          string
+	VisibilityScope string
 }
