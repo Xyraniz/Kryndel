@@ -222,6 +222,23 @@ fn webhook_thread_query(thread_id: String) -> Result[String, String] {
     return ok("thread_id=" + thread_id)
 }
 
+fn webhook_files_payload(content: String, filenames: Array[String]) -> Result[String, String] {
+    if len(filenames) == 0 || len(filenames) > 10 { return err("webhook send_files requires 1 to 10 files") }
+    if discord_text_length(content) > 2000 { return err("webhook content must be at most 2000 UTF-16 code units") }
+    let indices: Array[String] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    let mut attachments: String = ""
+    let mut index: Int = 0
+    for filename in filenames {
+        let encoded_filename: String = json_quote(filename)?
+        if index > 0 { attachments = attachments + "," }
+        attachments = attachments + "{\"id\":" + indices[index] + ",\"filename\":" + encoded_filename + "}"
+        index = index + 1
+    }
+    let encoded_content: String = json_quote(content)?
+    let payload: String = "{\"content\":" + encoded_content + ",\"attachments\":[" + attachments + "],\"allowed_mentions\":{\"parse\":[]}}"
+    return ok(payload)
+}
+
 impl Webhook {
     // Raw JSON exposes Discord's complete execute/edit payload surface, including
     // embeds, components, polls, allowed_mentions, and future API fields.
@@ -254,6 +271,12 @@ impl Webhook {
                 return discord_webhook_upload("POST", route, payload_json, filenames, file_data, self.token)
             }
         }
+    }
+
+    pub fn send_files(content: String, filenames: Array[String], file_data: Array[Bytes], thread_id: String) -> Result[Json, String] {
+        let payload: String = webhook_files_payload(content, filenames)?
+        let response: Result[String, String] = self.upload_files_json(payload, filenames, file_data, thread_id)
+        return response_json(response)
     }
 
     // Plain-text sends suppress mentions unless the caller uses execute_json
