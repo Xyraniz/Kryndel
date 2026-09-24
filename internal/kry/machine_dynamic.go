@@ -81,6 +81,10 @@ type directMachine struct {
 	hostRuntimeUsed     bool
 	inFunction          bool
 	currentFunction     string
+	windowsABI          bool
+	windowsStackDepth   int
+	peImportRefs        []peImportRef
+	peFunctions         []peFunctionRange
 }
 
 type machineSlot struct {
@@ -102,6 +106,18 @@ type machineDataRef struct {
 	displacement   int
 	instructionEnd int
 	dataOffset     int
+}
+
+type peImportRef struct {
+	displacement   int
+	instructionEnd int
+	importIndex    int
+}
+
+type peFunctionRange struct {
+	begin int
+	end   int
+	frame uint32
 }
 
 func newDirectMachine() *directMachine {
@@ -185,8 +201,19 @@ func (m *directMachine) emitCall(name string) error {
 	if !ok {
 		return fmt.Errorf("direct ELF backend has no function '%s'", name)
 	}
+	if m.windowsABI {
+		adjust := byte(32 + ((16 - m.windowsStackDepth%16) % 16))
+		m.code = append(m.code, 0x48, 0x83, 0xec, adjust) // shadow space and call-site alignment
+	}
 	m.code = append(m.code, 0xe8)
-	return m.emitLabelDisplacement(label)
+	if err := m.emitLabelDisplacement(label); err != nil {
+		return err
+	}
+	if m.windowsABI {
+		adjust := byte(32 + ((16 - m.windowsStackDepth%16) % 16))
+		m.code = append(m.code, 0x48, 0x83, 0xc4, adjust)
+	}
+	return nil
 }
 
 func functionKey(f *Function) string {
@@ -200,8 +227,19 @@ func functionKey(f *Function) string {
 }
 
 func (m *directMachine) emitLabelCall(label int) error {
+	var adjust byte
+	if m.windowsABI {
+		adjust = byte(32 + ((16 - m.windowsStackDepth%16) % 16))
+		m.code = append(m.code, 0x48, 0x83, 0xec, adjust) // shadow space and call-site alignment
+	}
 	m.code = append(m.code, 0xe8)
-	return m.emitLabelDisplacement(label)
+	if err := m.emitLabelDisplacement(label); err != nil {
+		return err
+	}
+	if m.windowsABI {
+		m.code = append(m.code, 0x48, 0x83, 0xc4, adjust)
+	}
+	return nil
 }
 
 func (m *directMachine) emitConditionalJump(op byte, label int) error {
@@ -254,11 +292,107 @@ func (m *directMachine) emitStringAddress(text string) {
 	m.dataRefs = append(m.dataRefs, machineDataRef{displacement: start + 3, instructionEnd: start + 7, dataOffset: offset})
 }
 
-func (m *directMachine) emitStringWrite() {
+func (m *directMachine) emitStringWrite() error {
 	// rax points to {u64 length, u8 bytes[length]}.
+	if m.windowsABI {
+		// WriteFile accepts a DWORD length. Reject wider strings instead of
+		// silently truncating their length during the ABI conversion.
+		m.code = append(m.code, 0x83, 0x78, 0x04, 0x00) // cmp dword [rax+4], 0
+		if err := m.emitConditionalJump(0x85, m.trapLabel); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x48, 0x89, 0xc2)       // mov rdx, rax
+		m.code = append(m.code, 0x8b, 0x00)             // mov eax, [rax]
+		m.code = append(m.code, 0x41, 0x89, 0xc0)       // mov r8d, eax
+		m.code = append(m.code, 0x48, 0x83, 0xc2, 0x08) // lea rdx, [rdx+8]
+		return m.emitPEWriteRDXR8()
+	}
 	m.code = append(m.code, 0x48, 0x8b, 0x10) // mov rdx, [rax]
 	m.code = append(m.code, 0x48, 0x8d, 0x70, 0x08)
 	m.code = append(m.code, 0xb8, 0x01, 0, 0, 0, 0xbf, 0x01, 0, 0, 0, 0x0f, 0x05)
+	return nil
+}
+
+const (
+	peImportGetStdHandle = iota
+	peImportWriteFile
+	peImportExitProcess
+)
+
+// emitPEImportedCall emits a RIP-relative indirect call through the PE IAT.
+// The IAT RVA is known only after calculating the final read-only data size.
+func (m *directMachine) emitPEImportedCall(importIndex int) {
+	m.code = append(m.code, 0xff, 0x15)
+	displacement := len(m.code)
+	m.code = append(m.code, 0, 0, 0, 0)
+	m.peImportRefs = append(m.peImportRefs, peImportRef{
+		displacement: displacement, instructionEnd: len(m.code), importIndex: importIndex,
+	})
+}
+
+// emitPEWriteRDXR8 writes the bytes addressed by RDX with a DWORD length in
+// R8D. It loops over partial WriteFile results and treats invalid handles,
+// failed writes, and successful zero-byte writes as process failure.
+func (m *directMachine) emitPEWriteRDXR8() error {
+	empty := m.newLabel()
+	loop := m.newLabel()
+	failed := m.newLabel()
+	done := m.newLabel()
+	m.code = append(m.code, 0x45, 0x85, 0xc0) // test r8d, r8d
+	if err := m.emitConditionalJump(0x84, empty); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xec, 0x40)                   // home area plus aligned stack temporaries
+	m.code = append(m.code, 0x48, 0x89, 0x54, 0x24, 0x30)             // [rsp+48] = buffer
+	m.code = append(m.code, 0x44, 0x89, 0x44, 0x24, 0x38)             // [rsp+56] = remaining DWORD
+	m.code = append(m.code, 0x48, 0xc7, 0x44, 0x24, 0x20, 0, 0, 0, 0) // fifth argument = NULL
+	m.code = append(m.code, 0xb9, 0xf5, 0xff, 0xff, 0xff)             // STD_OUTPUT_HANDLE
+	m.emitPEImportedCall(peImportGetStdHandle)
+	m.code = append(m.code, 0x48, 0x85, 0xc0) // reject NULL
+	if err := m.emitConditionalJump(0x84, failed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xf8, 0xff) // reject INVALID_HANDLE_VALUE
+	if err := m.emitConditionalJump(0x84, failed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x89, 0x44, 0x24, 0x28) // [rsp+40] = handle
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x8b, 0x4c, 0x24, 0x28) // rcx = handle
+	m.code = append(m.code, 0x48, 0x8b, 0x54, 0x24, 0x30) // rdx = buffer
+	m.code = append(m.code, 0x44, 0x8b, 0x44, 0x24, 0x38) // r8d = remaining
+	m.code = append(m.code, 0x4c, 0x8d, 0x4c, 0x24, 0x3c) // r9 = &bytesWritten
+	m.emitPEImportedCall(peImportWriteFile)
+	m.code = append(m.code, 0x85, 0xc0) // test eax, eax
+	if err := m.emitConditionalJump(0x84, failed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x8b, 0x44, 0x24, 0x3c, 0x85, 0xc0) // bytesWritten; reject zero progress
+	if err := m.emitConditionalJump(0x84, failed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x01, 0x44, 0x24, 0x30) // buffer += bytesWritten
+	m.code = append(m.code, 0x29, 0x44, 0x24, 0x38)       // remaining -= bytesWritten
+	if err := m.emitConditionalJump(0x85, loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xc4, 0x40)
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(failed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xc4, 0x40)
+	if err := m.emitJump(m.trapLabel); err != nil {
+		return err
+	}
+	if err := m.bind(empty); err != nil {
+		return err
+	}
+	return m.bind(done)
 }
 
 func (m *directMachine) emitStringConcatCall() error {
@@ -4109,7 +4243,7 @@ func (m *directMachine) emitFSReadTextRuntime() error {
 		0xc6, 0x41, 0x08, 0x00,
 		0x48, 0x81, 0xec, 0x90, 0x00, 0x00, 0x00,
 		0x49, 0x8d, 0x7d, 0x08,
-		0x48, 0x31, 0xf6,
+		0xbe, 0x00, 0x00, 0x02, 0x00, // mov esi, O_NOFOLLOW: reject a symlink at the final path component
 		0x48, 0x31, 0xd2,
 		0xb8, 0x02, 0x00, 0x00, 0x00,
 		0x0f, 0x05,
@@ -4340,8 +4474,16 @@ func (m *directMachine) emitFSWriteBytesRuntime() error {
 	return nil
 }
 
-func (m *directMachine) emitWrite(text string) {
+func (m *directMachine) emitWrite(text string) error {
 	offset := m.addData(text)
+	if m.windowsABI {
+		start := len(m.code)
+		m.code = append(m.code, 0x48, 0x8d, 0x15, 0, 0, 0, 0) // lea rdx, [rip+text]
+		m.dataRefs = append(m.dataRefs, machineDataRef{displacement: start + 3, instructionEnd: start + 7, dataOffset: offset})
+		m.code = append(m.code, 0x41, 0xb8, 0, 0, 0, 0) // mov r8d, length
+		binary.LittleEndian.PutUint32(m.code[len(m.code)-4:], uint32(len(text)))
+		return m.emitPEWriteRDXR8()
+	}
 	// mov eax, SYS_write; mov edi, STDOUT_FILENO
 	m.code = append(m.code, 0xb8, 0x01, 0, 0, 0, 0xbf, 0x01, 0, 0, 0)
 	// lea rsi, [rip + disp32]
@@ -4351,10 +4493,25 @@ func (m *directMachine) emitWrite(text string) {
 	m.code = append(m.code, 0xba, 0, 0, 0, 0, 0x0f, 0x05)
 	binary.LittleEndian.PutUint32(m.code[start+8:start+12], uint32(len(text)))
 	m.dataRefs = append(m.dataRefs, machineDataRef{displacement: start + 3, instructionEnd: start + 7, dataOffset: offset})
+	return nil
 }
 
-func (m *directMachine) emitExit(status byte) {
+func (m *directMachine) emitExit(status byte) error {
+	if m.windowsABI {
+		// Restore the current frame before tail-calling. Its caller supplied a
+		// return slot and Win64 home area, which form a valid stack for
+		// ExitProcess (which never returns).
+		m.code = append(m.code, 0xc9, 0xb9, status, 0, 0, 0) // leave; mov ecx, status
+		m.code = append(m.code, 0xff, 0x25)                  // jmp [rip+ExitProcess IAT]
+		displacement := len(m.code)
+		m.code = append(m.code, 0, 0, 0, 0)
+		m.peImportRefs = append(m.peImportRefs, peImportRef{
+			displacement: displacement, instructionEnd: len(m.code), importIndex: peImportExitProcess,
+		})
+		return nil
+	}
 	m.code = append(m.code, 0xb8, 0x3c, 0, 0, 0, 0xbf, status, 0, 0, 0, 0x0f, 0x05)
+	return nil
 }
 
 func (m *directMachine) lookupSlot(name string) (machineSlot, bool) {
@@ -4487,6 +4644,15 @@ func (m *directMachine) emitInteger(unsigned bool) error {
 	if err := m.bind(ready); err != nil {
 		return err
 	}
+	if m.windowsABI {
+		// R8 points to the first digit; compute its length from the fixed end
+		// of the current stack buffer, then pass (RDX=buffer, R8D=length).
+		m.code = append(m.code, 0x4c, 0x89, 0xc2) // mov rdx, r8
+		m.code = append(m.code, 0x4c, 0x8d, 0x85)
+		m.code = append(m.code, buffer[:]...)
+		m.code = append(m.code, 0x49, 0x29, 0xd0) // sub r8, rdx
+		return m.emitPEWriteRDXR8()
+	}
 	// write(1, r8, bufferEnd-r8)
 	m.code = append(m.code, 0xb8, 0x01, 0, 0, 0, 0xbf, 0x01, 0, 0, 0)
 	m.code = append(m.code, 0x4c, 0x89, 0xc6, 0x48, 0x8d, 0x95)
@@ -4505,19 +4671,25 @@ func (m *directMachine) emitBooleanOutput(e *Expr, newline bool) error {
 	if err := m.emitConditionalJump(0x84, falseLabel); err != nil {
 		return err
 	}
-	m.emitWrite("true")
+	if err := m.emitWrite("true"); err != nil {
+		return err
+	}
 	if err := m.emitJump(joinLabel); err != nil {
 		return err
 	}
 	if err := m.bind(falseLabel); err != nil {
 		return err
 	}
-	m.emitWrite("false")
+	if err := m.emitWrite("false"); err != nil {
+		return err
+	}
 	if err := m.bind(joinLabel); err != nil {
 		return err
 	}
 	if newline {
-		m.emitWrite("\n")
+		if err := m.emitWrite("\n"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -4592,8 +4764,22 @@ func machineTypeFromSpec(p *Program, spec *TypeSpec) (*Type, bool) {
 }
 
 func (m *directMachine) emitMoveArg(index int) error {
-	if index < 0 || index >= 6 {
+	maxArgs := 6
+	if m.windowsABI {
+		maxArgs = 4
+	}
+	if index < 0 || index >= maxArgs {
 		return fmt.Errorf("direct ELF backend supports at most six scalar arguments")
+	}
+	if m.windowsABI {
+		registerMoves := [4][]byte{
+			{0x48, 0x89, 0xc1}, // rcx = rax
+			{0x48, 0x89, 0xc2}, // rdx = rax
+			{0x49, 0x89, 0xc0}, // r8 = rax
+			{0x49, 0x89, 0xc1}, // r9 = rax
+		}
+		m.code = append(m.code, registerMoves[index]...)
+		return nil
 	}
 	// SysV AMD64 integer argument registers: rdi, rsi, rdx, rcx, r8, r9.
 	registerMoves := [6][]byte{
@@ -4609,8 +4795,23 @@ func (m *directMachine) emitMoveArg(index int) error {
 }
 
 func (m *directMachine) emitStoreArg(index int, slot machineSlot) error {
-	if index < 0 || index >= 6 {
+	maxArgs := 6
+	if m.windowsABI {
+		maxArgs = 4
+	}
+	if index < 0 || index >= maxArgs {
 		return fmt.Errorf("direct ELF backend supports at most six scalar arguments")
+	}
+	if m.windowsABI {
+		registerLoads := [4][]byte{
+			{0x48, 0x89, 0xc8}, // mov rax, rcx
+			{0x48, 0x89, 0xd0}, // mov rax, rdx
+			{0x4c, 0x89, 0xc0}, // mov rax, r8
+			{0x4c, 0x89, 0xc8}, // mov rax, r9
+		}
+		m.code = append(m.code, registerLoads[index]...)
+		m.emitStoreSlot(slot)
+		return nil
 	}
 	// Move the incoming register through RAX so the existing checked slot
 	// store remains the single encoding path for local storage.
@@ -4634,8 +4835,44 @@ func (m *directMachine) emitFunctionCall(e *Expr) error {
 	if len(e.Args) != len(e.Function.Params) {
 		return fmt.Errorf("direct ELF backend does not support omitted default arguments for function '%s'", e.Function.Name)
 	}
-	if len(e.Args) > 6 {
+	maxArgs := 6
+	if m.windowsABI {
+		maxArgs = 4
+	}
+	if len(e.Args) > maxArgs {
 		return fmt.Errorf("direct ELF backend function '%s' has too many arguments", e.Function.Name)
+	}
+	if m.windowsABI {
+		// Store values in an aligned temporary area while evaluating later
+		// arguments. This keeps nested Win64 calls aligned and prevents their
+		// 32-byte home areas from overwriting already evaluated arguments.
+		spillBytes := (len(e.Args)*8 + 15) &^ 15
+		if spillBytes > 0 {
+			m.code = append(m.code, 0x48, 0x83, 0xec, byte(spillBytes))
+		}
+		for index, argument := range e.Args {
+			if err := m.emitExpr(argument); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0x44, 0x24, byte(index*8)) // [rsp+slot] = rax
+		}
+		registerLoads := [4][]byte{
+			{0x48, 0x8b, 0x4c, 0x24}, // rcx = [rsp+slot]
+			{0x48, 0x8b, 0x54, 0x24}, // rdx = [rsp+slot]
+			{0x4c, 0x8b, 0x44, 0x24}, // r8 = [rsp+slot]
+			{0x4c, 0x8b, 0x4c, 0x24}, // r9 = [rsp+slot]
+		}
+		for index := range e.Args {
+			m.code = append(m.code, registerLoads[index]...)
+			m.code = append(m.code, byte(index*8))
+		}
+		if err := m.emitCall(functionKey(e.Function)); err != nil {
+			return err
+		}
+		if spillBytes > 0 {
+			m.code = append(m.code, 0x48, 0x83, 0xc4, byte(spillBytes))
+		}
+		return nil
 	}
 	// Keep already-evaluated arguments on the machine stack while evaluating
 	// later arguments. Runtime calls and string/array lowering freely use the
@@ -4661,6 +4898,16 @@ func (m *directMachine) emitFunctionCall(e *Expr) error {
 		m.code = append(m.code, registerPops[index]...)
 	}
 	return m.emitCall(functionKey(e.Function))
+}
+
+func (m *directMachine) emitFunctionEpilog() {
+	if m.windowsABI {
+		// Win64 epilogs must use an unwind-recognizable stack reset followed by
+		// the nonvolatile pop and return.
+		m.code = append(m.code, 0x48, 0x8d, 0x65, 0x00, 0x5d, 0xc3) // lea rsp,[rbp]; pop rbp; ret
+		return
+	}
+	m.code = append(m.code, 0xc9, 0xc3) // leave; ret
 }
 
 func machineBits(t *Type) uint8 {
@@ -5495,10 +5742,16 @@ func (m *directMachine) emitBinary(e *Expr) error {
 		return err
 	}
 	m.code = append(m.code, 0x50) // push rax
+	if m.windowsABI {
+		m.windowsStackDepth += 8
+	}
 	if err := m.emitExpr(e.Right); err != nil {
 		return err
 	}
 	m.code = append(m.code, 0x48, 0x89, 0xc1, 0x58) // mov rcx, rax; pop rax
+	if m.windowsABI {
+		m.windowsStackDepth -= 8
+	}
 	leftType := e.Left.Type
 	unsigned := leftType != nil && leftType.Kind == TyUInt
 	if leftType != nil && leftType.Kind == TyString {
@@ -5579,9 +5832,17 @@ func (m *directMachine) emitBinary(e *Expr) error {
 		m.code = append(m.code, 0x48, 0x09, 0xc8)
 		m.emitUIntMask(machineBits(e.Type))
 	case SHL:
+		m.code = append(m.code, 0x48, 0x83, 0xf9, machineBits(leftType)) // cmp rcx, UInt width
+		if err := m.emitConditionalJump(0x83, m.trapLabel); err != nil { // jae trap; negative Int counts compare above the width too
+			return err
+		}
 		m.code = append(m.code, 0x48, 0xd3, 0xe0)
 		m.emitUIntMask(machineBits(e.Type))
 	case SHR:
+		m.code = append(m.code, 0x48, 0x83, 0xf9, machineBits(leftType))
+		if err := m.emitConditionalJump(0x83, m.trapLabel); err != nil {
+			return err
+		}
 		m.code = append(m.code, 0x48, 0xd3, 0xe8)
 		m.emitUIntMask(machineBits(e.Type))
 	case AND:
@@ -5931,9 +6192,13 @@ func (m *directMachine) emitStaticOutput(e *Expr, name string) error {
 			if err := m.emitExpr(e.Args[0]); err != nil {
 				return err
 			}
-			m.emitStringWrite()
+			if err := m.emitStringWrite(); err != nil {
+				return err
+			}
 			if name == "println" {
-				m.emitWrite("\n")
+				if err := m.emitWrite("\n"); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
@@ -5950,7 +6215,9 @@ func (m *directMachine) emitStaticOutput(e *Expr, name string) error {
 			return err
 		}
 		if name == "println" {
-			m.emitWrite("\n")
+			if err := m.emitWrite("\n"); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -5958,8 +6225,7 @@ func (m *directMachine) emitStaticOutput(e *Expr, name string) error {
 	if name == "println" {
 		text += "\n"
 	}
-	m.emitWrite(text)
-	return nil
+	return m.emitWrite(text)
 }
 
 func (m *directMachine) emitScopedStatements(stmts []*Stmt) error {
@@ -6069,10 +6335,7 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 				return fmt.Errorf("direct ELF backend supports only calls without receivers")
 			}
 			if s.Expr.Function != nil {
-				if len(s.Expr.Args) != 0 {
-					return fmt.Errorf("direct ELF backend function '%s' requires zero arguments", s.Expr.Function.Name)
-				}
-				if err := m.emitCall(functionKey(s.Expr.Function)); err != nil {
+				if err := m.emitExpr(s.Expr); err != nil {
 					return err
 				}
 				continue
@@ -6175,7 +6438,7 @@ func (m *directMachine) emitStatements(stmts []*Stmt) error {
 				} else if returnType != nil && returnType.Kind != TyNil {
 					return fmt.Errorf("direct ELF backend scalar function must return a value")
 				}
-				m.code = append(m.code, 0xc9, 0xc3)
+				m.emitFunctionEpilog()
 				continue
 			}
 			if s.Return != nil && s.Return.Kind != ExNil {
@@ -6200,9 +6463,8 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	m.scopeStack = []map[string]machineSlot{{}}
 	// push rbp; mov rbp, rsp; reserve aligned local storage.
 	m.code = append(m.code, 0x55, 0x48, 0x89, 0xe5)
-	frame := (int(m.nextSlot) + 15) &^ 15
 	m.bufferOffset = m.nextSlot + 1
-	frame = (int(m.nextSlot) + 64 + 15) &^ 15
+	frame := (int(m.nextSlot) + 64 + 15) &^ 15
 	if frame > 0 {
 		m.code = append(m.code, 0x48, 0x81, 0xec)
 		var size [4]byte
@@ -6212,9 +6474,12 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
-	if len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed || m.structRuntimeUsed || m.hostRuntimeUsed || m.stringCharsUsed || m.mapRuntimeUsed {
+	if m.windowsABI || len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed || m.structRuntimeUsed || m.hostRuntimeUsed || m.stringCharsUsed || m.mapRuntimeUsed {
 		if err := m.emitJump(m.endLabel); err != nil {
 			return nil, err
+		}
+		if m.windowsABI {
+			m.peFunctions = append(m.peFunctions, peFunctionRange{begin: 0, end: len(m.code), frame: uint32(frame)})
 		}
 		mainSlots := m.slots
 		mainStatic := m.staticEnv
@@ -6225,6 +6490,7 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			if err := m.bind(m.functionLabels[key]); err != nil {
 				return nil, err
 			}
+			functionBegin := len(m.code)
 			m.inFunction = true
 			m.currentFunction = key
 			m.slots = m.functionSlots[key]
@@ -6249,13 +6515,16 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			if err := m.emitStatements(f.Body); err != nil {
 				return nil, fmt.Errorf("function '%s': %w", f.Name, err)
 			}
+			m.emitFunctionEpilog()
+			if m.windowsABI {
+				m.peFunctions = append(m.peFunctions, peFunctionRange{begin: functionBegin, end: len(m.code), frame: uint32(functionFrame)})
+			}
 			m.inFunction = false
 			m.currentFunction = ""
 			m.slots = mainSlots
 			m.staticEnv = mainStatic
 			m.loops = mainLoops
 			m.scopeStack = mainScopes
-			m.code = append(m.code, 0xc9, 0xc3)
 		}
 	}
 	if m.hostRuntimeUsed {
@@ -6384,11 +6653,18 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	if err := m.bind(m.endLabel); err != nil {
 		return nil, err
 	}
-	m.emitExit(0)
+	if err := m.emitExit(0); err != nil {
+		return nil, err
+	}
 	if err := m.bind(m.trapLabel); err != nil {
 		return nil, err
 	}
-	m.emitExit(1)
+	if err := m.emitExit(1); err != nil {
+		return nil, err
+	}
+	if m.windowsABI {
+		return buildDirectDynamicPE(m.code, m.data, m.dataRefs, m.peImportRefs, m.peFunctions)
+	}
 	for _, ref := range m.dataRefs {
 		dataAddress := elfCodeOffset + len(m.code) + ref.dataOffset
 		nextInstruction := elfCodeOffset + ref.instructionEnd

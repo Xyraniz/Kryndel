@@ -1,10 +1,12 @@
 package kry
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -55,6 +57,7 @@ while index < 3 {
     println(index)
     index = index + 1
 }
+
 if index == 3 {
     println("done")
 } else {
@@ -82,6 +85,60 @@ println("after")
 	}
 	if string(out) != "loop\n0\nloop\n1\nloop\n2\ndone\nafter\n" {
 		t.Fatalf("unexpected dynamic direct ELF output %q", out)
+	}
+}
+
+func TestDirectELFUnsignedShiftOutOfRangeExitsWithFailure(t *testing.T) {
+	p, c := testProgram(t, "let count: Int = 8\nprintln(u8(1) << count)\n")
+	data, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return
+	}
+	path := filepath.Join(t.TempDir(), "invalid-shift")
+	if err := os.WriteFile(path, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(path).CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || len(out) != 0 {
+		t.Fatalf("out-of-range shift result: err=%v output=%q", err, out)
+	}
+}
+
+func TestDirectELFReadTextRejectsSymlinkFinalComponent(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("direct ELF filesystem runtime requires linux-amd64")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	link := filepath.Join(dir, "link.txt")
+	if err := os.WriteFile(target, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	source := "fn main() -> Nil {\n" +
+		"    let original: Result[String, String] = fs_read_text(" + strconv.Quote(target) + ")\n" +
+		"    println(is_err(original))\n" +
+		"    let linked: Result[String, String] = fs_read_text(" + strconv.Quote(link) + ")\n" +
+		"    println(is_err(linked))\n" +
+		"}\n"
+	p, c := testProgram(t, source)
+	data, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "symlink-check")
+	if err := os.WriteFile(path, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(path).CombinedOutput()
+	if err != nil || string(out) != "false\ntrue\n" {
+		t.Fatalf("direct ELF fs_read_text followed final symlink: err=%v output=%q", err, out)
 	}
 }
 

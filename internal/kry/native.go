@@ -63,6 +63,8 @@ func DescribeNativeBackend(format string) (NativeBackend, error) {
 	switch format {
 	case "elf-direct":
 		return NativeBackend{Name: "direct ELF", ExternalToolchain: "none"}, nil
+	case "pe-direct":
+		return NativeBackend{Name: "direct PE32+", ExternalToolchain: "none"}, nil
 	case "c":
 		return NativeBackend{Name: "C source", ExternalToolchain: "none (source only)"}, nil
 	case "exe", "pe", "elf":
@@ -85,6 +87,7 @@ func NativeCapabilityMatrix() []NativeCapability {
 	}{
 		{name: "elf", scope: "C AOT subset; host integrations without a C runtime implementation are rejected"},
 		{name: "elf-direct", scope: "documented direct ELF subset; scalar, string, array, struct, Option/Result, and function slices"},
+		{name: "pe-direct", scope: "C-free PE32+ Windows x64 console subset: scalar/String values, up to four function arguments, if/while and print/println"},
 		{name: "exe", scope: "C AOT subset; host integrations without a C runtime implementation are rejected"},
 		{name: "pe", scope: "C AOT subset; host integrations without a C runtime implementation are rejected"},
 		{name: "macho", scope: "not implemented"},
@@ -109,7 +112,7 @@ func NativeCapabilityMatrix() []NativeCapability {
 			} else if reason := nativeOutputTargetReason(format.name, target.target); reason != "" {
 				row.Status = "unsupported"
 				row.Reason = reason
-			} else if format.name == "elf-direct" {
+			} else if format.name == "elf-direct" || format.name == "pe-direct" {
 				row.Status = "partial"
 				row.Toolchain = "none"
 			}
@@ -198,6 +201,15 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 		}
 		return BuildDirectELF(p, c, target)
 	}
+	if format == "pe-direct" {
+		if err := validateNativeOutputTarget(format, target); err != nil {
+			return nil, err
+		}
+		if obfuscate {
+			return nil, fmt.Errorf("direct PE backend does not support C obfuscation flags")
+		}
+		return BuildDirectPE(p, c, target)
+	}
 	if err := validateNativeOutputTarget(format, target); err != nil {
 		return nil, err
 	}
@@ -251,6 +263,10 @@ func nativeOutputTargetReason(format string, target NativeTarget) string {
 	case "elf-direct":
 		if target.OS != "linux" || target.Arch != "amd64" {
 			return "direct ELF backend currently supports only linux-amd64"
+		}
+	case "pe-direct":
+		if target.OS != "windows" || target.Arch != "amd64" || target.GUI {
+			return "direct PE backend currently supports only windows-amd64 console targets"
 		}
 	}
 	return ""

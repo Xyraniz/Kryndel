@@ -699,7 +699,22 @@ func TestStage34KryndelDynamicBackendUnaryNot(t *testing.T) {
 	}
 	assertNativeArtifact(t, got, "stage34 dynamic unary-not output")
 	if !bytes.Equal(got, oracle) {
-		t.Fatal("stage34 dynamic unary-not ELF differs from direct backend")
+		limit := len(got)
+		if len(oracle) < limit {
+			limit = len(oracle)
+		}
+		offset := 0
+		for offset < limit && got[offset] == oracle[offset] {
+			offset++
+		}
+		gotByte, oracleByte := "<eof>", "<eof>"
+		if offset < len(got) {
+			gotByte = fmt.Sprintf("%02x", got[offset])
+		}
+		if offset < len(oracle) {
+			oracleByte = fmt.Sprintf("%02x", oracle[offset])
+		}
+		t.Fatalf("stage34 dynamic unary-not ELF differs from direct backend: lengths=%d/%d first_difference=%d got=%s oracle=%s", len(got), len(oracle), offset, gotByte, oracleByte)
 	}
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("dynamic backend ELF execution requires linux-amd64")

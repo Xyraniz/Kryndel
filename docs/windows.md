@@ -12,4 +12,27 @@ Kryndel keeps an explicit boundary between the portable language and Windows-spe
 
 Process execution in the language uses `exec.CommandContext` without a shell; this prevents an input string from being interpreted as compound commands. Windows adapters also bound captured output. Privileged operations are never elevated automatically, and permission failures propagate as verifiable errors.
 
-The CLI recognizes `windows-x64` and `windows-arm64` target aliases, but the C AOT backend currently produces PE output only for Windows amd64 and requires a MinGW-capable `gcc`. Windows arm64 PE code generation is not implemented. `kry inspect` validates the `MZ`/`PE\0\0` signatures, architecture, and section count without executing the file. A generated executable still supports only the documented native backend subset; until broader IR lowering and native runtime linking are complete, the `KRYNATIVE4` bundle and interpreter remain the portable path.
+The CLI recognizes `windows-x64` and `windows-arm64` target aliases. The
+`exe`/`pe` C AOT formats produce Windows amd64 PE through a MinGW-capable
+`gcc`; `pe-direct` writes PE32+ itself without a C compiler, assembler, or
+linker for a bounded scalar subset on Windows amd64: `Int`, `UInt`, `Bool`, and
+`String` values; functions with up to four register arguments; `if`, `while`,
+`break`, `continue`; and `print`/`println`. It emits PE imports and Win64 unwind
+records directly. Arrays, maps, floats, runtime helpers, and arguments beyond
+the four register slots fail with a diagnostic. Windows arm64 PE code generation
+is not implemented. `kry inspect` recognizes the
+`MZ`/`PE\0\0` signatures and reports architecture and section count without
+executing the file; it is not a complete PE validator. Broader IR lowering
+and a native runtime are still required for the full language. The
+`KRYNATIVE4` bundle and interpreter cover the portable language features.
+
+The [Windows x64 ABI contract](windows-abi.md) records the register, stack,
+return, unwind, and import rules a direct PE backend must follow. CI runs the
+Go test suite on a native `windows-latest` runner as well as cross-compiling
+the CLI. A portable regression checks that `windows-x64` KIR retains checked
+types and argument positions. Direct PE tests parse the image with Go's
+independent PE reader and launch both static and dynamic `.exe` files on
+Windows. The dynamic regression covers nested calls with four integer
+arguments, mutable strings, signed number output, and `if`/`while` control
+flow. Floating-point, aggregate, stack-passed, and host API calls remain outside
+the direct backend's supported subset.

@@ -20,6 +20,7 @@ func TestNativeBackendDescriptions(t *testing.T) {
 		requiresTool bool
 	}{
 		{format: "elf-direct", name: "direct ELF", toolchain: "none"},
+		{format: "pe-direct", name: "direct PE32+", toolchain: "none"},
 		{format: "c", name: "C source", toolchain: "none (source only)"},
 		{format: "elf", name: "C AOT", toolchain: "external C compiler", requiresTool: true},
 		{format: "exe", name: "C AOT", toolchain: "external C compiler", requiresTool: true},
@@ -39,8 +40,8 @@ func TestNativeBackendDescriptions(t *testing.T) {
 
 func TestNativeCapabilityMatrixMatchesTargetPolicy(t *testing.T) {
 	rows := NativeCapabilityMatrix()
-	if len(rows) != len(nativeCapabilityTargets)*5+1 {
-		t.Fatalf("capability matrix has %d rows, want %d", len(rows), len(nativeCapabilityTargets)*5+1)
+	if len(rows) != len(nativeCapabilityTargets)*6+1 {
+		t.Fatalf("capability matrix has %d rows, want %d", len(rows), len(nativeCapabilityTargets)*6+1)
 	}
 	targets := make(map[string]NativeTarget, len(nativeCapabilityTargets))
 	for _, target := range nativeCapabilityTargets {
@@ -71,7 +72,7 @@ func TestNativeCapabilityMatrixMatchesTargetPolicy(t *testing.T) {
 		}
 		reason := nativeOutputTargetReason(row.Format, target)
 		want := "supported"
-		if row.Format == "elf-direct" && reason == "" {
+		if (row.Format == "elf-direct" || row.Format == "pe-direct") && reason == "" {
 			want = "partial"
 		} else if reason != "" {
 			want = "unsupported"

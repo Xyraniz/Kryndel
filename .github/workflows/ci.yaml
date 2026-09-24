@@ -40,6 +40,22 @@ jobs:
         run: bash scripts/bootstrap-stage3.sh
         timeout-minutes: 30
 
+  windows:
+    name: Windows amd64 native Go tests
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+      - name: Run tests on Windows
+        env:
+          CGO_ENABLED: '0'
+        run: go test ./...
+        timeout-minutes: 30
+
   race:
     name: Go race detector
     runs-on: ubuntu-latest
