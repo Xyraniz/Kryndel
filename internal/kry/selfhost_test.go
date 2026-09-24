@@ -3,6 +3,7 @@ package kry
 import (
 	"bytes"
 	"crypto/sha256"
+	"debug/pe"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -36,14 +37,15 @@ func assertLinuxAMD64ELF(t *testing.T, data []byte, label string) {
 }
 
 type bootstrapLock struct {
-	SchemaVersion          int               `json:"schema_version"`
-	SourceRevision         string            `json:"source_revision"`
-	Target                 string            `json:"target"`
-	HostGo                 string            `json:"host_go"`
-	Stage0Build            string            `json:"stage0_build"`
-	SourceCompilerKIRBytes int               `json:"source_compiler_kir_bytes"`
-	Command                string            `json:"command"`
-	SHA256                 map[string]string `json:"sha256"`
+	SchemaVersion             int               `json:"schema_version"`
+	SourceRevision            string            `json:"source_revision"`
+	Target                    string            `json:"target"`
+	HostGo                    string            `json:"host_go"`
+	Stage0Build               string            `json:"stage0_build"`
+	SourceCompilerKIRBytes    int               `json:"source_compiler_kir_bytes"`
+	SourceCompilerKIRMaxBytes int               `json:"source_compiler_kir_max_bytes"`
+	Command                   string            `json:"command"`
+	SHA256                    map[string]string `json:"sha256"`
 }
 
 func loadBootstrapLock(t *testing.T, path string) bootstrapLock {
@@ -56,7 +58,7 @@ func loadBootstrapLock(t *testing.T, path string) bootstrapLock {
 	if err := json.Unmarshal(data, &lock); err != nil {
 		t.Fatalf("decode bootstrap lock %q: %v", path, err)
 	}
-	if lock.SchemaVersion != 2 || lock.Target != "linux-amd64" || lock.HostGo != "go1.26.0" || lock.SourceRevision == "" || lock.Stage0Build == "" || lock.SourceCompilerKIRBytes <= 0 || lock.Command == "" {
+	if lock.SchemaVersion != 3 || lock.Target != "linux-amd64" || lock.HostGo != "go1.26.0" || lock.SourceRevision == "" || lock.Stage0Build == "" || lock.SourceCompilerKIRBytes <= 0 || lock.SourceCompilerKIRMaxBytes <= lock.SourceCompilerKIRBytes || lock.Command == "" {
 		t.Fatalf("invalid bootstrap lock metadata: %#v", lock)
 	}
 	return lock
@@ -76,33 +78,11 @@ func verifyBootstrapHash(t *testing.T, lock bootstrapLock, seen map[string]bool,
 	t.Logf("bootstrap sha256 %s=%s", name, actual)
 }
 
-func verifyBootstrapSourceRevision(t *testing.T, root string, lock bootstrapLock, seen map[string]bool) {
+func verifyBootstrapSourceRevision(t *testing.T, root string, lock bootstrapLock) {
 	t.Helper()
-	cmd := exec.Command("git", "-C", root, "cat-file", "-e", lock.SourceRevision+"^{commit}")
+	cmd := exec.Command("git", "-C", root, "merge-base", "--is-ancestor", lock.SourceRevision, "HEAD")
 	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("bootstrap source revision %q is not available in this checkout: %v; %s", lock.SourceRevision, err, output)
-	}
-	files := []struct {
-		path      string
-		lockName  string
-		normalize bool
-	}{
-		{"selfhost/source_kir_compiler.kry", "source_kir_compiler.kry", true},
-		{"selfhost/dynamic_backend.kry", "dynamic_backend.kry", true},
-		{"selfhost/elf_backend.kry", "elf_backend.kry", true},
-		{"selfhost/kir_backend.kry", "kir_backend.kry", true},
-		{"selfhost/fixtures/bootstrap_hello_stage27.kry", "bootstrap-fixture.kry", true},
-	}
-	for _, file := range files {
-		cmd := exec.Command("git", "-C", root, "show", lock.SourceRevision+":"+file.path)
-		data, err := cmd.Output()
-		if err != nil {
-			t.Fatalf("read bootstrap input %q from revision %s: %v", file.path, lock.SourceRevision, err)
-		}
-		if file.normalize {
-			data = []byte(strings.ReplaceAll(string(data), "\r\n", "\n"))
-		}
-		verifyBootstrapHash(t, lock, seen, file.lockName, data)
+		t.Fatalf("bootstrap source revision %q is not an ancestor of the checkout: %v; %s", lock.SourceRevision, err, output)
 	}
 }
 
@@ -750,7 +730,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Skipf("locked bootstrap requires %s; this compatibility run uses %s", lock.HostGo, runtime.Version())
 	}
 	verifiedHashes := make(map[string]bool, len(lock.SHA256))
-	verifyBootstrapSourceRevision(t, root, lock, verifiedHashes)
+	verifyBootstrapSourceRevision(t, root, lock)
 	const stage0Build = "CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry"
 	if lock.Stage0Build != stage0Build {
 		t.Fatalf("bootstrap lock stage0_build=%q, want %q", lock.Stage0Build, stage0Build)
@@ -806,13 +786,13 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if header.Format != KIRFormat || header.Version != KIRVersion || header.LanguageVersion != LanguageVersion || header.Target.OS != "linux" || header.Target.Arch != "amd64" {
 		t.Fatalf("unexpected source compiler KIR header: %#v", header)
 	}
-	if len(kir) > DefaultLimits().MaxJSONBytes {
-		t.Fatalf("source compiler KIR is %d bytes, exceeding MaxJSONBytes=%d", len(kir), DefaultLimits().MaxJSONBytes)
+	if len(kir) > lock.SourceCompilerKIRMaxBytes {
+		t.Fatalf("source compiler KIR is %d bytes, exceeding locked bootstrap limit=%d", len(kir), lock.SourceCompilerKIRMaxBytes)
 	}
 	if len(kir) != lock.SourceCompilerKIRBytes {
 		t.Fatalf("source compiler KIR is %d bytes, bootstrap lock records %d", len(kir), lock.SourceCompilerKIRBytes)
 	}
-	t.Logf("source compiler KIR size=%d bytes; MaxJSONBytes headroom=%d bytes", len(kir), DefaultLimits().MaxJSONBytes-len(kir))
+	t.Logf("source compiler KIR size=%d bytes; bootstrap JSON limit=%d bytes; headroom=%d bytes", len(kir), lock.SourceCompilerKIRMaxBytes, lock.SourceCompilerKIRMaxBytes-len(kir))
 	verifyBootstrapHash(t, lock, verifiedHashes, "source-compiler.kir", kir)
 
 	generatedCompiler := filepath.Join(dir, "source-kir-compiler")
@@ -824,7 +804,8 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		maxWallMS = "1800000"
 		maxInstructions = "250000000"
 	}
-	runBackend := exec.Command(stage0Path, "--max-instructions", maxInstructions, "--max-wall-ms", maxWallMS, "run", backendPath, kirFile, generatedCompiler)
+	bootstrapJSONLimit := fmt.Sprint(lock.SourceCompilerKIRMaxBytes)
+	runBackend := exec.Command(stage0Path, "--max-json", bootstrapJSONLimit, "--max-instructions", maxInstructions, "--max-wall-ms", maxWallMS, "run", backendPath, kirFile, generatedCompiler)
 	if output, err := runBackend.CombinedOutput(); err != nil {
 		t.Fatalf("Stage 0 failed to run kir_backend.kry on source compiler KIR: %v; output: %s", err, output)
 	}
@@ -876,9 +857,9 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	backendText := strings.ReplaceAll(string(backendSource), "\r\n", "\n")
 	verifyBootstrapHash(t, lock, verifiedHashes, "dynamic_backend.kry", []byte(backendText))
-	const elfImport = "import \"elf_backend\"\n"
-	if !strings.HasPrefix(backendText, elfImport) {
-		t.Fatalf("dynamic backend no longer starts with expected ELF backend import %q", elfImport)
+	const backendImports = "import \"elf_backend\"\nimport \"pe_backend\"\n"
+	if !strings.HasPrefix(backendText, backendImports) {
+		t.Fatalf("dynamic backend no longer starts with expected backend imports %q", backendImports)
 	}
 	elfSource, err := os.ReadFile(filepath.Join(selfhost, "elf_backend.kry"))
 	if err != nil {
@@ -886,21 +867,21 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	elfText := strings.ReplaceAll(string(elfSource), "\r\n", "\n")
 	verifyBootstrapHash(t, lock, verifiedHashes, "elf_backend.kry", []byte(elfText))
-	bundledCompilerSource := strings.TrimSuffix(elfText, "\n") + "\n\n" + strings.TrimPrefix(backendText, elfImport) + "\n\n" + strings.TrimPrefix(frontendText, backendImport)
-	bundledCompiler := filepath.Join(dir, "source-kir-compiler-bundle.kry")
-	if err := os.WriteFile(bundledCompiler, []byte(bundledCompilerSource), 0o600); err != nil {
+	peSource, err := os.ReadFile(filepath.Join(selfhost, "pe_backend.kry"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	verifyBootstrapHash(t, lock, verifiedHashes, "source-kir-compiler-bundle.kry", []byte(bundledCompilerSource))
+	peText := strings.ReplaceAll(string(peSource), "\r\n", "\n")
+	verifyBootstrapHash(t, lock, verifiedHashes, "pe_backend.kry", []byte(peText))
 	fixtureSource, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixtureText := strings.ReplaceAll(string(fixtureSource), "\r\n", "\n")
 	verifyBootstrapHash(t, lock, verifiedHashes, "bootstrap-fixture.kry", []byte(fixtureText))
-	t.Logf("stage36 compiling %d-byte bundled compiler source", len(bundledCompilerSource))
+	t.Log("stage36 compiling the checked-in compiler module graph through its import resolver")
 	secondCompiler := filepath.Join(dir, "second-source-kir-compiler")
-	secondCompilerOutput, err := exec.Command(generatedCompiler, bundledCompiler, secondCompiler).CombinedOutput()
+	secondCompilerOutput, err := exec.Command(generatedCompiler, compilerPath, secondCompiler).CombinedOutput()
 	if err != nil {
 		t.Fatalf("stage36 generated compiler failed to compile the bundled frontend/backend source: %v; output: %s", err, secondCompilerOutput)
 	}
@@ -947,8 +928,42 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatalf("stage36 second-level compiler returned an unexpected invalid-source diagnostic (exit %v): %s", invalidErr, invalidOutput)
 	}
 
+	windowsSource := filepath.Join(dir, "windows-program.kry")
+	if err := os.WriteFile(windowsSource, []byte("fn main() -> Nil { println(42) }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	windowsPEPath := filepath.Join(dir, "windows-program.exe")
+	windowsPEOutput, err := exec.Command(secondCompiler, windowsSource, windowsPEPath, "windows-amd64").CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage36 second-level compiler failed to emit Windows PE: %v; output: %s", err, windowsPEOutput)
+	}
+	windowsPEBytes, err := os.ReadFile(windowsPEPath)
+	if err != nil {
+		t.Fatalf("stage36 second-level compiler did not write Windows PE: %v", err)
+	}
+	windowsPE, err := pe.NewFile(bytes.NewReader(windowsPEBytes))
+	if err != nil {
+		t.Fatalf("stage36 second-level compiler emitted invalid PE: %v", err)
+	}
+	if windowsPE.Machine != pe.IMAGE_FILE_MACHINE_AMD64 {
+		t.Fatalf("stage36 second-level compiler emitted PE machine %#x, want amd64", windowsPE.Machine)
+	}
+	if _, ok := windowsPE.OptionalHeader.(*pe.OptionalHeader64); !ok {
+		t.Fatal("stage36 second-level compiler emitted PE32, want PE32+")
+	}
+	t.Log("stage36 second-level compiler emitted a valid Windows amd64 PE32+ executable")
+	if artifactPath := os.Getenv("KRY_STAGE36_WINDOWS_PE_OUTPUT"); artifactPath != "" {
+		if err := os.MkdirAll(filepath.Dir(artifactPath), 0o700); err != nil {
+			t.Fatalf("create Stage36 Windows PE artifact directory: %v", err)
+		}
+		if err := os.WriteFile(artifactPath, windowsPEBytes, 0o700); err != nil {
+			t.Fatalf("write Stage36 Windows PE artifact: %v", err)
+		}
+		t.Logf("saved Stage2-generated Windows PE for native execution: %s", artifactPath)
+	}
+
 	thirdCompiler := filepath.Join(dir, "third-source-kir-compiler")
-	thirdCompilerOutput, err := exec.Command(secondCompiler, bundledCompiler, thirdCompiler).CombinedOutput()
+	thirdCompilerOutput, err := exec.Command(secondCompiler, compilerPath, thirdCompiler).CombinedOutput()
 	if err != nil {
 		t.Fatalf("stage3 second-level compiler failed to rebuild itself from the bundled sources: %v; output: %s", err, thirdCompilerOutput)
 	}
@@ -2594,12 +2609,19 @@ func TestStage28DirectJSONStringToU8Array(t *testing.T) {
 }
 
 func TestStage28SourceCompilerBootstrap(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("source compiler ELF execution requires linux-amd64")
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "bootstrap_hello_stage27.kry")
 	compiler := filepath.Join(root, "..", "..", "selfhost", "source_kir_compiler.kry")
+	bootstrapLock := loadBootstrapLock(t, filepath.Join(root, "..", "..", "selfhost", "bootstrap.lock.json"))
+	compilerLimits := DefaultLimits()
+	compilerLimits.MaxArtifactBytes = bootstrapLock.SourceCompilerKIRMaxBytes
+	compilerLimits.MaxJSONBytes = bootstrapLock.SourceCompilerKIRMaxBytes
 	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
 	if d != nil {
 		t.Fatal(d.Message)
@@ -2607,20 +2629,17 @@ func TestStage28SourceCompilerBootstrap(t *testing.T) {
 	if _, d := Check(fixtureProgram, DefaultLimits()); d != nil {
 		t.Fatal(d.Message)
 	}
-	compilerProgram, d := LoadProgram(compiler, DefaultLimits(), "")
+	compilerProgram, d := LoadProgram(compiler, compilerLimits, "")
 	if d != nil {
 		t.Fatal(d.Message)
 	}
-	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	compilerChecker, d := Check(compilerProgram, compilerLimits)
 	if d != nil {
 		t.Fatal(d.Message)
 	}
 	compilerELF, err := BuildDirectELF(compilerProgram, compilerChecker, NativeTarget{OS: "linux", Arch: "amd64"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("source compiler bootstrap execution requires linux-amd64")
 	}
 	dir := t.TempDir()
 	compilerPath := filepath.Join(dir, "source-kir-compiler")

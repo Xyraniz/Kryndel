@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Xyraniz/Kryndel/internal/kry"
 )
 
 func TestDirectProgramInvocation(t *testing.T) {
@@ -22,6 +24,23 @@ func TestDirectProgramInvocation(t *testing.T) {
 	}
 	if got := run([]string{source, "unexpected"}); got != 2 {
 		t.Fatalf("direct invocation accepted extra arguments with status %d", got)
+	}
+}
+
+func TestMaxJSONCLIOverride(t *testing.T) {
+	if got := kry.DefaultLimits().MaxJSONBytes; got != 64<<20 {
+		t.Fatalf("default MaxJSONBytes = %d; want 64 MiB", got)
+	}
+	source := filepath.Join(t.TempDir(), "json-limit.kry")
+	program := []byte("let parsed: Result[Json, String] = json_parse(\"{}\")\nlet value: Json = result_unwrap(parsed)\nprintln(json_kind(value))\n")
+	if err := os.WriteFile(source, program, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := run([]string{"--max-json", "1", "run", source}); status == 0 {
+		t.Fatal("--max-json 1 accepted a two-byte JSON value")
+	}
+	if status := run([]string{"--max-json", "2", "run", source}); status != 0 {
+		t.Fatalf("--max-json 2 rejected a two-byte JSON value with status %d", status)
 	}
 }
 

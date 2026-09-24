@@ -22,6 +22,7 @@ struct SourceExpr {
 struct SourceFunction {
     return_type: String,
     parameters: Array[String],
+    symbol: String,
 }
 
 struct SourceStruct {
@@ -32,6 +33,7 @@ struct SourceStruct {
 struct SourceParser {
     tokens: Array[SourceToken],
     position: Int,
+    module_id: String,
     bindings: Map[String, SourceBinding],
     functions: Map[String, SourceFunction],
     structs: Map[String, SourceStruct],
@@ -75,12 +77,40 @@ struct ParsedStruct {
     json: String,
 }
 
+struct SourceModule {
+    path: String,
+    tokens: Array[SourceToken],
+    imports: Array[String],
+}
+
+struct SourceModuleContext {
+    module_id: String,
+    functions: Map[String, SourceFunction],
+    public_names: Array[String],
+}
+
+struct SourceModules {
+    items: Array[SourceModule],
+    visiting: Map[String, Bool],
+    loaded: Map[String, Bool],
+}
+
 fn char_at(chars: Array[String], index: Int) -> String {
     return unwrap_or(array_get(chars, index), "")
 }
 
 fn is_space(value: String) -> Bool {
     return value == " " || value == "\t" || value == "\r"
+}
+
+fn newline_continues_expression(chars: Array[String], newline_index: Int) -> Bool {
+    let mut previous_index: Int = newline_index - 1
+    while previous_index >= 0 && is_space(char_at(chars, previous_index)) {
+        previous_index = previous_index - 1
+    }
+    if previous_index < 0 { return false }
+    let previous: String = char_at(chars, previous_index)
+    return previous == "," || previous == "." || previous == "+" || previous == "-" || previous == "*" || previous == "/" || previous == "%" || previous == "<" || previous == ">" || previous == "=" || previous == "!" || previous == "&" || previous == "|" || previous == "^"
 }
 
 fn is_digit(value: String) -> Bool {
@@ -100,6 +130,34 @@ fn join_text_range(parts: Array[String], start: Int, end: Int) -> String {
     if end - start == 1 { return unwrap_or(array_get(parts, start), "") }
     let middle: Int = start + (end - start) / 2
     return join_text_range(parts, start, middle) + join_text_range(parts, middle, end)
+}
+
+fn source_directory(path: String) -> String {
+    let chars: Array[String] = string_chars(path)
+    let mut index: Int = len(chars) - 1
+    while index >= 0 {
+        if char_at(chars, index) == "/" || char_at(chars, index) == "\\" {
+            return join_text_range(chars, 0, index + 1)
+        }
+        index = index - 1
+    }
+    return ""
+}
+
+fn safe_module_name(name: String) -> Bool {
+    let chars: Array[String] = string_chars(name)
+    if len(chars) == 0 || !is_identifier_start(char_at(chars, 0)) { return false }
+    let mut index: Int = 1
+    while index < len(chars) {
+        if !is_identifier_continue(char_at(chars, index)) { return false }
+        index = index + 1
+    }
+    return true
+}
+
+fn source_function_symbol(module_id: String, name: String) -> String {
+    if module_id == "root" && name == "main" { return "main" }
+    return "kry_module_" + module_id + "_" + name
 }
 
 fn push_token(tokens: Array[SourceToken], kind: String, text: String) -> Array[SourceToken] {
@@ -128,7 +186,7 @@ fn lex(source: String) -> Result[Array[SourceToken], String] {
             continue
         }
         if current == "\n" {
-            if paren_depth == 0 && bracket_depth == 0 {
+            if paren_depth == 0 && bracket_depth == 0 && !newline_continues_expression(chars, index) {
                 tokens = push_token(tokens, "separator", ";")
                 if len(tokens) >= 128 {
                     token_chunks = array_push(token_chunks, tokens)
@@ -250,12 +308,66 @@ fn lex(source: String) -> Result[Array[SourceToken], String] {
     return ok(join_token_chunks(token_chunks, 0, len(token_chunks)))
 }
 
+fn module_without_imports(path: String, tokens: Array[SourceToken]) -> Result[SourceModule, String] {
+    let mut output: Array[SourceToken] = []
+    let mut output_chunks: Array[Array[SourceToken]] = []
+    let mut imports: Array[String] = []
+    let mut index: Int = 0
+    let mut braces: Int = 0
+    while index < len(tokens) {
+        let token: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "" })
+        if braces == 0 && token.kind == "identifier" && token.text == "import" {
+            let name: SourceToken = unwrap_or(array_get(tokens, index + 1), SourceToken{ kind: "eof", text: "" })
+            if name.kind != "string" { return err("module: import expects a quoted module name in '" + path + "'") }
+            if !safe_module_name(name.text) { return err("module: unsafe module path '" + name.text + "' in '" + path + "'") }
+            imports = array_push(imports, name.text)
+            index = index + 2
+            let separator: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "" })
+            if separator.text == ";" { index = index + 1 }
+            else if separator.kind != "eof" { return err("module: expected separator after import in '" + path + "'") }
+            continue
+        }
+        if token.kind == "symbol" && token.text == "{" { braces = braces + 1 }
+        if token.kind == "symbol" && token.text == "}" { braces = braces - 1 }
+        output = array_push(output, token)
+        if len(output) >= 128 {
+            output_chunks = array_push(output_chunks, output)
+            output = []
+        }
+        index = index + 1
+    }
+    if len(output) > 0 { output_chunks = array_push(output_chunks, output) }
+    return ok(SourceModule{ path: path, tokens: join_token_chunks(output_chunks, 0, len(output_chunks)), imports: imports })
+}
+
+fn load_source_modules(path: String, directory: String, state: SourceModules) -> Result[SourceModules, String] {
+    if map_contains_key(state.visiting, path) { return err("module: import cycle involving '" + path + "'") }
+    if map_contains_key(state.loaded, path) { return ok(state) }
+    let source: Result[String, String] = fs_read_text(path)
+    if is_err(source) { return err("module: cannot read '" + path + "': " + unwrap_or(result_error(source), "unknown error")) }
+    let lexed: Result[Array[SourceToken], String] = lex(result_unwrap(source))
+    if is_err(lexed) { return err("module: lexer failed in '" + path + "': " + unwrap_or(result_error(lexed), "unknown error")) }
+    let stripped: Result[SourceModule, String] = module_without_imports(path, result_unwrap(lexed))
+    if is_err(stripped) { return err(unwrap_or(result_error(stripped), "invalid import")) }
+    let module: SourceModule = result_unwrap(stripped)
+    let mut current: SourceModules = SourceModules{ items: state.items, visiting: map_insert(state.visiting, path, true), loaded: state.loaded }
+    let mut index: Int = 0
+    while index < len(module.imports) {
+        let name: String = unwrap_or(array_get(module.imports, index), "")
+        let imported: Result[SourceModules, String] = load_source_modules(directory + name + ".kry", directory, current)
+        if is_err(imported) { return err(unwrap_or(result_error(imported), "cannot load module")) }
+        current = result_unwrap(imported)
+        index = index + 1
+    }
+    return ok(SourceModules{ items: array_push(current.items, module), visiting: map_remove(current.visiting, path), loaded: map_insert(current.loaded, path, true) })
+}
+
 fn current_token(parser: SourceParser) -> SourceToken {
     return unwrap_or(array_get(parser.tokens, parser.position), SourceToken{ kind: "eof", text: "" })
 }
 
 fn advance(parser: SourceParser) -> SourceParser {
-    return SourceParser{ tokens: parser.tokens, position: parser.position + 1, bindings: parser.bindings, functions: parser.functions, structs: parser.structs }
+    return SourceParser{ tokens: parser.tokens, position: parser.position + 1, module_id: parser.module_id, bindings: parser.bindings, functions: parser.functions, structs: parser.structs }
 }
 
 fn parser_error(value: Result[SourceParser, String]) -> String {
@@ -357,7 +469,7 @@ fn parse_struct(parser: SourceParser, public: Bool) -> Result[ParsedStruct, Stri
     if is_err(closed) { return err(parser_error(closed)) }
     let definition: SourceStruct = SourceStruct{ fields: fields, names: names }
     let after: SourceParser = result_unwrap(closed)
-    let updated: SourceParser = SourceParser{ tokens: after.tokens, position: after.position, bindings: after.bindings, functions: after.functions, structs: map_insert(after.structs, name.text, definition) }
+    let updated: SourceParser = SourceParser{ tokens: after.tokens, position: after.position, module_id: after.module_id, bindings: after.bindings, functions: after.functions, structs: map_insert(after.structs, name.text, definition) }
     return ok(ParsedStruct{ parser: updated, json: "{\"name\":" + json_quote(name.text) + ",\"public\":" + bool_text(public) + ",\"module\":\"\",\"fields\":" + fields_json + "]}" })
 }
 
@@ -766,6 +878,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             let mut return_type: String = ""
             let mut expected: Array[String] = []
             let mut call_target: String = ""
+            let mut call_name: String = token.text
             let mut builtin_generic: Bool = false
             let mut builtin_unsigned_conversion: Bool = false
             if token.text == "u8" || token.text == "u16" || token.text == "u32" || token.text == "u64" {
@@ -781,10 +894,11 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             } else {
                 let signature: Option[SourceFunction] = map_get(parser.functions, token.text)
                 if is_none(signature) { return err("parser: unknown function '" + token.text + "'") }
-                let found: SourceFunction = unwrap_or(signature, SourceFunction{ return_type: "", parameters: [] })
+                let found: SourceFunction = unwrap_or(signature, SourceFunction{ return_type: "", parameters: [], symbol: "" })
                 return_type = found.return_type
                 expected = found.parameters
-                call_target = "function:" + token.text
+                call_target = "function:" + found.symbol
+                call_name = found.symbol
             }
             let mut current: SourceParser = advance(after_name)
             let mut args: String = "["
@@ -804,8 +918,10 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                 }
                 if !builtin_generic && !builtin_unsigned_conversion {
                     if argument_index >= len(expected) { return err("parser: too many function arguments") }
-                    if argument_expression.type_name != unwrap_or(array_get(expected, argument_index), "") {
-                        return err("parser: function '" + token.text + "' argument " + str(argument_index) + " expects '" + unwrap_or(array_get(expected, argument_index), "") + "', got '" + argument_expression.type_name + "'")
+                    let expected_argument_type: String = unwrap_or(array_get(expected, argument_index), "")
+                    argument_expression = apply_empty_type(argument_expression, expected_argument_type)
+                    if argument_expression.type_name != expected_argument_type {
+                        return err("parser: function '" + token.text + "' argument " + str(argument_index) + " expects '" + expected_argument_type + "', got '" + argument_expression.type_name + "'")
                     }
                 }
                 if !first { args = args + "," }
@@ -848,7 +964,8 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                     if argument_index != 1 { return err("parser: str expects one argument") }
                     return_type = "String"
                 } else if token.text == "int" {
-                    if argument_index != 1 || (unwrap_or(array_get(argument_types, 0), "") != "String" && unwrap_or(array_get(argument_types, 0), "") != "Int" && unwrap_or(array_get(argument_types, 0), "") != "Bool") { return err("parser: int expects String, Int, or Bool") }
+                    let int_argument_type: String = unwrap_or(array_get(argument_types, 0), "")
+                    if argument_index != 1 || (int_argument_type != "String" && int_argument_type != "Int" && int_argument_type != "Bool" && !starts_with(int_argument_type, "UInt")) { return err("parser: int expects String, Int, UInt, or Bool") }
                     return_type = "Int"
                 } else if token.text == "none" {
                     if argument_index != 0 { return err("parser: none expects no arguments") }
@@ -980,7 +1097,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             }
             let closed: Result[SourceParser, String] = expect(current, ")")
             if is_err(closed) { return err(parser_error(closed)) }
-            let json: String = "{\"kind\":\"call\",\"type\":" + json_quote(return_type) + ",\"const\":null,\"name\":" + json_quote(token.text) + ",\"call_target\":" + json_quote(call_target) + ",\"args\":" + args + "]}"
+            let json: String = "{\"kind\":\"call\",\"type\":" + json_quote(return_type) + ",\"const\":null,\"name\":" + json_quote(call_name) + ",\"call_target\":" + json_quote(call_target) + ",\"args\":" + args + "]}"
             let mut display: String = ""
             if token.text == "err" { display = args + "]" }
             return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: return_type, known: false, display: display } })
@@ -1346,7 +1463,7 @@ fn parse_binding(parser: SourceParser) -> Result[ParsedStatements, String] {
     if is_err(separated) { return err(parser_error(separated)) }
     let binding: SourceBinding = SourceBinding{ type_name: initializer.type_name, mutable: mutable, known: !mutable && initializer.known, display: initializer.display }
     let mut updated_parser: SourceParser = result_unwrap(separated)
-    updated_parser = SourceParser{ tokens: updated_parser.tokens, position: updated_parser.position, bindings: map_insert(updated_parser.bindings, name.text, binding), functions: updated_parser.functions, structs: updated_parser.structs }
+    updated_parser = SourceParser{ tokens: updated_parser.tokens, position: updated_parser.position, module_id: updated_parser.module_id, bindings: map_insert(updated_parser.bindings, name.text, binding), functions: updated_parser.functions, structs: updated_parser.structs }
     let body: String = "\"name\":" + json_quote(name.text) + ",\"mutable\":" + bool_text(mutable) + ",\"const\":" + bool_text(keyword == "const") + ",\"annotation\":" + json_quote(initializer.type_name) + ",\"init\":" + initializer.json
     return ok(ParsedStatements{ parser: updated_parser, json: statement_json("let", body) })
 }
@@ -1368,7 +1485,7 @@ fn parse_assignment(parser: SourceParser) -> Result[ParsedStatements, String] {
     if is_err(separated) { return err(parser_error(separated)) }
     let updated: SourceParser = result_unwrap(separated)
     let replacement: SourceBinding = SourceBinding{ type_name: info.type_name, mutable: true, known: false, display: "" }
-    let next: SourceParser = SourceParser{ tokens: updated.tokens, position: updated.position, bindings: map_insert(updated.bindings, target.text, replacement), functions: updated.functions, structs: updated.structs }
+    let next: SourceParser = SourceParser{ tokens: updated.tokens, position: updated.position, module_id: updated.module_id, bindings: map_insert(updated.bindings, target.text, replacement), functions: updated.functions, structs: updated.structs }
     let target_json: String = "{\"kind\":\"var\",\"type\":" + json_quote(info.type_name) + ",\"const\":null,\"name\":" + json_quote(target.text) + "}"
     return ok(ParsedStatements{ parser: next, json: statement_json("assign", "\"target\":" + target_json + ",\"value\":" + updated_expression.json) })
 }
@@ -1462,9 +1579,89 @@ fn parse_function_header(parser: SourceParser) -> Result[ParsedFunctionHeader, S
     let header: ParsedFunctionHeader = ParsedFunctionHeader{
         parser: result_unwrap(parsed_return).parser,
         name: name.text,
-        signature: SourceFunction{ return_type: result_unwrap(parsed_return).name, parameters: parameter_types },
+        signature: SourceFunction{ return_type: result_unwrap(parsed_return).name, parameters: parameter_types, symbol: source_function_symbol(parser.module_id, name.text) },
     }
     return ok(header)
+}
+
+fn collect_module_context(module: SourceModule, module_index: Int, is_root: Bool) -> Result[SourceModuleContext, String] {
+    let mut module_id: String = str(module_index)
+    if is_root { module_id = "root" }
+    let mut parser: SourceParser = SourceParser{ tokens: module.tokens, position: 0, module_id: module_id, bindings: {}, functions: {}, structs: {} }
+    let mut functions: Map[String, SourceFunction] = {}
+    let mut public_names: Array[String] = []
+    while current_token(parser).kind != "eof" {
+        parser = skip_separators(parser)
+        let mut declaration: SourceParser = parser
+        let mut public: Bool = false
+        if current_token(declaration).text == "pub" {
+            public = true
+            declaration = advance(declaration)
+        }
+        if current_token(declaration).text == "fn" {
+            let parsed: Result[ParsedFunctionHeader, String] = parse_function_header(declaration)
+            if is_err(parsed) { return err(unwrap_or(result_error(parsed), "invalid function header")) }
+            let header: ParsedFunctionHeader = result_unwrap(parsed)
+            if map_contains_key(functions, header.name) { return err("module: duplicate function '" + header.name + "' in '" + module.path + "'") }
+            functions = map_insert(functions, header.name, header.signature)
+            if public { public_names = array_push(public_names, header.name) }
+            if current_token(header.parser).text != "{" { return err("module: expected a body for '" + header.name + "'") }
+            parser = skip_source_block(header.parser)
+            continue
+        }
+        if current_token(declaration).text == "struct" {
+            parser = advance(declaration)
+            if current_token(parser).kind == "identifier" { parser = advance(parser) }
+            if current_token(parser).text == "{" { parser = skip_source_block(parser) }
+            continue
+        }
+        if current_token(declaration).kind == "eof" { break }
+        if current_token(parser).text == "{" {
+            parser = skip_source_block(parser)
+        } else {
+            parser = advance(parser)
+        }
+    }
+    return ok(SourceModuleContext{ module_id: module_id, functions: functions, public_names: public_names })
+}
+
+fn find_source_module(modules: Array[SourceModule], path: String) -> Int {
+    let mut index: Int = 0
+    while index < len(modules) {
+        let module: SourceModule = unwrap_or(array_get(modules, index), SourceModule{ path: "", tokens: [], imports: [] })
+        if module.path == path { return index }
+        index = index + 1
+    }
+    return -1
+}
+
+fn source_module_scope(modules: Array[SourceModule], contexts: Array[SourceModuleContext], module_index: Int, directory: String) -> Result[Map[String, SourceFunction], String] {
+    let module: SourceModule = unwrap_or(array_get(modules, module_index), SourceModule{ path: "", tokens: [], imports: [] })
+    let own: SourceModuleContext = unwrap_or(array_get(contexts, module_index), SourceModuleContext{ module_id: "", functions: {}, public_names: [] })
+    let mut scope: Map[String, SourceFunction] = own.functions
+    let mut seen: Map[String, Bool] = {}
+    let mut import_index: Int = 0
+    while import_index < len(module.imports) {
+        let imported_name: String = unwrap_or(array_get(module.imports, import_index), "")
+        let imported_path: String = directory + imported_name + ".kry"
+        if !map_contains_key(seen, imported_path) {
+            let target_index: Int = find_source_module(modules, imported_path)
+            if target_index < 0 { return err("module: import resolver lost module '" + imported_name + "'") }
+            let imported: SourceModuleContext = unwrap_or(array_get(contexts, target_index), SourceModuleContext{ module_id: "", functions: {}, public_names: [] })
+            let mut public_index: Int = 0
+            while public_index < len(imported.public_names) {
+                let name: String = unwrap_or(array_get(imported.public_names, public_index), "")
+                if map_contains_key(scope, name) { return err("module: duplicate visible function '" + name + "' in '" + module.path + "'") }
+                let signature: Option[SourceFunction] = map_get(imported.functions, name)
+                if is_none(signature) { return err("module: missing export '" + name + "' from '" + imported_name + "'") }
+                scope = map_insert(scope, name, unwrap_or(signature, SourceFunction{ return_type: "", parameters: [], symbol: "" }))
+                public_index = public_index + 1
+            }
+            seen = map_insert(seen, imported_path, true)
+        }
+        import_index = import_index + 1
+    }
+    return ok(scope)
 }
 
 fn skip_source_block(parser: SourceParser) -> SourceParser {
@@ -1509,7 +1706,7 @@ fn predeclare_functions(parser: SourceParser) -> Result[SourceParser, String] {
         }
         current = advance(current)
     }
-    return ok(SourceParser{ tokens: parser.tokens, position: parser.position, bindings: parser.bindings, functions: functions, structs: parser.structs })
+    return ok(SourceParser{ tokens: parser.tokens, position: parser.position, module_id: parser.module_id, bindings: parser.bindings, functions: functions, structs: parser.structs })
 }
 
 fn parse_function(parser: SourceParser, public: Bool) -> Result[ParsedFunction, String] {
@@ -1554,13 +1751,13 @@ fn parse_function(parser: SourceParser, public: Bool) -> Result[ParsedFunction, 
     if is_err(parsed_return) { return err(unwrap_or(result_error(parsed_return), "parser: expected a function return type")) }
     let return_type: String = result_unwrap(parsed_return).name
     if return_type != "Nil" && !source_type_supported(parser, return_type) { return err("parser: unsupported function return type '" + return_type + "'") }
-    let signature: SourceFunction = SourceFunction{ return_type: return_type, parameters: parameter_types }
-    let local_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: result_unwrap(parsed_return).parser.position, bindings: local_bindings, functions: map_insert(parser.functions, name.text, signature), structs: parser.structs }
+    let signature: SourceFunction = SourceFunction{ return_type: return_type, parameters: parameter_types, symbol: source_function_symbol(parser.module_id, name.text) }
+    let local_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: result_unwrap(parsed_return).parser.position, module_id: parser.module_id, bindings: local_bindings, functions: map_insert(parser.functions, name.text, signature), structs: parser.structs }
     let body: Result[ParsedStatements, String] = parse_block(local_parser)
     if is_err(body) { return err(statements_error(body)) }
     let parsed_body: ParsedStatements = result_unwrap(body)
-    let outer_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: parsed_body.parser.position, bindings: parser.bindings, functions: map_insert(parser.functions, name.text, signature), structs: parser.structs }
-    let function_json: String = "{\"name\":" + json_quote(name.text) + ",\"public\":" + bool_text(public) + ",\"params\":" + parameters_json + "] ,\"return\":" + json_quote(return_type) + ",\"body\":" + parsed_body.json + "}"
+    let outer_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: parsed_body.parser.position, module_id: parser.module_id, bindings: parser.bindings, functions: map_insert(parser.functions, name.text, signature), structs: parser.structs }
+    let function_json: String = "{\"name\":" + json_quote(signature.symbol) + ",\"public\":" + bool_text(public) + ",\"worker\":false,\"unsafe\":false,\"module\":\"\",\"receiver\":\"\",\"type_params\":[],\"params\":" + parameters_json + "] ,\"return\":" + json_quote(return_type) + ",\"body\":" + parsed_body.json + "}"
     return ok(ParsedFunction{ parser: outer_parser, json: function_json })
 }
 
@@ -1615,11 +1812,11 @@ fn parse_for(parser: SourceParser) -> Result[ParsedStatements, String] {
     let parsed_iterator: ParsedExpr = result_unwrap(iterator)
     if !is_array_type(parsed_iterator.expression.type_name) { return err("parser: for iterator must be Array[T]") }
     let item_type: String = array_inner(parsed_iterator.expression.type_name)
-    let loop_parser: SourceParser = SourceParser{ tokens: parsed_iterator.parser.tokens, position: parsed_iterator.parser.position, bindings: map_insert(parsed_iterator.parser.bindings, binding_token.text, SourceBinding{ type_name: item_type, mutable: false, known: false, display: "" }), functions: parsed_iterator.parser.functions, structs: parsed_iterator.parser.structs }
+    let loop_parser: SourceParser = SourceParser{ tokens: parsed_iterator.parser.tokens, position: parsed_iterator.parser.position, module_id: parsed_iterator.parser.module_id, bindings: map_insert(parsed_iterator.parser.bindings, binding_token.text, SourceBinding{ type_name: item_type, mutable: false, known: false, display: "" }), functions: parsed_iterator.parser.functions, structs: parsed_iterator.parser.structs }
     let body: Result[ParsedStatements, String] = parse_block(loop_parser)
     if is_err(body) { return err(statements_error(body)) }
     let parsed_body: ParsedStatements = result_unwrap(body)
-    let outer: SourceParser = SourceParser{ tokens: parsed_body.parser.tokens, position: parsed_body.parser.position, bindings: parser.bindings, functions: parsed_body.parser.functions, structs: parsed_body.parser.structs }
+    let outer: SourceParser = SourceParser{ tokens: parsed_body.parser.tokens, position: parsed_body.parser.position, module_id: parser.module_id, bindings: parser.bindings, functions: parsed_body.parser.functions, structs: parsed_body.parser.structs }
     let json: String = statement_json("for", "\"name\":" + json_quote(binding_token.text) + ",\"iter\":" + parsed_iterator.expression.json + ",\"body\":" + parsed_body.json)
     return ok(ParsedStatements{ parser: outer, json: json })
 }
@@ -1689,14 +1886,57 @@ fn parse_program(parser: SourceParser) -> Result[ParsedProgram, String] {
     return ok(ParsedProgram{ parser: current, statements: statements, functions: functions, structs: structs })
 }
 
-fn compile_source(source: String) -> Result[Bytes, String] {
-    let tokens: Result[Array[SourceToken], String] = lex(source)
-    if is_err(tokens) { return err(unwrap_or(result_error(tokens), "lexer error")) }
-    let parser: SourceParser = SourceParser{ tokens: result_unwrap(tokens), position: 0, bindings: {}, functions: {}, structs: {} }
-    let program: Result[ParsedProgram, String] = parse_program(parser)
-    if is_err(program) { return err(program_error(program)) }
-    let parsed: ParsedProgram = result_unwrap(program)
-    let document_text: String = "{\"format\":\"kry-ir\",\"version\":2,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":" + parsed.structs + ",\"enums\":[],\"functions\":" + parsed.functions + ",\"statements\":" + parsed.statements + "}"
+fn json_array_items(value: String) -> String {
+    let chars: Array[String] = string_chars(value)
+    if len(chars) < 2 { return "" }
+    let inner: Result[String, String] = substring(value, 1, len(chars) - 2)
+    return result_unwrap(inner)
+}
+
+fn compile_path(path: String, target_os: String, target_arch: String) -> Result[Bytes, String] {
+    let initial: SourceModules = SourceModules{ items: [], visiting: {}, loaded: {} }
+    let loaded: Result[SourceModules, String] = load_source_modules(path, source_directory(path), initial)
+    if is_err(loaded) { return err(unwrap_or(result_error(loaded), "module load failed")) }
+    let modules: Array[SourceModule] = result_unwrap(loaded).items
+    let mut contexts: Array[SourceModuleContext] = []
+    let mut index: Int = 0
+    while index < len(modules) {
+        let declaration_module: SourceModule = unwrap_or(array_get(modules, index), SourceModule{ path: "", tokens: [], imports: [] })
+        let declaration_context: Result[SourceModuleContext, String] = collect_module_context(declaration_module, index, index == len(modules) - 1)
+        if is_err(declaration_context) { return err(unwrap_or(result_error(declaration_context), "module declaration error")) }
+        contexts = array_push(contexts, result_unwrap(declaration_context))
+        index = index + 1
+    }
+    let mut function_items: Array[String] = []
+    let mut struct_items: Array[String] = []
+    let mut source_items: Array[String] = []
+    let mut import_items: Array[String] = []
+    let mut statements: String = "[]"
+    index = 0
+    while index < len(modules) {
+        let module: SourceModule = unwrap_or(array_get(modules, index), SourceModule{ path: "", tokens: [], imports: [] })
+        let context: SourceModuleContext = unwrap_or(array_get(contexts, index), SourceModuleContext{ module_id: "", functions: {}, public_names: [] })
+        let scope: Result[Map[String, SourceFunction], String] = source_module_scope(modules, contexts, index, source_directory(path))
+        if is_err(scope) { return err(unwrap_or(result_error(scope), "module scope error")) }
+        let parser: SourceParser = SourceParser{ tokens: module.tokens, position: 0, module_id: context.module_id, bindings: {}, functions: result_unwrap(scope), structs: {} }
+        let program: Result[ParsedProgram, String] = parse_program(parser)
+        if is_err(program) { return err("module '" + module.path + "': " + program_error(program)) }
+        let parsed: ParsedProgram = result_unwrap(program)
+        if index != len(modules) - 1 && parsed.statements != "[]" { return err("module '" + module.path + "': imported modules cannot contain top-level statements") }
+        if parsed.functions != "[]" { function_items = array_push(function_items, json_array_items(parsed.functions)) }
+        if parsed.structs != "[]" { struct_items = array_push(struct_items, json_array_items(parsed.structs)) }
+        source_items = array_push(source_items, json_quote(module.path))
+        if index == len(modules) - 1 {
+            statements = parsed.statements
+            let mut import_index: Int = 0
+            while import_index < len(module.imports) {
+                import_items = array_push(import_items, json_quote(unwrap_or(array_get(module.imports, import_index), "")))
+                import_index = import_index + 1
+            }
+        }
+        index = index + 1
+    }
+    let document_text: String = "{\"format\":\"kry-ir\",\"version\":2,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":" + json_quote(path) + ",\"target\":{\"os\":" + json_quote(target_os) + ",\"arch\":" + json_quote(target_arch) + ",\"gui\":false},\"imports\":[" + join_json_items(import_items, 0, len(import_items)) + "],\"sources\":[" + join_json_items(source_items, 0, len(source_items)) + "],\"structs\":[" + join_json_items(struct_items, 0, len(struct_items)) + "],\"enums\":[],\"functions\":[" + join_json_items(function_items, 0, len(function_items)) + "],\"statements\":" + statements + "}"
     let document: Result[Json, String] = json_parse(document_text)
     if is_err(document) { return err(unwrap_or(result_error(document), "source frontend produced invalid KIR")) }
     let lowered: Result[Bytes, String] = compile_document(result_unwrap(document))
@@ -1712,14 +1952,20 @@ fn fail_compilation(message: String) -> Nil {
 
 fn main() -> Nil {
     let args: Array[String] = process_args()
-    if len(args) != 2 {
-        return fail_compilation("source compiler expects 2 arguments, got " + str(len(args)))
+    if len(args) < 2 || len(args) > 3 {
+        return fail_compilation("source compiler expects source, output, and optional target (2 or 3 arguments), got " + str(len(args)))
     }
-    let source_result: Result[String, String] = fs_read_text(args[0])
-    if is_err(source_result) {
-        return fail_compilation("source compiler read failed: " + unwrap_or(result_error(source_result), "unknown error"))
+    let mut target_os: String = "linux"
+    let mut target_arch: String = "amd64"
+    if len(args) == 3 {
+        let requested_target: String = args[2]
+        if requested_target == "windows-amd64" {
+            target_os = "windows"
+        } else if requested_target != "linux-amd64" {
+            return fail_compilation("unsupported target '" + requested_target + "' (supported: linux-amd64, windows-amd64)")
+        }
     }
-    let compiled: Result[Bytes, String] = compile_source(result_unwrap(source_result))
+    let compiled: Result[Bytes, String] = compile_path(args[0], target_os, target_arch)
     if is_err(compiled) {
         return fail_compilation("source compiler compile failed: " + unwrap_or(result_error(compiled), "unknown error"))
     }

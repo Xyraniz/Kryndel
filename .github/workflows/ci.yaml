@@ -37,12 +37,20 @@ jobs:
       - name: Rebuild and verify bootstrap stages
         env:
           KRY_REQUIRE_LOCKED_BOOTSTRAP: '1'
+          KRY_STAGE36_WINDOWS_PE_OUTPUT: ${{ runner.temp }}/stage36-selfhost.exe
         run: bash scripts/bootstrap-stage3.sh
         timeout-minutes: 30
+      - name: Upload Stage 2 Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage36-selfhost-windows-amd64
+          path: ${{ runner.temp }}/stage36-selfhost.exe
+          if-no-files-found: error
 
   windows:
     name: Windows amd64 native Go tests
     runs-on: windows-latest
+    needs: bootstrap
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -55,6 +63,17 @@ jobs:
           CGO_ENABLED: '0'
         run: go test ./...
         timeout-minutes: 30
+      - name: Download Stage 2 Windows executable
+        uses: actions/download-artifact@v4
+        with:
+          name: stage36-selfhost-windows-amd64
+          path: stage36-pe
+      - name: Execute Stage 2 generated Windows executable
+        shell: pwsh
+        run: |
+          $output = & .\stage36-pe\stage36-selfhost.exe
+          if ($LASTEXITCODE -ne 0) { throw "Stage 2 PE exited with $LASTEXITCODE" }
+          if (($output -join "`n") -ne "42") { throw "Unexpected Stage 2 PE output: $output" }
 
   race:
     name: Go race detector

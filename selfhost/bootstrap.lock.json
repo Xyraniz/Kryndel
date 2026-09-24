@@ -1,22 +1,23 @@
 {
-  "schema_version": 2,
-  "source_revision": "cb4b2292eec98ba05481ff47b7a85a8050117787",
+  "schema_version": 3,
+  "source_revision": "e778307f52302b133aaff2e8517abedf3bee0bae",
   "target": "linux-amd64",
   "host_go": "go1.26.0",
   "stage0_build": "CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry",
-  "source_compiler_kir_bytes": 58378437,
+  "source_compiler_kir_bytes": 67200306,
+  "source_compiler_kir_max_bytes": 134217728,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
-    "stage0-host-kry-linux-amd64": "77959ef382720d1ea9ddfd6f786361bf47f9583def9ef9ff849bce9b4983ccc9",
-    "source-compiler.kir": "8173510454ff5603685412887da734741a3b36ab5ed64190c04a8d1ceff4f971",
-    "stage1-source-kir-compiler.elf": "ffff12169d3b17ee859a2f744bc8084480c5249cdd534a8cbd67eee3dadcb3ed",
-    "source_kir_compiler.kry": "b89231e732bb5517e82ff7d266afe965720964520841106dba668c21f4e14ca9",
-    "dynamic_backend.kry": "a97054c4ebb18b90a38d039ecba98e9357f189761cd1628379f2e8af35633503",
+    "stage0-host-kry-linux-amd64": "fe34a03963c1b0bfb4359011918c242afe40fdd9451280772eea53075d8d0373",
+    "source-compiler.kir": "7054167b263bbfe32e21c3f8b04572ac867418c41683e9217cf8a62ae83f523d",
+    "stage1-source-kir-compiler.elf": "8e019e8dac11b5ba9d591f2fe2965dffd0ca1c14c9ac565b8899adc3a86fa680",
+    "source_kir_compiler.kry": "356d2c8d7c26afc5ccf53522e840967e90f8ee9b63e8ba85626ba6aacd917560",
+    "dynamic_backend.kry": "43beaa8f20cb62e6eee4d928013069aff16721a1c495f2489f83464271cd112b",
     "elf_backend.kry": "0348e0230050815a2d5c5d37ead0e3216f831e65f6ce00ddd49c98067a5eaf57",
     "kir_backend.kry": "3a1be5137d9d8fa08f86e310adde81c83a3269ad156b89258f2a02fe1e37331a",
-    "source-kir-compiler-bundle.kry": "1c6819ca4876ac2c552a3ef2a2700ae7a487fe74082f5038ec1720f4a35811f3",
+    "pe_backend.kry": "8e50b8723a5554b256d45665a2a63af28564fd85416feba19b66a7fab4a6c9d0",
     "bootstrap-fixture.kry": "eb24d52f08ffb85bba3946c15273abd8f2c85a2b3b2b91018e91800533206c0d",
-    "stage2-source-kir-compiler.elf": "7da6d2f2c95e7870e2d9d89183bb3b22b404629f7a50ff9dea095771b5482e7c",
-    "stage3-source-kir-compiler.elf": "7da6d2f2c95e7870e2d9d89183bb3b22b404629f7a50ff9dea095771b5482e7c"
+    "stage2-source-kir-compiler.elf": "3f2dedcfc1542ed3b35a36e1d8a82e33035024ddb51065d70aca9ad25a2f7606",
+    "stage3-source-kir-compiler.elf": "3f2dedcfc1542ed3b35a36e1d8a82e33035024ddb51065d70aca9ad25a2f7606"
   }
 }
