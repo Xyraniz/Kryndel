@@ -1,0 +1,56 @@
+// Shared Discord API value types and validated constructors.
+
+// Discord bot account client. Self-bots and normal-user account automation
+// are intentionally unsupported.
+pub struct Bot {
+    private token: String,
+    private intents: Array[String],
+    private gateway: String,
+    private shard_id: Int,
+    private shard_count: Int,
+}
+
+struct GatewaySessionState {
+    private reconnect: Bool,
+    private session_id: String,
+    private sequence: Int,
+    private resume_url: String,
+}
+
+pub struct Webhook {
+    private id: String,
+    private token: String,
+}
+
+pub fn bot(token: String, intents: Array[String]) -> Result[Bot, String] {
+    if !valid_token(token) { return err("Discord bot token must be non-empty and contain no control characters") }
+    let checked_intents: Result[Int, String] = intent_mask(intents)
+    match checked_intents {
+        err(problem) => { return err(problem) }
+        ok(_) => {}
+    }
+    return ok(Bot{token: token, intents: intents, gateway: "https://discord.com/api/v10/gateway/bot", shard_id: 0, shard_count: 1})
+}
+
+pub fn webhook(id: String, token: String) -> Result[Webhook, String] {
+    if !valid_snowflake(id) { return err("webhook ID must be a Discord snowflake") }
+    if !valid_interaction_token(token) { return err("invalid webhook token") }
+    return ok(Webhook{id: id, token: token})
+}
+
+pub fn webhook_from_url(value: String) -> Result[Webhook, String] {
+    let parts: Array[String] = split(value, "/")
+    if len(parts) != 7 { return err("webhook URL must be https://discord.com/api/webhooks/{id}/{token}") }
+    if parts[0] != "https:" || parts[1] != "" || parts[2] != "discord.com" || parts[3] != "api" || parts[4] != "webhooks" {
+        return err("webhook URL must use Discord's HTTPS API host and webhook path")
+    }
+    return webhook(parts[5], parts[6])
+}
+
+pub fn webhook_from_json(value: Json) -> Result[Webhook, String] {
+    let id_value: Json = json_object_get(value, "id")?
+    let id: String = json_string(id_value)?
+    let token_value: Json = json_object_get(value, "token")?
+    let token: String = json_string(token_value)?
+    return webhook(id, token)
+}

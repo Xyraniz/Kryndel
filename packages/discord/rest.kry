@@ -1,0 +1,349 @@
+// Webhook and bot REST endpoints.
+
+impl Webhook {
+    // Raw JSON exposes Discord's complete execute/edit payload surface, including
+    // embeds, components, polls, allowed_mentions, and future API fields.
+    pub fn execute_json(payload_json: String, wait: Bool, thread_id: String) -> Result[String, String] {
+        let checked_thread: Result[String, String] = webhook_thread_query(thread_id)
+        match checked_thread {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut query: String = "?wait=false"
+                if wait { query = "?wait=true" }
+                if thread_query != "" { query = query + "&" + thread_query }
+                let route: String = "/webhooks/" + self.id + "/" + self.token + query
+                return discord_interaction_request("POST", route, payload_json)
+            }
+        }
+    }
+
+    // Uploads raw file bytes as Discord multipart fields files[0]..files[9].
+    // The JSON payload must include attachment metadata for those files.
+    pub fn upload_files_json(payload_json: String, filenames: Array[String], file_data: Array[Bytes], thread_id: String) -> Result[String, String] {
+        if len(filenames) == 0 || len(filenames) > 10 || len(filenames) != len(file_data) {
+            return err("webhook upload requires matching filename and byte arrays with 1 to 10 files")
+        }
+        let checked_thread: Result[String, String] = webhook_thread_query(thread_id)
+        match checked_thread {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut route: String = "/webhooks/" + self.id + "/" + self.token + "?wait=true"
+                if thread_query != "" { route = route + "&" + thread_query }
+                return discord_webhook_upload("POST", route, payload_json, filenames, file_data, self.token)
+            }
+        }
+    }
+
+    pub fn send_files(content: String, filenames: Array[String], file_data: Array[Bytes], thread_id: String) -> Result[Json, String] {
+        let payload: String = webhook_files_payload(content, filenames)?
+        let response: Result[String, String] = self.upload_files_json(payload, filenames, file_data, thread_id)
+        return response_json(response)
+    }
+
+    // Plain-text sends suppress mentions unless the caller uses execute_json
+    // and explicitly supplies allowed_mentions.
+    pub fn send(content: String) -> Result[Json, String] {
+        if discord_text_length(content) == 0 || discord_text_length(content) > 2000 {
+            return err("webhook content must contain 1 to 2000 UTF-16 code units")
+        }
+        let quoted: Result[String, String] = json_quote(content)
+        match quoted {
+            err(problem) => { return err(problem) }
+            ok(encoded) => {
+                let payload: String = "{\"content\":" + encoded + ",\"allowed_mentions\":{\"parse\":[]}}"
+                let response: Result[String, String] = self.execute_json(payload, true, "")
+                return response_json(response)
+            }
+        }
+    }
+
+    pub fn fetch() -> Result[Json, String] {
+        return response_json(discord_interaction_request("GET", "/webhooks/" + self.id + "/" + self.token, ""))
+    }
+
+    pub fn edit_json(payload_json: String) -> Result[Json, String] {
+        return response_json(discord_interaction_request("PATCH", "/webhooks/" + self.id + "/" + self.token, payload_json))
+    }
+
+    pub fn delete() -> Result[Nil, String] {
+        let result: Result[String, String] = discord_interaction_request("DELETE", "/webhooks/" + self.id + "/" + self.token, "")
+        match result { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+    }
+
+    pub fn fetch_message(message_id: String, thread_id: String) -> Result[Json, String] {
+        if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+        let query: Result[String, String] = webhook_thread_query(thread_id)
+        match query {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut suffix: String = ""
+                if thread_query != "" { suffix = "?" + thread_query }
+                let route: String = "/webhooks/" + self.id + "/" + self.token + "/messages/" + message_id + suffix
+                return response_json(discord_interaction_request("GET", route, ""))
+            }
+        }
+    }
+
+    pub fn edit_message_json(message_id: String, payload_json: String, thread_id: String) -> Result[Json, String] {
+        if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+        let query: Result[String, String] = webhook_thread_query(thread_id)
+        match query {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut suffix: String = ""
+                if thread_query != "" { suffix = "?" + thread_query }
+                let route: String = "/webhooks/" + self.id + "/" + self.token + "/messages/" + message_id + suffix
+                return response_json(discord_interaction_request("PATCH", route, payload_json))
+            }
+        }
+    }
+
+    pub fn edit_message_files_json(message_id: String, payload_json: String, filenames: Array[String], file_data: Array[Bytes], thread_id: String) -> Result[Json, String] {
+        if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+        if len(filenames) == 0 || len(filenames) > 10 || len(filenames) != len(file_data) {
+            return err("webhook edit requires matching filename and byte arrays with 1 to 10 files")
+        }
+        let query: Result[String, String] = webhook_thread_query(thread_id)
+        match query {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut suffix: String = ""
+                if thread_query != "" { suffix = "?" + thread_query }
+                let route: String = "/webhooks/" + self.id + "/" + self.token + "/messages/" + message_id + suffix
+                let response: Result[String, String] = discord_webhook_upload("PATCH", route, payload_json, filenames, file_data, self.token)
+                return response_json(response)
+            }
+        }
+    }
+
+    pub fn delete_message(message_id: String, thread_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+        let query: Result[String, String] = webhook_thread_query(thread_id)
+        match query {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut suffix: String = ""
+                if thread_query != "" { suffix = "?" + thread_query }
+                let route: String = "/webhooks/" + self.id + "/" + self.token + "/messages/" + message_id + suffix
+                let result: Result[String, String] = discord_interaction_request("DELETE", route, "")
+                match result { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+            }
+        }
+    }
+}
+
+impl Bot {
+
+    // Raw REST access keeps the complete API v10 route surface available.
+    // The host and authentication scheme are fixed by the runtime builtin.
+    pub fn request(method: String, route: String, body: String) -> Result[String, String] {
+        return discord_api_request(method, route, body, self.token)
+    }
+
+    pub fn with_shard(shard_id: Int, shard_count: Int) -> Result[Bot, String] {
+        if shard_count < 1 || shard_count > 1024 || shard_id < 0 || shard_id >= shard_count {
+            return err("shard_id must be within a shard_count from 1 to 1024")
+        }
+        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: shard_id, shard_count: shard_count})
+    }
+
+    pub fn upload(method: String, route: String, payload_json: String, filename: String, data: Bytes) -> Result[String, String] {
+        return discord_api_upload(method, route, payload_json, filename, data, self.token)
+    }
+
+    pub fn create_webhook(channel_id: String, name: String) -> Result[Webhook, String] {
+        if !valid_snowflake(channel_id) { return err("channel_id must be a Discord snowflake") }
+        if discord_text_length(name) == 0 || discord_text_length(name) > 80 { return err("webhook name must contain 1 to 80 UTF-16 code units") }
+        let quoted: Result[String, String] = json_quote(name)
+        match quoted {
+            err(problem) => { return err(problem) }
+            ok(encoded) => {
+                let payload: String = "{\"name\":" + encoded + "}"
+                let response: Json = response_json(self.request("POST", "/channels/" + channel_id + "/webhooks", payload))?
+                return webhook_from_json(response)
+            }
+        }
+    }
+
+    pub fn list_channel_webhooks(channel_id: String) -> Result[Json, String] {
+        if !valid_snowflake(channel_id) { return err("channel_id must be a Discord snowflake") }
+        return response_json(self.request("GET", "/channels/" + channel_id + "/webhooks", ""))
+    }
+
+    pub fn list_guild_webhooks(guild_id: String) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        return response_json(self.request("GET", "/guilds/" + guild_id + "/webhooks", ""))
+    }
+
+    pub fn fetch_webhook(webhook_id: String) -> Result[Json, String] {
+        if !valid_snowflake(webhook_id) { return err("webhook_id must be a Discord snowflake") }
+        return response_json(self.request("GET", "/webhooks/" + webhook_id, ""))
+    }
+
+    pub fn edit_webhook_json(webhook_id: String, payload_json: String) -> Result[Json, String] {
+        if !valid_snowflake(webhook_id) { return err("webhook_id must be a Discord snowflake") }
+        return response_json(self.request("PATCH", "/webhooks/" + webhook_id, payload_json))
+    }
+
+    pub fn delete_webhook(webhook_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(webhook_id) { return err("webhook_id must be a Discord snowflake") }
+        let result: Result[String, String] = self.request("DELETE", "/webhooks/" + webhook_id, "")
+        match result { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+    }
+
+    pub fn get_current_user() -> Result[Json, String] {
+        return response_json(self.request("GET", "/users/@me", ""))
+    }
+
+    pub fn get_user(user_id: String) -> Result[Json, String] {
+        if !valid_snowflake(user_id) { return err("user_id must be a Discord snowflake") }
+        return response_json(self.request("GET", "/users/" + user_id, ""))
+    }
+
+    pub fn get_guild(guild_id: String) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        return response_json(self.request("GET", "/guilds/" + guild_id, ""))
+    }
+
+    pub fn get_channel(channel_id: String) -> Result[Json, String] {
+        if !valid_snowflake(channel_id) { return err("channel_id must be a Discord snowflake") }
+        return response_json(self.request("GET", "/channels/" + channel_id, ""))
+    }
+
+    pub fn get_message(channel_id: String, message_id: String) -> Result[Json, String] {
+        if !valid_snowflake(channel_id) || !valid_snowflake(message_id) {
+            return err("channel_id and message_id must be Discord snowflakes")
+        }
+        return response_json(self.request("GET", "/channels/" + channel_id + "/messages/" + message_id, ""))
+    }
+
+    pub fn create_dm(user_id: String) -> Result[Json, String] {
+        if !valid_snowflake(user_id) { return err("user_id must be a Discord snowflake") }
+        return response_json(self.request("POST", "/users/@me/channels", "{\"recipient_id\":\"" + user_id + "\"}"))
+    }
+
+    pub fn send_message(channel_id: String, content: String) -> Result[Json, String] {
+        if !valid_snowflake(channel_id) { return err("channel_id must be a Discord snowflake") }
+        if discord_text_length(content) == 0 || discord_text_length(content) > 2000 { return err("message content must contain 1 to 2000 UTF-16 code units") }
+        let quoted: Result[String, String] = json_quote(content)
+        match quoted {
+            err(problem) => { return err(problem) }
+            ok(encoded) => {
+                let body: String = "{\"content\":" + encoded + ",\"allowed_mentions\":{\"parse\":[]}}"
+                return response_json(self.request("POST", "/channels/" + channel_id + "/messages", body))
+            }
+        }
+    }
+
+    pub fn edit_message(channel_id: String, message_id: String, content: String) -> Result[Json, String] {
+        if !valid_snowflake(channel_id) || !valid_snowflake(message_id) {
+            return err("channel_id and message_id must be Discord snowflakes")
+        }
+        if discord_text_length(content) == 0 || discord_text_length(content) > 2000 { return err("message content must contain 1 to 2000 UTF-16 code units") }
+        let quoted: Result[String, String] = json_quote(content)
+        match quoted {
+            err(problem) => { return err(problem) }
+            ok(encoded) => {
+                let body: String = "{\"content\":" + encoded + ",\"allowed_mentions\":{\"parse\":[]}}"
+                return response_json(self.request("PATCH", "/channels/" + channel_id + "/messages/" + message_id, body))
+            }
+        }
+    }
+
+    pub fn delete_message(channel_id: String, message_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(channel_id) || !valid_snowflake(message_id) {
+            return err("channel_id and message_id must be Discord snowflakes")
+        }
+        let result: Result[String, String] = self.request("DELETE", "/channels/" + channel_id + "/messages/" + message_id, "")
+        match result {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
+        }
+    }
+
+    pub fn create_guild_channel(guild_id: String, name: String, channel_type: Int) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        if name == "" || len(name) > 100 { return err("channel name must contain 1 to 100 code points") }
+        let quoted: Result[String, String] = json_quote(name)
+        match quoted {
+            err(problem) => { return err(problem) }
+            ok(encoded) => {
+                let body: String = "{\"name\":" + encoded + ",\"type\":" + str(channel_type) + "}"
+                return response_json(self.request("POST", "/guilds/" + guild_id + "/channels", body))
+            }
+        }
+    }
+
+    pub fn create_role(guild_id: String, name: String) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        if name == "" || len(name) > 100 { return err("role name must contain 1 to 100 code points") }
+        let quoted: Result[String, String] = json_quote(name)
+        match quoted {
+            err(problem) => { return err(problem) }
+            ok(encoded) => {
+                return response_json(self.request("POST", "/guilds/" + guild_id + "/roles", "{\"name\":" + encoded + "}"))
+            }
+        }
+    }
+
+    pub fn delete_role(guild_id: String, role_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(guild_id) || !valid_snowflake(role_id) {
+            return err("guild_id and role_id must be Discord snowflakes")
+        }
+        let result: Result[String, String] = self.request("DELETE", "/guilds/" + guild_id + "/roles/" + role_id, "")
+        match result {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
+        }
+    }
+
+    pub fn add_member_role(guild_id: String, user_id: String, role_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(guild_id) || !valid_snowflake(user_id) || !valid_snowflake(role_id) {
+            return err("guild_id, user_id, and role_id must be Discord snowflakes")
+        }
+        let result: Result[String, String] = self.request("PUT", "/guilds/" + guild_id + "/members/" + user_id + "/roles/" + role_id, "")
+        match result {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
+        }
+    }
+
+    pub fn remove_member_role(guild_id: String, user_id: String, role_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(guild_id) || !valid_snowflake(user_id) || !valid_snowflake(role_id) {
+            return err("guild_id, user_id, and role_id must be Discord snowflakes")
+        }
+        let result: Result[String, String] = self.request("DELETE", "/guilds/" + guild_id + "/members/" + user_id + "/roles/" + role_id, "")
+        match result {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
+        }
+    }
+
+    pub fn ban(guild_id: String, user_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(guild_id) || !valid_snowflake(user_id) { return err("guild_id and user_id must be Discord snowflakes") }
+        let result: Result[String, String] = self.request("PUT", "/guilds/" + guild_id + "/bans/" + user_id, "{\"delete_message_seconds\":0}")
+        match result {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
+        }
+    }
+
+    pub fn unban(guild_id: String, user_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(guild_id) || !valid_snowflake(user_id) { return err("guild_id and user_id must be Discord snowflakes") }
+        let result: Result[String, String] = self.request("DELETE", "/guilds/" + guild_id + "/bans/" + user_id, "")
+        match result {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
+        }
+    }
+
+    pub fn kick(guild_id: String, user_id: String) -> Result[Nil, String] {
+        if !valid_snowflake(guild_id) || !valid_snowflake(user_id) { return err("guild_id and user_id must be Discord snowflakes") }
+        let result: Result[String, String] = self.request("DELETE", "/guilds/" + guild_id + "/members/" + user_id, "")
+        match result {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
+        }
+    }
+
+}
