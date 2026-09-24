@@ -162,7 +162,7 @@ func safeComponents(root, target string) bool {
 	return true
 }
 func (l *ModuleLoader) merge(root *Program) *Program {
-	out := &Program{Source: root.Source, Module: root.Module, Sources: []*Source{root.Source}, Statements: root.Statements, Functions: append([]*Function{}, root.Functions...), Structs: append([]*StructDecl{}, root.Structs...), Enums: append([]*EnumDecl{}, root.Enums...)}
+	out := &Program{Source: root.Source, Module: root.Module, Imports: append([]ImportDecl{}, root.Imports...), Sources: []*Source{root.Source}, Statements: root.Statements, Functions: append([]*Function{}, root.Functions...), Structs: append([]*StructDecl{}, root.Structs...), Enums: append([]*EnumDecl{}, root.Enums...)}
 	seen := map[string]bool{root.Source.Name: true}
 	var add func(*Program)
 	add = func(p *Program) {

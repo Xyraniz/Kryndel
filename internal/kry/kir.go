@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
+	"strings"
 )
 
 // KIR is the host-independent representation exchanged between the
@@ -182,42 +184,43 @@ func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	if p == nil || c == nil || c.Env == nil {
 		return nil, fmt.Errorf("missing checked program")
 	}
+	paths := newKIRPathNames(p)
 	d := &KIRDocument{
-		Format: KIRFormat, Version: KIRVersion, LanguageVersion: LanguageVersion, Module: p.Module,
-		Source: sourceName(p.Source), Target: KIRTarget{OS: target.OS, Arch: target.Arch, GUI: target.GUI},
+		Format: KIRFormat, Version: KIRVersion, LanguageVersion: LanguageVersion, Module: paths.name(p.Module),
+		Source: paths.source(p.Source), Target: KIRTarget{OS: target.OS, Arch: target.Arch, GUI: target.GUI},
 		Imports: make([]string, 0, len(p.Imports)), Sources: make([]string, 0, len(p.Sources)),
 		Structs: make([]*KIRStruct, 0, len(p.Structs)), Enums: make([]*KIREnum, 0, len(p.Enums)),
 		Functions: make([]*KIRFunction, 0, len(p.Functions)), Statements: make([]*KIRStmt, 0, len(p.Statements)),
 	}
-	functionTargets := kirFunctionTargets(p)
+	functionTargets := kirFunctionTargets(p, paths)
 	for _, x := range p.Imports {
 		d.Imports = append(d.Imports, x.Path)
 	}
 	for _, x := range p.Sources {
-		d.Sources = append(d.Sources, sourceName(x))
+		d.Sources = append(d.Sources, paths.source(x))
 	}
 	for _, x := range p.Structs {
-		s := &KIRStruct{Name: x.Name, Public: x.Public, Module: x.Module, Fields: make([]*KIRField, 0, len(x.Fields))}
+		s := &KIRStruct{Name: x.Name, Public: x.Public, Module: paths.name(x.Module), Fields: make([]*KIRField, 0, len(x.Fields))}
 		for _, f := range x.Fields {
 			s.Fields = append(s.Fields, &KIRField{Name: f.Name, Public: f.Public, Type: typeString(f.Type, f.Spec)})
 		}
 		d.Structs = append(d.Structs, s)
 	}
 	for _, x := range p.Enums {
-		d.Enums = append(d.Enums, &KIREnum{Name: x.Name, Public: x.Public, Module: x.Module, Variants: append([]string(nil), x.Variants...)})
+		d.Enums = append(d.Enums, &KIREnum{Name: x.Name, Public: x.Public, Module: paths.name(x.Module), Variants: append([]string(nil), x.Variants...)})
 	}
 	for _, x := range p.Functions {
-		f := &KIRFunction{Name: x.Name, Public: x.Public, Worker: x.Worker, Unsafe: x.Unsafe, Module: x.Module, Receiver: typeSpecString(x.Receiver), Return: typeSpecString(x.Return), TypeParams: make([]*KIRTypeParam, 0, len(x.TypeParams)), Params: make([]*KIRParam, 0, len(x.Params)), Body: kirStmts(x.Body, c, functionTargets)}
+		f := &KIRFunction{Name: x.Name, Public: x.Public, Worker: x.Worker, Unsafe: x.Unsafe, Module: paths.name(x.Module), Receiver: typeSpecString(x.Receiver), Return: typeSpecString(x.Return), TypeParams: make([]*KIRTypeParam, 0, len(x.TypeParams)), Params: make([]*KIRParam, 0, len(x.Params)), Body: kirStmts(x.Body, c, functionTargets, paths)}
 		for _, tp := range x.TypeParams {
 			f.TypeParams = append(f.TypeParams, &KIRTypeParam{Name: tp.Name, Constraint: tp.Constraint})
 		}
 		for _, param := range x.Params {
-			f.Params = append(f.Params, &KIRParam{Name: param.Name, Type: typeSpecString(param.Type), Default: kirExpr(param.Default, c, functionTargets)})
+			f.Params = append(f.Params, &KIRParam{Name: param.Name, Type: typeSpecString(param.Type), Default: kirExpr(param.Default, c, functionTargets, paths)})
 		}
 		d.Functions = append(d.Functions, f)
 	}
 	for _, x := range p.Statements {
-		d.Statements = append(d.Statements, kirStmt(x, c, functionTargets))
+		d.Statements = append(d.Statements, kirStmt(x, c, functionTargets, paths))
 	}
 	data, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
@@ -240,54 +243,82 @@ func typeSpecString(s *TypeSpec) string {
 	return TypeSpecString(s)
 }
 
-func sourceName(s *Source) string {
-	if s == nil {
-		return ""
-	}
-	return s.Name
+type kirPathNames struct {
+	root string
 }
 
-func tokenSource(t Token) string { return sourceName(t.Source) }
+func newKIRPathNames(program *Program) kirPathNames {
+	name := program.Module
+	if name == "" && program.Source != nil {
+		name = program.Source.Name
+	}
+	if filepath.IsAbs(name) {
+		return kirPathNames{root: findModuleRoot(filepath.Dir(name))}
+	}
+	return kirPathNames{}
+}
 
-func kirStmts(in []*Stmt, c *Checker, functionTargets map[*Function]string) []*KIRStmt {
+func (paths kirPathNames) name(name string) string {
+	if name == "" {
+		return ""
+	}
+	if paths.root != "" && filepath.IsAbs(name) {
+		relative, err := filepath.Rel(paths.root, name)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return filepath.ToSlash(relative)
+		}
+	}
+	return filepath.ToSlash(name)
+}
+
+func (paths kirPathNames) source(source *Source) string {
+	if source == nil {
+		return ""
+	}
+	return paths.name(source.Name)
+}
+
+func (paths kirPathNames) tokenSource(token Token) string { return paths.source(token.Source) }
+
+func kirStmts(in []*Stmt, c *Checker, functionTargets map[*Function]string, paths kirPathNames) []*KIRStmt {
 	out := make([]*KIRStmt, 0, len(in))
 	for _, x := range in {
-		out = append(out, kirStmt(x, c, functionTargets))
+		out = append(out, kirStmt(x, c, functionTargets, paths))
 	}
 	return out
 }
 
-func kirStmt(s *Stmt, c *Checker, functionTargets map[*Function]string) *KIRStmt {
+func kirStmt(s *Stmt, c *Checker, functionTargets map[*Function]string, paths kirPathNames) *KIRStmt {
 	if s == nil {
 		return nil
 	}
-	k := &KIRStmt{Kind: stmtName(s.Kind), Source: tokenSource(s.Tok), Line: s.Tok.Line, Column: s.Tok.Column, Name: s.Name, Mutable: s.Mutable, Const: s.Const, Annotation: typeSpecString(s.Annotation), Init: kirExpr(s.Init, c, functionTargets), Expr: kirExpr(s.Expr, c, functionTargets), Target: kirExpr(s.Target, c, functionTargets), Value: kirExpr(s.Value, c, functionTargets), Cond: kirExpr(s.Cond, c, functionTargets), Then: kirStmts(s.Then, c, functionTargets), Else: kirStmts(s.Else, c, functionTargets), Body: kirStmts(s.Body, c, functionTargets), Iter: kirExpr(s.Iter, c, functionTargets), Return: kirExpr(s.Return, c, functionTargets), Scrutinee: kirExpr(s.Scrutinee, c, functionTargets), Arms: make([]*KIRArm, 0, len(s.Arms))}
+	k := &KIRStmt{Kind: stmtName(s.Kind), Source: paths.tokenSource(s.Tok), Line: s.Tok.Line, Column: s.Tok.Column, Name: s.Name, Mutable: s.Mutable, Const: s.Const, Annotation: typeSpecString(s.Annotation), Init: kirExpr(s.Init, c, functionTargets, paths), Expr: kirExpr(s.Expr, c, functionTargets, paths), Target: kirExpr(s.Target, c, functionTargets, paths), Value: kirExpr(s.Value, c, functionTargets, paths), Cond: kirExpr(s.Cond, c, functionTargets, paths), Then: kirStmts(s.Then, c, functionTargets, paths), Else: kirStmts(s.Else, c, functionTargets, paths), Body: kirStmts(s.Body, c, functionTargets, paths), Iter: kirExpr(s.Iter, c, functionTargets, paths), Return: kirExpr(s.Return, c, functionTargets, paths), Scrutinee: kirExpr(s.Scrutinee, c, functionTargets, paths), Arms: make([]*KIRArm, 0, len(s.Arms))}
 	for _, arm := range s.Arms {
-		k.Arms = append(k.Arms, &KIRArm{Pattern: kirPattern(arm.Pattern), Body: kirStmts(arm.Body, c, functionTargets)})
+		k.Arms = append(k.Arms, &KIRArm{Pattern: kirPattern(arm.Pattern, paths), Body: kirStmts(arm.Body, c, functionTargets, paths)})
 	}
 	return k
 }
 
-func kirPattern(p Pattern) *KIRPattern {
-	return &KIRPattern{Kind: patternName(p.Kind), Source: tokenSource(p.Tok), Line: p.Tok.Line, Column: p.Tok.Column, Bool: p.Bool, Int: p.Int, String: p.Str, Type: p.TypeName, Variant: p.Variant, Binding: p.Binding, Present: p.Present, OK: p.OK}
+func kirPattern(p Pattern, paths kirPathNames) *KIRPattern {
+	return &KIRPattern{Kind: patternName(p.Kind), Source: paths.tokenSource(p.Tok), Line: p.Tok.Line, Column: p.Tok.Column, Bool: p.Bool, Int: p.Int, String: p.Str, Type: p.TypeName, Variant: p.Variant, Binding: p.Binding, Present: p.Present, OK: p.OK}
 }
 
-func kirExpr(e *Expr, c *Checker, functionTargets map[*Function]string) *KIRExpr {
+func kirExpr(e *Expr, c *Checker, functionTargets map[*Function]string, paths kirPathNames) *KIRExpr {
 	if e == nil {
 		return nil
 	}
-	k := &KIRExpr{Kind: exprName(e.Kind), Source: tokenSource(e.Tok), Line: e.Tok.Line, Column: e.Tok.Column, Type: typeString(e.Type, nil), Int: e.Int, Float: e.Float, Bool: e.Bool, String: e.Str, Name: e.Name, Operator: opText(e.Op), Left: kirExpr(e.Left, c, functionTargets), Right: kirExpr(e.Right, c, functionTargets), Operand: kirExpr(e.Operand, c, functionTargets), Args: make([]*KIRExpr, 0, len(e.Args)), Items: make([]*KIRExpr, 0, len(e.Items)), Base: kirExpr(e.Base, c, functionTargets), Field: e.Field, Receiver: kirExpr(e.Receiver, c, functionTargets), MapKeys: make([]*KIRExpr, 0, len(e.MapKeys)), StructName: e.StructName, Fields: append([]string(nil), e.Fields...), Values: make([]*KIRExpr, 0, len(e.Values)), EnumType: e.EnumType, EnumVariant: e.EnumVariant, Tail: e.Tail}
+	k := &KIRExpr{Kind: exprName(e.Kind), Source: paths.tokenSource(e.Tok), Line: e.Tok.Line, Column: e.Tok.Column, Type: typeString(e.Type, nil), Int: e.Int, Float: e.Float, Bool: e.Bool, String: e.Str, Name: e.Name, Operator: opText(e.Op), Left: kirExpr(e.Left, c, functionTargets, paths), Right: kirExpr(e.Right, c, functionTargets, paths), Operand: kirExpr(e.Operand, c, functionTargets, paths), Args: make([]*KIRExpr, 0, len(e.Args)), Items: make([]*KIRExpr, 0, len(e.Items)), Base: kirExpr(e.Base, c, functionTargets, paths), Field: e.Field, Receiver: kirExpr(e.Receiver, c, functionTargets, paths), MapKeys: make([]*KIRExpr, 0, len(e.MapKeys)), StructName: e.StructName, Fields: append([]string(nil), e.Fields...), Values: make([]*KIRExpr, 0, len(e.Values)), EnumType: e.EnumType, EnumVariant: e.EnumVariant, Tail: e.Tail}
 	for _, x := range e.Args {
-		k.Args = append(k.Args, kirExpr(x, c, functionTargets))
+		k.Args = append(k.Args, kirExpr(x, c, functionTargets, paths))
 	}
 	for _, x := range e.Items {
-		k.Items = append(k.Items, kirExpr(x, c, functionTargets))
+		k.Items = append(k.Items, kirExpr(x, c, functionTargets, paths))
 	}
 	for _, x := range e.MapKeys {
-		k.MapKeys = append(k.MapKeys, kirExpr(x, c, functionTargets))
+		k.MapKeys = append(k.MapKeys, kirExpr(x, c, functionTargets, paths))
 	}
 	for _, x := range e.Values {
-		k.Values = append(k.Values, kirExpr(x, c, functionTargets))
+		k.Values = append(k.Values, kirExpr(x, c, functionTargets, paths))
 	}
 	if e.ConstValue != nil {
 		k.Const = kirValue(*e.ConstValue)

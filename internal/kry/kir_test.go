@@ -3,9 +3,61 @@ package kry
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestKIRImportedProgramIsIndependentOfCheckoutPath(t *testing.T) {
+	writeProject := func(root string) string {
+		t.Helper()
+		lib := filepath.Join(root, "lib")
+		if err := os.MkdirAll(lib, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lib, "math.kry"), []byte("pub fn twice(value: Int) -> Int { return value + value }\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		main := filepath.Join(root, "main.kry")
+		source := "import \"lib/math\"\nfn choose(value: Int) -> Int { return value }\nfn choose(value: String) -> Int { return 2 }\nlet answer: Int = twice(choose(3))\n"
+		if err := os.WriteFile(main, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return main
+	}
+	emit := func(path string) []byte {
+		t.Helper()
+		program, diagnostic := LoadProgram(path, DefaultLimits(), "")
+		if diagnostic != nil {
+			t.Fatal(diagnostic.Message)
+		}
+		checker, diagnostic := Check(program, DefaultLimits())
+		if diagnostic != nil {
+			t.Fatal(diagnostic.Message)
+		}
+		data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	first := emit(writeProject(t.TempDir()))
+	second := emit(writeProject(t.TempDir()))
+	if !bytes.Equal(first, second) {
+		t.Fatal("identical imported sources produced different KIR in different checkout paths")
+	}
+	document, err := DecodeKIR(first, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Module != "main.kry" || document.Source != "main.kry" || len(document.Imports) != 1 || document.Imports[0] != "lib/math" {
+		t.Fatalf("KIR lost logical module identity or imports: module=%q source=%q imports=%q", document.Module, document.Source, document.Imports)
+	}
+	if len(document.Sources) != 2 || document.Sources[0] != "main.kry" || document.Sources[1] != "lib/math.kry" {
+		t.Fatalf("KIR has unexpected source names: %q", document.Sources)
+	}
+}
 
 func TestKIRIsDeterministicAndTyped(t *testing.T) {
 	src := `
