@@ -195,8 +195,12 @@ contracts and must reject unsupported calls.
 Static errors, runtime diagnostics, and recoverable `Result[T, E]` values are
 distinct. A runtime diagnostic terminates the current invocation after deferred
 cleanup. `?` propagates a failed `Option` or `Result` only when the containing
-function returns a compatible type. Host operations return `Result` where the
-builtin contract declares it; the caller may handle those failures.
+function returns the same fallible kind. For `Result`, the error type must be
+compatible with the containing function's error type; the successful value may
+have a different type and is checked where the `?` expression is used. For
+`Option`, any optional value may propagate into an `Option`-returning function.
+Host operations return `Result` where the builtin contract declares it; the
+caller may handle those failures.
 
 CLI diagnostics expose a stable category and code (`KRY001` through `KRY008`),
 severity, source, line, column, and a human-readable message. They do not

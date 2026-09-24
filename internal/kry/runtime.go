@@ -812,25 +812,26 @@ type DispatchEntry struct {
 	Priority int64
 }
 type Runtime struct {
-	Prog         *Program
-	Checker      *Checker
-	Funcs        map[string]*Function
-	Args         []string
-	Global       *RunScope
-	Lim          Limits
-	Sandbox      Sandbox
-	Ctx          *ExecContext
-	Channels     []*Channel
-	Threads      []*Thread
-	Dispatch     map[string][]DispatchEntry
-	nextTimerID  int64
-	Worker       bool
-	propagated   *Value
-	shutdownOnce sync.Once
-	resourceMu   sync.Mutex
-	resources    []runtimeResource
-	discordRates *discordRateLimiter
-	discordCache *discordObjectCache
+	Prog              *Program
+	Checker           *Checker
+	Funcs             map[string]*Function
+	Args              []string
+	Global            *RunScope
+	Lim               Limits
+	Sandbox           Sandbox
+	Ctx               *ExecContext
+	Channels          []*Channel
+	Threads           []*Thread
+	Dispatch          map[string][]DispatchEntry
+	nextTimerID       int64
+	Worker            bool
+	propagated        *Value
+	shutdownOnce      sync.Once
+	resourceMu        sync.Mutex
+	resources         []runtimeResource
+	discordRates      *discordRateLimiter
+	discordCache      *discordObjectCache
+	discordAPIBaseURL string
 }
 
 type runtimeResource struct {
@@ -903,7 +904,7 @@ func NewRuntime(prog *Program, c *Checker, lim Limits, sb Sandbox) (*Runtime, *D
 
 func NewRuntimeWithArgs(prog *Program, c *Checker, lim Limits, sb Sandbox, args []string) (*Runtime, *Diagnostic) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
-	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Args: append([]string(nil), args...), Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(), discordCache: newDiscordObjectCache(10_000, 30*time.Minute)}
+	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Args: append([]string(nil), args...), Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(), discordCache: newDiscordObjectCache(10_000, 30*time.Minute), discordAPIBaseURL: discordAPIBase}
 	return r, nil
 }
 func (r *Runtime) fail(e *Expr, format string, args ...any) *Diagnostic {
@@ -4125,7 +4126,7 @@ func (r *Runtime) spawn(e *Expr, name string) (Value, *Diagnostic) {
 	}
 	go func() {
 		defer close(t.Done)
-		wr := &Runtime{Prog: r.Prog, Checker: r.Checker, Funcs: r.Funcs, Global: newRunScope(nil), Lim: r.Lim, Sandbox: r.Sandbox, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: r.Lim}, Channels: channelsSnapshot, Threads: threadsSnapshot, Worker: true, discordRates: r.discordRates, discordCache: r.discordCache}
+		wr := &Runtime{Prog: r.Prog, Checker: r.Checker, Funcs: r.Funcs, Global: newRunScope(nil), Lim: r.Lim, Sandbox: r.Sandbox, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: r.Lim}, Channels: channelsSnapshot, Threads: threadsSnapshot, Worker: true, discordRates: r.discordRates, discordCache: r.discordCache, discordAPIBaseURL: r.discordAPIBaseURL}
 		wr.Worker = true
 		for n, v := range channelSnapshot {
 			_ = wr.Global.define(n, v, false)
