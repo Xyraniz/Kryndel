@@ -90,13 +90,29 @@ jobs:
           GOARCH: amd64
           CGO_ENABLED: '0'
         run: go build -trimpath -ldflags='-s -w' -o dist/kry-installer-windows-amd64.exe ./cmd/kry-installer
-      - name: Generate checksums, SBOM, and provenance
+      - name: Generate SPDX SBOM from release binaries
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist
+          format: spdx-json
+          output-file: ${{ runner.temp }}/kry-${{ matrix.goos }}-${{ matrix.goarch }}.spdx.json
+          syft-version: v1.52.0
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Validate release SBOM and generate checksums and provenance
         shell: bash
         run: |
+          sbom="$RUNNER_TEMP/kry-${{ matrix.goos }}-${{ matrix.goarch }}.spdx.json"
+          jq -e '
+            .spdxVersion == "SPDX-2.3" and
+            (.packages | type == "array") and
+            ([.packages[]?.externalRefs[]?.referenceLocator | select(type == "string" and startswith("pkg:golang/"))] | length >= 2)
+          ' "$sbom" > /dev/null
+          cp "$sbom" "dist/kry-${{ matrix.goos }}-${{ matrix.goarch }}.spdx.json"
+          compiler="$(go version | awk '{print $3}')"
+          printf 'repository=%s\nref=%s\ncommit=%s\ntarget=${{ matrix.goos }}/${{ matrix.goarch }}\ncompiler=%s\ncgo=disabled\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$GITHUB_SHA" "$compiler" > "dist/kry-${{ matrix.goos }}-${{ matrix.goarch }}.provenance.txt"
           cd dist
           sha256sum kry-* > SHA256SUMS
-          printf '{"SPDXID":"SPDXRef-DOCUMENT","spdxVersion":"SPDX-2.3","name":"Kryndel Go release","documentNamespace":"https://github.com/Xyraniz/Kryndel/releases/${GITHUB_REF_NAME}","packages":[{"SPDXID":"SPDXRef-Package-Kryndel","name":"Kryndel","versionInfo":"%s","downloadLocation":"NOASSERTION","licenseConcluded":"NOASSERTION"}]}' "${GITHUB_REF_NAME#v}" > "kry-${{ matrix.goos }}-${{ matrix.goarch }}.spdx.json"
-          printf 'repository=%s\nref=%s\ncommit=%s\ntarget=${{ matrix.goos }}/${{ matrix.goarch }}\ncompiler=go-${GO_VERSION}\ncgo=disabled\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$GITHUB_SHA" > "kry-${{ matrix.goos }}-${{ matrix.goarch }}.provenance.txt"
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
