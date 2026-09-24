@@ -73,7 +73,7 @@ jobs:
         run: |
           $output = & .\stage36-pe\stage36-selfhost.exe
           if ($LASTEXITCODE -ne 0) { throw "Stage 2 PE exited with $LASTEXITCODE" }
-          if (($output -join "`n") -ne "42") { throw "Unexpected Stage 2 PE output: $output" }
+          if (($output -join "`n") -ne "Mode::Ready`n42") { throw "Unexpected Stage 2 PE output: $output" }
 
   race:
     name: Go race detector
