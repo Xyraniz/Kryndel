@@ -1038,6 +1038,60 @@ fn emit_string_write(state: EmitState) -> Result[EmitState, String] {
     return ok(append_code(state, [u8(72), u8(139), u8(16), u8(72), u8(141), u8(112), u8(8), u8(184), u8(1), u8(0), u8(0), u8(0), u8(191), u8(1), u8(0), u8(0), u8(0), u8(15), u8(5)]))
 }
 
+fn enum_output_name(enum_name: String) -> String {
+    let prefix: String = "@kry_enum_module_"
+    if !starts_with(enum_name, prefix) { return enum_name }
+    let characters: Array[String] = string_chars(enum_name)
+    let mut separator: Int = len(string_chars(prefix))
+    while separator < len(characters) {
+        if unwrap_or(array_get(characters, separator), "") == "_" { break }
+        separator = separator + 1
+    }
+    if separator >= len(characters) - 1 { return enum_name }
+    let display_name: Result[String, String] = substring(enum_name, separator + 1, len(characters) - separator - 1)
+    if is_err(display_name) { return enum_name }
+    return result_unwrap(display_name)
+}
+
+fn emit_enum_output(state: EmitState, expression: Json, newline: Bool) -> Result[EmitState, String] {
+    let emitted: Result[EmitState, String] = emit_expression(state, expression)
+    if is_err(emitted) { return err(expression_error(emitted)) }
+    let mut current: EmitState = result_unwrap(emitted)
+    let enum_name: String = expr_type(expression)
+    let display_name: String = enum_output_name(enum_name)
+    let variants_option: Option[Json] = map_get(current.env.struct_fields, enum_name)
+    if is_none(variants_option) { return err("dynamic backend: enum output has no variants for '" + enum_name + "'") }
+    let variants: Json = unwrap_or(variants_option, result_unwrap(json_parse("[]")))
+    let variant_count: Int = result_unwrap(json_array_len(variants))
+    if variant_count == 0 { return err("dynamic backend: enum output has no variants for '" + enum_name + "'") }
+    let end_label: LabelState = new_label(current)
+    current = end_label.state
+    let mut index: Int = 0
+    while index < variant_count {
+        let variant_name: String = text(result_unwrap(json_array_get(variants, index)))
+        let next_label: LabelState = new_label(current)
+        current = append_code(next_label.state, array_concat([u8(72), u8(61)], i32_bytes(index)))
+        current = emit_jump(current, next_label.label, true, u8(133))
+        let written: Result[EmitState, String] = emit_write(current, display_name + "::" + variant_name)
+        if is_err(written) { return err(unwrap_or(result_error(written), "dynamic backend: enum output failed")) }
+        current = result_unwrap(written)
+        if newline {
+            let line: Result[EmitState, String] = emit_write(current, "\n")
+            if is_err(line) { return err(unwrap_or(result_error(line), "dynamic backend: enum newline output failed")) }
+            current = result_unwrap(line)
+        }
+        current = emit_jump(current, end_label.label, false, u8(0))
+        let bound_next: Result[EmitState, String] = bind_label(current, next_label.label)
+        if is_err(bound_next) { return err(unwrap_or(result_error(bound_next), "dynamic backend: cannot bind enum output branch")) }
+        current = result_unwrap(bound_next)
+        index = index + 1
+    }
+    current = emit_jump(current, current.env.trap_label, false, u8(0))
+    let bound_end: Result[EmitState, String] = bind_label(current, end_label.label)
+    if is_err(bound_end) { return err(unwrap_or(result_error(bound_end), "dynamic backend: cannot bind enum output join")) }
+    return ok(result_unwrap(bound_end))
+}
+
 fn emit_boolean_output(state: EmitState, expression: Json, newline: Bool) -> Result[EmitState, String] {
     let emitted: Result[EmitState, String] = emit_expression(state, expression)
     if is_err(emitted) { return err(expression_error(emitted)) }
@@ -4584,6 +4638,9 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         if type_name == "Bool" {
             return emit_boolean_output(state, argument, target == "builtin:println")
         }
+        if is_enum_type(state.env.struct_fields, type_name) {
+            return emit_enum_output(state, argument, target == "builtin:println")
+        }
         if type_name != "Int" && !starts_with(type_name, "UInt") { return err("dynamic backend: print value has unsupported type '" + type_name + "': " + unwrap_or(result_error(display_value), "dynamic backend: print value is not static")) }
         let generated: Result[EmitState, String] = emit_expression(state, argument)
         if is_err(generated) { return err(expression_error(generated)) }
@@ -5627,7 +5684,6 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
         }
         if !allow_output || (target != "builtin:print" && target != "builtin:println") || count != 1 { return err("PE backend: only statement-form print(value) and println(value) are supported") }
         let output: Json = result_unwrap(json_array_get(args, 0))
-        if pe_is_enum_type(enums, expr_type(output)) { return err("PE backend: printing enum values is not supported") }
         if pe_is_struct_type(structs, expr_type(output)) { return err("PE backend: printing structs is not supported") }
         if starts_with(expr_type(output), "Array[") { return err("PE backend: printing arrays is not supported") }
         if starts_with(expr_type(output), "Map[") { return err("PE backend: printing maps is not supported") }

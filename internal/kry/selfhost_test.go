@@ -49,6 +49,7 @@ import "modes"
 
 fn main() -> Nil {
     let point: Point = translate(Point{x: 40, y: 1})
+    println(Mode::Ready)
     println(score(Mode::Ready, point.x + point.y))
 }
 `,
@@ -82,8 +83,8 @@ pub fn score(mode: Mode, value: Int) -> Int {
 	if err != nil {
 		t.Fatalf("%s compiler's imported struct/enum program failed: %v; output: %s", label, err, programOutput)
 	}
-	if string(programOutput) != "42\n" {
-		t.Fatalf("%s compiler's imported struct/enum output = %q, want %q", label, programOutput, "42\n")
+	if string(programOutput) != "Mode::Ready\n42\n" {
+		t.Fatalf("%s compiler's imported struct/enum output = %q, want %q", label, programOutput, "Mode::Ready\n42\n")
 	}
 }
 
@@ -990,10 +991,16 @@ pub fn translate(point: Point, delta: Int) -> Point {
 	if err := os.WriteFile(geometrySource, []byte(geometry), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	modesSource := filepath.Join(dir, "modes.kry")
+	if err := os.WriteFile(modesSource, []byte("pub enum Mode { Idle, Ready }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	windowsSource := filepath.Join(dir, "windows-program.kry")
 	program := `import "geometry"
+import "modes"
 fn main() -> Nil {
     let point = translate(Point { x: 40, y: 2 }, 2)
+    println(Mode::Ready)
     println(point.x + point.y)
 }
 `
@@ -1019,7 +1026,7 @@ fn main() -> Nil {
 	if _, ok := windowsPE.OptionalHeader.(*pe.OptionalHeader64); !ok {
 		t.Fatal("stage36 second-level compiler emitted PE32, want PE32+")
 	}
-	t.Log("stage36 second-level compiler emitted a valid Windows amd64 PE32+ executable")
+	t.Log("stage36 second-level compiler emitted a valid Windows amd64 PE32+ executable with imported struct and enum modules")
 	if artifactPath := os.Getenv("KRY_STAGE36_WINDOWS_PE_OUTPUT"); artifactPath != "" {
 		if err := os.MkdirAll(filepath.Dir(artifactPath), 0o700); err != nil {
 			t.Fatalf("create Stage36 Windows PE artifact directory: %v", err)
