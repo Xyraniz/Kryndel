@@ -54,7 +54,7 @@ func loadDiscordTestProgram(t *testing.T, source string) (*Program, *Checker) {
 }
 
 func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
-	const version = "2.1.0"
+	const version = "2.2.0"
 	archivePath := filepath.Join("..", "..", "registry", "packages", "discord-"+version+".tar.gz")
 	archive, err := os.ReadFile(archivePath)
 	if err != nil {

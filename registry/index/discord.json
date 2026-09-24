@@ -2,9 +2,9 @@
   "name": "discord",
   "versions": [
     {
-      "version": "2.1.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-2.1.0.tar.gz",
-      "sha256": "456ba230ed2a63ebd16a21353b26c18c47d09e46a4b9a1d6a91db54ee76528c4"
+      "version": "2.2.0",
+      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-2.2.0.tar.gz",
+      "sha256": "7fd0132cee10f429b279fd3be4eaa65c11476ee100e5d7a152dc141202fdde36"
     }
   ]
 }

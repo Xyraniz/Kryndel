@@ -1,5 +1,58 @@
 // Discord interaction responses and application command endpoints.
 
+pub fn interaction_message_response_json(content: String) -> Result[String, String] {
+    if discord_text_length(content) > 2000 {
+        return err("interaction message content must be at most 2000 UTF-16 code units")
+    }
+    let encoded: String = json_quote(content)?
+    return ok("{\"type\":4,\"data\":{\"content\":" + encoded + ",\"allowed_mentions\":{\"parse\":[]}}}")
+}
+
+pub fn interaction_defer_response_json(ephemeral: Bool) -> String {
+    if ephemeral { return "{\"type\":5,\"data\":{\"flags\":64}}" }
+    return "{\"type\":5}"
+}
+
+fn interaction_callback_route(interaction_json: String) -> Result[String, String] {
+    let interaction: Json = json_parse(interaction_json)?
+    let raw_id: Json = json_object_get(interaction, "id")?
+    let interaction_id: String = json_string(raw_id)?
+    let raw_token: Json = json_object_get(interaction, "token")?
+    let interaction_token: String = json_string(raw_token)?
+    if !valid_snowflake(interaction_id) || !valid_interaction_token(interaction_token) {
+        return err("interaction JSON has an invalid ID or token")
+    }
+    return ok("/interactions/" + interaction_id + "/" + interaction_token + "/callback")
+}
+
+fn interaction_webhook_route(interaction_json: String, suffix: String) -> Result[String, String] {
+    let interaction: Json = json_parse(interaction_json)?
+    let raw_application_id: Json = json_object_get(interaction, "application_id")?
+    let application_id: String = json_string(raw_application_id)?
+    let raw_token: Json = json_object_get(interaction, "token")?
+    let interaction_token: String = json_string(raw_token)?
+    if !valid_snowflake(application_id) || !valid_interaction_token(interaction_token) {
+        return err("interaction JSON has an invalid application ID or token")
+    }
+    return ok("/webhooks/" + application_id + "/" + interaction_token + suffix)
+}
+
+// Sends the initial defer immediately so the handler can perform slower work.
+pub fn interaction_defer(interaction_json: String, ephemeral: Bool) -> Result[Nil, String] {
+    let route: String = interaction_callback_route(interaction_json)?
+    let response: Result[String, String] = discord_interaction_request("POST", route, interaction_defer_response_json(ephemeral))
+    match response {
+        ok(_) => { return ok(nil) }
+        err(problem) => { return err(problem) }
+    }
+}
+
+// Sends a follow-up from a raw Gateway interaction inside a registered callback.
+pub fn interaction_followup_json(interaction_json: String, body: String) -> Result[Json, String] {
+    let route: String = interaction_webhook_route(interaction_json, "")?
+    return response_json(discord_interaction_request("POST", route, body))
+}
+
 impl Bot {
 
     pub fn interaction_request(method: String, route: String, body: String) -> Result[String, String] {

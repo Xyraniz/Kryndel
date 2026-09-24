@@ -8,6 +8,73 @@ fn discord_internal_ignore_message_v10(message_json: String) -> String {
     return ""
 }
 
+fn discord_internal_ignore_interaction_v10(interaction_json: String) -> String {
+    return ""
+}
+
+fn discord_interaction_handler_slot(interaction: Json) -> Result[String, String] {
+    let raw_type: Json = json_field(interaction, "type")?
+    let interaction_type: Int = json_int(raw_type)?
+    if interaction_type == 2 || interaction_type == 4 {
+        let data: Json = json_field(interaction, "data")?
+        let raw_name: Json = json_field(data, "name")?
+        let name: String = json_string(raw_name)?
+        if name == "" { return err("Discord interaction command name is empty") }
+        if interaction_type == 2 { return ok("discord.on_command." + name) }
+        return ok("discord.on_autocomplete." + name)
+    }
+    if interaction_type == 3 || interaction_type == 5 {
+        let data: Json = json_field(interaction, "data")?
+        let raw_custom_id: Json = json_field(data, "custom_id")?
+        let custom_id: String = json_string(raw_custom_id)?
+        if custom_id == "" { return err("Discord component interaction custom_id is empty") }
+        return ok("discord.on_component." + custom_id)
+    }
+    return ok("discord.on_interaction")
+}
+
+fn discord_dispatch_interaction(bot: Bot, interaction: Json, event_reply: String) -> Result[Nil, String] {
+    let interaction_json: String = json_stringify(interaction)
+    let mut callback_json: String = event_reply
+    if callback_json == "" {
+        let slot: String = discord_interaction_handler_slot(interaction)?
+        let dispatch: Result[String, String] = poly_dispatch(slot, interaction_json)
+        match dispatch {
+            ok(value) => { callback_json = value }
+            err(problem) => {
+                if problem == "dispatch slot has no registered handlers" {
+                    if slot == "discord.on_interaction" { return ok(nil) }
+                    let fallback: Result[String, String] = poly_dispatch("discord.on_interaction", interaction_json)
+                    match fallback {
+                        ok(value) => { callback_json = value }
+                        err(fallback_problem) => {
+                            if fallback_problem == "dispatch slot has no registered handlers" { return ok(nil) }
+                            return err("Discord interaction handler failed: " + fallback_problem)
+                        }
+                    }
+                } else {
+                    return err("Discord interaction handler failed: " + problem)
+                }
+            }
+        }
+    }
+    if callback_json == "" { return ok(nil) }
+    let callback: Json = json_parse(callback_json)?
+    if json_kind(callback) != "object" { return err("Discord interaction handler must return a JSON callback object") }
+    let raw_id: Json = json_field(interaction, "id")?
+    let interaction_id: String = json_string(raw_id)?
+    let raw_token: Json = json_field(interaction, "token")?
+    let interaction_token: String = json_string(raw_token)?
+    if !valid_snowflake(interaction_id) || !valid_interaction_token(interaction_token) {
+        return err("Discord interaction has an invalid ID or token")
+    }
+    let sent: Result[Nil, String] = bot.respond_interaction(interaction_id, interaction_token, callback_json)
+    match sent {
+        ok(_) => { return ok(nil) }
+        err(problem) => { return err("Discord interaction response failed: " + problem) }
+    }
+}
+
 fn gateway_frame(raw: String) -> Result[Json, String] {
     return json_parse(raw)
 }
@@ -95,6 +162,15 @@ impl Bot {
             err(problem) => {
                 if problem != "handler already registered in slot" {
                     return err("could not install Discord message handler fallback: " + problem)
+                }
+            }
+        }
+        let interaction_fallback: Result[Nil, String] = poly_register("discord.on_interaction", "discord_internal_ignore_interaction_v10", -1000000)
+        match interaction_fallback {
+            ok(_) => {}
+            err(problem) => {
+                if problem != "handler already registered in slot" {
+                    return err("could not install Discord interaction handler fallback: " + problem)
                 }
             }
         }
@@ -425,6 +501,13 @@ fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String,
                                                         err(problem) => { return err("Discord message reply failed: " + problem) }
                                                     }
                                                 }
+                                            }
+                                        }
+                                        if event_name == "INTERACTION_CREATE" {
+                                            let handled: Result[Nil, String] = discord_dispatch_interaction(bot, event_data, reply)
+                                            match handled {
+                                                ok(_) => {}
+                                                err(problem) => { return err(problem) }
                                             }
                                         }
                                     }
