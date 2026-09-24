@@ -88,7 +88,7 @@ The built-in constraints are `Copy`, `Numeric`, and `Comparable`. `Copy` is stru
 
 Overload resolution is multiple dispatch over the complete argument tuple, not just the function name or first argument. Every visible candidate is checked against the static argument types; exactly one candidate must match. If two concrete or generic candidates match equally, compilation fails with an ambiguity diagnostic instead of depending on declaration order.
 
-Struct fields are public by default inside a public API, but `private field: T` makes access and construction outside the declaring module a static error. This is enforced by the checker rather than by naming convention.
+Struct fields are public by default inside a public API, but `private field: T` makes access and construction outside the defining visibility scope a static error. That scope is the source file for standalone modules and the manifest-backed package for its source files; callers outside the package cannot access its private fields. This is enforced by the checker rather than by naming convention.
 
 ## Structs, enums, and matching
 

@@ -17,6 +17,6 @@ By default, the client uses Kryndel's static public registry at `https://raw.git
 
 > The installer rejects absolute paths, alternate separators that escape the root, `..`, symbolic links, directories in the archive, duplicate entries, and files larger than the per-file limit. Cryptographic verification happens before extraction.
 
-Packages are imported with `import "name"` and resolved from `vendor/name/main.kry`. Only declarations marked `pub` cross the package boundary. Official libraries include `discord`, `async`, `crypto`, `fs`, and `json`; these expose structured concurrency, standard cryptography, sandboxed filesystem operations, and safe JSON over typed runtime primitives.
+Packages are imported with `import "name"` and resolved from `vendor/name/main.kry`. Files under the same manifest directory share package-private access. Only declarations marked `pub` cross the package boundary; a private helper in an imported package module is not part of the caller's API. Official libraries include `discord`, `async`, `crypto`, `fs`, and `json`; these expose structured concurrency, standard cryptography, sandboxed filesystem operations, and safe JSON over typed runtime primitives.
 
 See [Discord package usage](discord.md) for webhook URL parsing, execution, message management, and the current API boundaries.

@@ -232,7 +232,7 @@ language version must retain source, stdout, exit-status, and diagnostic fixture
 under `tests/compat/<version>/`.
 
 The current compiler supports language version 1.0.0. New manifests, KIR v2,
-and KRYNATIVE4 artifacts record it explicitly. For compatibility, manifests
-without the field, KIR v1 documents, and KRYNATIVE3 artifacts are interpreted
-as 1.0.0. Unknown or malformed versions are rejected instead of being silently
-treated as the current dialect.
+and KRYNATIVE5 artifacts record it explicitly. For compatibility, manifests
+without the field, KIR v1 documents, and KRYNATIVE3/KRYNATIVE4 artifacts are
+interpreted as 1.0.0. Unknown or malformed versions are rejected instead of
+being silently treated as the current dialect.

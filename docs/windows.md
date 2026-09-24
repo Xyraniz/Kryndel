@@ -24,7 +24,7 @@ is not implemented. `kry inspect` recognizes the
 `MZ`/`PE\0\0` signatures and reports architecture and section count without
 executing the file; it is not a complete PE validator. Broader IR lowering
 and a native runtime are still required for the full language. The
-`KRYNATIVE4` bundle and interpreter cover the portable language features.
+`KRYNATIVE5` bundle and interpreter cover the portable language features.
 
 The [Windows x64 ABI contract](windows-abi.md) records the register, stack,
 return, unwind, and import rules a direct PE backend must follow. CI runs the

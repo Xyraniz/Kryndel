@@ -527,6 +527,9 @@ func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
 			if d != nil {
 				return nil, d
 			}
+			if name := inaccessibleTypeName(t, s.VisibilityScope, 0); name != "" {
+				return nil, Diag(CatType, s.Fields[i].Tok.Source, s.Fields[i].Tok.Line, s.Fields[i].Tok.Column, "type '%s' is private", name)
+			}
 			s.Fields[i].Type = t
 		}
 	}
@@ -580,6 +583,30 @@ func ensurePublicType(t *Type, local string, depth int) bool {
 
 	}
 	return true
+}
+
+func inaccessibleTypeName(t *Type, visibilityScope string, depth int) string {
+	if t == nil || depth > 128 {
+		return ""
+	}
+	switch t.Kind {
+	case TyStruct:
+		if t.Struct == nil || !t.Struct.Public && t.Struct.VisibilityScope != visibilityScope {
+			return t.Name
+		}
+	case TyEnum:
+		if t.Enum == nil || !t.Enum.Public && t.Enum.VisibilityScope != visibilityScope {
+			return t.Name
+		}
+	case TyArray, TyOption, TyChannel, TyThread, TySet, TyActor, TyShared:
+		return inaccessibleTypeName(t.A, visibilityScope, depth+1)
+	case TyResult, TyMap:
+		if name := inaccessibleTypeName(t.A, visibilityScope, depth+1); name != "" {
+			return name
+		}
+		return inaccessibleTypeName(t.B, visibilityScope, depth+1)
+	}
+	return ""
 }
 
 var _ = fmt.Sprintf

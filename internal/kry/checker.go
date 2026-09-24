@@ -12,21 +12,24 @@ type Binding struct {
 	Global  bool
 }
 type Scope struct {
-	Parent *Scope
-	Values map[string]Binding
-	Worker bool
-	Unsafe bool
-	Module string
+	Parent          *Scope
+	Values          map[string]Binding
+	Worker          bool
+	Unsafe          bool
+	Module          string
+	VisibilityScope string
 }
 
 func NewScope(parent *Scope, worker bool) *Scope {
 	m := ""
+	visibilityScope := ""
 	unsafe := false
 	if parent != nil {
 		m = parent.Module
+		visibilityScope = parent.VisibilityScope
 		unsafe = parent.Unsafe
 	}
-	return &Scope{Parent: parent, Values: map[string]Binding{}, Worker: worker, Unsafe: unsafe, Module: m}
+	return &Scope{Parent: parent, Values: map[string]Binding{}, Worker: worker, Unsafe: unsafe, Module: m, VisibilityScope: visibilityScope}
 }
 func (s *Scope) lookup(n string) (Binding, bool) {
 	for q := s; q != nil; q = q.Parent {
@@ -64,6 +67,7 @@ func Check(prog *Program, lim Limits) (*Checker, *Diagnostic) {
 	c := &Checker{Prog: prog, Env: env, Lim: lim, funcs: map[string]bool{}}
 	c.Globals = NewScope(nil, false)
 	c.Globals.Module = prog.Module
+	c.Globals.VisibilityScope = prog.VisibilityScope
 	c.markWorkers()
 	for _, s := range prog.Statements {
 		if (s.Kind == StLet || s.Kind == StConst) && s.Annotation != nil {
@@ -304,8 +308,10 @@ func calledFunctions(body []*Stmt) []string {
 func (c *Checker) checkFunction(f *Function) *Diagnostic {
 	sc := NewScope(c.Globals, f.Worker)
 	sc.Module = f.Module
+	sc.VisibilityScope = f.VisibilityScope
 	defaultScope := NewScope(c.Globals, f.Worker)
 	defaultScope.Module = f.Module
+	defaultScope.VisibilityScope = f.VisibilityScope
 	c.currentFunction = f
 	previousParams := c.Env.TypeParams
 	c.Env.TypeParams = map[string]*Type{}
@@ -326,6 +332,9 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 		if d != nil {
 			return d
 		}
+		if name := inaccessibleTypeName(rt, f.VisibilityScope, 0); name != "" {
+			return Diag(CatType, f.Receiver.Tok.Source, f.Receiver.Tok.Line, f.Receiver.Tok.Column, "type '%s' is private", name)
+		}
 		sc.Values["self"] = Binding{Type: rt, Mutable: false}
 		defaultScope.Values["self"] = Binding{Type: rt, Mutable: false}
 	}
@@ -333,6 +342,9 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 		t, d := resolveSpec(c.Env, p.Type, 0)
 		if d != nil {
 			return d
+		}
+		if name := inaccessibleTypeName(t, f.VisibilityScope, 0); name != "" {
+			return Diag(CatType, p.Tok.Source, p.Tok.Line, p.Tok.Column, "type '%s' is private", name)
 		}
 		if sc.local(p.Name) {
 			return Diag(CatType, p.Tok.Source, p.Tok.Line, p.Tok.Column, "parameter '%s' is duplicated", p.Name)
@@ -355,6 +367,9 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 	rt, d := resolveSpec(c.Env, f.Return, 0)
 	if d != nil {
 		return d
+	}
+	if name := inaccessibleTypeName(rt, f.VisibilityScope, 0); name != "" {
+		return Diag(CatType, f.Return.Tok.Source, f.Return.Tok.Line, f.Return.Tok.Column, "type '%s' is private", name)
 	}
 	for _, p := range f.Params {
 		t, _ := resolveSpec(c.Env, p.Type, 0)
@@ -410,6 +425,10 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 			expected, dd = resolveSpec(c.Env, s.Annotation, 0)
 			if dd != nil {
 				c.Err = dd
+				return Flow{HasError: true}
+			}
+			if name := inaccessibleTypeName(expected, sc.VisibilityScope, 0); name != "" {
+				c.Err = Diag(CatType, s.Annotation.Tok.Source, s.Annotation.Tok.Line, s.Annotation.Tok.Column, "type '%s' is private", name)
 				return Flow{HasError: true}
 			}
 		}
@@ -740,6 +759,8 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		et := c.Env.Types[e.EnumType]
 		if et == nil || et.Kind != TyEnum {
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown enum '%s'", e.EnumType)
+		} else if name := inaccessibleTypeName(et, sc.VisibilityScope, 0); name != "" {
+			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "enum '%s' is private", name)
 		} else {
 			found := false
 			for _, v := range et.Enum.Variants {
@@ -1001,21 +1022,24 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		found := false
 		for _, f := range bt.Struct.Fields {
 			if f.Name == e.Field {
-				if !f.Public && bt.Struct.Module != sc.Module {
+				found = true
+				if !f.Public && bt.Struct.VisibilityScope != sc.VisibilityScope {
 					d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "field '%s' is private", e.Field)
 					break
 				}
 				t = f.Type
-				found = true
 			}
 		}
-		if !found {
+		if !found && d == nil {
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown field '%s'", e.Field)
 		}
 	case ExStruct:
 		st := c.Env.Types[e.StructName]
 		if st == nil || st.Kind != TyStruct {
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown struct '%s'", e.StructName)
+			break
+		} else if name := inaccessibleTypeName(st, sc.VisibilityScope, 0); name != "" {
+			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "struct '%s' is private", name)
 			break
 		}
 		if len(e.Fields) != len(st.Struct.Fields) {
@@ -1040,7 +1064,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				break
 			}
 			for _, f := range st.Struct.Fields {
-				if f.Name == n && !f.Public && st.Struct.Module != sc.Module {
+				if f.Name == n && !f.Public && st.Struct.VisibilityScope != sc.VisibilityScope {
 					d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "field '%s' is private", n)
 				}
 			}
@@ -1102,7 +1126,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		var matched *Function
 		var matchedType *Type
 		for _, candidate := range candidates {
-			if !candidate.Public && candidate.Module != sc.Module {
+			if !candidate.Public && candidate.VisibilityScope != sc.VisibilityScope {
 				continue
 			}
 			visible = true
@@ -1143,7 +1167,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	var matched *Function
 	var matchedType *Type
 	for _, f := range candidates {
-		if f.Public || f.Module == sc.Module {
+		if f.Public || f.VisibilityScope == sc.VisibilityScope {
 			visible = true
 			if rt, ok := c.matchFunctionCall(sc, e, f, expected); ok {
 				if matched != nil {

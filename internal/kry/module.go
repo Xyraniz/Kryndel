@@ -81,6 +81,17 @@ func (l *ModuleLoader) load(path string) (*Program, *Diagnostic) {
 		return nil, d
 	}
 	prog.Module = path
+	prog.VisibilityScope = moduleVisibilityScope(path, l.Root)
+	prog.Source.VisibilityScope = prog.VisibilityScope
+	for _, f := range prog.Functions {
+		f.VisibilityScope = prog.VisibilityScope
+	}
+	for _, s := range prog.Structs {
+		s.VisibilityScope = prog.VisibilityScope
+	}
+	for _, e := range prog.Enums {
+		e.VisibilityScope = prog.VisibilityScope
+	}
 	for i := range prog.Imports {
 		imp := prog.Imports[i]
 		if filepath.IsAbs(imp.Path) || strings.ContainsRune(imp.Path, 0) || hasParent(imp.Path) {
@@ -126,6 +137,23 @@ func resolveImportPath(base, imp string) string {
 }
 func fileExists(path string) bool { _, err := os.Stat(path); return err == nil }
 
+// moduleVisibilityScope gives files in the same manifest-backed package access
+// to private declarations without changing their module identity used by KIR.
+// Files outside a package manifest retain file-local visibility.
+func moduleVisibilityScope(path, root string) string {
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		if fileExists(filepath.Join(dir, "kry.toml")) {
+			return dir
+		}
+		if dir == root || filepath.Dir(dir) == dir {
+			break
+		}
+	}
+	return path
+}
+
 func hasParent(p string) bool {
 	for _, x := range strings.FieldsFunc(filepath.ToSlash(p), func(r rune) bool { return r == '/' }) {
 		if x == ".." {
@@ -162,7 +190,7 @@ func safeComponents(root, target string) bool {
 	return true
 }
 func (l *ModuleLoader) merge(root *Program) *Program {
-	out := &Program{Source: root.Source, Module: root.Module, Imports: append([]ImportDecl{}, root.Imports...), Sources: []*Source{root.Source}, Statements: root.Statements, Functions: append([]*Function{}, root.Functions...), Structs: append([]*StructDecl{}, root.Structs...), Enums: append([]*EnumDecl{}, root.Enums...)}
+	out := &Program{Source: root.Source, Module: root.Module, VisibilityScope: root.VisibilityScope, Imports: append([]ImportDecl{}, root.Imports...), Sources: []*Source{root.Source}, Statements: root.Statements, Functions: append([]*Function{}, root.Functions...), Structs: append([]*StructDecl{}, root.Structs...), Enums: append([]*EnumDecl{}, root.Enums...)}
 	seen := map[string]bool{root.Source.Name: true}
 	var add func(*Program)
 	add = func(p *Program) {
