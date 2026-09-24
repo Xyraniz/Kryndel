@@ -19,7 +19,7 @@ The KIR stage accepts:
 
 The dynamic KIR stage additionally accepts top-level and nested `let`/`const`, mutable Int/Bool/UInt slots, assignments, checked signed arithmetic, wrapping fixed-width unsigned arithmetic, comparisons, bitwise operations, `if`/`else`, `while`, `for` over `Array[T]`, `break`, `continue`, functions with up to six SysV AMD64 register parameters, scalar `Int`/`Bool`/`UInt` values, immutable `String` pointers, immutable `Array[T]` pointers with literal/index/`len`/`array_push`/`array_get`/`array_indices`/concatenation operations, boxed struct literals and field loads, immutable pointer-like `Option[T]` and `Result[T,E]` values with `some`/`none`/`ok`/`err`, predicates, `unwrap_or`, `result_unwrap`, and `result_error`, scalar/Array/struct/Option/Result function-local declarations and assignments, static display values, and dynamic `Bool`/`Int`/`UInt`/`String` values inside `print`/`println`. It emits stack loads/stores, decimal integer and Boolean conversion, relative branches, calls/returns, RIP-relative references to immutable string objects, overflow traps, Linux `mmap`-backed String, qword-array, boxed-struct, and tagged Option/Result allocation/copy runtimes, bounds checks, and Linux syscalls directly from Kryndel. Other dynamic String operations, Map/Set/resource values, unsupported array builtins, general heap values outside the documented slices, `match`, and non-Linux targets remain explicit rejection points.
 
-Unsupported arbitrary calls, dynamic String operations other than `+`, collection and resource values outside the documented Array/struct slice, unsupported array builtins, general heap values outside the documented slices, and non-Linux targets are rejected with explicit errors. This restriction is intentional while the lowering is being expanded.
+Unsupported arbitrary calls, dynamic String operations other than `+`, collection and resource values outside the documented Array/struct slice, unsupported array builtins, and general heap values outside the documented slices are rejected with explicit errors. The dynamic KIR backend's ELF target remains Linux amd64.
 
 The original source stage has the static output subset and performs its own lexical and syntactic validation instead of recognizing complete source lines by prefix. `source_kir_compiler.kry` owns the dynamic scalar source subset; both frontends reject unsupported constructs explicitly rather than guessing.
 
@@ -45,7 +45,7 @@ kry emit selfhost/fixtures/option_result_runtime_stage7.kry --target=linux-x64 -
 kry run selfhost/kir_backend.kry option-result.kir option-result-stage7
 ```
 
-The Go direct backend is kept as a byte-level oracle for these stages. Regression tests execute both Kryndel programs under the interpreter and require byte-identical ELF output before a change can pass. This is bootstrap progress, not yet a complete self-hosting compiler: modules/import resolution, general heap values, linker/object-file support, and Windows target remain ahead of this subset.
+The Go direct backend is kept as a byte-level oracle for these stages. Regression tests execute both Kryndel programs under the interpreter and require byte-identical ELF output before a change can pass. This is bootstrap progress, not yet a complete self-hosting compiler: the source frontend has a bounded same-directory function-module resolver, while full module/type parity, general heap values, linker/object-file support, and broad Windows target parity remain ahead of this subset.
 
 Stage 14 extends the direct ELF oracle with boxed struct values (literals, field loads, function parameters and returns), scoped shadowing, `for` lowering over `Array[T]`, and `array_indices`. It is covered by an executable Linux regression fixture. Stage 17 mirrors this ABI in `dynamic_backend.kry`; the self-hosted emitter now produces byte-identical ELF and the Linux regression executes the generated `48\n` result.
 
@@ -79,9 +79,11 @@ Stage 28 fixes the native `u8_array` runtime's loop bound, which previously comp
 
 Stage 34 fixes KIR emission for unary Boolean negation: `!` is now serialized as `!` instead of the fallback operator text `?`. Its regression lowers a small KIR program through `kir_backend.kry`, checks byte parity with the Go direct backend, and executes the ELF on Linux amd64. KIR documents also have a separate `MaxJSONBytes` limit (64 MiB by default); this is distinct from the 16 MiB limit for ordinary Kryndel strings.
 
-Stage 35 generates the first native source compiler from KIR emitted by the locked Stage 0 Go CLI. The CLI runs `kir_backend.kry` to produce a Linux amd64 ELF; that compiler then compiles and runs a fixture. This stage is exercised as the first half of the Stage 36 bootstrap regression. The KIR is pinned at 58,378,437 bytes (55.7 MiB), leaving 8,730,427 bytes below the default 64 MiB `MaxJSONBytes` limit. Project-relative paths keep that artifact independent of its checkout location. The lock records the exact size and SHA-256 so growth is visible and must be reviewed.
+Stage 35 generates the first native source compiler from KIR emitted by the locked Stage 0 Go CLI. The CLI runs `kir_backend.kry` to produce a Linux amd64 ELF; that compiler then compiles and runs a fixture. This stage is exercised as the first half of the Stage 36 bootstrap regression. The current KIR is 67,200,306 bytes; the lock records that exact size and a bootstrap-only 134,217,728-byte (`128 MiB`) JSON limit. Ordinary CLI commands retain the default 64 MiB limit. Every growth consumes the measured bootstrap budget and must be reviewed. Project-relative paths keep the artifact independent of its checkout location.
 
-Stage 36 verifies a second compiler level. The generated Stage 35 compiler consumes a bundle containing `elf_backend.kry`, `dynamic_backend.kry`, and `source_kir_compiler.kry`, and emits a second Linux amd64 compiler ELF. That second compiler compiles and runs the fixture and rejects invalid source with the expected diagnostic. This proves that the generated compiler can compile a functional copy of its own frontend/backend without invoking the Go backend in that second-level compilation. It does not complete all self-hosting goals: module/import resolution and the other explicitly unsupported language and target features remain outstanding. Reproduce both levels on Linux amd64 with:
+Stage 36 verifies a second compiler level. The generated Stage 35 compiler uses its own module resolver to compile the checked-in graph `source_kir_compiler.kry` → `dynamic_backend.kry` → `elf_backend.kry` and `pe_backend.kry` into a second Linux amd64 compiler ELF. That compiler compiles and runs the fixture, rejects invalid source with the expected diagnostic, emits a Windows amd64 PE32+ executable, and rebuilds itself byte-for-byte. The CI bootstrap job uploads this exact Stage 2-produced PE, and the Windows job runs it and checks its output. This proves the tested frontend/backend module graph can rebuild without invoking the Go backend during second-level compilation and that its Windows PE output runs under the native loader. It does not complete all self-hosting goals: unsupported language features, full PE language parity, and linker/object-file support remain outstanding. Reproduce both levels on Linux amd64 with:
+
+Stage 37 corrects module brace tracking when a string contains `{` or `}`, assigns internal KIR symbols per source module so private helpers with the same spelling remain separate, and exposes only each module's own functions plus the public functions of its direct imports. The regression compiles and executes two modules that each define a private `secret`, checks that transitive exports stay private to their importer, and retains cycle, unsafe path, duplicate export, and string-token tests. This stage covers function declarations and direct imports in the same directory; it does not claim imported type/enum parity, nested module directories, aliases, or manifests.
 
 ```text
 go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v
@@ -91,9 +93,23 @@ The standalone Stage 1–3 bootstrap command is `./scripts/bootstrap-stage3.sh`.
 It requires Linux x86-64 and the Go version in `selfhost/bootstrap.lock.json`.
 The test builds and hash-checks the Stage 0 Go CLI, then uses that executable
 to emit the source KIR and run `kir_backend.kry`. It checks SHA-256 values for
-the KIR, bundled sources, fixture, and generated Stage 1, Stage 2, and Stage 3
+the KIR, module sources, fixture, and generated Stage 1, Stage 2, and Stage 3
 compiler ELFs against that lock.
 Stage 2 and Stage 3 must also be byte-identical. This remains a bounded subset
 bootstrap rather than full self-hosting.
 
 On non-Linux hosts, `TestStage36KryndelSecondCompilerBootstrap` skips before emitting KIR or validating an ELF. Cross-platform compile checks do not establish execution of this bootstrap; both levels must pass on Linux amd64 before this stage is considered complete.
+
+## Windows PE output from the self-hosted source frontend
+
+`source_kir_compiler.kry` can request the C-free Windows x86-64 PE32+ serializer for programs inside a deliberately bounded subset:
+
+```text
+kry run selfhost/source_kir_compiler.kry program.kry program.exe windows-amd64
+```
+
+The compiler frontend and dynamic backend are written in Kryndel. The bootstrap builds them into a standalone Linux amd64 compiler ELF; that ELF emits the Windows `.exe` without invoking C, MinGW, an assembler, or an external linker. The compiler itself is not yet a Windows executable, and the generated `.exe` supports only the subset below.
+
+The PE subset accepts one source module with no imports; scalar `Int`, `Bool`, `String`, and `UInt8`/`UInt16`/`UInt32`/`UInt64` values; ordinary functions with at most four scalar parameters; `Nil` or scalar returns; local bindings and scalar assignment; calls; `if`/`else`, `while`, `break`, `continue`, and `return`; supported scalar arithmetic, comparisons, Boolean and bitwise operators; and `print`/`println`. It emits a Windows amd64 console PE32+ image with imports for `GetStdHandle`, `WriteFile`, and `ExitProcess`, plus x64 unwind metadata for generated functions.
+
+The serializer intentionally rejects imports/modules, arrays, maps, structs, enums, generic/worker/unsafe/receiver functions, GUI targets, unsupported builtins and expressions, and functions with more than four parameters. The current PE has a fixed image base and no base relocations or ASLR support. Unsupported programs fail with a `PE backend:` diagnostic instead of receiving a partially lowered executable. `internal/kry/selfhost_pe_test.go` covers native execution on Windows, including source-to-PE compilation, function calls, control flow, integer and string output, unsupported-feature rejection, and a checked runtime trap.

@@ -1,0 +1,9 @@
+import "helper"
+
+pub fn answer() -> Int {
+    return twice(secret())
+}
+
+fn secret() -> Int {
+    return 21
+}

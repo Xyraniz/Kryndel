@@ -41,6 +41,11 @@ func run(args []string) int {
 			if i < 0 {
 				return 2
 			}
+		case "--max-json":
+			i = takeLimit(args, i, "json", &e.Limits.MaxJSONBytes)
+			if i < 0 {
+				return 2
+			}
 		case "--max-instructions":
 			v, n := nextInt(args, i)
 			if n < 0 {
@@ -111,7 +116,7 @@ func run(args []string) int {
 		fmt.Println("doctor: ready")
 		fmt.Println("implementation: Go 1.22 standard library")
 		fmt.Println("runtime: self-contained executable")
-		fmt.Printf("limits: source=%d artifact=%d instructions=%d\n", e.Limits.MaxSourceBytes, e.Limits.MaxArtifactBytes, e.Limits.MaxInstructions)
+		fmt.Printf("limits: source=%d artifact=%d json=%d instructions=%d\n", e.Limits.MaxSourceBytes, e.Limits.MaxArtifactBytes, e.Limits.MaxJSONBytes, e.Limits.MaxInstructions)
 		return 0
 	case "capabilities":
 		return capabilitiesCmd(rest, jsonMode)
@@ -900,6 +905,6 @@ func printHelp() {
 	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (Linux subset); pe-direct (Windows x64 scalar/function subset); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
 	fmt.Println("check options: -Werror, -Werror=KRYW002,KRYW004, -Wno=KRYW003")
-	fmt.Println("global options: --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-instructions N, --max-wall-ms N")
+	fmt.Println("global options: --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-json BYTES, --max-instructions N, --max-wall-ms N")
 	fmt.Println("sealed artifacts: --passphrase VALUE, --passphrase-file PATH (AES-256-GCM + PBKDF2-SHA256)")
 }
