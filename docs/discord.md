@@ -65,6 +65,8 @@ Command definitions and callback payloads are JSON strings and are validated bef
 
 `Bot.create_webhook(channel_id, name)` creates a webhook with bot authentication and returns a token-authenticated `Webhook` when Discord includes its token in the create response. `webhook_from_json(value)` validates and converts a JSON webhook object that includes both its ID and token; `webhook(id, token)` constructs one directly. `webhook_from_url(value)` accepts exactly `https://discord.com/api/webhooks/{id}/{token}` and rejects other hosts, HTTP, extra path segments, query strings, and invalid IDs or tokens. The token is a credential; keep it out of source control and logs. Token-authenticated `Webhook` requests use the token in the fixed Discord API path and never send a bot `Authorization` header.
 
+`examples/discord_webhook_live.kry` is an opt-in live probe. Set `KRYND_DISCORD_WEBHOOK_URL` in the environment and run `kry run examples/discord_webhook_live.kry`; it creates one plain-text message, edits and fetches it, then deletes it and verifies the API returns 404. It does not delete or modify the webhook itself. Windows double-click launch requires the `.kry` association installed by `cmd/kry-installer`.
+
 `Bot.list_channel_webhooks`, `Bot.list_guild_webhooks`, `Bot.fetch_webhook`, `Bot.edit_webhook_json`, and `Bot.delete_webhook` cover management routes that use bot authentication. Edit payloads remain raw JSON so Discord can add webhook fields without waiting for new wrappers.
 
 - `Webhook.send(content)` sends plain text, waits for the created message, escapes JSON, enforces Discord's 2,000 UTF-16-unit content limit, and disables mentions by default.
