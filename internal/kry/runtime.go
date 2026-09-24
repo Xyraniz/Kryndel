@@ -2392,6 +2392,22 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return r.discordInteractionRequest(a[0].S, a[1].S, a[2].S)
 	case "discord_api_upload":
 		return r.discordAPIUpload(a[0].S, a[1].S, a[2].S, a[3].S, a[4].Bytes, a[5].S)
+	case "discord_webhook_upload":
+		if a[3].Kind != VArray || a[4].Kind != VArray {
+			return resVal(false, stringVal("Discord webhook upload expects arrays of filenames and bytes")), nil
+		}
+		if arrayLength(a[3]) == 0 || arrayLength(a[3]) > 10 || arrayLength(a[3]) != arrayLength(a[4]) {
+			return resVal(false, stringVal("Discord webhook upload needs matching arrays with 1 to 10 files")), nil
+		}
+		filenames, fileData := arrayValues(a[3]), arrayValues(a[4])
+		files := make([]discordUploadFile, len(filenames))
+		for index := range filenames {
+			if filenames[index].Kind != VString || fileData[index].Kind != VBytes {
+				return resVal(false, stringVal("Discord webhook upload expects String filenames and Bytes file data")), nil
+			}
+			files[index] = discordUploadFile{filename: filenames[index].S, data: fileData[index].Bytes}
+		}
+		return r.discordWebhookUpload(a[0].S, a[1].S, a[2].S, files, a[5].S)
 	case "discord_verify_interaction":
 		valid, err := verifyDiscordInteraction(a[0].S, a[1].S, a[2].S, a[3].S)
 		if err != nil {

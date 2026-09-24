@@ -47,7 +47,7 @@ func discordApplicationKey(token string) string {
 
 func redactDiscordSecrets(value, secrets string) string {
 	for _, secret := range strings.Split(secrets, "|") {
-		if len(secret) > 16 {
+		if secret != "" {
 			value = strings.ReplaceAll(value, secret, "[redacted]")
 		}
 	}
@@ -56,7 +56,16 @@ func redactDiscordSecrets(value, secrets string) string {
 
 func discordRequestRedactions(route, credential string) string {
 	secrets := credential
-	for _, part := range strings.Split(route, "/") {
+	parsed, err := url.Parse(route)
+	path := route
+	if err == nil {
+		path = parsed.Path
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) > 3 && (parts[1] == "webhooks" || parts[1] == "interactions") && parts[3] != "" {
+		secrets += "|" + parts[3]
+	}
+	for _, part := range parts {
 		if len(part) > 32 {
 			secrets += "|" + part
 		}
@@ -223,38 +232,61 @@ func (r *Runtime) discordInteractionRequest(method, route, body string) (Value, 
 	return r.discordHTTPRequest(method, route, strings.NewReader(body), "application/json", "", false, redact)
 }
 
+type discordUploadFile struct {
+	filename string
+	data     []byte
+}
+
 func (r *Runtime) discordAPIUpload(method, route, payload, filename string, data []byte, token string) (Value, *Diagnostic) {
+	files := []discordUploadFile{{filename: filename, data: data}}
+	return r.discordMultipartUpload(method, route, payload, files, token, true)
+}
+
+func (r *Runtime) discordWebhookUpload(method, route, payload string, files []discordUploadFile, token string) (Value, *Diagnostic) {
+	return r.discordMultipartUpload(method, route, payload, files, token, false)
+}
+
+func (r *Runtime) discordMultipartUpload(method, route, payload string, files []discordUploadFile, token string, botAuth bool) (Value, *Diagnostic) {
 	if method != "POST" && method != "PUT" && method != "PATCH" {
 		return resVal(false, stringVal("Discord uploads require POST, PUT, or PATCH")), nil
 	}
-	if !validDiscordRoute(route) || token == "" || strings.ContainsAny(filename, "/\\\x00\r\n") || strings.TrimSpace(filename) == "" || len(filename) > 255 {
+	if !validDiscordRoute(route) || token == "" || (!botAuth && !strings.HasPrefix(route, "/webhooks/")) || len(files) == 0 || len(files) > 10 {
 		return resVal(false, stringVal("invalid Discord upload route, token, or filename")), nil
 	}
 	if !json.Valid([]byte(payload)) {
 		return resVal(false, stringVal("Discord upload payload must be valid JSON")), nil
 	}
-	if len(data) > r.Lim.MaxSourceBytes {
-		return resVal(false, stringVal("Discord upload exceeds configured input limit")), nil
+	totalFileBytes := 0
+	for _, file := range files {
+		if strings.ContainsAny(file.filename, "/\\\x00\r\n") || strings.TrimSpace(file.filename) == "" || len(file.filename) > 255 {
+			return resVal(false, stringVal("invalid Discord upload route, token, or filename")), nil
+		}
+		if len(file.data) > r.Lim.MaxSourceBytes-totalFileBytes {
+			return resVal(false, stringVal("Discord upload exceeds configured input limit")), nil
+		}
+		totalFileBytes += len(file.data)
 	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("payload_json", payload); err != nil {
 		return resVal(false, stringVal("could not create Discord upload payload")), nil
 	}
-	part, err := writer.CreateFormFile("files[0]", filename)
-	if err != nil {
-		return resVal(false, stringVal("invalid Discord upload filename")), nil
+	for index, file := range files {
+		part, err := writer.CreateFormFile("files["+strconv.Itoa(index)+"]", file.filename)
+		if err != nil {
+			return resVal(false, stringVal("invalid Discord upload filename")), nil
+		}
+		if _, err = part.Write(file.data); err != nil {
+			return resVal(false, stringVal("could not write Discord upload data")), nil
+		}
 	}
-	if _, err = part.Write(data); err != nil {
-		return resVal(false, stringVal("could not write Discord upload data")), nil
-	}
-	if err = writer.Close(); err != nil {
+	if err := writer.Close(); err != nil {
 		return resVal(false, stringVal("could not finish Discord upload")), nil
 	}
 	if body.Len() > r.Lim.MaxSourceBytes {
 		return resVal(false, stringVal("multipart Discord upload exceeds configured input limit")), nil
 	}
-	return r.discordHTTPRequest(method, route, &body, writer.FormDataContentType(), token, true, discordRequestRedactions(route, token))
+	return r.discordHTTPRequest(method, route, &body, writer.FormDataContentType(), token, botAuth, discordRequestRedactions(route, token))
 }
 
 func (r *Runtime) discordHTTPRequest(method, route string, body io.Reader, contentType, credential string, botAuth bool, redact string) (Value, *Diagnostic) {

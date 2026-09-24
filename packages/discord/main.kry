@@ -239,6 +239,23 @@ impl Webhook {
         }
     }
 
+    // Uploads raw file bytes as Discord multipart fields files[0]..files[9].
+    // The JSON payload must include attachment metadata for those files.
+    pub fn upload_files_json(payload_json: String, filenames: Array[String], file_data: Array[Bytes], thread_id: String) -> Result[String, String] {
+        if len(filenames) == 0 || len(filenames) > 10 || len(filenames) != len(file_data) {
+            return err("webhook upload requires matching filename and byte arrays with 1 to 10 files")
+        }
+        let checked_thread: Result[String, String] = webhook_thread_query(thread_id)
+        match checked_thread {
+            err(problem) => { return err(problem) }
+            ok(thread_query) => {
+                let mut route: String = "/webhooks/" + self.id + "/" + self.token + "?wait=true"
+                if thread_query != "" { route = route + "&" + thread_query }
+                return discord_webhook_upload("POST", route, payload_json, filenames, file_data, self.token)
+            }
+        }
+    }
+
     // Plain-text sends suppress mentions unless the caller uses execute_json
     // and explicitly supplies allowed_mentions.
     pub fn send(content: String) -> Result[Json, String] {
