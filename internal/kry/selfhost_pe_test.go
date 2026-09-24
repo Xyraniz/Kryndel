@@ -486,7 +486,7 @@ func TestSelfhostPEBackendRejectsUnsupportedCollectionShapes(t *testing.T) {
 			name: "map with unsupported function parameter type",
 			source: `fn lookup(values: Map[Int, Int]) -> Int { return 0 }
 fn main() -> Nil {}`,
-			diagnostic: "PE backend: function parameters require supported scalar, enum, or collection types and no defaults",
+			diagnostic: "PE backend: function parameters require supported scalar, enum, struct, or collection types and no defaults",
 		},
 		{
 			name: "map with unsupported function return type",
@@ -544,7 +544,7 @@ fn main() -> Nil {}`,
 			name: "array function parameter",
 			source: `fn read(values: Array[Array[Int]]) -> Int { return 0 }
 fn main() -> Nil {}`,
-			diagnostic: "PE backend: function parameters require supported scalar, enum, or collection types and no defaults",
+			diagnostic: "PE backend: function parameters require supported scalar, enum, struct, or collection types and no defaults",
 		},
 		{
 			name: "array function return",

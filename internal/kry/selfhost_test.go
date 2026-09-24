@@ -981,8 +981,23 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatalf("stage36 second-level compiler returned an unexpected invalid-source diagnostic (exit %v): %s", invalidErr, invalidOutput)
 	}
 
+	geometrySource := filepath.Join(dir, "geometry.kry")
+	geometry := `pub struct Point { x: Int, y: Int }
+pub fn translate(point: Point, delta: Int) -> Point {
+    return Point { x: point.x + delta, y: point.y - delta }
+}
+`
+	if err := os.WriteFile(geometrySource, []byte(geometry), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	windowsSource := filepath.Join(dir, "windows-program.kry")
-	if err := os.WriteFile(windowsSource, []byte("fn main() -> Nil { println(42) }\n"), 0o600); err != nil {
+	program := `import "geometry"
+fn main() -> Nil {
+    let point = translate(Point { x: 40, y: 2 }, 2)
+    println(point.x + point.y)
+}
+`
+	if err := os.WriteFile(windowsSource, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	windowsPEPath := filepath.Join(dir, "windows-program.exe")

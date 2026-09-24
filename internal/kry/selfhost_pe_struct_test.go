@@ -22,8 +22,30 @@ fn build_and_read() -> Int {
     return 0
 }
 
+fn translate(point: Point, amount: Int) -> Point {
+    return Point { x: point.x + amount, y: point.y - amount }
+}
+
+fn make_tagged(value: Int) -> Tagged {
+    return Tagged { value: value, state: State::Ready }
+}
+
+fn identity(tagged: Tagged) -> Tagged {
+    return tagged
+}
+
+fn stack_read(a: Int, b: Int, c: Int, d: Int, point: Point) -> Int {
+    return a + b + c + d + point.x
+}
+
 fn main() -> Nil {
     assert_eq(build_and_read(), 42)
+    let translated = translate(Point { x: 19, y: 23 }, 2)
+    let tagged = identity(make_tagged(translated.x + translated.y))
+    println(translated.x)
+    println(translated.y)
+    println(tagged.value)
+    println(stack_read(1, 2, 3, 4, Point { x: 32, y: 0 }))
 }
 `)
 	if diagnostic != nil {
@@ -40,7 +62,7 @@ fn main() -> Nil {
 	if err != nil {
 		t.Fatalf("selfhost-generated struct PE failed: %v; output: %s", err, output)
 	}
-	if len(output) != 0 {
+	if string(output) != "21\n21\n42\n42\n" {
 		t.Fatalf("struct PE wrote unexpected output %q", output)
 	}
 }
@@ -61,20 +83,6 @@ fn main() -> Nil { let batch = Batch { values: [1, 2] } }`,
 struct Outer { inner: Inner }
 fn main() -> Nil { let outer = Outer { inner: Inner { value: 1 } } }`,
 			want: "must have a scalar or enum type",
-		},
-		{
-			name: "struct parameter",
-			source: `struct Point { x: Int }
-fn read(point: Point) -> Int { return point.x }
-fn main() -> Nil { let point = Point { x: 1 }; assert_eq(read(point), 1) }`,
-			want: "function parameters require supported scalar, enum, or collection types and no defaults",
-		},
-		{
-			name: "struct return",
-			source: `struct Point { x: Int }
-fn make() -> Point { return Point { x: 1 } }
-fn main() -> Nil { let point = make() }`,
-			want: "struct function returns are not supported",
 		},
 	}
 	for _, test := range tests {

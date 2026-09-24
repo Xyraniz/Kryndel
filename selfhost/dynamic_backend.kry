@@ -5269,7 +5269,6 @@ fn pe_validate_function_arguments(expression: Json, enums: Json, structs: Json) 
     let mut index: Int = 0
     while index < count {
         let argument: Json = result_unwrap(json_array_get(arguments, index))
-        if pe_is_struct_type(structs, expr_type(argument)) { return err("PE backend: struct function arguments are not supported") }
         let checked: Result[Bool, String] = pe_validate_expression(argument, false, false, enums, structs)
         if is_err(checked) { return checked }
         index = index + 1
@@ -5581,7 +5580,6 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
         return pe_validate_expression(field(expression, "right"), false, false, enums, structs)
     }
     if kind == "call" {
-        if pe_is_struct_type(structs, type_name) { return err("PE backend: struct function returns are not supported") }
         let target: String = call_target
         let args: Json = field(expression, "args")
         let count: Int = result_unwrap(json_array_len(args))
@@ -5654,7 +5652,7 @@ fn pe_validate_statements(statements: Json, enums: Json, structs: Json) -> Resul
             if starts_with(expr_type(init), "Array[") && text(field(init, "kind")) == "binary" { return err("PE backend: array binary operations are not supported") }
             if pe_is_supported_array_type(enums, expr_type(init)) && text(field(init, "kind")) != "array" && text(field(init, "kind")) != "var" && !pe_is_function_call(init) { return err("PE backend: array locals require a literal, an existing local array, or a function result") }
             if pe_is_supported_string_map_type(enums, expr_type(init)) && text(field(init, "kind")) != "map" && text(field(init, "kind")) != "var" && !pe_is_function_call(init) { return err("PE backend: map locals require a literal, an existing local map, or a function result") }
-            if pe_is_struct_type(structs, expr_type(init)) && text(field(init, "kind")) != "struct" { return err("PE backend: struct bindings require a local struct literal") }
+            if pe_is_struct_type(structs, expr_type(init)) && text(field(init, "kind")) != "struct" && text(field(init, "kind")) != "var" && !pe_is_function_call(init) { return err("PE backend: struct locals require a literal, an existing local struct, or a function result") }
             let checked: Result[Bool, String] = pe_validate_expression(init, false, false, enums, structs)
             if is_err(checked) { return checked }
         } else if kind == "assign" {
@@ -5691,7 +5689,6 @@ fn pe_validate_statements(statements: Json, enums: Json, structs: Json) -> Resul
         } else if kind == "return" {
             let value: Json = field(statement, "return")
             if json_kind(value) != "null" {
-                if pe_is_struct_type(structs, expr_type(value)) { return err("PE backend: struct returns are not supported") }
                 let checked: Result[Bool, String] = pe_validate_expression(value, true, false, enums, structs)
                 if is_err(checked) { return checked }
             }
@@ -5730,7 +5727,6 @@ fn pe_validate_document(document: Json) -> Result[Bool, String] {
             has_main = true
             if result_unwrap(json_array_len(field(function, "params"))) != 0 || text(field(function, "return")) != "Nil" { return err("PE backend: main must have no arguments and return Nil") }
         } else {
-            if pe_is_struct_type(structs, text(field(function, "return"))) { return err("PE backend: struct function returns are not supported") }
             if !pe_supported_local_type(enums, structs, text(field(function, "return"))) && text(field(function, "return")) != "Nil" { return err("PE backend: function '" + name + "' has an unsupported return type") }
         }
         let parameters: Json = field(function, "params")
@@ -5738,7 +5734,7 @@ fn pe_validate_document(document: Json) -> Result[Bool, String] {
         let mut parameter_index: Int = 0
         while parameter_index < parameter_count {
             let parameter: Json = result_unwrap(json_array_get(parameters, parameter_index))
-            if pe_is_struct_type(structs, text(field(parameter, "type"))) || !pe_supported_local_type(enums, structs, text(field(parameter, "type"))) || json_kind(field(parameter, "default")) != "null" { return err("PE backend: function parameters require supported scalar, enum, or collection types and no defaults") }
+            if !pe_supported_local_type(enums, structs, text(field(parameter, "type"))) || json_kind(field(parameter, "default")) != "null" { return err("PE backend: function parameters require supported scalar, enum, struct, or collection types and no defaults") }
             parameter_index = parameter_index + 1
         }
         let checked_body: Result[Bool, String] = pe_validate_statements(field(function, "body"), enums, structs)
