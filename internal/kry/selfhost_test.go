@@ -782,12 +782,12 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	verifiedHashes := make(map[string]bool, len(lock.SHA256))
 	verifyBootstrapSourceRevision(t, root, lock)
-	const stage0Build = "CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry"
+	const stage0Build = "CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry"
 	if lock.Stage0Build != stage0Build {
 		t.Fatalf("bootstrap lock stage0_build=%q, want %q", lock.Stage0Build, stage0Build)
 	}
 	stage0Path := filepath.Join(t.TempDir(), "kry")
-	buildStage0 := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", stage0Path, "./cmd/kry")
+	buildStage0 := exec.Command("go", "build", "-buildvcs=false", "-trimpath", "-ldflags=-s -w", "-o", stage0Path, "./cmd/kry")
 	buildStage0.Dir = filepath.Clean(filepath.Join(root, "..", ".."))
 	buildStage0.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if output, err := buildStage0.CombinedOutput(); err != nil {
