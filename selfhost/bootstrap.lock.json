@@ -1,23 +1,23 @@
 {
   "schema_version": 3,
-  "source_revision": "6a3145c1d5ff8499715cd9b853f9ea382415f318",
+  "source_revision": "c444a1d7076076d5ffe079f997e7b1f478a07887",
   "target": "linux-amd64",
   "host_go": "go1.26.0",
   "stage0_build": "CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry",
-  "source_compiler_kir_bytes": 72852497,
+  "source_compiler_kir_bytes": 73313558,
   "source_compiler_kir_max_bytes": 134217728,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
     "stage0-host-kry-linux-amd64": "d91a4f596baf9be3665a06cd54ab65966350877afac63e515d4475af40000a77",
-    "source-compiler.kir": "cee3048b5d88cfa60e91cc8710995d6b6fd0605be9b0a5e8602f40453259d350",
-    "stage1-source-kir-compiler.elf": "add26b99e97d2c7d33212f8ee02f65f749dc1285e9480da809917be4994ec356",
+    "source-compiler.kir": "61dd58b8bd35e2bd776f26bd03212232a5466a45d32b3c8c2b0e12e7f5fb7772",
+    "stage1-source-kir-compiler.elf": "448a90449e7fb76ba5eaed4d323e80ca4ab780da1a512237464e26207436bad2",
     "source_kir_compiler.kry": "3accb69ba0f1e9e750c9011898d721ed5ba126935c81ec2d6836631b69ed949b",
-    "dynamic_backend.kry": "5951d4461e59415e0d67dbc05aa8533ce24ed08709e6d990ffc36b4843917ef4",
+    "dynamic_backend.kry": "607b07494cc1effb95ad4efb729967284bd24ff50002095fbb9784c7ba45e2a7",
     "elf_backend.kry": "0348e0230050815a2d5c5d37ead0e3216f831e65f6ce00ddd49c98067a5eaf57",
     "kir_backend.kry": "3a1be5137d9d8fa08f86e310adde81c83a3269ad156b89258f2a02fe1e37331a",
     "pe_backend.kry": "9e70ecede3ffa80ccddb954a45c1022f8e05db659d1b51d0c30abff2d8ea428b",
     "bootstrap-fixture.kry": "eb24d52f08ffb85bba3946c15273abd8f2c85a2b3b2b91018e91800533206c0d",
-    "stage2-source-kir-compiler.elf": "99df16f2bacb413b05984fe5c4299bae75719c4c18f664c2ec04a895d209da02",
-    "stage3-source-kir-compiler.elf": "99df16f2bacb413b05984fe5c4299bae75719c4c18f664c2ec04a895d209da02"
+    "stage2-source-kir-compiler.elf": "cd5f92fe4218ff3934f701295c46fa67bbff431f22c86741be2517482588c1d4",
+    "stage3-source-kir-compiler.elf": "cd5f92fe4218ff3934f701295c46fa67bbff431f22c86741be2517482588c1d4"
   }
 }
