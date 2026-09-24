@@ -765,6 +765,18 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			}
 		}
 		return Res(TString, TString), nil
+	case "discord_webhook_upload":
+		want := []*Type{TString, TString, TString, Arr(TString), Arr(TBytes), TString}
+		for i, expected := range want {
+			t, d := arg(i, expected)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, expected) {
+				return bad("discord_webhook_upload expects method, route, payload, filenames, file bytes, and token")
+			}
+		}
+		return Res(TString, TString), nil
 	case "discord_verify_interaction":
 		for i := 0; i < 4; i++ {
 			t, d := arg(i, TString)
