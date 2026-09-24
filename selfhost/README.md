@@ -79,7 +79,7 @@ Stage 28 fixes the native `u8_array` runtime's loop bound, which previously comp
 
 Stage 34 fixes KIR emission for unary Boolean negation: `!` is now serialized as `!` instead of the fallback operator text `?`. Its regression lowers a small KIR program through `kir_backend.kry`, checks byte parity with the Go direct backend, and executes the ELF on Linux amd64. KIR documents also have a separate `MaxJSONBytes` limit (64 MiB by default); this is distinct from the 16 MiB limit for ordinary Kryndel strings.
 
-Stage 35 generates the first native source compiler from KIR emitted by the checked Go frontend. The host interpreter runs `kir_backend.kry` to produce a Linux amd64 ELF; that compiler then compiles and runs a fixture. This stage is exercised as the first half of the Stage 36 bootstrap regression. The source compiler KIR is about 63 MB, so the test raises only its host interpreter instruction and wall-time budgets.
+Stage 35 generates the first native source compiler from KIR emitted by the locked Stage 0 Go CLI. The CLI runs `kir_backend.kry` to produce a Linux amd64 ELF; that compiler then compiles and runs a fixture. This stage is exercised as the first half of the Stage 36 bootstrap regression. The KIR is pinned at 61,028,220 bytes (58.2 MiB), leaving 6,080,644 bytes below the default 64 MiB `MaxJSONBytes` limit. The lock records the exact size and SHA-256 so growth is visible and must be reviewed.
 
 Stage 36 verifies a second compiler level. The generated Stage 35 compiler consumes a bundle containing `elf_backend.kry`, `dynamic_backend.kry`, and `source_kir_compiler.kry`, and emits a second Linux amd64 compiler ELF. That second compiler compiles and runs the fixture and rejects invalid source with the expected diagnostic. This proves that the generated compiler can compile a functional copy of its own frontend/backend without invoking the Go backend in that second-level compilation. It does not complete all self-hosting goals: module/import resolution and the other explicitly unsupported language and target features remain outstanding. Reproduce both levels on Linux amd64 with:
 
@@ -89,8 +89,10 @@ go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count
 
 The standalone Stage 1–3 bootstrap command is `./scripts/bootstrap-stage3.sh`.
 It requires Linux x86-64 and the Go version in `selfhost/bootstrap.lock.json`.
-The test checks SHA-256 values for the source KIR, bundled sources, fixture,
-and generated Stage 1, Stage 2, and Stage 3 compiler ELFs against that lock.
+The test builds and hash-checks the Stage 0 Go CLI, then uses that executable
+to emit the source KIR and run `kir_backend.kry`. It checks SHA-256 values for
+the KIR, bundled sources, fixture, and generated Stage 1, Stage 2, and Stage 3
+compiler ELFs against that lock.
 Stage 2 and Stage 3 must also be byte-identical. This remains a bounded subset
 bootstrap rather than full self-hosting.
 
