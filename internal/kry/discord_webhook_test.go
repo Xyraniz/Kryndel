@@ -21,7 +21,7 @@ type discordWebhookRequest struct {
 }
 
 func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
-	const version = "1.7.0"
+	const version = "1.8.0"
 	archivePath := filepath.Join("..", "..", "registry", "packages", "discord-"+version+".tar.gz")
 	archive, err := os.ReadFile(archivePath)
 	if err != nil {
@@ -298,6 +298,11 @@ fn main() -> Result[Nil, String] {
     assert_eq(is_err(hook.edit_message_files_json("bad", "{}", ["edit.txt"], [files[0]], "")), true)
     let uploaded: String = hook.upload_files_json("{\"content\":\"files\",\"attachments\":[{\"id\":0,\"filename\":\"alpha.txt\"},{\"id\":1,\"filename\":\"beta.bin\"}]}", filenames, files, "456")?
     assert_eq(uploaded, "{\"id\":\"987\"}")
+    let safe_names: Array[String] = ["safe-report.txt"]
+    let safe_files: Array[Bytes] = [bytes_from_u8([u8(81)])]
+    let sent_files: Json = hook.send_files("report <@456>", safe_names, safe_files, "456")?
+    let sent_files_id: String = json_string(result_unwrap(json_object_get(sent_files, "id")))?
+    assert_eq(sent_files_id, "987")
     let edited_files: Json = hook.edit_message_files_json("789", "{\"attachments\":[{\"id\":0,\"filename\":\"edit.txt\"}]}", ["edit.txt"], [bytes_from_u8([u8(68)])], "456")?
     let edited_id: String = json_string(result_unwrap(json_object_get(edited_files, "id")))?
     assert_eq(edited_id, "987")
@@ -333,6 +338,15 @@ fn main() -> Result[Nil, String] {
 			payload:       `{"content":"files","attachments":[{"id":0,"filename":"alpha.txt"},{"id":1,"filename":"beta.bin"}]}`,
 			filenames:     map[string]string{"files[0]": "alpha.txt", "files[1]": "beta.bin"},
 			files:         map[string]string{"files[0]": "AB", "files[1]": string([]byte{0, 255})},
+		},
+		{
+			method:        http.MethodPost,
+			path:          "/api/v10/webhooks/123/short-upload-token?wait=true&thread_id=456",
+			authorization: "",
+			contentType:   "multipart/form-data; boundary=",
+			payload:       `{"content":"report <@456>","attachments":[{"id":0,"filename":"safe-report.txt"}],"allowed_mentions":{"parse":[]}}`,
+			filenames:     map[string]string{"files[0]": "safe-report.txt"},
+			files:         map[string]string{"files[0]": "Q"},
 		},
 		{
 			method:        http.MethodPatch,
