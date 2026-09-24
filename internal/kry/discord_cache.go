@@ -81,6 +81,10 @@ func (c *discordObjectCache) put(kind, id, value string) error {
 func (c *discordObjectCache) set(kind, id, value string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.setLocked(kind, id, value)
+}
+
+func (c *discordObjectCache) setLocked(kind, id, value string) {
 	if c.entries == nil {
 		c.entries = make(map[string]discordCacheEntry)
 	}
@@ -102,6 +106,53 @@ func (c *discordObjectCache) set(kind, id, value string) {
 		}
 		delete(c.entries, oldestKey)
 	}
+}
+
+func mergeDiscordJSONObject(existing, update map[string]any) {
+	for key, value := range update {
+		updatedObject, updatedIsObject := value.(map[string]any)
+		existingObject, existingIsObject := existing[key].(map[string]any)
+		if updatedIsObject && existingIsObject {
+			mergeDiscordJSONObject(existingObject, updatedObject)
+			continue
+		}
+		existing[key] = value
+	}
+}
+
+func (c *discordObjectCache) merge(kind, id, value string) error {
+	if c == nil {
+		return nil
+	}
+	var update map[string]any
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	if err := decoder.Decode(&update); err != nil || update == nil {
+		return fmt.Errorf("Discord cache update must be a JSON object")
+	}
+	key := discordCacheKey(kind, id)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if previous, ok := c.entries[key]; ok && time.Since(previous.seen) < c.ttl {
+		var existing map[string]any
+		decoder := json.NewDecoder(strings.NewReader(previous.value))
+		decoder.UseNumber()
+		if err := decoder.Decode(&existing); err == nil && existing != nil {
+			mergeDiscordJSONObject(existing, update)
+			update = existing
+		}
+	}
+	encoded, err := json.Marshal(update)
+	if err != nil {
+		delete(c.entries, key)
+		return fmt.Errorf("could not encode Discord cache update: %w", err)
+	}
+	if len(encoded) > 1<<20 {
+		delete(c.entries, key)
+		return fmt.Errorf("merged Discord cache object exceeds 1 MiB")
+	}
+	c.setLocked(kind, id, string(encoded))
+	return nil
 }
 
 func (c *discordObjectCache) get(kind, id string) (string, bool) {
@@ -142,6 +193,57 @@ func (c *discordObjectCache) clear() {
 	c.mu.Unlock()
 }
 
+func (c *discordObjectCache) deleteGuild(guildID string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	channelIDs := make(map[string]struct{})
+	for key, entry := range c.entries {
+		kind, id, ok := strings.Cut(key, ":")
+		if !ok || (kind != "channel" && kind != "thread") {
+			continue
+		}
+		var object map[string]any
+		if json.Unmarshal([]byte(entry.value), &object) != nil {
+			continue
+		}
+		if cachedGuildID, ok := discordJSONID(object["guild_id"]); ok && cachedGuildID == guildID {
+			channelIDs[id] = struct{}{}
+		}
+	}
+
+	compositePrefix := guildID + ":"
+	for key, entry := range c.entries {
+		kind, id, ok := strings.Cut(key, ":")
+		if !ok {
+			continue
+		}
+		if (kind == "guild" && id == guildID) ||
+			((kind == "member" || kind == "role" || kind == "emoji" || kind == "sticker" || kind == "voice_state") && strings.HasPrefix(id, compositePrefix)) {
+			delete(c.entries, key)
+			continue
+		}
+		var object map[string]any
+		if json.Unmarshal([]byte(entry.value), &object) != nil {
+			continue
+		}
+		if cachedGuildID, ok := discordJSONID(object["guild_id"]); ok && cachedGuildID == guildID {
+			delete(c.entries, key)
+			continue
+		}
+		if kind == "message" {
+			if channelID, ok := discordJSONID(object["channel_id"]); ok {
+				if _, belongsToGuild := channelIDs[channelID]; belongsToGuild {
+					delete(c.entries, key)
+				}
+			}
+		}
+	}
+}
+
 func discordJSONID(value any) (string, bool) {
 	switch value := value.(type) {
 	case string:
@@ -175,7 +277,8 @@ func (c *discordObjectCache) ingest(event, payload string) error {
 	if err := decoder.Decode(&object); err != nil || object == nil {
 		return fmt.Errorf("Discord Gateway event payload must be a JSON object")
 	}
-	putObject := func(kind string, value any) {
+	var cacheErr error
+	saveObject := func(kind string, value any, merge bool) {
 		item, ok := value.(map[string]any)
 		if !ok {
 			return
@@ -186,9 +289,22 @@ func (c *discordObjectCache) ingest(event, payload string) error {
 		}
 		encoded, err := json.Marshal(item)
 		if err == nil {
-			c.set(kind, id, string(encoded))
+			if len(encoded) > 1<<20 {
+				c.delete(kind, id)
+				cacheErr = fmt.Errorf("Discord cache object exceeds 1 MiB")
+				return
+			}
+			if merge {
+				if err := c.merge(kind, id, string(encoded)); err != nil {
+					cacheErr = err
+				}
+			} else {
+				c.set(kind, id, string(encoded))
+			}
 		}
 	}
+	putObject := func(kind string, value any) { saveObject(kind, value, false) }
+	mergeObject := func(kind string, value any) { saveObject(kind, value, true) }
 	deleteObject := func(kind string, value any) {
 		id, ok := discordJSONID(value)
 		if ok {
@@ -203,51 +319,96 @@ func (c *discordObjectCache) ingest(event, payload string) error {
 		}
 		return guildID + ":" + itemID
 	}
-	putComposite := func(kind string, guildValue any, value any) {
+	saveComposite := func(kind string, guildValue any, value any, merge bool) {
 		item, ok := value.(map[string]any)
 		if !ok {
 			return
 		}
-		id := compositeID(guildValue, item["id"])
+		itemID := item["id"]
+		if kind == "member" {
+			user, ok := item["user"].(map[string]any)
+			if !ok {
+				return
+			}
+			itemID = user["id"]
+			member := make(map[string]any, len(item)+1)
+			for key, field := range item {
+				member[key] = field
+			}
+			member["id"] = itemID
+			if _, exists := member["guild_id"]; !exists {
+				member["guild_id"] = guildValue
+			}
+			item = member
+		}
+		id := compositeID(guildValue, itemID)
 		if id == "" {
 			return
 		}
 		encoded, err := json.Marshal(item)
 		if err == nil {
-			c.set(kind, id, string(encoded))
+			if len(encoded) > 1<<20 {
+				c.delete(kind, id)
+				cacheErr = fmt.Errorf("Discord cache object exceeds 1 MiB")
+				return
+			}
+			if merge {
+				if err := c.merge(kind, id, string(encoded)); err != nil {
+					cacheErr = err
+				}
+			} else {
+				c.set(kind, id, string(encoded))
+			}
 		}
 	}
+	putComposite := func(kind string, guildValue any, value any) { saveComposite(kind, guildValue, value, false) }
+	mergeComposite := func(kind string, guildValue any, value any) { saveComposite(kind, guildValue, value, true) }
 	switch event {
 	case "READY":
 		putObject("user", object["user"])
-	case "GUILD_CREATE", "GUILD_UPDATE":
+	case "GUILD_CREATE":
 		putObject("guild", object)
 		guildID := object["id"]
 		for _, field := range []struct{ key, kind string }{{"channels", "channel"}, {"threads", "thread"}, {"roles", "role"}, {"members", "member"}, {"emojis", "emoji"}, {"stickers", "sticker"}, {"stage_instances", "stage_instance"}, {"guild_scheduled_events", "scheduled_event"}} {
 			items, _ := object[field.key].([]any)
 			for _, item := range items {
-				if field.kind == "channel" || field.kind == "thread" || field.kind == "stage_instance" || field.kind == "scheduled_event" {
+				if field.kind == "member" {
+					putComposite(field.kind, guildID, item)
+					member, _ := item.(map[string]any)
+					user, _ := member["user"].(map[string]any)
+					putObject("user", user)
+				} else if field.kind == "channel" || field.kind == "thread" || field.kind == "stage_instance" || field.kind == "scheduled_event" {
 					putObject(field.kind, item)
 				} else {
 					putComposite(field.kind, guildID, item)
 				}
 			}
 		}
+	case "GUILD_UPDATE":
+		mergeObject("guild", object)
 	case "GUILD_DELETE":
 		unavailable, _ := object["unavailable"].(bool)
 		if !unavailable {
-			deleteObject("guild", object["id"])
+			if guildID, ok := discordJSONID(object["id"]); ok {
+				c.deleteGuild(guildID)
+			}
 		}
-	case "CHANNEL_CREATE", "CHANNEL_UPDATE":
+	case "CHANNEL_CREATE":
 		putObject("channel", object)
+	case "CHANNEL_UPDATE":
+		mergeObject("channel", object)
 	case "CHANNEL_DELETE":
 		deleteObject("channel", object["id"])
-	case "THREAD_CREATE", "THREAD_UPDATE":
+	case "THREAD_CREATE":
 		putObject("thread", object)
+	case "THREAD_UPDATE":
+		mergeObject("thread", object)
 	case "THREAD_DELETE":
 		deleteObject("thread", object["id"])
-	case "MESSAGE_CREATE", "MESSAGE_UPDATE":
+	case "MESSAGE_CREATE":
 		putObject("message", object)
+	case "MESSAGE_UPDATE":
+		mergeObject("message", object)
 	case "MESSAGE_DELETE":
 		deleteObject("message", object["id"])
 	case "MESSAGE_DELETE_BULK":
@@ -255,11 +416,17 @@ func (c *discordObjectCache) ingest(event, payload string) error {
 		for _, id := range ids {
 			deleteObject("message", id)
 		}
-	case "GUILD_MEMBER_ADD", "GUILD_MEMBER_UPDATE":
+	case "GUILD_MEMBER_ADD":
 		user, _ := object["user"].(map[string]any)
 		if user != nil {
-			putComposite("member", object["guild_id"], map[string]any{"id": user["id"], "user": user, "nick": object["nick"], "roles": object["roles"], "joined_at": object["joined_at"], "deaf": object["deaf"], "mute": object["mute"]})
+			putComposite("member", object["guild_id"], object)
 			putObject("user", user)
+		}
+	case "GUILD_MEMBER_UPDATE":
+		user, _ := object["user"].(map[string]any)
+		if user != nil {
+			mergeComposite("member", object["guild_id"], object)
+			mergeObject("user", user)
 		}
 	case "GUILD_MEMBER_REMOVE":
 		user, _ := object["user"].(map[string]any)
@@ -269,7 +436,7 @@ func (c *discordObjectCache) ingest(event, payload string) error {
 			}
 		}
 	case "USER_UPDATE":
-		putObject("user", object)
+		mergeObject("user", object)
 	case "VOICE_STATE_UPDATE":
 		if id := compositeID(object["guild_id"], object["user_id"]); id != "" {
 			channelID, _ := discordJSONID(object["channel_id"])
@@ -278,16 +445,23 @@ func (c *discordObjectCache) ingest(event, payload string) error {
 			} else {
 				encoded, err := json.Marshal(object)
 				if err == nil {
-					c.set("voice_state", id, string(encoded))
+					if len(encoded) > 1<<20 {
+						c.delete("voice_state", id)
+						cacheErr = fmt.Errorf("Discord cache object exceeds 1 MiB")
+					} else {
+						c.set("voice_state", id, string(encoded))
+					}
 				}
 			}
 		}
-	case "GUILD_ROLE_CREATE", "GUILD_ROLE_UPDATE":
+	case "GUILD_ROLE_CREATE":
 		putComposite("role", object["guild_id"], object["role"])
+	case "GUILD_ROLE_UPDATE":
+		mergeComposite("role", object["guild_id"], object["role"])
 	case "GUILD_ROLE_DELETE":
 		if id := compositeID(object["guild_id"], object["role_id"]); id != "" {
 			c.delete("role", id)
 		}
 	}
-	return nil
+	return cacheErr
 }
