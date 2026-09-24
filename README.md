@@ -106,49 +106,6 @@ The checker rejects a required parameter that follows a defaulted one and a defa
 
 Functions are collected before the top-level program runs, so a function can be called before its declaration in the source file. The checker still validates the whole program before execution.
 
-## Runtime polymorphism
-
-Developer applications can create a dispatch slot for a family of interchangeable handlers and change the order at runtime. The API is deliberately narrow: a registered handler must be a top-level `fn(String) -> String`. This keeps the dynamic part easy to inspect and lets the normal runtime limits continue to apply.
-
-```kryndel
-fn json_handler(value: String) -> String {
-    return "json:" + value
-}
-
-fn text_handler(value: String) -> String {
-    return "text:" + value
-}
-
-let a: Result[Nil, String] = poly_register("render", "json_handler", 10)
-let b: Result[Nil, String] = poly_register("render", "text_handler", 5)
-
-match poly_dispatch("render", "hello") {
-    ok(value) => { println(value) }
-    err(message) => { println(message) }
-}
-
-let c: Result[Nil, String] = poly_reorder("render", "text_handler", "json_handler")
-```
-
-`poly_register` orders handlers by descending priority. `poly_reorder` moves one registered handler before another, and `poly_dispatch` invokes the first handler in the current order. Registration and dispatch return `Result` values so missing slots, duplicate handlers, incompatible functions, and handler failures are explicit.
-
-Run the complete example with:
-
-```bash
-./tools/kry run examples/runtime_polymorphism.kry
-```
-
-The same API is available through `std/dispatch`, which keeps application code focused on the handler registry instead of builtin names:
-
-```kryndel
-import "std/dispatch"
-
-let registered: Result[Nil, String] = register("render", "text_handler", 10)
-println(call_or("render", "hello", "fallback"))
-```
-
-See `examples/dispatch_library.kry` for a complete module-based example.
-
 ## Modules and packages
 
 Modules are resolved relative to the importing source file. The `.kry` extension is optional, paths cannot escape the module root, and only `pub` declarations are exported. Cycles, duplicate exports, unsafe paths, and invalid public types are rejected.
