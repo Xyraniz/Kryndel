@@ -250,22 +250,118 @@ func TestSelfhostPEBackendIntArrayBoundsChecks(t *testing.T) {
 	}
 }
 
+func TestSelfhostPEBackendStringIntMapLiteralAndLookup(t *testing.T) {
+	source := `
+fn main() -> Nil {
+    let scores: Map[String, Int] = {"alpha": 17, "beta": -42, "gamma": 5}
+    let alias: Map[String, Int] = scores
+    println(map_contains_key(alias, "beta"))
+    println(map_contains_key(alias, "missing"))
+    println(unwrap_or(map_get(alias, "alpha"), -1))
+    println(unwrap_or(map_get(alias, "missing"), -1))
+    println(unwrap_or(map_get({"inline": 23}, "inline"), -2))
+}
+`
+	image, d := runSelfhostPEBackend(t, source)
+	if d != nil {
+		t.Fatalf("selfhost PE backend rejected supported Map[String,Int] lookup: %v", d)
+	}
+	peImage, err := pe.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatalf("Go PE parser rejected the Map[String,Int] image: %v", err)
+	}
+	imports, err := peImage.ImportedSymbols()
+	peImage.Close()
+	if err != nil {
+		t.Fatalf("could not read Map[String,Int] PE imports: %v", err)
+	}
+	processHeapImports, heapAllocImports := 0, 0
+	for _, symbol := range imports {
+		if strings.HasPrefix(symbol, "GetProcessHeap:") {
+			processHeapImports++
+		}
+		if strings.HasPrefix(symbol, "HeapAlloc:") {
+			heapAllocImports++
+		}
+	}
+	if processHeapImports != 1 || heapAllocImports != 1 {
+		t.Fatalf("expected one GetProcessHeap and one HeapAlloc PE import, got %d and %d (%v)", processHeapImports, heapAllocImports, imports)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("native PE execution requires Windows amd64")
+	}
+	executable := filepath.Join(t.TempDir(), "string-int-map.exe")
+	if err := os.WriteFile(executable, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(executable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated Map[String,Int] PE failed: %v; output: %s", err, output)
+	}
+	want := "true\nfalse\n17\n-1\n23\n"
+	if string(output) != want {
+		t.Fatalf("unexpected Map[String,Int] PE output %q; want %q", output, want)
+	}
+}
+
 func TestSelfhostPEBackendRejectsUnsupportedCollectionShapes(t *testing.T) {
 	cases := []struct {
 		name, source, diagnostic string
 	}{
 		{
-			name: "maps",
+			name: "map with unsupported key type",
 			source: `fn main() -> Nil {
-    let values: Map[String, Int] = {}
-    println(len(values))
+    let values: Map[Int, Int] = {1: 2}
 }`,
-			diagnostic: "PE backend: maps are not supported",
+			diagnostic: "PE backend: only Map[String,Int] locals are supported",
 		},
 		{
 			name:       "map builtin",
-			source:     `fn main() -> Nil { map_get({"key": 1}, "key") }`,
+			source:     `fn main() -> Nil { map_remove({"key": 1}, "key") }`,
 			diagnostic: "PE backend: map builtins are not supported",
+		},
+		{
+			name: "map insertion",
+			source: `fn main() -> Nil {
+    let values: Map[String, Int] = {"key": 1}
+    map_insert(values, "new", 2)
+}`,
+			diagnostic: "PE backend: map builtins are not supported",
+		},
+		{
+			name: "map reassignment",
+			source: `fn main() -> Nil {
+    let mut values: Map[String, Int] = {"key": 1}
+    values = {"new": 2}
+}`,
+			diagnostic: "PE backend: Map[String,Int] reassignment is not supported",
+		},
+		{
+			name: "map values must be Int",
+			source: `fn main() -> Nil {
+    let values: Map[String, Bool] = {"key": true}
+}`,
+			diagnostic: "PE backend: only Map[String,Int] locals are supported",
+		},
+		{
+			name: "map keys must be literals",
+			source: `fn main() -> Nil {
+    let key: String = "key"
+    let values: Map[String, Int] = {key: 1}
+}`,
+			diagnostic: "PE backend: Map[String,Int] literal keys must be String literals",
+		},
+		{
+			name: "map function parameter",
+			source: `fn lookup(values: Map[String, Int]) -> Bool { return map_contains_key(values, "key") }
+fn main() -> Nil {}`,
+			diagnostic: "PE backend: map function parameters are not supported",
+		},
+		{
+			name: "map function return",
+			source: `fn make() -> Map[String, Int] { return {"key": 1} }
+fn main() -> Nil {}`,
+			diagnostic: "PE backend: map function returns are not supported",
 		},
 		{
 			name: "non Int array elements",
@@ -443,6 +539,13 @@ fn main() -> Nil {
     println(str(zero_value()))
     println(str(truth_value()))
     println(str(u64(17)))
+    let values: Array[Int] = [8, 4]
+    println(len(values))
+    println(values[1])
+    let scores: Map[String, Int] = {"source": 17, "compiled": -8}
+    let score_alias: Map[String, Int] = scores
+    println(map_contains_key(score_alias, "source"))
+    println(unwrap_or(map_get(score_alias, "compiled"), 0))
     println("compiled from Kryndel source")
 }
 `
@@ -494,7 +597,7 @@ fn main() -> Nil {
 	if err != nil {
 		t.Fatalf("selfhost-source-generated PE failed: %v; output: %s", err, output)
 	}
-	want := "2\n4\n6\ncontinued condition\n17\n42\n-42\n-42\n0\ntrue\n17\ncompiled from Kryndel source\n"
+	want := "2\n4\n6\ncontinued condition\n17\n42\n-42\n-42\n0\ntrue\n17\n2\n4\ntrue\n-8\ncompiled from Kryndel source\n"
 	if string(output) != want {
 		t.Fatalf("unexpected source-compiled PE output %q", output)
 	}

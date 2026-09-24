@@ -5189,8 +5189,67 @@ fn pe_is_int_array_type(type_name: String) -> Bool {
     return type_name == "Array[Int]"
 }
 
+fn pe_is_string_int_map_type(type_name: String) -> Bool {
+    return type_name == "Map[String,Int]" || type_name == "Map[String, Int]"
+}
+
 fn pe_supported_local_type(enums: Json, structs: Json, type_name: String) -> Bool {
-    return pe_supported_type_with_structs(enums, structs, type_name) || pe_is_int_array_type(type_name)
+    return pe_supported_type_with_structs(enums, structs, type_name) || pe_is_int_array_type(type_name) || pe_is_string_int_map_type(type_name)
+}
+
+fn pe_validate_map_expression(expression: Json, enums: Json, structs: Json) -> Result[Bool, String] {
+    if !pe_is_string_int_map_type(expr_type(expression)) { return err("PE backend: only Map[String,Int] is supported") }
+    let kind: String = text(field(expression, "kind"))
+    if kind == "var" { return ok(true) }
+    if kind != "map" { return err("PE backend: Map[String,Int] values require a local literal or an existing local map") }
+    let keys: Json = field(expression, "map_keys")
+    let values: Json = field(expression, "values")
+    let count: Int = result_unwrap(json_array_len(keys))
+    if result_unwrap(json_array_len(values)) != count { return err("PE backend: map literal key/value count mismatch") }
+    let mut seen: Map[String, Bool] = {}
+    let mut index: Int = 0
+    while index < count {
+        let key: Json = result_unwrap(json_array_get(keys, index))
+        let value: Json = result_unwrap(json_array_get(values, index))
+        if text(field(key, "kind")) != "string" { return err("PE backend: Map[String,Int] literal keys must be String literals") }
+        if expr_type(value) != "Int" { return err("PE backend: Map[String,Int] literal values must be Int") }
+        let key_text: String = text(field(key, "string"))
+        if map_contains_key(seen, key_text) { return err("PE backend: duplicate Map[String,Int] literal key '" + key_text + "'") }
+        let checked_value: Result[Bool, String] = pe_validate_expression(value, false, false, enums, structs)
+        if is_err(checked_value) { return checked_value }
+        seen = map_insert(seen, key_text, true)
+        index = index + 1
+    }
+    return ok(true)
+}
+
+fn pe_validate_map_call(expression: Json, enums: Json, structs: Json) -> Result[Bool, String] {
+    let target: String = text(field(expression, "call_target"))
+    let args: Json = field(expression, "args")
+    let count: Int = result_unwrap(json_array_len(args))
+    if target == "builtin:map_contains_key" || target == "builtin:map_get" {
+        if count != 2 { return err("PE backend: map lookup expects Map[String,Int] and String") }
+        let map_value: Json = result_unwrap(json_array_get(args, 0))
+        let key: Json = result_unwrap(json_array_get(args, 1))
+        if !pe_is_string_int_map_type(expr_type(map_value)) || expr_type(key) != "String" { return err("PE backend: map lookup supports only Map[String,Int] and String keys") }
+        if target == "builtin:map_contains_key" && expr_type(expression) != "Bool" { return err("PE backend: map_contains_key must return Bool") }
+        if target == "builtin:map_get" && expr_type(expression) != "Option[Int]" { return err("PE backend: map_get must return Option[Int]") }
+        let checked_map: Result[Bool, String] = pe_validate_map_expression(map_value, enums, structs)
+        if is_err(checked_map) { return checked_map }
+        return pe_validate_expression(key, false, false, enums, structs)
+    }
+    if target == "builtin:unwrap_or" {
+        if count != 2 { return err("PE backend: unwrap_or expects Option[Int] and an Int fallback") }
+        let option: Json = result_unwrap(json_array_get(args, 0))
+        let fallback: Json = result_unwrap(json_array_get(args, 1))
+        if expr_type(expression) != "Int" || expr_type(option) != "Option[Int]" || text(field(option, "kind")) != "call" || text(field(option, "call_target")) != "builtin:map_get" || expr_type(fallback) != "Int" {
+            return err("PE backend: unwrap_or supports only map_get(Map[String,Int], String) with an Int fallback")
+        }
+        let checked_option: Result[Bool, String] = pe_validate_map_call(option, enums, structs)
+        if is_err(checked_option) { return checked_option }
+        return pe_validate_expression(fallback, false, false, enums, structs)
+    }
+    return err("PE backend: map builtins are not supported except read-only Map[String,Int] lookup")
 }
 
 fn pe_is_enum_type(enums: Json, type_name: String) -> Bool {
@@ -5327,7 +5386,10 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
     let mut call_target: String = ""
     if kind == "call" { call_target = text(field(expression, "call_target")) }
     let nil_builtin: Bool = kind == "call" && (call_target == "builtin:print" || call_target == "builtin:println" || call_target == "builtin:assert" || call_target == "builtin:assert_eq" || starts_with(call_target, "function:"))
-    if starts_with(call_target, "builtin:map_") { return err("PE backend: map builtins are not supported") }
+    if call_target == "builtin:map_contains_key" || call_target == "builtin:map_get" || call_target == "builtin:unwrap_or" {
+        return pe_validate_map_call(expression, enums, structs)
+    }
+    if starts_with(call_target, "builtin:map_") { return err("PE backend: map builtins are not supported except read-only Map[String,Int] lookup") }
     if starts_with(call_target, "builtin:array_") { return err("PE backend: array builtins are not supported except len(Array[Int]) and local indexing") }
     if kind == "enum" {
         let enum_name: String = text(field(expression, "enum_type"))
@@ -5376,7 +5438,7 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
     if kind == "binary" && (pe_is_int_array_type(expr_type(field(expression, "left"))) || pe_is_int_array_type(expr_type(field(expression, "right")))) {
         return err("PE backend: Array[Int] binary operations are not supported")
     }
-    if starts_with(type_name, "Map[") { return err("PE backend: maps are not supported") }
+    if starts_with(type_name, "Map[") { return pe_validate_map_expression(expression, enums, structs) }
     if starts_with(type_name, "Array[") && !pe_is_int_array_type(type_name) { return err("PE backend: only Array[Int] is supported") }
     if pe_is_int_array_type(type_name) && kind != "array" && kind != "var" {
         return err("PE backend: Array[Int] values are only supported as literals and local variables")
@@ -5486,6 +5548,7 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
         if pe_is_enum_type(enums, expr_type(output)) { return err("PE backend: printing enum values is not supported") }
         if pe_is_struct_type(structs, expr_type(output)) { return err("PE backend: printing structs is not supported") }
         if pe_is_int_array_type(expr_type(output)) { return err("PE backend: printing Array[Int] is not supported") }
+        if starts_with(expr_type(output), "Map[") { return err("PE backend: printing maps is not supported") }
         return pe_validate_expression(output, false, false, enums, structs)
     }
     return err("PE backend: unsupported expression kind '" + kind + "'")
@@ -5499,18 +5562,21 @@ fn pe_validate_statements(statements: Json, enums: Json, structs: Json) -> Resul
         let kind: String = text(field(statement, "kind"))
         if kind == "let" || kind == "const" {
             let init: Json = field(statement, "init")
-            if starts_with(expr_type(init), "Map[") { return err("PE backend: maps are not supported") }
+            if starts_with(expr_type(init), "Map[") && !pe_is_string_int_map_type(expr_type(init)) { return err("PE backend: only Map[String,Int] locals are supported") }
             if starts_with(expr_type(init), "Array[") && !pe_is_int_array_type(expr_type(init)) { return err("PE backend: only Array[Int] locals are supported") }
             if !pe_supported_local_type(enums, structs, expr_type(init)) { return err("PE backend: binding '" + text(field(statement, "name")) + "' has an unsupported type") }
             if text(field(init, "kind")) == "call" && starts_with(text(field(init, "call_target")), "builtin:array_") { return err("PE backend: array builtins are not supported except len(Array[Int]) and local indexing") }
+            if text(field(init, "kind")) == "call" && starts_with(text(field(init, "call_target")), "builtin:map_") { return err("PE backend: map builtins are not supported except read-only Map[String,Int] lookup") }
             if pe_is_int_array_type(expr_type(init)) && text(field(init, "kind")) == "binary" { return err("PE backend: Array[Int] binary operations are not supported") }
             if pe_is_int_array_type(expr_type(init)) && text(field(init, "kind")) != "array" && text(field(init, "kind")) != "var" { return err("PE backend: Array[Int] locals require a literal or an existing local array") }
+            if pe_is_string_int_map_type(expr_type(init)) && text(field(init, "kind")) != "map" && text(field(init, "kind")) != "var" { return err("PE backend: Map[String,Int] locals require a literal or an existing local map") }
             if pe_is_struct_type(structs, expr_type(init)) && text(field(init, "kind")) != "struct" { return err("PE backend: struct bindings require a local struct literal") }
             let checked: Result[Bool, String] = pe_validate_expression(init, false, false, enums, structs)
             if is_err(checked) { return checked }
         } else if kind == "assign" {
             let target: Json = field(statement, "target")
             let value: Json = field(statement, "value")
+            if pe_is_string_int_map_type(expr_type(target)) || pe_is_string_int_map_type(expr_type(value)) { return err("PE backend: Map[String,Int] reassignment is not supported") }
             if pe_is_int_array_type(expr_type(target)) || pe_is_int_array_type(expr_type(value)) { return err("PE backend: Array[Int] mutation and reassignment are not supported") }
             if text(field(target, "kind")) == "index" && pe_is_int_array_type(expr_type(field(target, "base"))) { return err("PE backend: Array[Int] element mutation is not supported") }
             if text(field(target, "kind")) != "var" || pe_is_struct_type(structs, expr_type(value)) || !pe_supported_type(enums, expr_type(value)) { return err("PE backend: assignment requires a scalar or enum local") }
@@ -5582,6 +5648,7 @@ fn pe_validate_document(document: Json) -> Result[Bool, String] {
         } else {
             if pe_is_struct_type(structs, text(field(function, "return"))) { return err("PE backend: struct function returns are not supported") }
             if pe_is_int_array_type(text(field(function, "return"))) { return err("PE backend: Array[Int] function returns are not supported") }
+            if starts_with(text(field(function, "return")), "Map[") { return err("PE backend: map function returns are not supported") }
             if !pe_supported_type(enums, text(field(function, "return"))) && text(field(function, "return")) != "Nil" { return err("PE backend: function '" + name + "' has an unsupported return type") }
         }
         let parameters: Json = field(function, "params")
@@ -5590,6 +5657,7 @@ fn pe_validate_document(document: Json) -> Result[Bool, String] {
         while parameter_index < parameter_count {
             let parameter: Json = result_unwrap(json_array_get(parameters, parameter_index))
             if pe_is_int_array_type(text(field(parameter, "type"))) { return err("PE backend: Array[Int] function parameters are not supported") }
+            if starts_with(text(field(parameter, "type")), "Map[") { return err("PE backend: map function parameters are not supported") }
             if pe_is_struct_type(structs, text(field(parameter, "type"))) || !pe_supported_type(enums, text(field(parameter, "type"))) || json_kind(field(parameter, "default")) != "null" { return err("PE backend: function parameters require scalar or enum types and no defaults") }
             parameter_index = parameter_index + 1
         }
