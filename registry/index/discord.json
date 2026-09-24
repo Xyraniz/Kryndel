@@ -2,54 +2,9 @@
   "name": "discord",
   "versions": [
     {
-      "version": "1.0.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.0.0.tar.gz",
-      "sha256": "0f964883a2b3a01fd23782da3186290dd30a5c59fd8470e4fa74ff129cff7cb3"
-    },
-    {
-      "version": "1.1.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.1.0.tar.gz",
-      "sha256": "fa8d484af6b542ea90f591bdbac9ec3dc197f91d3d87c9a3bc7302c545488cee"
-    },
-    {
-      "version": "1.2.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.2.0.tar.gz",
-      "sha256": "96c71c5f2c91ee13000d0d611663cc487247ffb57b04c6419404249af8df9d68"
-    },
-    {
-      "version": "1.3.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.3.0.tar.gz",
-      "sha256": "1af94119eeee79e8c2676c72af4f48e6054d93424814cae673b542c44c1598e0"
-    },
-    {
-      "version": "1.4.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.4.0.tar.gz",
-      "sha256": "edf3c09483e8c82032b290dff67431411bf31b70753d9ff731c1170722ce5567"
-    },
-    {
-      "version": "1.5.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.5.0.tar.gz",
-      "sha256": "5ec790c19ee1885c6dd51f2bbb31ee64291dc2fb7288e26f262b21f3745c2060"
-    },
-    {
-      "version": "1.6.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.6.0.tar.gz",
-      "sha256": "5d8dfe896082a5c6ffd4e1c216737f185b9e10098cfe56f4435bd9bc2201fc4f"
-    },
-    {
-      "version": "1.7.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.7.0.tar.gz",
-      "sha256": "5e715c0065db659255a918c81ba4859ddadfb0f7a8b5ae8dafa1c82742dcdef3"
-    },
-    {
-      "version": "1.8.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-1.8.0.tar.gz",
-      "sha256": "27e5f44dd917c4cb407b84a65acfb44739a861696b4e3fb6c1e52a306f1833bf"
-    },
-    {
-      "version": "2.0.0",
-      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-2.0.0.tar.gz",
-      "sha256": "77cdcebf9ee105946c68f0cd975fbf1d521d84486fa5e84dcfae01cf826544c2"
+      "version": "2.1.0",
+      "url": "https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry/packages/discord-2.1.0.tar.gz",
+      "sha256": "456ba230ed2a63ebd16a21353b26c18c47d09e46a4b9a1d6a91db54ee76528c4"
     }
   ]
 }

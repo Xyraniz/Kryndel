@@ -739,6 +739,9 @@ func (x *ExecContext) step(src *Source, line, col int) *Diagnostic {
 		return Diag(CatResource, src, line, col, "instruction limit exceeded")
 	}
 	x.Instructions++
+	return x.contextFailure(src, line, col)
+}
+func (x *ExecContext) contextFailure(src *Source, line, col int) *Diagnostic {
 	select {
 	case <-x.Ctx.Done():
 		if errors.Is(x.Ctx.Err(), context.DeadlineExceeded) {
@@ -905,7 +908,13 @@ func NewRuntime(prog *Program, c *Checker, lim Limits, sb Sandbox) (*Runtime, *D
 }
 
 func NewRuntimeWithArgs(prog *Program, c *Checker, lim Limits, sb Sandbox, args []string) (*Runtime, *Diagnostic) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if lim.MaxWallTimeMS == 0 {
+		ctx, cancel = context.WithCancel(context.Background())
+	} else {
+		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
+	}
 	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Args: append([]string(nil), args...), Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(), discordCache: newDiscordObjectCache(10_000, 30*time.Minute), discordAPIBaseURL: discordAPIBase}
 	return r, nil
 }
@@ -957,6 +966,9 @@ func (r *Runtime) run() (result *Diagnostic) {
 			return d
 		}
 		x := r.execStmt(r.Global, s)
+		if d := r.Ctx.contextFailure(s.Tok.Source, s.Tok.Line, s.Tok.Column); d != nil {
+			return d
+		}
 		if x.Diag != nil {
 			return x.Diag
 		}
@@ -975,6 +987,9 @@ func (r *Runtime) run() (result *Diagnostic) {
 		if f := r.Funcs["main"]; f != nil {
 			v, d := r.evalCall(r.Global, &Expr{Kind: ExCall, Name: "main", Tok: f.Tok})
 			if d != nil {
+				return d
+			}
+			if d := r.Ctx.contextFailure(f.Tok.Source, f.Tok.Line, f.Tok.Column); d != nil {
 				return d
 			}
 			if v.Kind == VResult && !v.OK {
@@ -2394,20 +2409,27 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return r.discordInteractionRequest(a[0].S, a[1].S, a[2].S)
 	case "discord_api_upload":
 		return r.discordAPIUpload(a[0].S, a[1].S, a[2].S, a[3].S, a[4].Bytes, a[5].S)
-	case "discord_webhook_upload":
-		if a[3].Kind != VArray || a[4].Kind != VArray {
-			return resVal(false, stringVal("Discord webhook upload expects arrays of filenames and bytes")), nil
+	case "discord_api_upload_files", "discord_webhook_upload":
+		uploadName := "Discord webhook upload"
+		if b.Name == "discord_api_upload_files" {
+			uploadName = "Discord API upload"
 		}
-		if arrayLength(a[3]) == 0 || arrayLength(a[3]) > discordMaxWebhookFiles || arrayLength(a[3]) != arrayLength(a[4]) {
-			return resVal(false, stringVal("Discord webhook upload needs matching arrays with 1 to 10 files")), nil
+		if a[3].Kind != VArray || a[4].Kind != VArray {
+			return resVal(false, stringVal(uploadName+" expects arrays of filenames and bytes")), nil
+		}
+		if arrayLength(a[3]) == 0 || arrayLength(a[3]) > discordMaxUploadFiles || arrayLength(a[3]) != arrayLength(a[4]) {
+			return resVal(false, stringVal(uploadName+" needs matching arrays with 1 to 10 files")), nil
 		}
 		filenames, fileData := arrayValues(a[3]), arrayValues(a[4])
 		files := make([]discordUploadFile, len(filenames))
 		for index := range filenames {
 			if filenames[index].Kind != VString || fileData[index].Kind != VBytes {
-				return resVal(false, stringVal("Discord webhook upload expects String filenames and Bytes file data")), nil
+				return resVal(false, stringVal(uploadName+" expects String filenames and Bytes file data")), nil
 			}
 			files[index] = discordUploadFile{filename: filenames[index].S, data: fileData[index].Bytes}
+		}
+		if b.Name == "discord_api_upload_files" {
+			return r.discordAPIUploadFiles(a[0].S, a[1].S, a[2].S, files, a[5].S)
 		}
 		return r.discordWebhookUpload(a[0].S, a[1].S, a[2].S, files, a[5].S)
 	case "discord_verify_interaction":
@@ -2756,7 +2778,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return nilVal(), nil
 	case "tcp_connect":
-		socket, err := tcpConnect(a[0].S, a[1].I, time.Duration(r.Lim.MaxWallTimeMS)*time.Millisecond)
+		socket, err := tcpConnect(a[0].S, a[1].I, networkTimeout(r.Lim.MaxWallTimeMS))
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
@@ -3877,7 +3899,7 @@ func (r *Runtime) doHTTP(method, rawURL, body, token string) (Value, *Diagnostic
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := (&http.Client{Timeout: time.Duration(r.Lim.MaxWallTimeMS) * time.Millisecond}).Do(req)
+	resp, err := (&http.Client{Timeout: networkTimeout(r.Lim.MaxWallTimeMS)}).Do(req)
 	if err != nil {
 		return resVal(false, stringVal(err.Error())), nil
 	}

@@ -291,6 +291,7 @@ var generatedInterpreterBuiltinCases = map[string]struct{}{
 	"datetime_unix_ms":                 {},
 	"discord_api_request":              {},
 	"discord_api_upload":               {},
+	"discord_api_upload_files":         {},
 	"discord_cache_clear":              {},
 	"discord_cache_delete":             {},
 	"discord_cache_get":                {},

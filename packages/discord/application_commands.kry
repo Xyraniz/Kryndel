@@ -1,0 +1,88 @@
+// Small JSON builders for the common Discord application command types.
+
+fn valid_chat_command_name(value: String) -> Bool {
+    if len(value) == 0 || len(value) > 32 { return false }
+    for point in codepoints(value) {
+        let allowed: Bool = (point >= 97 && point <= 122) ||
+            (point >= 48 && point <= 57) || point == 45 || point == 95
+        if !allowed { return false }
+    }
+    return true
+}
+
+fn valid_context_command_name(value: String) -> Bool {
+    if len(value) == 0 || len(value) > 32 { return false }
+    for point in codepoints(value) {
+        if point < 32 || (point >= 127 && point <= 159) { return false }
+    }
+    return true
+}
+
+fn validate_application_command_options(value: String) -> Result[String, String] {
+    let parsed: Json = json_parse(value)?
+    let count: Int = json_array_len(parsed)?
+    if count > 25 { return err("Discord slash commands accept at most 25 options") }
+
+    let mut index: Int = 0
+    while index < count {
+        let option: Json = json_array_get(parsed, index)?
+        if json_kind(option) != "object" {
+            return err("each Discord slash command option must be a JSON object")
+        }
+        index = index + 1
+    }
+    return ok(value)
+}
+
+// This builder accepts the ASCII subset of Discord's CHAT_INPUT name rule.
+// The Discord API also accepts certain Unicode letter/number categories;
+// Kryndel has no Unicode-category predicate yet, so this helper rejects them
+// instead of claiming to validate names it cannot classify.
+pub fn slash_command_json(name: String, description: String, options_json: String) -> Result[String, String] {
+    if !valid_chat_command_name(name) {
+        return err("slash command name must be 1 to 32 lowercase ASCII letters, digits, hyphens, or underscores")
+    }
+    if len(description) == 0 || len(description) > 100 {
+        return err("slash command description must contain 1 to 100 Unicode code points")
+    }
+
+    let checked_options: String = validate_application_command_options(options_json)?
+    let quoted_name: String = json_quote(name)?
+    let quoted_description: String = json_quote(description)?
+    return ok("{\"name\":" + quoted_name + ",\"type\":1,\"description\":" + quoted_description + ",\"options\":" + checked_options + "}")
+}
+
+// Context menu commands have no description or options in Discord's schema.
+pub fn user_context_command_json(name: String) -> Result[String, String] {
+    if !valid_context_command_name(name) {
+        return err("user context command name must contain 1 to 32 non-control Unicode code points")
+    }
+    let quoted_name: String = json_quote(name)?
+    return ok("{\"name\":" + quoted_name + ",\"type\":2}")
+}
+
+pub fn message_context_command_json(name: String) -> Result[String, String] {
+    if !valid_context_command_name(name) {
+        return err("message context command name must contain 1 to 32 non-control Unicode code points")
+    }
+    let quoted_name: String = json_quote(name)?
+    return ok("{\"name\":" + quoted_name + ",\"type\":3}")
+}
+
+impl Bot {
+    // Validates the overwrite envelope and delegates request/authentication to
+    // the existing bulk-overwrite route helper.
+    pub fn sync_global_commands(application_id: String, commands_json: String) -> Result[Json, String] {
+        let parsed: Json = json_parse(commands_json)?
+        let count: Int = json_array_len(parsed)?
+        let mut index: Int = 0
+        while index < count {
+            let command: Json = json_array_get(parsed, index)?
+            if json_kind(command) != "object" {
+                return err("each Discord global application command must be a JSON object")
+            }
+            index = index + 1
+        }
+        return self.bulk_overwrite_global_commands(application_id, commands_json)
+    }
+}

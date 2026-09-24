@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 )
 
 func geocodeIPJSON(ctx *ExecContext, ip string, maxBytes int) (string, error) {
@@ -32,7 +31,7 @@ func geocodeIPJSON(ctx *ExecContext, ip string, maxBytes int) (string, error) {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "Kryndel-geocoder/1")
-	client := &http.Client{Timeout: time.Duration(ctx.Lim.MaxWallTimeMS) * time.Millisecond}
+	client := &http.Client{Timeout: networkTimeout(ctx.Lim.MaxWallTimeMS)}
 	response, err := client.Do(req)
 	if err != nil {
 		return "", err
