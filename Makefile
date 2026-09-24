@@ -57,7 +57,10 @@ coverage:
 	$(GO) test -covermode=atomic -coverprofile=build/coverage.out ./...
 
 fuzz-smoke:
-	$(GO) test -run='TestFuzzSmoke' -count=1 -timeout=$(TIMEOUT) ./...
+	$(GO) test -run='^$$' -fuzz='^FuzzKryndelLex$$' -fuzztime=2s -parallel=2 -timeout=$(TIMEOUT) ./internal/kry
+	$(GO) test -run='^$$' -fuzz='^FuzzKryndelParseAndCheck$$' -fuzztime=2s -parallel=2 -timeout=$(TIMEOUT) ./internal/kry
+	$(GO) test -run='^$$' -fuzz='^FuzzKryndelArtifactDecoder$$' -fuzztime=2s -parallel=2 -timeout=$(TIMEOUT) ./internal/kry
+	$(GO) test -run='^$$' -fuzz='^FuzzKryndelKIRDecoder$$' -fuzztime=2s -parallel=2 -timeout=$(TIMEOUT) ./internal/kry
 
 check-docs:
 	$(GO) test -run='TestDocumentation' -count=1 ./...

@@ -1,13 +1,13 @@
 # Build and release guide
 
-Kryndel can be built from source with Go 1.22 or newer and its standard library. The supported release targets are Linux amd64/arm64, macOS amd64/arm64, and Windows amd64; distributed binaries are built with `CGO_ENABLED=0` and require no external runtime:
+Kryndel can be built from source with Go 1.22 or newer and the modules listed in `go.mod`. The supported release targets are Linux amd64/arm64, macOS amd64/arm64, and Windows amd64; distributed binaries are built with `CGO_ENABLED=0` and include their Go dependencies, so they require no external runtime:
 
 ```bash
 make
 ./tools/kry version
 ```
 
-The launcher does not detect or invoke C, Python, Rust, or Node.js. When `build/kry` is missing it exits with `69` and instructs the developer to run `make build`. The executable uses only the Go standard library for numeric operations, channels, workers, filesystem checks, and serialization.
+The launcher does not detect or invoke C, Python, Rust, or Node.js. When `build/kry` is missing it exits with `69` and instructs the developer to run `make build`. Numeric operations, channels, workers, filesystem checks, and serialization use Go code; host integrations also use the Go modules declared in `go.mod`.
 
 A reproducible verification build uses the following targets:
 

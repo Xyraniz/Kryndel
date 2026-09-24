@@ -5,7 +5,7 @@
 
 Kryndel is a small, statically checked language for developer tools and structured applications. The repository contains the compiler, checker, runtime, standard library wrappers, package tooling, and a self-contained command-line executable.
 
-The implementation is written in Go and uses the Go standard library. Source goes through lexing, parsing, module resolution, static checking, validated IR, and runtime execution. Released binaries do not need Go or another host-language runtime.
+The implementation is written in Go and uses the standard library plus the Go modules listed in `go.mod` for host integrations. Source goes through lexing, parsing, module resolution, static checking, and runtime execution. Released binaries include their Go dependencies and do not need Go or another host-language runtime.
 
 ## Quick start
 
