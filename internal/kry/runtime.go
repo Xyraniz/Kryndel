@@ -28,6 +28,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/Xyraniz/Kryndel/internal/platform"
 )
 
 type ValueKind int
@@ -2977,31 +2979,31 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return resVal(true, Value{Kind: VJSON, S: value}), nil
 	case "screen_display_count":
-		value, err := screenDisplayCount()
+		value, err := platform.ScreenDisplayCount()
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, intVal(int64(value))), nil
 	case "screen_display_bounds":
-		value, err := screenDisplayBoundsJSON(a[0].I)
+		value, err := platform.ScreenDisplayBoundsJSON(a[0].I)
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, Value{Kind: VJSON, S: value}), nil
 	case "screen_capture":
-		value, err := screenCapturePNG(a[0].I, a[1].I, a[2].I, a[3].I, r.Lim.MaxOutputBytes)
+		value, err := platform.CaptureScreenPNG(a[0].I, a[1].I, a[2].I, a[3].I, r.Lim.MaxOutputBytes)
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, bytesVal(value)), nil
 	case "screen_capture_display":
-		value, err := screenCaptureDisplayPNG(a[0].I, r.Lim.MaxOutputBytes)
+		value, err := platform.CaptureScreenDisplayPNG(a[0].I, r.Lim.MaxOutputBytes)
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, bytesVal(value)), nil
 	case "camera_capture":
-		value, err := cameraCapture(r.Ctx.Ctx, a[0].S, a[1].I, a[2].I, r.Lim.MaxOutputBytes)
+		value, err := platform.CaptureCamera(r.Ctx.Ctx, a[0].S, a[1].I, a[2].I, r.Lim.MaxOutputBytes)
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}

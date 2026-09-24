@@ -19,7 +19,7 @@ Keep changes to these modes explicit: a Go version change must update the
 module declaration and relevant CI/release jobs, while a bootstrap lock change
 must be reproduced with its pinned host and target before it is accepted.
 
-The implementation is split into source, diagnostics, lexer, parser/AST, types and copy analysis, modules, control-flow checking, builtin registry, validated bytecode, VM, sandbox filesystem, concurrency, artifacts, formatter, REPL, and CLI packages under `internal/kry`. Compiler and execution state is explicit per invocation; no mutable package-level program state is used.
+The compiler and runtime subsystems remain in `internal/kry`; bounded camera and display capture now live in the leaf package `internal/platform`, which has no dependency on compiler or runtime state. The next package extractions should follow similarly testable dependency boundaries instead of mechanically splitting files. Compiler and execution state is explicit per invocation; no mutable package-level program state is used.
 
 The frontend produces a validated bytecode program. The VM executes only validated instructions and carries an `ExecContext` with cancellation, instruction, wall-clock, call-depth, stack, memory, source, and output budgets. Every host-facing operation returns a typed error. Go panics are not used for language failures and are converted at the CLI boundary only for unexpected host failures.
 
