@@ -19,8 +19,15 @@ linker for a bounded scalar subset on Windows amd64: `Int`, `UInt`, `Bool`, and
 `String` values; functions with up to four register arguments; `if`, `while`,
 `break`, `continue`; and `print`/`println`. It emits PE imports and Win64 unwind
 records directly. Arrays, maps, floats, runtime helpers, and arguments beyond
-the four register slots fail with a diagnostic. Windows arm64 PE code generation
-is not implemented. `kry inspect` recognizes the
+the four register slots fail with a diagnostic. Windows arm64 PE code
+generation is not implemented.
+
+> [!WARNING]
+> `windows-arm64` is a recognized target alias, but Kryndel does not currently
+> generate PE files for it. Check `kry capabilities` for supported format and
+> target pairs.
+
+`kry inspect` recognizes the
 `MZ`/`PE\0\0` signatures and reports architecture and section count without
 executing the file; it is not a complete PE validator. Broader IR lowering
 and a native runtime are still required for the full language. The
