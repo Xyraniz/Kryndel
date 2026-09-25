@@ -42,7 +42,8 @@ language-servers = ["kryndel"]
 - Hover shows checked expression types and user function or builtin
   signatures.
 - Completion offers language keywords, primitive/container types, builtins,
-  and visible top-level functions, structs, and enums.
+  visible top-level functions, structs, and enums, along with locals in scope
+  and accessible fields after `.` when the receiver is a struct-valued identifier.
 - Formatting returns a whole-document edit from the Kryndel formatter.
 
 The server uses full-document synchronization. It converts LSP positions using
@@ -51,6 +52,4 @@ published diagnostics. The client must send `shutdown` followed by `exit` for a
 clean process status.
 
 The compiler reports its first diagnostic per analysis, so the server
-currently publishes at most one compiler diagnostic for each open file. The
-completion list is based on visible top-level declarations and does not yet
-include local variables or context-specific struct members.
+currently publishes at most one compiler diagnostic for each open file.

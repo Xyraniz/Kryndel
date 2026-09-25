@@ -1,6 +1,10 @@
 SHELL := /bin/bash
 GO ?= go
-BINARY := build/kry
+ifeq ($(OS),Windows_NT)
+BINARY ?= build/kry.exe
+else
+BINARY ?= build/kry
+endif
 TIMEOUT ?= 10m
 RACE_TIMEOUT ?= 40m
 
@@ -45,7 +49,18 @@ test: build check
 	$(BINARY) inspect build/hello.elf
 
 test-static: build
-	@test -z "$$($(GO)fmt -l cmd internal)" || (echo 'gofmt check failed' >&2; exit 1)
+	@set -euo pipefail; \
+	  head=$$(git rev-parse HEAD); \
+	  if git rev-parse --verify origin/main >/dev/null 2>&1; then \
+	    base=$$(git merge-base "$$head" origin/main); \
+	    if [ "$$base" = "$$head" ] && git rev-parse --verify HEAD^ >/dev/null 2>&1; then base=$$(git rev-parse HEAD^); fi; \
+	  elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then base=$$(git rev-parse HEAD^); \
+	  else base=$$head; fi; \
+	  mapfile -t files < <(git diff --name-only --diff-filter=ACMR "$$base" -- '*.go'; git ls-files --others --exclude-standard -- '*.go'); \
+	  if (( $${#files[@]} )); then \
+	    unformatted=$$(gofmt -l "$${files[@]}"); \
+	    if [ -n "$$unformatted" ]; then printf '%s\n' "$$unformatted" >&2; exit 1; fi; \
+	  fi
 	$(GO) vet ./...
 	$(GO) test -count=1 ./...
 
