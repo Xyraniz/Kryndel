@@ -6,6 +6,8 @@ import (
 	"image"
 	"image/color"
 	"testing"
+
+	"github.com/blackjack/webcam"
 )
 
 func TestDecodeV4L2YUYVHandlesOddWidthRows(t *testing.T) {
@@ -36,5 +38,30 @@ func TestDecodeV4L2YUYVHandlesOddWidthRows(t *testing.T) {
 
 	if _, err := decodeV4L2Frame(frame[:len(frame)-1], fourCC("YUYV"), 3, 2); err == nil {
 		t.Fatal("truncated odd-width YUYV frame was accepted")
+	}
+}
+
+func TestPreferredCameraFormatIsDeterministicAndDecodable(t *testing.T) {
+	formats := map[webcam.PixelFormat]string{
+		fourCC("RGB3"): "RGB24",
+		fourCC("YUYV"): "YUYV 4:2:2",
+		fourCC("JPEG"): "JPEG",
+		fourCC("MJPG"): "Motion-JPEG",
+	}
+	for i := 0; i < 20; i++ {
+		got, ok := preferredCameraFormat(formats)
+		if !ok || got != fourCC("MJPG") {
+			t.Fatalf("preferred camera format = %q, %v; want MJPG, true", formatString(got), ok)
+		}
+	}
+	got, ok := preferredCameraFormat(map[webcam.PixelFormat]string{
+		fourCC("RGB3"): "RGB24",
+		fourCC("YUYV"): "YUYV 4:2:2",
+	})
+	if !ok || got != fourCC("YUYV") {
+		t.Fatalf("preferred camera fallback = %q, %v; want YUYV, true", formatString(got), ok)
+	}
+	if _, ok := preferredCameraFormat(map[webcam.PixelFormat]string{fourCC("H264"): "H.264"}); ok {
+		t.Fatal("unsupported camera format was selected")
 	}
 }

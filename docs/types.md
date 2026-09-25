@@ -14,7 +14,7 @@ Kryndel checks every program before evaluation. A declaration with an initialize
 | `Nil` | Explicit nil value, not a general error or truthiness escape hatch. |
 | `Option[T]` | `some(value)` or `none()`, with the expected type resolving `none`. |
 | `Result[T, E]` | `ok(value)` or `err(value)`, with the annotation resolving the counterpart type. |
-| `Channel[T]` | Synchronized FIFO channel carrying `T`, unbounded by default or bounded by explicit capacity. |
+| `Channel[T]` | Synchronized FIFO channel carrying `T`, with capacity 64 by default or a configured positive capacity. |
 | `Thread[T]` | OS-backed worker handle with result type `T`. |
 | Struct and enum | Nominal declarations with checked fields or finite variants. |
 

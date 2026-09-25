@@ -491,7 +491,7 @@ func TestStage37SelfHostedSourceModules(t *testing.T) {
 		}
 	})
 	t.Run("unsafe imports", func(t *testing.T) {
-		for _, name := range []string{"../outside", "/absolute", "sub/file", "other.kry"} {
+		for _, name := range []string{"../outside", "/absolute", "other.kry"} {
 			t.Run(name, func(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "main.kry")
 				if err := os.WriteFile(path, []byte("import \""+name+"\"\n"), 0o600); err != nil {

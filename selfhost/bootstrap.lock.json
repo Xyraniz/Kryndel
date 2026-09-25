@@ -4,20 +4,20 @@
   "target": "linux-amd64",
   "host_go": "go1.26.0",
   "stage0_build": "CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry",
-  "source_compiler_kir_bytes": 75524667,
+  "source_compiler_kir_bytes": 75587728,
   "source_compiler_kir_max_bytes": 134217728,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
-    "stage0-host-kry-linux-amd64": "44ac5b747ab2b735733da30806508d650663e912a6a5a6e8dc78c3fa82d0170b",
-    "source-compiler.kir": "5626a773ee7aa062a8bbdbccd2f988c33ef65d8d090bb454f9d0185a40375fee",
-    "stage1-source-kir-compiler.elf": "75a3e45cb8651d1e3740b7629857f8136a5ab306e639463e54e4562fcf474666",
-    "source_kir_compiler.kry": "3accb69ba0f1e9e750c9011898d721ed5ba126935c81ec2d6836631b69ed949b",
+    "stage0-host-kry-linux-amd64": "4960d793f47d4f07280ab3df07590d973ee72efd1bfc804bad42b921133df27c",
+    "source-compiler.kir": "8055e70ad907c14f2e5dcc0f50971afb418db7312b6b0b2806e3d1bb18a92e9c",
+    "stage1-source-kir-compiler.elf": "6291bf72dd3b72c3077bdb80f1ab422e95e769d373772bbc9f68bc6bbdb14671",
+    "source_kir_compiler.kry": "195df88a4937357d47e09340f026d70f4f0844853b31e242d2d02003adadaba2",
     "dynamic_backend.kry": "6b37d3ee750950f7ea77875026614520e8d579d67bd0d0c0275ef92fa1ed3bd8",
     "elf_backend.kry": "0348e0230050815a2d5c5d37ead0e3216f831e65f6ce00ddd49c98067a5eaf57",
     "kir_backend.kry": "3a1be5137d9d8fa08f86e310adde81c83a3269ad156b89258f2a02fe1e37331a",
     "pe_backend.kry": "9e70ecede3ffa80ccddb954a45c1022f8e05db659d1b51d0c30abff2d8ea428b",
     "bootstrap-fixture.kry": "eb24d52f08ffb85bba3946c15273abd8f2c85a2b3b2b91018e91800533206c0d",
-    "stage2-source-kir-compiler.elf": "2e299d325a73ef97bbffc5dca65bc79552a3947da2d5f93cd21ca13a28e9f960",
-    "stage3-source-kir-compiler.elf": "2e299d325a73ef97bbffc5dca65bc79552a3947da2d5f93cd21ca13a28e9f960"
+    "stage2-source-kir-compiler.elf": "dfda5a64eb5e67f172f39c0731f9ec48ed77f0610f9b7ff8d97b6e3f6688ebe7",
+    "stage3-source-kir-compiler.elf": "dfda5a64eb5e67f172f39c0731f9ec48ed77f0610f9b7ff8d97b6e3f6688ebe7"
   }
 }

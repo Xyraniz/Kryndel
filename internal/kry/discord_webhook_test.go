@@ -39,6 +39,123 @@ func writeDiscordTestFixture(t *testing.T, source string) string {
 	return fixturePath
 }
 
+func packageFileContents(root string) (map[string][]byte, error) {
+	files := make(map[string][]byte)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if rel == "kry.lock" || filepath.Base(path) == ".DS_Store" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[filepath.ToSlash(rel)] = data
+		return nil
+	})
+	return files, err
+}
+
+func TestRegistryPackageArchivesMatchSources(t *testing.T) {
+	indexDir := filepath.Join("..", "..", "registry", "index")
+	entries, err := os.ReadDir(indexDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".json")
+		t.Run(name, func(t *testing.T) {
+			var index struct {
+				Name     string `json:"name"`
+				Versions []struct {
+					Version string `json:"version"`
+					SHA256  string `json:"sha256"`
+				} `json:"versions"`
+			}
+			indexData, err := os.ReadFile(filepath.Join(indexDir, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(indexData, &index); err != nil {
+				t.Fatal(err)
+			}
+			sourceDir := filepath.Join("..", "..", "packages", name)
+			manifest, err := ReadManifest(sourceDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if index.Name != name {
+				t.Fatalf("registry index name = %q, want %q", index.Name, name)
+			}
+			var wantHash string
+			for _, version := range index.Versions {
+				if version.Version == manifest.Version {
+					wantHash = version.SHA256
+					break
+				}
+			}
+			if wantHash == "" {
+				t.Fatalf("registry index has no %s@%s release", name, manifest.Version)
+			}
+			archivePath := filepath.Join("..", "..", "registry", "packages", name+"-"+manifest.Version+".tar.gz")
+			archive, err := os.ReadFile(archivePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(archive)
+			if got := hex.EncodeToString(digest[:]); got != wantHash {
+				t.Fatalf("archive SHA-256 = %s, registry index says %s", got, wantHash)
+			}
+			publishedDir := t.TempDir()
+			if err := extractPackage(archive, publishedDir); err != nil {
+				t.Fatalf("extract published package: %v", err)
+			}
+			sourceFiles, err := packageFileContents(sourceDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publishedFiles, err := packageFileContents(publishedDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(sourceFiles, publishedFiles) {
+				t.Fatal("published package files differ from the checked-in source")
+			}
+			rebuiltPath := filepath.Join(t.TempDir(), name+".tar.gz")
+			if err := PackageArchive(sourceDir, rebuiltPath); err != nil {
+				t.Fatal(err)
+			}
+			rebuiltData, err := os.ReadFile(rebuiltPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rebuiltDir := t.TempDir()
+			if err := extractPackage(rebuiltData, rebuiltDir); err != nil {
+				t.Fatalf("extract rebuilt package: %v", err)
+			}
+			rebuiltFiles, err := packageFileContents(rebuiltDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(sourceFiles, rebuiltFiles) {
+				t.Fatal("rebuilt package files differ from the checked-in source")
+			}
+		})
+	}
+}
+
 func loadDiscordTestProgram(t *testing.T, source string) (*Program, *Checker) {
 	t.Helper()
 	fixturePath := writeDiscordTestFixture(t, source)
@@ -124,17 +241,6 @@ func TestDiscordPackageArchiveMatchesRegistryIndex(t *testing.T) {
 		t.Fatalf("type-check Discord Webhook through published package: %s", diagnostic.Message)
 	}
 
-	rebuilt := filepath.Join(t.TempDir(), "discord-"+version+".tar.gz")
-	if err := PackageArchive(filepath.Join("..", "..", "packages", "discord"), rebuilt); err != nil {
-		t.Fatal(err)
-	}
-	rebuiltArchive, err := os.ReadFile(rebuilt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(rebuiltArchive, archive) {
-		t.Fatal("published Discord package archive is not reproducible from packages/discord")
-	}
 }
 
 func TestDiscordCredentialsArePrivateToThePackage(t *testing.T) {

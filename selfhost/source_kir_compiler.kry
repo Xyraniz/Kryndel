@@ -157,6 +157,10 @@ fn source_directory(path: String) -> String {
     return ""
 }
 
+fn source_import_path(module_path: String, imported_name: String) -> String {
+    return source_directory(module_path) + imported_name + ".kry"
+}
+
 fn safe_module_name(name: String) -> Bool {
     let chars: Array[String] = string_chars(name)
     if len(chars) == 0 || !is_identifier_start(char_at(chars, 0)) { return false }
@@ -166,6 +170,24 @@ fn safe_module_name(name: String) -> Bool {
         index = index + 1
     }
     return true
+}
+
+fn safe_module_path(path: String) -> Bool {
+    let chars: Array[String] = string_chars(path)
+    let mut component_start: Int = 0
+    let mut index: Int = 0
+    while index < len(chars) {
+        if char_at(chars, index) == "/" {
+            if index == component_start { return false }
+            let component: String = result_unwrap(substring(path, component_start, index - component_start))
+            if !safe_module_name(component) { return false }
+            component_start = index + 1
+        }
+        index = index + 1
+    }
+    if component_start >= len(chars) { return false }
+    let final_component: String = result_unwrap(substring(path, component_start, len(chars) - component_start))
+    return safe_module_name(final_component)
 }
 
 fn source_function_symbol(module_id: String, name: String) -> String {
@@ -332,7 +354,7 @@ fn module_without_imports(path: String, tokens: Array[SourceToken]) -> Result[So
         if braces == 0 && token.kind == "identifier" && token.text == "import" {
             let name: SourceToken = unwrap_or(array_get(tokens, index + 1), SourceToken{ kind: "eof", text: "" })
             if name.kind != "string" { return err("module: import expects a quoted module name in '" + path + "'") }
-            if !safe_module_name(name.text) { return err("module: unsafe module path '" + name.text + "' in '" + path + "'") }
+            if !safe_module_path(name.text) { return err("module: unsafe module path '" + name.text + "' in '" + path + "'") }
             imports = array_push(imports, name.text)
             index = index + 2
             let separator: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "" })
@@ -353,7 +375,7 @@ fn module_without_imports(path: String, tokens: Array[SourceToken]) -> Result[So
     return ok(SourceModule{ path: path, tokens: join_token_chunks(output_chunks, 0, len(output_chunks)), imports: imports })
 }
 
-fn load_source_modules(path: String, directory: String, state: SourceModules) -> Result[SourceModules, String] {
+fn load_source_modules(path: String, state: SourceModules) -> Result[SourceModules, String] {
     if map_contains_key(state.visiting, path) { return err("module: import cycle involving '" + path + "'") }
     if map_contains_key(state.loaded, path) { return ok(state) }
     let source: Result[String, String] = fs_read_text(path)
@@ -367,7 +389,7 @@ fn load_source_modules(path: String, directory: String, state: SourceModules) ->
     let mut index: Int = 0
     while index < len(module.imports) {
         let name: String = unwrap_or(array_get(module.imports, index), "")
-        let imported: Result[SourceModules, String] = load_source_modules(directory + name + ".kry", directory, current)
+        let imported: Result[SourceModules, String] = load_source_modules(source_import_path(path, name), current)
         if is_err(imported) { return err(unwrap_or(result_error(imported), "cannot load module")) }
         current = result_unwrap(imported)
         index = index + 1
@@ -1802,7 +1824,7 @@ fn source_type_exposes_private(structs: Map[String, SourceStruct], type_name: St
     return !unwrap_or(definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} }).public
 }
 
-fn source_module_type_scope(modules: Array[SourceModule], contexts: Array[SourceModuleContext], module_index: Int, directory: String) -> Result[Map[String, SourceStruct], String] {
+fn source_module_type_scope(modules: Array[SourceModule], contexts: Array[SourceModuleContext], module_index: Int) -> Result[Map[String, SourceStruct], String] {
     let module: SourceModule = unwrap_or(array_get(modules, module_index), SourceModule{ path: "", tokens: [], imports: [] })
     let mut scope: Map[String, SourceStruct] = {}
     let mut visible_names: Map[String, Bool] = {}
@@ -1829,7 +1851,7 @@ fn source_module_type_scope(modules: Array[SourceModule], contexts: Array[Source
     let mut import_index: Int = 0
     while import_index < len(module.imports) {
         let imported_name: String = unwrap_or(array_get(module.imports, import_index), "")
-        let imported_path: String = directory + imported_name + ".kry"
+        let imported_path: String = source_import_path(module.path, imported_name)
         if !map_contains_key(seen, imported_path) {
             let target_index: Int = find_source_module(modules, imported_path)
             if target_index < 0 { return err("module: import resolver lost module '" + imported_name + "'") }
@@ -1934,7 +1956,7 @@ fn find_source_module(modules: Array[SourceModule], path: String) -> Int {
     return -1
 }
 
-fn source_module_scope(modules: Array[SourceModule], contexts: Array[SourceModuleContext], module_index: Int, directory: String) -> Result[Map[String, SourceFunction], String] {
+fn source_module_scope(modules: Array[SourceModule], contexts: Array[SourceModuleContext], module_index: Int) -> Result[Map[String, SourceFunction], String] {
     let module: SourceModule = unwrap_or(array_get(modules, module_index), SourceModule{ path: "", tokens: [], imports: [] })
     let own: SourceModuleContext = unwrap_or(array_get(contexts, module_index), SourceModuleContext{ module_id: "", functions: {}, public_names: [], structs: {}, struct_names: [], public_struct_names: [] })
     let mut scope: Map[String, SourceFunction] = own.functions
@@ -1942,7 +1964,7 @@ fn source_module_scope(modules: Array[SourceModule], contexts: Array[SourceModul
     let mut import_index: Int = 0
     while import_index < len(module.imports) {
         let imported_name: String = unwrap_or(array_get(module.imports, import_index), "")
-        let imported_path: String = directory + imported_name + ".kry"
+        let imported_path: String = source_import_path(module.path, imported_name)
         if !map_contains_key(seen, imported_path) {
             let target_index: Int = find_source_module(modules, imported_path)
             if target_index < 0 { return err("module: import resolver lost module '" + imported_name + "'") }
@@ -2204,7 +2226,7 @@ fn json_array_items(value: String) -> String {
 
 fn compile_path(path: String, target_os: String, target_arch: String) -> Result[Bytes, String] {
     let initial: SourceModules = SourceModules{ items: [], visiting: {}, loaded: {} }
-    let loaded: Result[SourceModules, String] = load_source_modules(path, source_directory(path), initial)
+    let loaded: Result[SourceModules, String] = load_source_modules(path, initial)
     if is_err(loaded) { return err(unwrap_or(result_error(loaded), "module load failed")) }
     let modules: Array[SourceModule] = result_unwrap(loaded).items
     let mut contexts: Array[SourceModuleContext] = []
@@ -2220,7 +2242,7 @@ fn compile_path(path: String, target_os: String, target_arch: String) -> Result[
     while index < len(modules) {
         let implementation_module: SourceModule = unwrap_or(array_get(modules, index), SourceModule{ path: "", tokens: [], imports: [] })
         let headers: SourceModuleContext = unwrap_or(array_get(contexts, index), SourceModuleContext{ module_id: "", functions: {}, public_names: [], structs: {}, struct_names: [], public_struct_names: [] })
-        let implementation_scope: Result[Map[String, SourceStruct], String] = source_module_type_scope(modules, contexts, index, source_directory(path))
+        let implementation_scope: Result[Map[String, SourceStruct], String] = source_module_type_scope(modules, contexts, index)
         if is_err(implementation_scope) { return err(unwrap_or(result_error(implementation_scope), "module type scope error")) }
         let implementation_result: Result[SourceModuleContext, String] = collect_module_context(implementation_module, headers, result_unwrap(implementation_scope))
         if is_err(implementation_result) { return err(unwrap_or(result_error(implementation_result), "module declaration error")) }
@@ -2239,9 +2261,9 @@ fn compile_path(path: String, target_os: String, target_arch: String) -> Result[
     while index < len(modules) {
         let module: SourceModule = unwrap_or(array_get(modules, index), SourceModule{ path: "", tokens: [], imports: [] })
         let context: SourceModuleContext = unwrap_or(array_get(contexts, index), SourceModuleContext{ module_id: "", functions: {}, public_names: [], structs: {}, struct_names: [], public_struct_names: [] })
-        let scope: Result[Map[String, SourceFunction], String] = source_module_scope(modules, contexts, index, source_directory(path))
+        let scope: Result[Map[String, SourceFunction], String] = source_module_scope(modules, contexts, index)
         if is_err(scope) { return err(unwrap_or(result_error(scope), "module scope error")) }
-        let emission_type_scope: Result[Map[String, SourceStruct], String] = source_module_type_scope(modules, contexts, index, source_directory(path))
+        let emission_type_scope: Result[Map[String, SourceStruct], String] = source_module_type_scope(modules, contexts, index)
         if is_err(emission_type_scope) { return err(unwrap_or(result_error(emission_type_scope), "module type scope error")) }
         let parser: SourceParser = SourceParser{ tokens: module.tokens, position: 0, module_id: context.module_id, bindings: {}, functions: result_unwrap(scope), structs: result_unwrap(emission_type_scope) }
         let program: Result[ParsedProgram, String] = parse_program(parser, source_module_name(module.path, source_directory(path)))

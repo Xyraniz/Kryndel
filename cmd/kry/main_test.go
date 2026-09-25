@@ -27,6 +27,34 @@ func TestDirectProgramInvocation(t *testing.T) {
 	}
 }
 
+func TestGlobalHelpAndVersionFlags(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"--help"}, want: "usage: kry [global-options]"},
+		{args: []string{"--version"}, want: "Kryndel " + version + "\n"},
+	} {
+		readEnd, writeEnd, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldStdout := os.Stdout
+		os.Stdout = writeEnd
+		status := run(tc.args)
+		_ = writeEnd.Close()
+		os.Stdout = oldStdout
+		output, err := io.ReadAll(readEnd)
+		_ = readEnd.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status != 0 || !strings.Contains(string(output), tc.want) {
+			t.Fatalf("run(%q) = %d, output %q; want status 0 and %q", tc.args, status, output, tc.want)
+		}
+	}
+}
+
 func TestLSPCommandRejectsPositionalArguments(t *testing.T) {
 	if status := run([]string{"lsp", "unexpected"}); status != 2 {
 		t.Fatalf("lsp accepted positional arguments with status %d", status)
