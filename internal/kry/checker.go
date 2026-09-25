@@ -469,6 +469,7 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 		}
 		return normalFlow()
 	case StAssign:
+		s.Target.Scope = sc
 		b, ok := sc.lookup(s.Target.Name)
 		if s.Target.Kind != ExVar || !ok {
 			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "assignment target must be a binding")
@@ -728,6 +729,9 @@ func (c *Checker) exhaustive(t *Type, s *Stmt) bool {
 func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnostic) {
 	if e == nil {
 		return TNil, nil
+	}
+	if e.Kind == ExVar {
+		e.Scope = sc
 	}
 	if e.Type != nil {
 		return e.Type, nil

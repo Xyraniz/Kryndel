@@ -59,9 +59,12 @@ type Expr struct {
 	VariantToken          Token
 	VariantDefinition     Token
 	Type                  *Type
-	Function              *Function
-	ConstValue            *Value
-	Tail                  bool
+	// Scope is retained on variable references so editor completion can use the
+	// checked lexical environment, including when the reference is unresolved.
+	Scope      *Scope
+	Function   *Function
+	ConstValue *Value
+	Tail       bool
 }
 type StmtKind int
 

@@ -1670,7 +1670,9 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 				return bad("poly_register expects String slot and handler")
 			}
 		}
-		if !isStaticPolyHandler(c, e.Args[1]) {
+		// Literal names can be checked early; variable names are resolved by the
+		// runtime and report incompatible handlers through the returned Result.
+		if e.Args[1].Kind == ExString && !isStaticPolyHandler(c, e.Args[1]) {
 			return bad("poly_register requires a literal name of one top-level fn(String) -> String handler")
 		}
 		priority, d := arg(2, TInt)
@@ -1691,7 +1693,8 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 				return bad("poly_reorder expects String slot, handler, and predecessor")
 			}
 		}
-		if !isStaticPolyHandler(c, e.Args[1]) || !isStaticPolyHandler(c, e.Args[2]) {
+		if (e.Args[1].Kind == ExString && !isStaticPolyHandler(c, e.Args[1])) ||
+			(e.Args[2].Kind == ExString && !isStaticPolyHandler(c, e.Args[2])) {
 			return bad("poly_reorder requires literal names of top-level fn(String) -> String handlers")
 		}
 		return Res(TNil, TString), nil

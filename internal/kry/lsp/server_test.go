@@ -208,6 +208,90 @@ func TestOffsetUsesUTF16Characters(t *testing.T) {
 	}
 }
 
+func TestCompletionIncludesLocalBindingsAndParameters(t *testing.T) {
+	cases := []struct {
+		name, source, typed string
+		want                string
+	}{
+		{
+			name:   "local binding",
+			source: `fn render(prefix: String) -> Nil { let message: String = prefix; println(mes) }`,
+			typed:  "mes)",
+			want:   "message",
+		},
+		{
+			name:   "parameter",
+			source: `fn render(prefix: String) -> Nil { println(pre) }`,
+			typed:  "pre)",
+			want:   "prefix",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := NewServer()
+			path := filepath.Join(t.TempDir(), "main.kry")
+			uri := uriFromPath(path)
+			server.docs[uri] = document{URI: uri, Path: path, Text: tc.source}
+			offset := strings.Index(tc.source, tc.typed) + len(tc.typed) - 1
+			result, err := server.completion(uri, Position{Character: uint32(offset)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !completionHasLabel(result, tc.want) {
+				t.Fatalf("completion omitted %q: %#v", tc.want, result)
+			}
+		})
+	}
+}
+
+func TestCompletionIncludesStructFields(t *testing.T) {
+	source := `struct Point { x: Int, name: String }
+fn render() -> Nil { let point: Point = Point { x: 1, name: "origin" }; println(point.) }`
+	server := NewServer()
+	path := filepath.Join(t.TempDir(), "main.kry")
+	uri := uriFromPath(path)
+	server.docs[uri] = document{URI: uri, Path: path, Text: source}
+	offset := strings.Index(source, "point.)") + len("point.")
+	result, err := server.completion(uri, Position{Line: 1, Character: uint32(offset - strings.LastIndex(source[:offset], "\n") - 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"x", "name"} {
+		if !completionHasLabel(result, label) {
+			t.Fatalf("completion omitted struct field %q: %#v", label, result)
+		}
+	}
+
+	partial := strings.Replace(source, "point.)", "point.na)", 1)
+	server.docs[uri] = document{URI: uri, Path: path, Text: partial}
+	offset = strings.Index(partial, "point.na)") + len("point.na")
+	result, err = server.completion(uri, Position{Line: 1, Character: uint32(offset - strings.LastIndex(partial[:offset], "\n") - 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !completionHasLabel(result, "name") {
+		t.Fatalf("completion omitted the field matching a partial name: %#v", result)
+	}
+}
+
+func completionHasLabel(result any, want string) bool {
+	response, ok := result.(map[string]any)
+	if !ok {
+		return false
+	}
+	items, ok := response["items"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if ok && entry["label"] == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestUnsavedImportedModuleIsMergedWithoutDiskFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "kry.toml"), []byte("name = \"overlay-test\"\n"), 0o600); err != nil {

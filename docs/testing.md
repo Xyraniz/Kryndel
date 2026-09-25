@@ -1,6 +1,6 @@
 # Testing
 
-The Go source build requires Go 1.22+ and downloads the modules listed in `go.mod`. `make test` builds the self-contained CLI, checks the shipped examples, runs the Go tests, and performs a C-backed ELF smoke build; it therefore also requires a C compiler. The Linux amd64 bootstrap lock has a separate Go 1.26.0 job. `make test-static` and `go test ./...` do not run the C-backed `make test` smoke-build commands.
+The Go source build requires Go 1.22+ and downloads the modules listed in `go.mod`. `make test` builds the CLI, checks the shipped examples, runs the Go tests, and performs a C-backed ELF smoke build; it therefore also requires a C compiler. It checks but does not run `examples/discord_bot.kry`, whose live execution needs `DISCORD_TOKEN` and a Discord connection. `make test-static` checks formatting only for Go files changed from the current branch base, then runs `go vet` and the Go tests; the repository has older files outside that changed-file check. The Linux amd64 bootstrap lock has a separate Go 1.26.0 job. `go test ./...` does not run the C-backed ELF smoke-build commands.
 
 ```bash
 make test

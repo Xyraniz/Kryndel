@@ -181,12 +181,11 @@ Channel close wakes blocked senders and receivers. The interpreter cancels
 workers, closes channels, and joins outstanding workers during invocation
 shutdown. Runtime polymorphism uses a per-invocation dispatch table with a fixed
 `String -> String` handler signature; it is not a general function-value ABI.
-`poly_register` and `poly_reorder` require literal handler names that resolve
-to one unambiguous top-level `fn(String) -> String`. The checker rejects
-unknown, overloaded, incorrectly typed, or dynamically computed handler names
-before execution. Whether a valid handler is registered in a slot and whether
-the requested reorder is currently possible remain recoverable `Result`
-outcomes.
+Literal handler names passed to `poly_register` and `poly_reorder` are checked
+early and must resolve to one unambiguous top-level `fn(String) -> String`.
+String expressions may also supply names dynamically; the runtime validates
+their signatures and registration state and reports failures as recoverable
+`Result` values.
 Native backends support only the concurrency features listed in their support
 contracts and must reject unsupported calls.
 

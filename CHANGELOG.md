@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — Dispatch and local editor completion
+
+`poly_register` and `poly_reorder` accept `String` expressions for handler names; invalid dynamic names return the documented `Result` errors, while literal names retain early signature checks. LSP completion now includes in-scope parameters and local bindings plus accessible fields after `.` when the receiver is a struct-valued identifier. Windows Make builds and runs `build/kry.exe`, and `make test-static` formats only Go files changed from the branch base instead of failing on pre-existing formatting drift. The offline test suite checks the Discord bot example without starting a credential-dependent connection.
+
 ## Unreleased — Kryndel language server
 
 `kry lsp` now serves the Language Server Protocol over standard input/output. Editors receive live checker diagnostics, go-to-definition, hover signatures and types, visible symbol and builtin completion, and whole-document formatting. Open buffers, including unsaved imported modules, are checked through the existing module resolver and type checker. LSP document positions use UTF-16 code units, and diagnostics are cleared when a document closes. The server keeps the Go 1.22 toolchain requirement by using a Go 1.17-compatible JSON-RPC transport.

@@ -127,7 +127,7 @@ For intentionally shared state, `Shared[T]` is the only global mutable memory ha
 
 ## Runtime polymorphism
 
-Developer applications can use a bounded runtime dispatch table when an integration needs to reorder implementations without recompiling. A handler must be a top-level function with the exact signature `fn(String) -> String`; runtime registration rejects incompatible names. `poly_register(slot, handler, priority)` inserts a handler in descending priority order, `poly_reorder(slot, handler, before)` moves an existing handler, and `poly_dispatch(slot, input)` invokes the first handler in the current order and returns a `Result[String, String]`. The table belongs to one runtime invocation, is not global mutable host state, and remains subject to call-depth, instruction, memory, and wall-clock limits.
+Developer applications can use a bounded runtime dispatch table when an integration needs to reorder implementations without recompiling. A handler must be a top-level function with the exact signature `fn(String) -> String`; literal names are checked early, while dynamic `String` names are validated at runtime and return failures as `Result` values. `poly_register(slot, handler, priority)` inserts a handler in descending priority order, `poly_reorder(slot, handler, before)` moves an existing handler, and `poly_dispatch(slot, input)` invokes the first handler in the current order and returns a `Result[String, String]`. The table belongs to one runtime invocation, is not global mutable host state, and remains subject to call-depth, instruction, memory, and wall-clock limits.
 
 ```kryndel
 fn json_handler(value: String) -> String { return "json:" + value }

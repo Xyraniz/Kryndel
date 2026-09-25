@@ -555,6 +555,7 @@ func (s *Server) completion(uri string, pos Position) (any, error) {
 		return map[string]any{"isIncomplete": false, "items": []any{}}, nil
 	}
 	prefix := prefixAt(doc.Text, pos)
+	fieldContext, hasFieldContext := fieldCompletionAt(doc.Text, pos)
 	items := map[string]map[string]any{}
 	add := func(label, detail string, kind int) {
 		if !strings.HasPrefix(label, prefix) {
@@ -579,7 +580,13 @@ func (s *Server) completion(uri string, pos Position) (any, error) {
 		sources[open.Path] = open.Text
 	}
 	s.mu.RUnlock()
+	if hasFieldContext {
+		sources[doc.Path] = fieldContext.source
+	}
 	if prog, d := kry.LoadProgramWithSources(doc.Path, sources, kry.DefaultLimits()); d == nil {
+		// Keep the partial checker annotations even if the identifier under the
+		// cursor has an unknown-name diagnostic; they still carry its lexical scope.
+		_, _ = kry.Check(prog, kry.DefaultLimits())
 		for _, fn := range prog.Functions {
 			if fn.Public || fn.VisibilityScope == prog.VisibilityScope {
 				add(fn.Name, functionSignature(fn), 3)
@@ -595,6 +602,19 @@ func (s *Server) completion(uri string, pos Position) (any, error) {
 				add(typ.Name, "enum", 13)
 			}
 		}
+		if hasFieldContext {
+			if receiver := expressionAtToken(prog, doc.Path, fieldContext.receiver); receiver != nil && receiver.Type != nil && receiver.Type.Kind == kry.TyStruct && receiver.Type.Struct != nil {
+				for _, field := range receiver.Type.Struct.Fields {
+					if field.Public || receiver.Scope != nil && receiver.Type.Struct.VisibilityScope == receiver.Scope.VisibilityScope {
+						add(field.Name, "field: "+field.Type.String(), 5)
+					}
+				}
+			}
+		} else if selected, found := identifierAt(doc.Text, pos); found {
+			if expression := expressionAtToken(prog, doc.Path, selected); expression != nil && expression.Scope != nil {
+				addLocalCompletions(add, expression.Scope, doc.Path, selected.Start)
+			}
+		}
 	}
 	labels := make([]string, 0, len(items))
 	for label := range items {
@@ -606,6 +626,113 @@ func (s *Server) completion(uri string, pos Position) (any, error) {
 		ordered = append(ordered, items[label])
 	}
 	return map[string]any{"isIncomplete": false, "items": ordered}, nil
+}
+
+type fieldCompletionContext struct {
+	receiver kry.Token
+	source   string
+}
+
+func fieldCompletionAt(text string, pos Position) (fieldCompletionContext, bool) {
+	src := &kry.Source{Name: "<buffer>", Text: text}
+	tokens, d := kry.Lex(src, kry.DefaultLimits())
+	if d != nil {
+		return fieldCompletionContext{}, false
+	}
+	offset := offsetAt(text, pos)
+	var selected *kry.Token
+	for i := range tokens {
+		token := &tokens[i]
+		if token.Kind == kry.ID && offset >= token.Start && offset <= token.Start+token.Length {
+			selected = token
+			break
+		}
+	}
+	replaceEnd := offset
+	if selected != nil {
+		replaceEnd = selected.Start + selected.Length
+	}
+	var result fieldCompletionContext
+	found := false
+	for i, dot := range tokens {
+		if dot.Kind != kry.DOT || dot.Start+dot.Length > offset || i == 0 || tokens[i-1].Kind != kry.ID {
+			continue
+		}
+		dotEnd := dot.Start + dot.Length
+		if selected != nil && selected.Start < dotEnd {
+			continue
+		}
+		gapEnd := offset
+		if selected != nil {
+			gapEnd = selected.Start
+		}
+		if gapEnd < dotEnd || strings.TrimSpace(text[dotEnd:gapEnd]) != "" {
+			continue
+		}
+		valid := true
+		for j := i + 1; j < len(tokens); j++ {
+			token := tokens[j]
+			if token.Kind == kry.EOF || token.Start >= offset {
+				break
+			}
+			if selected != nil && token.Kind == kry.ID && token.Start == selected.Start {
+				continue
+			}
+			valid = false
+			break
+		}
+		if !valid {
+			continue
+		}
+		result = fieldCompletionContext{
+			receiver: tokens[i-1],
+			source:   text[:dot.Start] + text[replaceEnd:],
+		}
+		found = true
+	}
+	return result, found
+}
+
+func identifierAt(text string, pos Position) (kry.Token, bool) {
+	src := &kry.Source{Name: "<buffer>", Text: text}
+	tokens, d := kry.Lex(src, kry.DefaultLimits())
+	if d != nil {
+		return kry.Token{}, false
+	}
+	offset := offsetAt(text, pos)
+	for _, token := range tokens {
+		if token.Kind == kry.ID && offset >= token.Start && offset <= token.Start+token.Length {
+			return token, true
+		}
+	}
+	return kry.Token{}, false
+}
+
+func expressionAtToken(program *kry.Program, path string, token kry.Token) *kry.Expr {
+	var found *kry.Expr
+	walkProgram(program, func(expression *kry.Expr) {
+		if expression.Kind == kry.ExVar && expression.Tok.Source != nil && expression.Tok.Source.Name == path && expression.Tok.Start == token.Start && expression.Tok.Length == token.Length {
+			found = expression
+		}
+	})
+	return found
+}
+
+func addLocalCompletions(add func(string, string, int), scope *kry.Scope, path string, offset int) {
+	seen := map[string]bool{}
+	for current := scope; current != nil; current = current.Parent {
+		for name, binding := range current.Values {
+			if seen[name] || binding.Global || name != "self" && (binding.Token.Source == nil || binding.Token.Source.Name != path || binding.Token.Start > offset) {
+				continue
+			}
+			seen[name] = true
+			kind := "local"
+			if binding.Const {
+				kind = "const"
+			}
+			add(name, kind+": "+binding.Type.String(), 6)
+		}
+	}
 }
 
 func (s *Server) format(uri string) (any, error) {
