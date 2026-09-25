@@ -268,6 +268,219 @@ fn main() -> Nil {
 	}
 }
 
+func TestSelfhostPEBackendArrayPush(t *testing.T) {
+	source := `
+enum Mode { Idle, Active }
+
+fn append_one(values: Array[Int], value: Int) -> Array[Int] {
+    return array_push(values, value)
+}
+
+fn main() -> Nil {
+    let original: Array[Int] = [10, 20]
+    let appended: Array[Int] = append_one(original, 30)
+    let appended_again: Array[Int] = array_push(appended, 40)
+    println(len(original))
+    println(original[0])
+    println(len(appended))
+    println(appended[2])
+    println(len(appended_again))
+    println(appended_again[3])
+
+    let empty: Array[Int] = []
+    let from_empty: Array[Int] = array_push(empty, -7)
+    println(len(empty))
+    println(from_empty[0])
+
+    let flags: Array[Bool] = [false]
+    let flags_with_true: Array[Bool] = array_push(flags, true)
+    println(flags_with_true[1])
+
+    let ids: Array[UInt64] = [u64(41)]
+    let ids_with_42: Array[UInt64] = array_push(ids, u64(42))
+    println(str(int(ids_with_42[1])))
+
+    let modes: Array[Mode] = [Mode::Idle]
+    let modes_with_active: Array[Mode] = array_push(modes, Mode::Active)
+    println(modes_with_active[1])
+
+    let words: Array[String] = ["first"]
+    let words_with_second: Array[String] = array_push(words, "second")
+    println(words_with_second[1])
+}
+`
+	image, d := runSelfhostPEBackend(t, source)
+	if d != nil {
+		t.Fatalf("selfhost PE backend rejected array_push: %v", d)
+	}
+	if len(image) < 0x100 || string(image[:2]) != "MZ" || string(image[0x80:0x84]) != "PE\x00\x00" {
+		t.Fatalf("selfhost backend did not emit a PE32+ image (size %d)", len(image))
+	}
+	parsedPE, err := pe.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatalf("Go PE parser rejected the array_push image: %v", err)
+	}
+	parsedPE.Close()
+	want := "2\n10\n3\n30\n4\n40\n0\n-7\ntrue\n42\nMode::Active\nsecond\n"
+	if interpreted := runInterp(t, source); interpreted != want {
+		t.Fatalf("unexpected interpreter output %q; want %q", interpreted, want)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("native array_push execution requires Windows amd64; PE structure was validated")
+	}
+	executable := filepath.Join(t.TempDir(), "array-push.exe")
+	if err := os.WriteFile(executable, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(executable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated array_push PE failed: %v; output: %s", err, output)
+	}
+	if string(output) != want {
+		t.Fatalf("unexpected selfhost-generated array_push PE output %q; want %q", output, want)
+	}
+}
+
+func TestSelfhostPEBackendArrayConcat(t *testing.T) {
+	source := `
+enum Mode { Idle, Active }
+
+fn concat_ints(left: Array[Int], right: Array[Int]) -> Array[Int] {
+    return left + right
+}
+
+fn main() -> Nil {
+    let left: Array[Int] = [10, 20]
+    let right: Array[Int] = [30]
+    let joined: Array[Int] = concat_ints(left, right)
+    let operator_joined: Array[Int] = left + right
+    println(len(joined))
+    println(joined[0])
+    println(joined[2])
+    println(operator_joined[1])
+    println(len(left))
+    println(len(right))
+
+    let empty: Array[Int] = []
+    let empty_left: Array[Int] = empty + left
+    let empty_right: Array[Int] = array_concat(left, empty)
+    let both_empty: Array[Int] = empty + empty
+    println(len(empty_left))
+    println(empty_left[1])
+    println(len(empty_right))
+    println(empty_right[0])
+    println(len(both_empty))
+
+    let flags: Array[Bool] = [false] + [true]
+    println(flags[0])
+    println(flags[1])
+
+    let ids: Array[UInt64] = [u64(41)] + [u64(42)]
+    println(str(int(ids[1])))
+
+    let words: Array[String] = ["first"] + ["second"]
+    println(words[1])
+
+    let modes: Array[Mode] = [Mode::Idle] + [Mode::Active]
+    println(modes[1])
+}
+`
+	image, d := runSelfhostPEBackend(t, source)
+	if d != nil {
+		t.Fatalf("selfhost PE backend rejected array_concat: %v", d)
+	}
+	if len(image) < 0x100 || string(image[:2]) != "MZ" || string(image[0x80:0x84]) != "PE\x00\x00" {
+		t.Fatalf("selfhost backend did not emit a PE32+ image (size %d)", len(image))
+	}
+	parsedPE, err := pe.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatalf("Go PE parser rejected the array_concat image: %v", err)
+	}
+	parsedPE.Close()
+	want := "3\n10\n30\n20\n2\n1\n2\n20\n2\n10\n0\nfalse\ntrue\n42\nsecond\nMode::Active\n"
+	if interpreted := runInterp(t, source); interpreted != want {
+		t.Fatalf("unexpected interpreter output %q; want %q", interpreted, want)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("native array concatenation execution requires Windows amd64; PE structure was validated")
+	}
+	executable := filepath.Join(t.TempDir(), "array-concat.exe")
+	if err := os.WriteFile(executable, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(executable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated array concatenation PE failed: %v; output: %s", err, output)
+	}
+	if string(output) != want {
+		t.Fatalf("unexpected selfhost-generated array concatenation PE output %q; want %q", output, want)
+	}
+}
+
+func TestSelfhostPEBackendArrayIndices(t *testing.T) {
+	source := `
+enum Mode { Idle, Active }
+
+fn indices_of_words(words: Array[String]) -> Array[Int] {
+    return array_indices(words)
+}
+
+fn main() -> Nil {
+    let values: Array[Int] = [4, 8, 15]
+    let indexes: Array[Int] = array_indices(values)
+    println(len(indexes))
+    println(indexes[0])
+    println(indexes[2])
+    println(len(values))
+    println(values[1])
+
+    let words: Array[String] = ["first", "second"]
+    let word_indexes: Array[Int] = indices_of_words(words)
+    println(len(word_indexes))
+    println(word_indexes[0])
+    println(word_indexes[1])
+
+    let modes: Array[Mode] = [Mode::Idle, Mode::Active]
+    let mode_indexes: Array[Int] = array_indices(modes)
+    println(mode_indexes[1])
+
+    let empty: Array[String] = []
+    let empty_indexes: Array[Int] = array_indices(empty)
+    println(len(empty_indexes))
+}
+`
+	image, d := runSelfhostPEBackend(t, source)
+	if d != nil {
+		t.Fatalf("selfhost PE backend rejected array_indices: %v", d)
+	}
+	if len(image) < 0x100 || string(image[:2]) != "MZ" || string(image[0x80:0x84]) != "PE\x00\x00" {
+		t.Fatalf("selfhost backend did not emit a PE32+ image (size %d)", len(image))
+	}
+	parsedPE, err := pe.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatalf("Go PE parser rejected the array_indices image: %v", err)
+	}
+	parsedPE.Close()
+	want := "3\n0\n2\n3\n8\n2\n0\n1\n1\n0\n"
+	if interpreted := runInterp(t, source); interpreted != want {
+		t.Fatalf("unexpected interpreter output %q; want %q", interpreted, want)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("native array_indices execution requires Windows amd64; PE structure was validated")
+	}
+	executable := filepath.Join(t.TempDir(), "array-indices.exe")
+	if err := os.WriteFile(executable, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(executable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated array_indices PE failed: %v; output: %s", err, output)
+	}
+	if string(output) != want {
+		t.Fatalf("unexpected selfhost-generated array_indices PE output %q; want %q", output, want)
+	}
+}
+
 func TestSelfhostPEBackendScalarArrayElements(t *testing.T) {
 	source := `
 enum Mode { Idle, Active }
@@ -571,21 +784,13 @@ fn main() -> Nil {}`,
 			diagnostic: "PE backend: arrays require scalar or fieldless-enum element types",
 		},
 		{
-			name: "array push",
+			name: "array equality",
 			source: `fn main() -> Nil {
-    let values: Array[Int] = [1]
-    let pushed: Array[Int] = array_push(values, 2)
-    println(len(pushed))
+    let left: Array[Int] = [1]
+    let right: Array[Int] = [2]
+    println(left == right)
 }`,
-			diagnostic: "PE backend: array builtins are not supported",
-		},
-		{
-			name: "array concatenation",
-			source: `fn main() -> Nil {
-    let values: Array[Int] = [1] + [2]
-    println(len(values))
-}`,
-			diagnostic: "PE backend: array binary operations are not supported",
+			diagnostic: "PE backend: array concatenation requires '+' and matching supported Array[T] values",
 		},
 		{
 			name: "array reassignment",
