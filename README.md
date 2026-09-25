@@ -43,14 +43,29 @@ The direct file form is useful for desktop integrations. On Windows, the release
 
 Use `kry --help` for global limits, JSON diagnostics, restricted filesystem execution, emit options, registry commands, and package commands.
 
-The default package registry is hosted in this repository, so a new project can install the published Discord package without extra setup:
+Start a project and run its generated entry point:
 
 ```bash
-mkdir mydiscordbot && cd mydiscordbot
-kry install discord
+kry new my-first-app
+cd my-first-app
+kry run main.kry
 ```
 
-The command creates a minimal manifest when the directory is new, writes the dependency to `kry.toml`, downloads and verifies the archive, copies it to `vendor/discord`, and records the exact URL and SHA-256 in `kry.lock`. It never overwrites an existing `main.kry`. Set `KRY_REGISTRY` only when using a private mirror or a local registry; the public default is versioned in this repository.
+To try the compatible crypto package from the default registry, install it and replace `main.kry` with this example:
+
+```bash
+kry install crypto
+```
+
+```kryndel
+import "crypto"
+
+fn main() -> Nil {
+    println(sha256_hex(string_to_bytes("hello from Kryndel")))
+}
+```
+
+`kry install` creates a minimal manifest when the directory is new, writes the dependency to `kry.toml`, downloads and verifies the archive, copies it to `vendor/crypto`, and records the exact URL and SHA-256 in `kry.lock`. It never overwrites an existing `main.kry`. Set `KRY_REGISTRY` only when using a private mirror or a local registry; the public default is versioned in this repository.
 
 ## Language
 
