@@ -21,6 +21,13 @@ import (
 	"time"
 )
 
+const (
+	maxPackageArchiveBytes         int64 = 64 << 20
+	maxPackageArchiveExpandedBytes int64 = 512 << 20
+	maxPackageArchiveEntries             = 10_000
+	maxPackageEntryBytes           int64 = 64 << 20
+)
+
 type PackageManifest struct {
 	Name, Version, Kryndel, LanguageVersion string
 	Dependencies                            map[string]string
@@ -386,12 +393,12 @@ func (pm *PackageManager) download(name string, v RegistryVersion) (LockedPackag
 		if resp.StatusCode != http.StatusOK {
 			return LockedPackage{}, fmt.Errorf("package download returned HTTP %d", resp.StatusCode)
 		}
-		data, err = io.ReadAll(io.LimitReader(resp.Body, 64<<20+1))
+		data, err = io.ReadAll(io.LimitReader(resp.Body, maxPackageArchiveBytes+1))
 		if err != nil {
 			return LockedPackage{}, err
 		}
 	}
-	if len(data) > 64<<20 {
+	if int64(len(data)) > maxPackageArchiveBytes {
 		return LockedPackage{}, fmt.Errorf("package is too large")
 	}
 	sum := sha256.Sum256(data)
@@ -481,13 +488,18 @@ func resolvedDependencies(base map[string]string, targeted map[string]map[string
 }
 
 func extractPackage(data []byte, dest string) error {
+	if int64(len(data)) > maxPackageArchiveBytes {
+		return fmt.Errorf("package archive is too large")
+	}
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("invalid package archive: %w", err)
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	archive := &io.LimitedReader{R: gz, N: maxPackageArchiveExpandedBytes + 1}
+	tr := tar.NewReader(archive)
 	seen := map[string]bool{}
+	entries := 0
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -495,6 +507,10 @@ func extractPackage(data []byte, dest string) error {
 		}
 		if err != nil {
 			return err
+		}
+		entries++
+		if entries > maxPackageArchiveEntries {
+			return fmt.Errorf("package archive contains too many entries")
 		}
 		if h.Typeflag != tar.TypeReg {
 			return fmt.Errorf("package contains unsupported entry %q", h.Name)
@@ -507,7 +523,7 @@ func extractPackage(data []byte, dest string) error {
 			return fmt.Errorf("package contains duplicate entry %q", name)
 		}
 		seen[name] = true
-		if h.Size < 0 || h.Size > 64<<20 {
+		if h.Size < 0 || h.Size > maxPackageEntryBytes {
 			return fmt.Errorf("package entry %q is too large", name)
 		}
 		target := filepath.Join(dest, name)
@@ -529,6 +545,12 @@ func extractPackage(data []byte, dest string) error {
 		if closeErr != nil {
 			return closeErr
 		}
+	}
+	if _, err := io.Copy(io.Discard, archive); err != nil {
+		return err
+	}
+	if archive.N == 0 {
+		return fmt.Errorf("package archive expands beyond the configured limit")
 	}
 	return nil
 }
@@ -830,6 +852,11 @@ func ensureProjectFiles(dir, name string, replaceMain bool) error {
 }
 
 func PackageArchive(dir, out string) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	f, err := os.Create(out)
 	if err != nil {
 		return err
@@ -847,9 +874,22 @@ func PackageArchive(dir, out string) error {
 		if d.IsDir() {
 			return nil
 		}
-		rel, _ := filepath.Rel(dir, path)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("package contains non-regular file %q", path)
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
 		if rel == "kry.lock" || filepath.Base(path) == ".DS_Store" {
 			return nil
+		}
+		if len(files) == maxPackageArchiveEntries {
+			return fmt.Errorf("package archive contains too many entries")
 		}
 		files = append(files, rel)
 		return nil
@@ -863,15 +903,33 @@ func PackageArchive(dir, out string) error {
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(filepath.Join(dir, rel))
+		file, err := root.Open(rel)
 		if err != nil {
 			return err
 		}
-		h := &tar.Header{Name: name, Mode: 0o644, Size: int64(len(data)), ModTime: time.Unix(0, 0), Typeflag: tar.TypeReg}
-		if err := tw.WriteHeader(h); err != nil {
+		info, err := file.Stat()
+		if err != nil {
+			_ = file.Close()
 			return err
 		}
-		if _, err := tw.Write(data); err != nil {
+		if !info.Mode().IsRegular() {
+			_ = file.Close()
+			return fmt.Errorf("package contains non-regular file %q", rel)
+		}
+		if info.Size() < 0 || info.Size() > maxPackageEntryBytes {
+			_ = file.Close()
+			return fmt.Errorf("package entry %q is too large", rel)
+		}
+		h := &tar.Header{Name: name, Mode: 0o644, Size: info.Size(), ModTime: time.Unix(0, 0), Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(h); err != nil {
+			_ = file.Close()
+			return err
+		}
+		if _, copyErr := io.CopyN(tw, file, info.Size()); copyErr != nil {
+			_ = file.Close()
+			return copyErr
+		}
+		if err := file.Close(); err != nil {
 			return err
 		}
 	}
@@ -909,8 +967,8 @@ func ServeRegistry(root, addr string) error {
 			http.Error(w, "invalid package coordinates", http.StatusBadRequest)
 			return
 		}
-		data, err := io.ReadAll(io.LimitReader(r.Body, 64<<20+1))
-		if err != nil || len(data) > 64<<20 {
+		data, err := io.ReadAll(io.LimitReader(r.Body, maxPackageArchiveBytes+1))
+		if err != nil || int64(len(data)) > maxPackageArchiveBytes {
 			http.Error(w, "invalid package body", http.StatusBadRequest)
 			return
 		}
@@ -1013,13 +1071,18 @@ func validatePublishedArchive(data []byte, expectedName, expectedVersion string)
 }
 
 func validatePackageArchive(data []byte, expectedName, expectedVersion string) (PackageManifest, error) {
+	if int64(len(data)) > maxPackageArchiveBytes {
+		return PackageManifest{}, fmt.Errorf("package archive is too large")
+	}
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return PackageManifest{}, fmt.Errorf("gzip: %w", err)
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	archive := &io.LimitedReader{R: gz, N: maxPackageArchiveExpandedBytes + 1}
+	tr := tar.NewReader(archive)
 	seen := map[string]bool{}
+	entries := 0
 	var manifest []byte
 	mainFound := false
 	for {
@@ -1029,6 +1092,10 @@ func validatePackageArchive(data []byte, expectedName, expectedVersion string) (
 		}
 		if err != nil {
 			return PackageManifest{}, err
+		}
+		entries++
+		if entries > maxPackageArchiveEntries {
+			return PackageManifest{}, fmt.Errorf("archive contains too many entries")
 		}
 		if h.Typeflag != tar.TypeReg {
 			return PackageManifest{}, fmt.Errorf("entry %q is not a regular file", h.Name)
@@ -1041,7 +1108,7 @@ func validatePackageArchive(data []byte, expectedName, expectedVersion string) (
 			return PackageManifest{}, fmt.Errorf("duplicate entry %q", name)
 		}
 		seen[name] = true
-		if h.Size < 0 || h.Size > 64<<20 {
+		if h.Size < 0 || h.Size > maxPackageEntryBytes {
 			return PackageManifest{}, fmt.Errorf("entry %q is too large", name)
 		}
 		content, err := io.ReadAll(io.LimitReader(tr, h.Size+1))
@@ -1054,6 +1121,12 @@ func validatePackageArchive(data []byte, expectedName, expectedVersion string) (
 		if name == "main.kry" {
 			mainFound = true
 		}
+	}
+	if _, err := io.Copy(io.Discard, archive); err != nil {
+		return PackageManifest{}, err
+	}
+	if archive.N == 0 {
+		return PackageManifest{}, fmt.Errorf("package archive expands beyond the configured limit")
 	}
 	if len(manifest) == 0 {
 		return PackageManifest{}, fmt.Errorf("archive must contain kry.toml")

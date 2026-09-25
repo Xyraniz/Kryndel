@@ -2529,7 +2529,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return resVal(true, bytesVal(data)), nil
 	case "websocket_connect":
-		conn, err := connectWebSocket(a[0].S)
+		conn, err := connectWebSocket(r.Ctx.Ctx, a[0].S, networkTimeout(r.Lim.MaxWallTimeMS))
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
@@ -2615,9 +2615,14 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			}
 			args[i] = x.S
 		}
-		cmd := exec.CommandContext(r.Ctx.Ctx, a[0].S, args...)
-		out, err := cmd.CombinedOutput()
-		if int64(len(out)) > r.Lim.MaxOutputBytes {
+		processCtx, cancel := context.WithCancel(r.Ctx.Ctx)
+		defer cancel()
+		cmd := exec.CommandContext(processCtx, a[0].S, args...)
+		outputLimit := &processOutputLimit{limit: r.Lim.MaxOutputBytes, cancel: cancel}
+		cmd.Stdout = outputLimit
+		cmd.Stderr = outputLimit
+		err := cmd.Run()
+		if outputLimit.exceededOutput() {
 			return bad("process output exceeds configured limit")
 		}
 		if err == nil {

@@ -2,6 +2,7 @@ package kry
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/tls"
@@ -29,6 +30,8 @@ type websocketReadResult struct {
 type websocketConn struct {
 	conn        net.Conn
 	read        *bufio.Reader
+	ctx         context.Context
+	timeout     time.Duration
 	writeMu     sync.Mutex
 	readMu      sync.Mutex
 	pendingRead chan websocketReadResult
@@ -36,7 +39,15 @@ type websocketConn struct {
 	closed      bool
 }
 
-func connectWebSocket(raw string) (*websocketConn, error) {
+func connectWebSocket(ctx context.Context, raw string, timeout time.Duration) (*websocketConn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		timeout = networkTimeout(0)
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	u, err := url.Parse(raw)
 	if err != nil {
 		return nil, err
@@ -45,23 +56,32 @@ func connectWebSocket(raw string) (*websocketConn, error) {
 		return nil, fmt.Errorf("WebSocket URL must use ws or wss")
 	}
 	host := u.Host
-	if !strings.Contains(host, ":") {
+	if u.Port() == "" {
+		port := "80"
 		if u.Scheme == "wss" {
-			host += ":443"
-		} else {
-			host += ":80"
+			port = "443"
 		}
+		host = net.JoinHostPort(u.Hostname(), port)
 	}
 	var conn net.Conn
+	dialer := &net.Dialer{}
 	if u.Scheme == "wss" {
-		conn, err = tls.Dial("tcp", host, &tls.Config{ServerName: strings.Split(u.Host, ":")[0], MinVersion: tls.VersionTLS12})
+		tlsDialer := &tls.Dialer{NetDialer: dialer, Config: &tls.Config{ServerName: u.Hostname(), MinVersion: tls.VersionTLS12}}
+		conn, err = tlsDialer.DialContext(dialCtx, "tcp", host)
 	} else {
-		conn, err = net.Dial("tcp", host)
+		conn, err = dialer.DialContext(dialCtx, "tcp", host)
 	}
 	if err != nil {
 		return nil, err
 	}
 	fail := func(e error) (*websocketConn, error) { _ = conn.Close(); return nil, e }
+	deadline, ok := dialCtx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(timeout)
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return fail(err)
+	}
 	keyBytes := make([]byte, 16)
 	if _, err := rand.Read(keyBytes); err != nil {
 		return fail(err)
@@ -76,7 +96,7 @@ func connectWebSocket(raw string) (*websocketConn, error) {
 		return fail(err)
 	}
 	br := bufio.NewReader(conn)
-	line, err := br.ReadString('\n')
+	line, err := readWebSocketHandshakeLine(br)
 	if err != nil {
 		return fail(err)
 	}
@@ -84,10 +104,15 @@ func connectWebSocket(raw string) (*websocketConn, error) {
 		return fail(fmt.Errorf("WebSocket handshake rejected: %s", strings.TrimSpace(line)))
 	}
 	headers := map[string]string{}
+	headerBytes := len(line)
 	for {
-		line, err = br.ReadString('\n')
+		line, err = readWebSocketHandshakeLine(br)
 		if err != nil {
 			return fail(err)
+		}
+		headerBytes += len(line)
+		if headerBytes > 64<<10 {
+			return fail(fmt.Errorf("WebSocket handshake headers exceed configured limit"))
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -103,7 +128,21 @@ func connectWebSocket(raw string) (*websocketConn, error) {
 	if headers["sec-websocket-accept"] != expected {
 		return fail(fmt.Errorf("invalid WebSocket accept key"))
 	}
-	return &websocketConn{conn: conn, read: br}, nil
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		return fail(err)
+	}
+	return &websocketConn{conn: conn, read: br, ctx: ctx, timeout: timeout}, nil
+}
+
+func readWebSocketHandshakeLine(r *bufio.Reader) (string, error) {
+	line, err := r.ReadSlice('\n')
+	if err != nil {
+		if errors.Is(err, bufio.ErrBufferFull) {
+			return "", fmt.Errorf("WebSocket handshake line exceeds configured limit")
+		}
+		return "", err
+	}
+	return string(line), nil
 }
 
 func (w *websocketConn) sendText(message string) error {
@@ -152,8 +191,41 @@ func (w *websocketConn) isClosed() bool {
 func (w *websocketConn) sendFrame(opcode byte, payload []byte) error {
 	w.writeMu.Lock()
 	defer w.writeMu.Unlock()
+	if w.ctx != nil {
+		if err := w.ctx.Err(); err != nil {
+			return err
+		}
+	}
 	if len(payload) > 16<<20 {
 		return fmt.Errorf("WebSocket message exceeds configured limit")
+	}
+	timeout := w.timeout
+	if timeout <= 0 {
+		timeout = networkTimeout(0)
+	}
+	deadline := time.Now().Add(timeout)
+	if w.ctx != nil {
+		if ctxDeadline, ok := w.ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+			deadline = ctxDeadline
+		}
+	}
+	if err := w.conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	stop := func() bool { return true }
+	if w.ctx != nil {
+		stop = context.AfterFunc(w.ctx, func() { _ = w.conn.SetWriteDeadline(time.Now()) })
+	}
+	defer func() {
+		stop()
+		if w.ctx == nil || w.ctx.Err() == nil {
+			_ = w.conn.SetWriteDeadline(time.Time{})
+		}
+	}()
+	if w.ctx != nil {
+		if err := w.ctx.Err(); err != nil {
+			return err
+		}
 	}
 	key := make([]byte, 4)
 	if _, err := rand.Read(key); err != nil {
@@ -248,12 +320,22 @@ func (w *websocketConn) receiveMessageRaw(max int) (byte, []byte, error) {
 	if w.isClosed() {
 		return 0, nil, fmt.Errorf("WebSocket handle is closed")
 	}
+	if w.ctx != nil {
+		if err := w.ctx.Err(); err != nil {
+			return 0, nil, err
+		}
+		stop := context.AfterFunc(w.ctx, func() { _ = w.conn.SetReadDeadline(time.Now()) })
+		defer stop()
+	}
 	var messageOpcode byte
 	var message []byte
 	collecting := false
 	for {
 		fin, opcode, payload, err := w.receiveFrame(max)
 		if err != nil {
+			if w.ctx != nil && w.ctx.Err() != nil {
+				return 0, nil, w.ctx.Err()
+			}
 			w.stateMu.Lock()
 			w.closed = true
 			w.stateMu.Unlock()

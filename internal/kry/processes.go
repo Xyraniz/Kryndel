@@ -5,9 +5,39 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 
 	psutil "github.com/shirou/gopsutil/v3/process"
 )
+
+type processOutputLimit struct {
+	mu       sync.Mutex
+	limit    int64
+	written  int64
+	exceeded bool
+	cancel   context.CancelFunc
+}
+
+func (w *processOutputLimit) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.exceeded {
+		return len(p), nil
+	}
+	if int64(len(p)) > w.limit-w.written {
+		w.exceeded = true
+		w.cancel()
+		return len(p), nil
+	}
+	w.written += int64(len(p))
+	return len(p), nil
+}
+
+func (w *processOutputLimit) exceededOutput() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.exceeded
+}
 
 func processContext(ctx context.Context) context.Context {
 	if ctx == nil {
