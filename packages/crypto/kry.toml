@@ -1,4 +1,4 @@
 [package]
 name = "crypto"
-version = "1.3.0"
-kryndel = ">=1.9.0"
+version = "1.3.1"
+kryndel = ">=1.3.0"
