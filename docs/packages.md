@@ -13,6 +13,9 @@ Kryndel uses `kry.toml` as the project manifest and `kry.lock` as the resolution
 | `kry publish` | Sends the archive to `PUT /publish/<name>/<version>`. | The registry recomputes SHA-256 and updates its index. |
 | `kry cache clean` | Removes cached indexes and archives. | The project and lockfile are untouched. |
 
+> [!CAUTION]
+> `kry update` can change resolved package versions. Review the resulting `kry.lock` before sharing or releasing a project; it records the exact archive URLs and SHA-256 hashes.
+
 By default, the client uses Kryndel's static public registry at `https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry`. Its index and archives are versioned repository files, so `kry install discord` works without additional configuration. `KRY_REGISTRY` selects a mirror, private registry, or local registry; `kry registry serve ROOT --addr 127.0.0.1:8765` serves the minimum layout `ROOT/index/<name>.json` and `ROOT/packages/<archive>.tar.gz`. `KRY_CACHE` changes the cache location, and `KRY_OFFLINE=1` restricts the client to already stored indexes and archives.
 
 The public Discord index currently contains only package `2.2.0`. Historical Discord archives have been removed; exact older pins and constraints that exclude 2.2.0 must be updated.
