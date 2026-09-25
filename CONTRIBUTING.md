@@ -4,7 +4,7 @@ Kryndel has one deliberately small Go implementation. A syntax change must consi
 
 ## Local development
 
-Go 1.22 or newer is required to build the executable from source; released binaries need no toolchain:
+Go 1.25.2 or newer is required to build the executable from source; released binaries need no toolchain:
 
 ```bash
 make test

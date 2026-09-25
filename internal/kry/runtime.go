@@ -922,9 +922,9 @@ func NewRuntimeWithArgs(prog *Program, c *Checker, lim Limits, sb Sandbox, args 
 func (r *Runtime) fail(e *Expr, format string, args ...any) *Diagnostic {
 	msg := fmt.Sprintf(format, args...)
 	if e == nil {
-		return Diag(CatRuntime, r.Prog.Source, 1, 1, msg)
+		return Diag(CatRuntime, r.Prog.Source, 1, 1, "%s", msg)
 	}
-	return Diag(CatRuntime, e.Tok.Source, e.Tok.Line, e.Tok.Column, msg)
+	return Diag(CatRuntime, e.Tok.Source, e.Tok.Line, e.Tok.Column, "%s", msg)
 }
 func (r *Runtime) printValue(v Value, newline bool) *Diagnostic {
 	s := display(v)
@@ -1067,7 +1067,7 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 			return EvalResult{Code: evalError, Diag: d}
 		}
 		if err := sc.define(s.Name, v, s.Mutable); err != nil {
-			return EvalResult{Code: evalError, Diag: r.fail(nil, err.Error())}
+			return EvalResult{Code: evalError, Diag: r.fail(nil, "%s", err.Error())}
 		}
 		return normal()
 	case StExpr:
@@ -1183,7 +1183,7 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 		for _, item := range items {
 			is := newRunScope(sc)
 			if err := is.define(s.Name, cloneValue(item), false); err != nil {
-				return EvalResult{Code: evalError, Diag: r.fail(s.Iter, err.Error())}
+				return EvalResult{Code: evalError, Diag: r.fail(s.Iter, "%s", err.Error())}
 			}
 			x := r.execBlock(is, s.Body)
 			if x.Diag != nil || x.Code == evalReturn {
@@ -1853,7 +1853,7 @@ func (r *Runtime) invokeFunction(e *Expr, f *Function, receiver *Value, args []V
 	}
 }
 func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic) {
-	bad := func(m string) (Value, *Diagnostic) { return nilVal(), r.fail(e, m) }
+	bad := func(m string) (Value, *Diagnostic) { return nilVal(), r.fail(e, "%s", m) }
 	switch b.Name {
 	case "poly_register":
 		slot, handler, priority := a[0].S, a[1].S, a[2].I
@@ -3948,7 +3948,7 @@ func (r *Runtime) httpRequest(e *Expr, method, rawURL, body string) (Value, *Dia
 }
 
 func badDiag(e *Expr, msg string) *Diagnostic {
-	return Diag(CatRuntime, e.Tok.Source, e.Tok.Line, e.Tok.Column, msg)
+	return Diag(CatRuntime, e.Tok.Source, e.Tok.Line, e.Tok.Column, "%s", msg)
 }
 func numericFloat(v Value) float64 {
 	if v.Kind == VInt {
