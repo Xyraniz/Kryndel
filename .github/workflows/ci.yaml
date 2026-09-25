@@ -18,6 +18,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22.x'
+      - name: Install MinGW-w64 cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc-mingw-w64-x86-64
+          x86_64-w64-mingw32-gcc --version
       - name: Run complete verification matrix
         run: make verify
         timeout-minutes: 45
