@@ -1,0 +1,27 @@
+import "std/env"
+import "discord-self"
+
+fn set_activity_when_ready(event_json: String) -> String {
+    let event: Json = result_unwrap(json_parse(event_json))
+    let raw_name: Json = result_unwrap(json_object_get(event, "name"))
+    let name: String = result_unwrap(json_string(raw_name))
+    if name == "READY" {
+        let activity: String = result_unwrap(rpc_activity_json("Kryndel", 0, "Kryndel runtime", ""))
+        let result: Result[Nil, String] = set_presence_json("online", "[" + activity + "]", false)
+        match result {
+            ok(_) => {}
+            err(problem) => { println("Could not update presence: " + problem) }
+        }
+    }
+    return ""
+}
+
+fn main() -> Result[Nil, String] {
+    let token: String = require("DISCORD_USER_TOKEN")?
+    let client: Client = self_client(token)?
+    let registered: Result[Nil, String] = poly_register("discord_self.on_event", "set_activity_when_ready", 0)
+    match registered {
+        ok(_) => { return client.run() }
+        err(problem) => { return err(problem) }
+    }
+}

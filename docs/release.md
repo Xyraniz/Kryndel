@@ -27,4 +27,4 @@ The repository CI uses `go vet`, race detection, fuzz smoke tests, coverage, doc
 
 ## Windows installer and Discord scope
 
-Releases also publish `kry-installer-windows-amd64.exe`. It downloads the Kryndel CLI from the GitHub release, installs it under the current user's configuration directory, and persists that directory in the user's `PATH` without requiring administrator rights. The Discord package supports bot accounts and moderation endpoints such as ban, unban, and kick. Selfbots are intentionally unsupported because automating normal user accounts violates Discord's platform rules.
+Releases also publish `kry-installer-windows-amd64.exe`. It downloads the Kryndel CLI from the GitHub release, installs it under the current user's configuration directory, and persists that directory in the user's `PATH` without requiring administrator rights. The `discord` package supports bot accounts and moderation endpoints such as ban, unban, and kick. A separate `discord-self` experiment supports a small user-account API surface, but Discord prohibits automating normal user accounts; bot accounts remain the supported choice.

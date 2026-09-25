@@ -120,6 +120,60 @@ func (r *Runtime) discordGatewayBindSession(socket *websocketConn, intents int64
 	return resVal(true, nilVal()), nil
 }
 
+func (r *Runtime) discordGatewaySend(opcode int64, dataJSON string) (Value, *Diagnostic) {
+	fail := func(message string) (Value, *Diagnostic) { return resVal(false, stringVal(message)), nil }
+	if opcode != 3 && opcode != 4 {
+		return fail("Discord Gateway send supports only presence and voice-state updates")
+	}
+	if !json.Valid([]byte(dataJSON)) {
+		return fail("Discord Gateway update data must be valid JSON")
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(dataJSON), &data); err != nil || data == nil {
+		return fail("Discord Gateway update data must be a JSON object")
+	}
+	encoded, err := json.Marshal(struct {
+		Opcode int64           `json:"op"`
+		Data   json.RawMessage `json:"d"`
+	}{Opcode: opcode, Data: json.RawMessage(dataJSON)})
+	if err != nil || len(encoded) > r.Lim.MaxSourceBytes {
+		return fail("Discord Gateway update exceeds configured input limit")
+	}
+	state := r.discordGateway
+	if state == nil {
+		return fail("Discord Gateway updates are only available during Bot.run callbacks")
+	}
+	state.sessionMu.Lock()
+	state.mu.Lock()
+	socket := state.socket
+	if socket == nil || socket.isClosed() {
+		state.mu.Unlock()
+		state.sessionMu.Unlock()
+		return fail("Discord Gateway updates are only available during Bot.run callbacks")
+	}
+	now := time.Now()
+	activeEvents := state.outboundEvents[:0]
+	for _, sentAt := range state.outboundEvents {
+		if now.Sub(sentAt) < discordGatewayEventWindow {
+			activeEvents = append(activeEvents, sentAt)
+		}
+	}
+	state.outboundEvents = activeEvents
+	if len(activeEvents) >= discordGatewayEventLimit {
+		state.mu.Unlock()
+		state.sessionMu.Unlock()
+		return fail("Discord Gateway outgoing event limit reached; retry after the current 60-second window")
+	}
+	state.outboundEvents = append(state.outboundEvents, now)
+	state.mu.Unlock()
+	if err := socket.sendText(string(encoded)); err != nil {
+		state.sessionMu.Unlock()
+		return fail("Discord Gateway update failed: " + err.Error())
+	}
+	state.sessionMu.Unlock()
+	return resVal(true, nilVal()), nil
+}
+
 func (r *Runtime) discordGatewayUnbindSession() Value {
 	if r.discordGateway != nil {
 		state := r.discordGateway

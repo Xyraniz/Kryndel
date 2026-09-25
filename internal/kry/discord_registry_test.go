@@ -9,7 +9,7 @@ import (
 )
 
 func TestDiscordRegistryContainsOnlyCurrentRelease(t *testing.T) {
-	const current = "2.2.1"
+	const current = "2.3.0"
 	indexPath := filepath.Join("..", "..", "registry", "index", "discord.json")
 	indexData, err := os.ReadFile(indexPath)
 	if err != nil {
@@ -34,7 +34,7 @@ func TestDiscordRegistryContainsOnlyCurrentRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "discord-") {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "discord-") || strings.HasPrefix(entry.Name(), "discord-self-") {
 			continue
 		}
 		if entry.Name() != "discord-"+current+".tar.gz" {
