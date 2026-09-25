@@ -1,6 +1,6 @@
 module github.com/Xyraniz/Kryndel
 
-go 1.22
+go 1.25.2
 
 require (
 	github.com/blackjack/webcam v0.6.1

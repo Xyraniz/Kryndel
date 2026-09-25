@@ -122,7 +122,7 @@ func run(args []string) int {
 			return 1
 		}
 		fmt.Println("doctor: ready")
-		fmt.Println("implementation: Go 1.22 standard library")
+		fmt.Println("implementation: Go standard library (minimum toolchain 1.25.2)")
 		fmt.Println("runtime: self-contained executable")
 		fmt.Printf("limits: source=%d artifact=%d json=%d instructions=%d\n", e.Limits.MaxSourceBytes, e.Limits.MaxArtifactBytes, e.Limits.MaxJSONBytes, e.Limits.MaxInstructions)
 		return 0
@@ -900,7 +900,7 @@ func projectCache(a []string) int {
 }
 func registryCmd(a []string) int {
 	if len(a) < 2 || a[0] != "serve" {
-		return usage("registry serve ROOT [--addr HOST:PORT]")
+		return usage("registry serve ROOT [--addr LOOPBACK:PORT]")
 	}
 	addr := "127.0.0.1:8765"
 	for i := 2; i+1 < len(a); i++ {

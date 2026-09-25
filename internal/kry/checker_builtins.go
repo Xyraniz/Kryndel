@@ -3,7 +3,7 @@ package kry
 func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*Type, *Diagnostic) {
 	arg := func(i int, want *Type) (*Type, *Diagnostic) { return c.checkExpr(sc, e.Args[i], want) }
 	bad := func(msg string) (*Type, *Diagnostic) {
-		return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, msg)
+		return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "%s", msg)
 	}
 	switch b.Name {
 	case "print", "println":

@@ -20,7 +20,7 @@ func AnalyzeWarnings(program *Program) []*Diagnostic {
 	}
 	var warnings []*Diagnostic
 	add := func(code string, tok Token, message string) {
-		d := Diag(CatType, tok.Source, tok.Line, tok.Column, message)
+		d := Diag(CatType, tok.Source, tok.Line, tok.Column, "%s", message)
 		d.Code = code
 		d.Severity = "warning"
 		warnings = append(warnings, d)

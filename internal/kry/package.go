@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -70,6 +71,32 @@ func NewPackageManager() *PackageManager {
 		}
 	}
 	return &PackageManager{Registry: strings.TrimRight(reg, "/"), Client: &http.Client{Timeout: 20 * time.Second}, CacheDir: cache, Offline: os.Getenv("KRY_OFFLINE") == "1"}
+}
+
+func (pm *PackageManager) httpClient() *http.Client {
+	client := pm.Client
+	if client == nil {
+		client = &http.Client{Timeout: 20 * time.Second}
+	}
+	clientCopy := *client
+	checkRedirect := client.CheckRedirect
+	clientCopy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && !sameHTTPOrigin(via[len(via)-1].URL, req.URL) {
+			return fmt.Errorf("cross-origin redirect blocked")
+		}
+		if checkRedirect != nil {
+			return checkRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &clientCopy
+}
+
+func sameHTTPOrigin(a, b *url.URL) bool {
+	return a != nil && b != nil && strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }
 
 func ParseManifest(data string) (PackageManifest, error) {
@@ -274,7 +301,7 @@ func (pm *PackageManager) index(name string) (RegistryIndex, error) {
 			return RegistryIndex{}, fmt.Errorf("offline mode: registry index for %s is not cached", name)
 		}
 	} else {
-		resp, err := pm.Client.Get(pm.Registry + "/index/" + url.PathEscape(name) + ".json")
+		resp, err := pm.httpClient().Get(pm.Registry + "/index/" + url.PathEscape(name) + ".json")
 		if err != nil {
 			return RegistryIndex{}, err
 		}
@@ -351,7 +378,7 @@ func (pm *PackageManager) download(name string, v RegistryVersion) (LockedPackag
 			return LockedPackage{}, fmt.Errorf("offline mode: package %s@%s is not cached", name, v.Version)
 		}
 	} else {
-		resp, getErr := pm.Client.Get(downloadURL)
+		resp, getErr := pm.httpClient().Get(downloadURL)
 		if getErr != nil {
 			return LockedPackage{}, getErr
 		}
@@ -700,7 +727,7 @@ func (pm *PackageManager) Search(term string) ([]string, error) {
 	if pm.Offline {
 		return nil, fmt.Errorf("offline mode: registry search is unavailable")
 	}
-	resp, err := pm.Client.Get(pm.Registry + "/search?q=" + url.QueryEscape(term))
+	resp, err := pm.httpClient().Get(pm.Registry + "/search?q=" + url.QueryEscape(term))
 	if err != nil {
 		return nil, err
 	}
@@ -741,7 +768,7 @@ func (pm *PackageManager) Publish(dir string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/gzip")
-	resp, err := pm.Client.Do(req)
+	resp, err := pm.httpClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -943,7 +970,16 @@ func ServeRegistry(root, addr string) error {
 		_, _ = w.Write(data)
 	})
 	mux.Handle("/packages/", http.StripPrefix("/packages/", http.FileServer(http.Dir(filepath.Join(root, "packages")))))
-	return http.ListenAndServe(addr, mux)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	localAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || !localAddr.IP.IsLoopback() {
+		_ = listener.Close()
+		return fmt.Errorf("registry refuses non-loopback address %q because publishing has no authentication", addr)
+	}
+	return http.Serve(listener, mux)
 }
 
 func atomicWrite(path string, data []byte) error {

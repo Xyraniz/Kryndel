@@ -93,7 +93,7 @@ func (p *Parser) expect(k TokenKind, msg string) Token {
 	if p.check(k) {
 		return p.advance()
 	}
-	p.fail(p.peek(), msg)
+	p.fail(p.peek(), "%s", msg)
 	return p.peek()
 }
 func (p *Parser) fail(t Token, msg string, args ...any) {
