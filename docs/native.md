@@ -33,6 +33,7 @@ On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` and Linux/arm64
 | `emit source.kry --format=kry-ir [--target=TARGET]` | Emit deterministic, versioned checked KIR JSON without executing source; `TARGET` defaults to the host. | `0` |
 | `inspect binary` | Inspect PE/ELF headers and reject unknown binary formats. | `0` |
 | `fmt [--check\|-w] source.kry` | Check and format valid source deterministically. | `0` |
+| `lsp` | Serve LSP requests over standard input/output until the client exits. | `0` after `shutdown` and `exit` |
 | `repl` | Run the interactive read-evaluate-print loop. | `0` |
 | `doctor` | Report native installation readiness. | `0` |
 | `version` | Print the compiler version. | `0` |

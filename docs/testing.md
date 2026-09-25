@@ -27,6 +27,7 @@ The native Go tests cover recursive functions, `if`, `while`, mutable bindings, 
 | Artifacts | Deterministic builds, KRYNATIVE5 metadata and package visibility replay, KRYNATIVE4/KRYNATIVE3 compatibility, exact lengths, SHA-256 hashes, embedded dependencies, path safety, trailing bytes, truncated payloads, version mismatch, invalid payloads, and replay after dependency removal. |
 | Security and resources | Restricted-root traversal and symlink checks, NUL paths, invalid UTF-8 environment values, source/artifact input limits, and clean controlled failures. |
 | Tooling | Persistent function/type state, 5 KiB REPL lines, formatter idempotence, JSON diagnostics, fuzz-smoke timeouts, coverage generation, and portable benchmark targets. |
+| Language server | JSON-RPC framing, initialize/shutdown, unsaved source and imported buffers, diagnostics and document versions, definition, hover, completion, formatting, UTF-16 positions, and file URIs. |
 | CLI | Help, version, invalid arguments, exit codes, REPL, formatter, doctor, JSON diagnostics, and missing executable. |
 | Memory | Representative success and failure paths, worker-local contexts, channel cleanup, worker joins, and bounded shutdown under the race detector. |
 | Documentation | English-only audit and synchronization between documented and implemented commands and builtins. |

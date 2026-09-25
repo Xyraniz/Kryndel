@@ -7,6 +7,7 @@ import (
 
 type Binding struct {
 	Type    *Type
+	Token   Token
 	Mutable bool
 	Const   bool
 	Global  bool
@@ -79,7 +80,7 @@ func Check(prog *Program, lim Limits) (*Checker, *Diagnostic) {
 				if c.Globals.local(s.Name) {
 					return nil, Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "binding '%s' is already defined in this scope", s.Name)
 				}
-				c.Globals.Values[s.Name] = Binding{Type: a, Mutable: s.Mutable, Const: s.Const, Global: true}
+				c.Globals.Values[s.Name] = Binding{Type: a, Token: s.NameToken, Mutable: s.Mutable, Const: s.Const, Global: true}
 			}
 		}
 	}
@@ -349,7 +350,7 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 		if sc.local(p.Name) {
 			return Diag(CatType, p.Tok.Source, p.Tok.Line, p.Tok.Column, "parameter '%s' is duplicated", p.Name)
 		}
-		sc.Values[p.Name] = Binding{Type: t, Mutable: false}
+		sc.Values[p.Name] = Binding{Type: t, Token: p.Tok, Mutable: false}
 	}
 	for _, p := range f.Params {
 		t, _ := resolveSpec(c.Env, p.Type, 0)
@@ -362,7 +363,7 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 				return Diag(CatType, p.Default.Tok.Source, p.Default.Tok.Line, p.Default.Tok.Column, "default value for parameter '%s' expected %s, found %s", p.Name, t, dt)
 			}
 		}
-		defaultScope.Values[p.Name] = Binding{Type: t, Mutable: false}
+		defaultScope.Values[p.Name] = Binding{Type: t, Token: p.Tok, Mutable: false}
 	}
 	rt, d := resolveSpec(c.Env, f.Return, 0)
 	if d != nil {
@@ -457,7 +458,8 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "const type %s is not deeply immutable", t)
 			return Flow{HasError: true}
 		}
-		sc.Values[s.Name] = Binding{Type: t, Mutable: s.Mutable, Const: s.Const, Global: false}
+		s.Type = t
+		sc.Values[s.Name] = Binding{Type: t, Token: s.NameToken, Mutable: s.Mutable, Const: s.Const, Global: false}
 		return normalFlow()
 	case StExpr:
 		_, d := c.checkExpr(sc, s.Expr, nil)
@@ -476,6 +478,7 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "immutable binding '%s' cannot be assigned", s.Target.Name)
 			return Flow{HasError: true}
 		}
+		s.Target.Definition = b.Token
 		// Assignment places bypass checkExpr, so retain the resolved binding
 		// type on the target node for typed IR serialization.
 		s.Target.Type = b.Type
@@ -545,7 +548,8 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 			return Flow{HasError: true}
 		}
 		loopScope := NewScope(sc, sc.Worker)
-		loopScope.Values[s.Name] = Binding{Type: elem, Mutable: false}
+		s.Type = elem
+		loopScope.Values[s.Name] = Binding{Type: elem, Token: s.NameToken, Mutable: false}
 		c.checkBlock(loopScope, s.Body, rt, loop+1, inFn)
 		if c.Err != nil {
 			return Flow{HasError: true}
@@ -636,7 +640,7 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 					c.Err = Diag(CatType, a.Pattern.Tok.Source, a.Pattern.Tok.Line, a.Pattern.Tok.Column, "invalid pattern binding")
 					return Flow{HasError: true}
 				}
-				as.Values[a.Pattern.Binding] = Binding{Type: bt}
+				as.Values[a.Pattern.Binding] = Binding{Type: bt, Token: a.Pattern.BindingTok}
 			}
 			af := c.checkBlock(as, a.Body, rt, loop, inFn)
 			if c.Err != nil {
@@ -750,6 +754,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown variable '%s'", e.Name)
 			}
 		} else {
+			e.Definition = b.Token
 			if sc.Worker && b.Global && b.Type.Kind != TyChannel && b.Type.Kind != TyShared {
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "global binding '%s' is not available in a worker-safe function", e.Name)
 			}
@@ -762,6 +767,13 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		} else if name := inaccessibleTypeName(et, sc.VisibilityScope, 0); name != "" {
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "enum '%s' is private", name)
 		} else {
+			e.Definition = et.Enum.NameToken
+			for i, variant := range et.Enum.Variants {
+				if variant == e.EnumVariant && i < len(et.Enum.VariantTokens) {
+					e.VariantDefinition = et.Enum.VariantTokens[i]
+					break
+				}
+			}
 			found := false
 			for _, v := range et.Enum.Variants {
 				if v == e.EnumVariant {
@@ -1028,6 +1040,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 					break
 				}
 				t = f.Type
+				e.Definition = f.Tok
 			}
 		}
 		if !found && d == nil {
@@ -1042,6 +1055,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "struct '%s' is private", name)
 			break
 		}
+		e.Definition = st.Struct.NameToken
 		if len(e.Fields) != len(st.Struct.Fields) {
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "struct '%s' has wrong field count", e.StructName)
 			break
@@ -1144,6 +1158,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of method '%s' matches the argument types", e.Name)
 		}
 		e.Function = matched
+		e.Definition = matched.NameToken
 		return matchedType, nil
 	}
 	b, ok := c.Env.Builtins[e.Name]
@@ -1182,6 +1197,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	}
 	if matched != nil {
 		e.Function = matched
+		e.Definition = matched.NameToken
 		return matchedType, nil
 	}
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of '%s' matches the argument types", e.Name)

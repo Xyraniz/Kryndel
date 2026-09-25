@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — Kryndel language server
+
+`kry lsp` now serves the Language Server Protocol over standard input/output. Editors receive live checker diagnostics, go-to-definition, hover signatures and types, visible symbol and builtin completion, and whole-document formatting. Open buffers, including unsaved imported modules, are checked through the existing module resolver and type checker. LSP document positions use UTF-16 code units, and diagnostics are cleared when a document closes. The server keeps the Go 1.22 toolchain requirement by using a Go 1.17-compatible JSON-RPC transport.
+
 ## Discord package 2.2.0
 
 The Discord package adds a local global/guild `CommandTree`, named Gateway callbacks for application commands, autocomplete and component interactions, asynchronous Gateway member queries, multipart uploads, encoded audit-log reasons, and helpers for message, defer, and autocomplete responses. Prefix callback contexts now include parsed arguments and route malformed quoting to an error callback while preserving the existing fields. Gateway query aggregation reports failed requests through callbacks, link buttons validate their URL host, and member-prefix limits accept 1–100. The current release still does not provide typed declarations, local command checks/cooldowns, or voice media and DAVE support.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/Xyraniz/Kryndel/internal/kry"
+	"github.com/Xyraniz/Kryndel/internal/kry/lsp"
 )
 
 const version = "1.3.0"
@@ -169,6 +171,16 @@ func run(args []string) int {
 			return usage("repl does not accept positional arguments")
 		}
 		return repl(e)
+	case "lsp":
+		if len(rest) != 0 {
+			return usage("lsp does not accept positional arguments")
+		}
+		status, err := lsp.Run(context.Background(), os.Stdin, os.Stdout)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "kry lsp:", err)
+			return 1
+		}
+		return status
 	default:
 		return usage("unknown command " + cmd)
 	}
@@ -900,7 +912,7 @@ func printHelp() {
 	fmt.Println("Kryndel " + version + " — self-contained language toolchain")
 	fmt.Println("usage: kry [global-options] command [arguments]")
 	fmt.Println("       kry [global-options] FILE.kry|FILE.kexe")
-	fmt.Println("commands: check, run, build, emit, inspect, capabilities, fmt, repl, doctor, version")
+	fmt.Println("commands: check, run, build, emit, inspect, capabilities, fmt, lsp, repl, doctor, version")
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
 	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (Linux subset); pe-direct (Windows x64 scalar/function subset); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")

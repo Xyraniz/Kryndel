@@ -36,6 +36,8 @@ const (
 type Expr struct {
 	Kind                  ExprKind
 	Tok                   Token
+	NameToken             Token
+	Definition            Token
 	Int                   int64
 	Float                 float64
 	Bool                  bool
@@ -51,8 +53,11 @@ type Expr struct {
 	MapKeys               []*Expr
 	StructName            string
 	Fields                []string
+	FieldTokens           []Token
 	Values                []*Expr
 	EnumType, EnumVariant string
+	VariantToken          Token
+	VariantDefinition     Token
 	Type                  *Type
 	Function              *Function
 	ConstValue            *Value
@@ -79,7 +84,9 @@ const (
 type Stmt struct {
 	Kind          StmtKind
 	Tok           Token
+	NameToken     Token
 	Name          string
+	Type          *Type
 	Mutable       bool
 	Const         bool
 	Annotation    *TypeSpec
@@ -110,6 +117,7 @@ const (
 type Pattern struct {
 	Kind                       PatternKind
 	Tok                        Token
+	BindingTok                 Token
 	Bool                       bool
 	Int                        int64
 	Str                        string
@@ -131,6 +139,7 @@ type Param struct {
 }
 type Function struct {
 	Name            string
+	NameToken       Token
 	Public          bool
 	Worker          bool
 	TypeParams      []TypeParam
@@ -152,6 +161,7 @@ type FieldDecl struct {
 }
 type StructDecl struct {
 	Name            string
+	NameToken       Token
 	Public          bool
 	Fields          []FieldDecl
 	Tok             Token
@@ -161,8 +171,10 @@ type StructDecl struct {
 }
 type EnumDecl struct {
 	Name            string
+	NameToken       Token
 	Public          bool
 	Variants        []string
+	VariantTokens   []Token
 	Tok             Token
 	Module          string
 	VisibilityScope string
