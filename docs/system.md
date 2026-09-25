@@ -8,4 +8,8 @@ Kryndel exposes a typed system boundary rather than a general host-language esca
 
 Modules remain source-relative and reject absolute paths, parent traversal, artifacts, missing files, duplicate exports, and cycles. Filesystem APIs use trusted local mode by default. `--restricted ROOT` enables restricted mode that rejects absolute paths and `..`, checks every existing component with `Lstat`, rejects symlink components, confines destination parents to the root, writes through a temporary file, and atomically replaces only after revalidation. The Go executable uses no C compiler or external runtime. `kry doctor` verifies executable capabilities, limits, and builtin-registry completeness.
 
+> [!CAUTION]
+> Filesystem calls use trusted local mode by default. Pass `--restricted ROOT`
+> when a program must be confined to a project root.
+
 Source and artifact inputs are bounded by safe defaults of 16 MiB and 64 MiB respectively; `--max-source` and `--max-artifact` allow a caller to choose stricter per-invocation limits. The same execution context applies instruction, wall-clock, call-depth, memory, collection, channel, worker, and output budgets. Resource failures produce categorized diagnostics before parsing or execution. Process creation, terminal control, signals, and arbitrary pointer arithmetic remain outside the stable source API; the implemented FFI surface is deliberately narrower than arbitrary native code. Any future addition must specify type signatures, error values, ownership and cleanup, path or capability boundaries, platform support, deterministic tests, and documentation before implementation is accepted.
