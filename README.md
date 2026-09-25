@@ -1,6 +1,6 @@
 # Kryndel
 
-[![Go 1.25.2+](https://img.shields.io/badge/Go-1.25.2%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go 1.27.1+](https://img.shields.io/badge/Go-1.27.1%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Kryndel is a small, statically checked language for developer tools and structured applications. The repository contains the compiler, checker, runtime, standard library wrappers, package tooling, and a self-contained command-line executable.
@@ -9,7 +9,7 @@ The implementation is written in Go and uses the standard library plus the Go mo
 
 ## Quick start
 
-A Go 1.25.2 or newer toolchain is needed when building from a checkout.
+A Go 1.27.1 or newer toolchain is needed when building from a checkout.
 
 ```bash
 git clone https://github.com/Xyraniz/Kryndel.git

@@ -2,7 +2,7 @@
 
 ## Unreleased — Package security hardening
 
-Package manager HTTP requests block cross-origin redirects, and the unauthenticated registry server refuses non-loopback bind addresses. Source builds now require Go 1.25.2 or newer to include the standard-library fixes for sparse TAR allocation and proxy-credential redirect handling. Dynamic diagnostic text is passed literally so percent signs cannot be misread as format directives.
+Package manager HTTP requests block cross-origin redirects, and the unauthenticated registry server refuses non-loopback bind addresses. Source builds now require Go 1.27.1 or newer to include the standard-library security fixes for sparse TAR allocation and proxy-credential redirect handling. Dynamic diagnostic text is passed literally so percent signs cannot be misread as format directives.
 
 ## Unreleased — Dispatch and local editor completion
 

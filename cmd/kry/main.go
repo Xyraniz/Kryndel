@@ -122,7 +122,7 @@ func run(args []string) int {
 			return 1
 		}
 		fmt.Println("doctor: ready")
-		fmt.Println("implementation: Go standard library (minimum toolchain 1.25.2)")
+		fmt.Println("implementation: Go standard library (minimum toolchain 1.27.1)")
 		fmt.Println("runtime: self-contained executable")
 		fmt.Printf("limits: source=%d artifact=%d json=%d instructions=%d\n", e.Limits.MaxSourceBytes, e.Limits.MaxArtifactBytes, e.Limits.MaxJSONBytes, e.Limits.MaxInstructions)
 		return 0

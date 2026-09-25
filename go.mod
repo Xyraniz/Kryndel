@@ -1,6 +1,6 @@
 module github.com/Xyraniz/Kryndel
 
-go 1.25.2
+go 1.27.1
 
 require (
 	github.com/blackjack/webcam v0.6.1
@@ -8,7 +8,7 @@ require (
 	github.com/kbinani/screenshot v0.0.0-20250624051815-089614a94018
 	github.com/shirou/gopsutil/v3 v3.24.5
 	go.lsp.dev/jsonrpc2 v0.10.0
-	golang.org/x/sys v0.24.0
+	golang.org/x/sys v0.44.0
 	modernc.org/sqlite v1.29.10
 )
 

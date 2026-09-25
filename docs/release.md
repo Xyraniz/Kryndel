@@ -1,6 +1,6 @@
 # Build and release guide
 
-Kryndel can be built from source with Go 1.25.2 or newer and the modules listed in `go.mod`. The supported release targets are Linux amd64/arm64, macOS amd64/arm64, and Windows amd64; distributed binaries are built with `CGO_ENABLED=0` and include their Go dependencies, so they require no external runtime:
+Kryndel can be built from source with Go 1.27.1 or newer and the modules listed in `go.mod`. The supported release targets are Linux amd64/arm64, macOS amd64/arm64, and Windows amd64; distributed binaries are built with `CGO_ENABLED=0` and include their Go dependencies, so they require no external runtime:
 
 ```bash
 make
