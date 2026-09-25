@@ -34,6 +34,7 @@ The direct file form is useful for desktop integrations. On Windows, the release
 | `kry FILE.kry` | Runs a source file directly. This is the form used by file associations and double-click. |
 | `kry build FILE` | Creates a deterministic `KRYNATIVE5` bundle. Native PE and ELF output is available for supported targets. |
 | `kry fmt FILE` | Formats valid source with stable whitespace and indentation. |
+| `kry lsp` | Serves editor diagnostics, navigation, hover, completion, and formatting over the Language Server Protocol on standard input/output. |
 | `kry repl` | Starts the interactive evaluator. |
 | `kry doctor` | Checks the executable, limits, standard library, and runtime capabilities. |
 | `kry new PROJECT` / `kry init` | Creates a project layout and manifest. |

@@ -27,6 +27,12 @@ func TestDirectProgramInvocation(t *testing.T) {
 	}
 }
 
+func TestLSPCommandRejectsPositionalArguments(t *testing.T) {
+	if status := run([]string{"lsp", "unexpected"}); status != 2 {
+		t.Fatalf("lsp accepted positional arguments with status %d", status)
+	}
+}
+
 func TestMaxJSONCLIOverride(t *testing.T) {
 	if got := kry.DefaultLimits().MaxJSONBytes; got != 64<<20 {
 		t.Fatalf("default MaxJSONBytes = %d; want 64 MiB", got)

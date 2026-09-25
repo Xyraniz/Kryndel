@@ -138,7 +138,7 @@ func (p *Parser) typeSpec() *TypeSpec {
 func (p *Parser) function(pub bool) *Function {
 	t := p.expect(FN, "expected 'fn'")
 	n := p.expect(ID, "expected a function name")
-	f := &Function{Name: n.Text(), Public: pub, Tok: t, Return: &TypeSpec{Name: "Nil", Tok: t}, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
+	f := &Function{Name: n.Text(), NameToken: n, Public: pub, Tok: t, Return: &TypeSpec{Name: "Nil", Tok: t}, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
 	if p.match(LBRACKET) {
 		if !p.check(RBRACKET) {
 			for {
@@ -185,7 +185,7 @@ func (p *Parser) function(pub bool) *Function {
 func (p *Parser) structDecl(pub bool) *StructDecl {
 	t := p.expect(STRUCT, "expected 'struct'")
 	n := p.expect(ID, "expected a struct name")
-	d := &StructDecl{Name: n.Text(), Public: pub, Tok: t, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
+	d := &StructDecl{Name: n.Text(), NameToken: n, Public: pub, Tok: t, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
 	p.expect(LBRACE, "expected '{' after struct name")
 	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
 		public := !p.match(PRIVATE)
@@ -218,11 +218,12 @@ func (p *Parser) implDecl() []*Function {
 func (p *Parser) enumDecl(pub bool) *EnumDecl {
 	t := p.expect(ENUM, "expected 'enum'")
 	n := p.expect(ID, "expected an enum name")
-	d := &EnumDecl{Name: n.Text(), Public: pub, Tok: t, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
+	d := &EnumDecl{Name: n.Text(), NameToken: n, Public: pub, Tok: t, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
 	p.expect(LBRACE, "expected '{' after enum name")
 	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
 		v := p.expect(ID, "expected an enum variant")
 		d.Variants = append(d.Variants, v.Text())
+		d.VariantTokens = append(d.VariantTokens, v)
 		if !p.match(COMMA) {
 			p.end()
 		}
@@ -251,6 +252,7 @@ func (p *Parser) statement() *Stmt {
 		s.Mutable = p.match(MUT)
 		n := p.expect(ID, "expected a binding name after 'let'")
 		s.Name = n.Text()
+		s.NameToken = n
 		if p.match(COLON) {
 			s.Annotation = p.typeSpec()
 		}
@@ -270,6 +272,7 @@ func (p *Parser) statement() *Stmt {
 		s := p.stmtNode(t, StFor)
 		item := p.expect(ID, "for expects a binding name")
 		s.Name = item.Text()
+		s.NameToken = item
 		p.expect(IN, "for expects 'in' after the binding name")
 		s.Iter = p.expression()
 		s.Body = p.block()
@@ -311,6 +314,7 @@ func (p *Parser) constStmt() *Stmt {
 	s.Const = true
 	n := p.expect(ID, "expected a constant name after 'const'")
 	s.Name = n.Text()
+	s.NameToken = n
 	if p.match(COLON) {
 		s.Annotation = p.typeSpec()
 	}
@@ -368,6 +372,7 @@ func (p *Parser) pattern() Pattern {
 			p.expect(LPAREN, "expected '(' in option/result pattern")
 			b := p.expect(ID, "expected a binding name in pattern")
 			pat.Binding = b.Text()
+			pat.BindingTok = b
 			p.expect(RPAREN, "expected ')' after pattern binding")
 			return pat
 		}
@@ -476,6 +481,7 @@ func (p *Parser) unary() *Expr {
 			c := p.node(p.prev(), ExCall)
 			if e.Kind == ExVar {
 				c.Name = e.Name
+				c.NameToken = e.Tok
 			}
 			if !p.check(RPAREN) {
 				for {
@@ -498,6 +504,7 @@ func (p *Parser) unary() *Expr {
 			if p.match(LPAREN) {
 				x := p.node(ft, ExCall)
 				x.Name = ft.Text()
+				x.NameToken = ft
 				x.Receiver = e
 				if !p.check(RPAREN) {
 					for {
@@ -568,7 +575,9 @@ func (p *Parser) primary() *Expr {
 			v := p.expect(ID, "expected an enum variant after '::'")
 			x := p.node(t, ExEnum)
 			x.EnumType = e.Name
+			x.NameToken = t
 			x.EnumVariant = v.Text()
+			x.VariantToken = v
 			return x
 		}
 		if p.check(LBRACE) && p.Pos+2 < len(p.Tokens) && p.Tokens[p.Pos+1].Kind == ID && p.Tokens[p.Pos+2].Kind == COLON {
@@ -579,6 +588,7 @@ func (p *Parser) primary() *Expr {
 				f := p.expect(ID, "expected a struct field name")
 				p.expect(COLON, "expected ':' after struct field name")
 				x.Fields = append(x.Fields, f.Text())
+				x.FieldTokens = append(x.FieldTokens, f)
 				x.Values = append(x.Values, p.expression())
 				if !p.match(COMMA) {
 					break

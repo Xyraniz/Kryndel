@@ -9,12 +9,33 @@ import (
 type ModuleLoader struct {
 	Lim      Limits
 	Root     string
+	Overlay  map[string]*Source
 	State    map[string]int
 	Programs map[string]*Program
 	Stack    map[string]bool
 }
 
 func LoadProgram(path string, lim Limits, restrictedRoot string) (*Program, *Diagnostic) {
+	return loadProgram(path, nil, lim, restrictedRoot)
+}
+
+// LoadProgramWithSources loads a source tree with in-memory text overriding
+// files on disk. Editors use it to type-check unsaved buffers with the same
+// module resolution and visibility rules as normal source files.
+func LoadProgramWithSources(path string, sources map[string]string, lim Limits) (*Program, *Diagnostic) {
+	overlay := make(map[string]*Source, len(sources))
+	for name, text := range sources {
+		abs, err := filepath.Abs(name)
+		if err != nil {
+			return nil, Diag(CatIO, nil, 1, 1, "cannot resolve source path: %v", err)
+		}
+		abs = filepath.Clean(abs)
+		overlay[abs] = &Source{Name: abs, Text: text}
+	}
+	return loadProgram(path, overlay, lim, "")
+}
+
+func loadProgram(path string, overlay map[string]*Source, lim Limits, restrictedRoot string) (*Program, *Diagnostic) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, Diag(CatIO, nil, 1, 1, "cannot resolve source path: %v", err)
@@ -30,7 +51,7 @@ func LoadProgram(path string, lim Limits, restrictedRoot string) (*Program, *Dia
 			return nil, Diag(CatIO, nil, 1, 1, "source path traverses a symlink")
 		}
 	}
-	l := &ModuleLoader{Lim: lim, Root: root, State: map[string]int{}, Programs: map[string]*Program{}, Stack: map[string]bool{}}
+	l := &ModuleLoader{Lim: lim, Root: root, Overlay: overlay, State: map[string]int{}, Programs: map[string]*Program{}, Stack: map[string]bool{}}
 	p, d := l.load(abs)
 	if d != nil {
 		return nil, d
@@ -72,9 +93,13 @@ func (l *ModuleLoader) load(path string) (*Program, *Diagnostic) {
 	}
 	l.Stack[path] = true
 	defer delete(l.Stack, path)
-	src, d := ReadSource(path, l.Lim)
-	if d != nil {
-		return nil, d
+	src := l.Overlay[path]
+	if src == nil {
+		var d *Diagnostic
+		src, d = ReadSource(path, l.Lim)
+		if d != nil {
+			return nil, d
+		}
 	}
 	prog, d := Parse(src, l.Lim)
 	if d != nil {
@@ -97,9 +122,9 @@ func (l *ModuleLoader) load(path string) (*Program, *Diagnostic) {
 		if filepath.IsAbs(imp.Path) || strings.ContainsRune(imp.Path, 0) || hasParent(imp.Path) {
 			return nil, Diag(CatIO, imp.Tok.Source, imp.Tok.Line, imp.Tok.Column, "unsafe module path '%s'", imp.Path)
 		}
-		candidate := resolveImportPath(filepath.Dir(path), imp.Path)
-		if !fileExists(candidate) {
-			candidate = resolveImportPath(l.Root, imp.Path)
+		candidate := l.resolveImportPath(filepath.Dir(path), imp.Path)
+		if !l.hasSource(candidate) {
+			candidate = l.resolveImportPath(l.Root, imp.Path)
 		}
 
 		if !within(l.Root, candidate) {
@@ -108,8 +133,10 @@ func (l *ModuleLoader) load(path string) (*Program, *Diagnostic) {
 		if !safeComponents(l.Root, candidate) {
 			return nil, Diag(CatIO, imp.Tok.Source, imp.Tok.Line, imp.Tok.Column, "module path traverses a symlink")
 		}
-		if _, err := os.Stat(candidate); err != nil {
-			return nil, Diag(CatIO, imp.Tok.Source, imp.Tok.Line, imp.Tok.Column, "cannot resolve module '%s': %v", imp.Path, err)
+		if !l.hasSource(candidate) {
+			if _, err := os.Stat(candidate); err != nil {
+				return nil, Diag(CatIO, imp.Tok.Source, imp.Tok.Line, imp.Tok.Column, "cannot resolve module '%s': %v", imp.Path, err)
+			}
 		}
 		if _, d = l.load(candidate); d != nil {
 			return nil, d
@@ -118,6 +145,28 @@ func (l *ModuleLoader) load(path string) (*Program, *Diagnostic) {
 	l.Programs[path] = prog
 	return prog, nil
 }
+
+func (l *ModuleLoader) hasSource(path string) bool {
+	if l.Overlay[path] != nil {
+		return true
+	}
+	return fileExists(path)
+}
+
+func (l *ModuleLoader) resolveImportPath(base, imp string) string {
+	candidate := resolveImportPath(base, imp)
+	if l.hasSource(candidate) || filepath.Ext(filepath.Join(base, imp)) != "" {
+		return candidate
+	}
+	// An unsaved package module may introduce its directory before the editor
+	// has created that directory on disk, so stat alone cannot find main.kry.
+	main := filepath.Clean(filepath.Join(base, imp, "main.kry"))
+	if l.Overlay[main] != nil {
+		return main
+	}
+	return candidate
+}
+
 func resolveImportPath(base, imp string) string {
 	candidate := filepath.Join(base, imp)
 	if filepath.Ext(candidate) == "" {
@@ -195,9 +244,9 @@ func (l *ModuleLoader) merge(root *Program) *Program {
 	var add func(*Program)
 	add = func(p *Program) {
 		for _, imp := range p.Imports {
-			candidate := resolveImportPath(filepath.Dir(p.Source.Name), imp.Path)
-			if !fileExists(candidate) {
-				candidate = resolveImportPath(l.Root, imp.Path)
+			candidate := l.resolveImportPath(filepath.Dir(p.Source.Name), imp.Path)
+			if !l.hasSource(candidate) {
+				candidate = l.resolveImportPath(l.Root, imp.Path)
 			}
 			if seen[candidate] {
 				continue
