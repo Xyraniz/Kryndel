@@ -867,10 +867,6 @@ var generatedDirectELFTypes = map[string]struct{}{
 	"TyStruct": {},
 	"TyUInt":   {},
 }
-var generatedSelfHostedUnaryOperators = map[string]struct{}{
-	"BANG":  {},
-	"MINUS": {},
-}
 var generatedSelfHostedBinaryOperators = map[string]struct{}{
 	"AND":     {},
 	"BITAND":  {},
@@ -890,20 +886,6 @@ var generatedSelfHostedBinaryOperators = map[string]struct{}{
 	"SHR":     {},
 	"SLASH":   {},
 	"STAR":    {},
-}
-var generatedSelfHostedTypes = map[string]struct{}{
-	"TyArray":  {},
-	"TyBool":   {},
-	"TyBytes":  {},
-	"TyInt":    {},
-	"TyJSON":   {},
-	"TyMap":    {},
-	"TyNil":    {},
-	"TyOption": {},
-	"TyResult": {},
-	"TyString": {},
-	"TyStruct": {},
-	"TyUInt":   {},
 }
 var generatedSelfHostedExprKinds = map[string]struct{}{
 	"ExArray":  {},
@@ -932,4 +914,22 @@ var generatedSelfHostedStmtKinds = map[string]struct{}{
 	"StLet":      {},
 	"StReturn":   {},
 	"StWhile":    {},
+}
+var generatedSelfHostedTypes = map[string]struct{}{
+	"TyArray":  {},
+	"TyBool":   {},
+	"TyBytes":  {},
+	"TyInt":    {},
+	"TyJSON":   {},
+	"TyMap":    {},
+	"TyNil":    {},
+	"TyOption": {},
+	"TyResult": {},
+	"TyString": {},
+	"TyStruct": {},
+	"TyUInt":   {},
+}
+var generatedSelfHostedUnaryOperators = map[string]struct{}{
+	"BANG":  {},
+	"MINUS": {},
 }

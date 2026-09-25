@@ -23,8 +23,8 @@ func writePackageFixture(t *testing.T, root, relative, source string) {
 
 func TestManifestPackageVisibilityAndArtifactReplay(t *testing.T) {
 	root := t.TempDir()
-	writePackageFixture(t, root, "kry.toml", "[package]\nname = \"app\"\nversion = \"0.1.0\"\n")
-	writePackageFixture(t, root, "vendor/discord/kry.toml", "[package]\nname = \"discord\"\nversion = \"0.1.0\"\n")
+	writePackageFixture(t, root, "kry.toml", "[package]\nname = \"app\"\nversion = \"0.1.0\"\nkryndel = \">=1.3.0\"\n")
+	writePackageFixture(t, root, "vendor/discord/kry.toml", "[package]\nname = \"discord\"\nversion = \"0.1.0\"\nkryndel = \">=1.3.0\"\n")
 	writePackageFixture(t, root, "vendor/discord/models.kry", "pub struct Bot { private token: String }\nstruct Hidden { value: Int }\nenum Secret { Hidden }\n")
 	writePackageFixture(t, root, "vendor/discord/validation.kry", "fn valid_token(value: String) -> Bool { return value != \"\" }\n")
 	writePackageFixture(t, root, "vendor/discord/rest.kry", "import \"models\"\nimpl Bot { pub fn token_length() -> Int { return len(self.token) } }\n")

@@ -16,6 +16,9 @@ type Engine struct {
 
 func NewEngine() *Engine { return &Engine{Limits: DefaultLimits()} }
 func (e *Engine) CheckPath(path string) (*Program, *Checker, *Diagnostic) {
+	if err := ValidateProjectForPath(path); err != nil {
+		return nil, nil, Diag(CatCLI, nil, 1, 1, "%v", err)
+	}
 	if filepath.Ext(path) == ".kexe" {
 		data, err := os.ReadFile(path)
 		if err != nil {

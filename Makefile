@@ -8,7 +8,7 @@ endif
 TIMEOUT ?= 10m
 RACE_TIMEOUT ?= 40m
 
-.PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs native-smoke native-parity package-smoke benchmark verify-fast verify-full verify install-association release clean
+.PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs check-generated native-smoke native-parity package-smoke benchmark verify-fast verify-full verify install-association release clean
 
 all: build
 
@@ -80,6 +80,10 @@ fuzz-smoke:
 check-docs:
 	$(GO) test -run='TestDocumentation' -count=1 ./...
 
+check-generated:
+	$(GO) generate ./internal/kry
+	git diff --exit-code -- internal/kry/native_features_gen.go
+
 native-smoke: build
 	$(BINARY) build examples/hello.kry --format=exe --target=windows-x64 -o build/hello.exe
 	$(BINARY) inspect build/hello.exe
@@ -103,7 +107,7 @@ package-smoke: build
 benchmark:
 	$(GO) test -run='^$$' -bench=. -benchmem ./...
 
-verify-fast: build check test-static check-docs fuzz-smoke
+verify-fast: build check test-static check-docs fuzz-smoke check-generated
 
 verify-full: verify-fast test native-smoke native-parity test-race coverage benchmark
 

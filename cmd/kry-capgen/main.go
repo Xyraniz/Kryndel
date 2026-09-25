@@ -129,9 +129,14 @@ func main() {
 		writeCases(&out, generatedCases[inventory.name])
 		fmt.Fprintln(&out, "}")
 	}
-	for name, values := range selfHostedKinds {
+	selfHostedKindNames := make([]string, 0, len(selfHostedKinds))
+	for name := range selfHostedKinds {
+		selfHostedKindNames = append(selfHostedKindNames, name)
+	}
+	sort.Strings(selfHostedKindNames)
+	for _, name := range selfHostedKindNames {
 		fmt.Fprintf(&out, "var %s = map[string]struct{}{\n", name)
-		writeCases(&out, values)
+		writeCases(&out, selfHostedKinds[name])
 		fmt.Fprintln(&out, "}")
 	}
 	source, err := format.Source(out.Bytes())

@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,10 +37,11 @@ type LockFile struct {
 }
 
 type RegistryVersion struct {
-	Version      string            `json:"version"`
-	URL          string            `json:"url"`
-	SHA256       string            `json:"sha256"`
-	Dependencies map[string]string `json:"dependencies,omitempty"`
+	Version            string                       `json:"version"`
+	URL                string                       `json:"url"`
+	SHA256             string                       `json:"sha256"`
+	Dependencies       map[string]string            `json:"dependencies,omitempty"`
+	TargetDependencies map[string]map[string]string `json:"target_dependencies,omitempty"`
 }
 
 type RegistryIndex struct {
@@ -121,8 +121,22 @@ func ParseManifest(data string) (PackageManifest, error) {
 	if !validPackageName(m.Name) {
 		return m, fmt.Errorf("package name must contain only letters, digits, '-' or '_' and be non-empty")
 	}
-	if m.Version == "" {
-		return m, fmt.Errorf("package version is required")
+	if !validVersion(m.Version) {
+		return m, fmt.Errorf("package version %q is invalid; expected MAJOR.MINOR.PATCH", m.Version)
+	}
+	if m.Kryndel == "" {
+		return m, fmt.Errorf("package Kryndel requirement is required")
+	}
+	if _, err := parseVersionConstraint(m.Kryndel); err != nil {
+		return m, fmt.Errorf("invalid Kryndel requirement: %w", err)
+	}
+	if err := validateDependencyConstraints(m.Dependencies); err != nil {
+		return m, err
+	}
+	for target, dependencies := range m.TargetDependencies {
+		if err := validateDependencyConstraints(dependencies); err != nil {
+			return m, fmt.Errorf("target %q: %w", target, err)
+		}
 	}
 	if err := checkLanguageVersion(m.LanguageVersion); err != nil {
 		return m, err
@@ -168,23 +182,18 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-func validVersion(s string) bool {
-	parts := strings.Split(strings.TrimPrefix(s, "v"), ".")
-	if len(parts) != 3 {
-		return false
-	}
-	for _, part := range parts {
-		if part == "" {
-			return false
+func validateDependencyConstraints(dependencies map[string]string) error {
+	for name, constraint := range dependencies {
+		if !validPackageName(name) {
+			return fmt.Errorf("invalid dependency name %q", name)
 		}
-		for _, r := range part {
-			if r < '0' || r > '9' {
-				return false
-			}
+		if _, err := parseVersionConstraint(constraint); err != nil {
+			return fmt.Errorf("dependency %q: %w", name, err)
 		}
 	}
-	return true
+	return nil
 }
+
 func validPackageName(s string) bool {
 	if s == "" || len(s) > 128 {
 		return false
@@ -203,6 +212,34 @@ func ReadManifest(dir string) (PackageManifest, error) {
 		return PackageManifest{}, err
 	}
 	return ParseManifest(string(data))
+}
+
+func ValidateProjectForPath(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(absPath)
+	if info, statErr := os.Stat(absPath); statErr == nil && info.IsDir() {
+		dir = absPath
+	}
+	for {
+		manifestPath := filepath.Join(dir, "kry.toml")
+		if _, statErr := os.Stat(manifestPath); statErr == nil {
+			manifest, readErr := ReadManifest(dir)
+			if readErr != nil {
+				return fmt.Errorf("invalid project manifest %s: %w", manifestPath, readErr)
+			}
+			return ValidateCompilerRequirement(manifest.Name, manifest.Kryndel)
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("cannot inspect project manifest %s: %w", manifestPath, statErr)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
 }
 
 func WriteManifest(dir string, m PackageManifest) error {
@@ -259,11 +296,32 @@ func (pm *PackageManager) index(name string) (RegistryIndex, error) {
 	if idx.Name != name {
 		return idx, fmt.Errorf("registry index name mismatch")
 	}
+	seenVersions := make(map[string]bool, len(idx.Versions))
+	for _, version := range idx.Versions {
+		if !validVersion(version.Version) {
+			return RegistryIndex{}, fmt.Errorf("registry index for %s contains invalid version %q", name, version.Version)
+		}
+		if seenVersions[version.Version] {
+			return RegistryIndex{}, fmt.Errorf("registry index for %s contains duplicate version %q", name, version.Version)
+		}
+		seenVersions[version.Version] = true
+		if err := validateDependencyConstraints(version.Dependencies); err != nil {
+			return RegistryIndex{}, fmt.Errorf("registry index for %s@%s: %w", name, version.Version, err)
+		}
+		for target, dependencies := range version.TargetDependencies {
+			if err := validateDependencyConstraints(dependencies); err != nil {
+				return RegistryIndex{}, fmt.Errorf("registry index for %s@%s target %q: %w", name, version.Version, target, err)
+			}
+		}
+	}
 	sort.Slice(idx.Versions, func(i, j int) bool { return compareVersion(idx.Versions[i].Version, idx.Versions[j].Version) > 0 })
 	return idx, nil
 }
 
 func (pm *PackageManager) resolve(name, constraint string) (RegistryVersion, error) {
+	if _, err := parseVersionConstraint(constraint); err != nil {
+		return RegistryVersion{}, fmt.Errorf("invalid version constraint for %s: %w", name, err)
+	}
 	idx, err := pm.index(name)
 	if err != nil {
 		return RegistryVersion{}, err
@@ -275,53 +333,6 @@ func (pm *PackageManager) resolve(name, constraint string) (RegistryVersion, err
 	}
 	return RegistryVersion{}, fmt.Errorf("no version of %s satisfies %q", name, constraint)
 }
-
-func satisfies(version, constraint string) bool {
-	constraint = strings.TrimSpace(constraint)
-	if constraint == "" || constraint == "*" {
-		return true
-	}
-	if strings.HasPrefix(constraint, "^") {
-		base := strings.TrimPrefix(constraint, "^")
-		return major(version) == major(base) && compareVersion(version, base) >= 0
-	}
-	if strings.HasPrefix(constraint, ">=") {
-		return compareVersion(version, strings.TrimSpace(strings.TrimPrefix(constraint, ">="))) >= 0
-	}
-	if strings.HasPrefix(constraint, "~") {
-		base := strings.TrimPrefix(constraint, "~")
-		return major(version) == major(base) && minor(version) == minor(base) && compareVersion(version, base) >= 0
-	}
-	return compareVersion(version, constraint) == 0
-}
-
-func versionParts(s string) [3]int {
-	var out [3]int
-	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(s), "v"), ".")
-	for i := 0; i < len(parts) && i < len(out); i++ {
-		digits := strings.TrimLeftFunc(parts[i], func(r rune) bool { return r < '0' || r > '9' })
-		if digits == "" {
-			continue
-		}
-		out[i], _ = strconv.Atoi(digits)
-	}
-	return out
-}
-
-func compareVersion(a, b string) int {
-	x, y := versionParts(a), versionParts(b)
-	for i := 0; i < 3; i++ {
-		if x[i] < y[i] {
-			return -1
-		}
-		if x[i] > y[i] {
-			return 1
-		}
-	}
-	return 0
-}
-func major(s string) int { return versionParts(s)[0] }
-func minor(s string) int { return versionParts(s)[1] }
 
 func (pm *PackageManager) download(name string, v RegistryVersion) (LockedPackage, error) {
 	if v.URL == "" || v.SHA256 == "" {
@@ -352,8 +363,6 @@ func (pm *PackageManager) download(name string, v RegistryVersion) (LockedPackag
 		if err != nil {
 			return LockedPackage{}, err
 		}
-		_ = os.MkdirAll(filepath.Dir(archivePath), 0o755)
-		_ = os.WriteFile(archivePath, data, 0o644)
 	}
 	if len(data) > 64<<20 {
 		return LockedPackage{}, fmt.Errorf("package is too large")
@@ -361,7 +370,26 @@ func (pm *PackageManager) download(name string, v RegistryVersion) (LockedPackag
 	sum := sha256.Sum256(data)
 	got := hex.EncodeToString(sum[:])
 	if !strings.EqualFold(got, v.SHA256) {
+		if pm.Offline {
+			_ = os.Remove(archivePath)
+		}
 		return LockedPackage{}, fmt.Errorf("hash mismatch for %s@%s", name, v.Version)
+	}
+	manifest, err := validatePackageArchive(data, name, v.Version)
+	if err != nil {
+		if pm.Offline {
+			_ = os.Remove(archivePath)
+		}
+		return LockedPackage{}, fmt.Errorf("invalid package %s@%s: %w", name, v.Version, err)
+	}
+	if !sameStringMap(manifest.Dependencies, v.Dependencies) || !sameTargetDependencyMap(manifest.TargetDependencies, v.TargetDependencies) {
+		if pm.Offline {
+			_ = os.Remove(archivePath)
+		}
+		return LockedPackage{}, fmt.Errorf("package %s@%s dependency metadata does not match the registry index", name, v.Version)
+	}
+	if err := ValidateCompilerRequirement(manifest.Name, manifest.Kryndel); err != nil {
+		return LockedPackage{}, err
 	}
 	dir := filepath.Join(pm.CacheDir, name+"-"+v.Version)
 	if err := os.RemoveAll(dir); err != nil {
@@ -371,9 +399,58 @@ func (pm *PackageManager) download(name string, v RegistryVersion) (LockedPackag
 		return LockedPackage{}, err
 	}
 	if err := extractPackage(data, dir); err != nil {
+		_ = os.RemoveAll(dir)
+		if pm.Offline {
+			_ = os.Remove(archivePath)
+		}
 		return LockedPackage{}, err
 	}
+	if !pm.Offline {
+		if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
+			_ = os.RemoveAll(dir)
+			return LockedPackage{}, err
+		}
+		if err := atomicWrite(archivePath, data); err != nil {
+			_ = os.RemoveAll(dir)
+			return LockedPackage{}, err
+		}
+	}
 	return LockedPackage{Name: name, Version: v.Version, URL: downloadURL, SHA256: got, Dependencies: v.Dependencies}, nil
+}
+
+func sameStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, value := range a {
+		if b[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func sameTargetDependencyMap(a, b map[string]map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for target, dependencies := range a {
+		if !sameStringMap(dependencies, b[target]) {
+			return false
+		}
+	}
+	return true
+}
+
+func resolvedDependencies(base map[string]string, targeted map[string]map[string]string, target string) map[string]string {
+	dependencies := make(map[string]string, len(base)+len(targeted[target]))
+	for name, constraint := range base {
+		dependencies[name] = constraint
+	}
+	for name, constraint := range targeted[target] {
+		dependencies[name] = constraint
+	}
+	return dependencies
 }
 
 func extractPackage(data []byte, dest string) error {
@@ -446,6 +523,9 @@ func (pm *PackageManager) Install(dir string, requested []string) (LockFile, err
 	if err != nil {
 		return LockFile{}, err
 	}
+	if err := ValidateCompilerRequirement(m.Name, m.Kryndel); err != nil {
+		return LockFile{}, err
+	}
 	for _, name := range requested {
 		if err := AddDependency(dir, name, "*"); err != nil {
 			return LockFile{}, err
@@ -484,8 +564,9 @@ func (pm *PackageManager) Install(dir string, requested []string) (LockFile, err
 		if err := copyPackageTree(cachePackage, filepath.Join(dir, "vendor", name)); err != nil {
 			return lock, err
 		}
+		lp.Dependencies = resolvedDependencies(v.Dependencies, v.TargetDependencies, target)
 		lock.Packages = append(lock.Packages, lp)
-		for dep, constraint := range v.Dependencies {
+		for dep, constraint := range lp.Dependencies {
 			if !seen[dep] {
 				if _, ok := m.Dependencies[dep]; !ok {
 					m.Dependencies[dep] = constraint
@@ -701,7 +782,7 @@ func EnsureProject(dir, name string) error {
 }
 
 func ensureProjectFiles(dir, name string, replaceMain bool) error {
-	m := PackageManifest{Name: name, Version: "0.1.0", Kryndel: ">=1.3.0", LanguageVersion: LanguageVersion, Dependencies: map[string]string{}, TargetDependencies: map[string]map[string]string{}}
+	m := PackageManifest{Name: name, Version: "0.1.0", Kryndel: ">=" + CompilerVersion, LanguageVersion: LanguageVersion, Dependencies: map[string]string{}, TargetDependencies: map[string]map[string]string{}}
 	if _, err := os.Stat(filepath.Join(dir, "kry.toml")); os.IsNotExist(err) {
 		if err := WriteManifest(dir, m); err != nil {
 			return err
@@ -808,7 +889,8 @@ func ServeRegistry(root, addr string) error {
 		}
 		publishMu.Lock()
 		defer publishMu.Unlock()
-		if err := validatePublishedArchive(data, parts[0], parts[1]); err != nil {
+		manifest, err := validatePackageArchive(data, parts[0], parts[1])
+		if err != nil {
 			http.Error(w, "invalid package archive: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -831,12 +913,12 @@ func ServeRegistry(root, addr string) error {
 		found := false
 		for i := range idx.Versions {
 			if idx.Versions[i].Version == parts[1] {
-				idx.Versions[i] = RegistryVersion{Version: parts[1], URL: "/packages/" + fileName, SHA256: hex.EncodeToString(sum[:])}
+				idx.Versions[i] = RegistryVersion{Version: parts[1], URL: "/packages/" + fileName, SHA256: hex.EncodeToString(sum[:]), Dependencies: manifest.Dependencies, TargetDependencies: manifest.TargetDependencies}
 				found = true
 			}
 		}
 		if !found {
-			idx.Versions = append(idx.Versions, RegistryVersion{Version: parts[1], URL: "/packages/" + fileName, SHA256: hex.EncodeToString(sum[:])})
+			idx.Versions = append(idx.Versions, RegistryVersion{Version: parts[1], URL: "/packages/" + fileName, SHA256: hex.EncodeToString(sum[:]), Dependencies: manifest.Dependencies, TargetDependencies: manifest.TargetDependencies})
 		}
 		encoded, _ := json.MarshalIndent(idx, "", "  ")
 		if err := atomicWrite(indexPath, append(encoded, '\n')); err != nil {
@@ -890,53 +972,65 @@ func atomicWrite(path string, data []byte) error {
 }
 
 func validatePublishedArchive(data []byte, expectedName, expectedVersion string) error {
+	_, err := validatePackageArchive(data, expectedName, expectedVersion)
+	return err
+}
+
+func validatePackageArchive(data []byte, expectedName, expectedVersion string) (PackageManifest, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("gzip: %w", err)
+		return PackageManifest{}, fmt.Errorf("gzip: %w", err)
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
 	seen := map[string]bool{}
 	var manifest []byte
+	mainFound := false
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return err
+			return PackageManifest{}, err
 		}
 		if h.Typeflag != tar.TypeReg {
-			return fmt.Errorf("entry %q is not a regular file", h.Name)
+			return PackageManifest{}, fmt.Errorf("entry %q is not a regular file", h.Name)
 		}
 		name, err := safeArchivePath(h.Name)
 		if err != nil {
-			return err
+			return PackageManifest{}, err
 		}
 		if seen[name] {
-			return fmt.Errorf("duplicate entry %q", name)
+			return PackageManifest{}, fmt.Errorf("duplicate entry %q", name)
 		}
 		seen[name] = true
 		if h.Size < 0 || h.Size > 64<<20 {
-			return fmt.Errorf("entry %q is too large", name)
+			return PackageManifest{}, fmt.Errorf("entry %q is too large", name)
 		}
 		content, err := io.ReadAll(io.LimitReader(tr, h.Size+1))
 		if err != nil || int64(len(content)) != h.Size {
-			return fmt.Errorf("truncated entry %q", name)
+			return PackageManifest{}, fmt.Errorf("truncated entry %q", name)
 		}
 		if name == "kry.toml" {
 			manifest = content
 		}
+		if name == "main.kry" {
+			mainFound = true
+		}
 	}
 	if len(manifest) == 0 {
-		return fmt.Errorf("archive must contain kry.toml")
+		return PackageManifest{}, fmt.Errorf("archive must contain kry.toml")
+	}
+	if !mainFound {
+		return PackageManifest{}, fmt.Errorf("archive must contain main.kry")
 	}
 	m, err := ParseManifest(string(manifest))
 	if err != nil {
-		return err
+		return PackageManifest{}, err
 	}
 	if m.Name != expectedName || m.Version != expectedVersion {
-		return fmt.Errorf("manifest coordinates are %s@%s, expected %s@%s", m.Name, m.Version, expectedName, expectedVersion)
+		return PackageManifest{}, fmt.Errorf("manifest coordinates are %s@%s, expected %s@%s", m.Name, m.Version, expectedName, expectedVersion)
 	}
-	return nil
+	return m, nil
 }

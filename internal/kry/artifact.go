@@ -16,8 +16,8 @@ const (
 	artifactMagic            = "KRYNATIVE5\x00"
 	previousArtifactMagic    = "KRYNATIVE4\x00"
 	legacyArtifactMagic      = "KRYNATIVE3\x00"
-	compilerIdentity         = "kryndel-go-1.3.0"
-	previousCompilerIdentity = "kryndel-go-1.3.0"
+	compilerIdentity         = "kryndel-go-" + CompilerVersion
+	previousCompilerIdentity = compilerIdentity
 	legacyCompilerID         = "kryndel-go-1.2.0"
 	artifactRootScope        = "<root>"
 )
