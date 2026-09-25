@@ -15,7 +15,7 @@ import (
 	"github.com/Xyraniz/Kryndel/internal/kry/lsp"
 )
 
-const version = "1.3.0"
+const version = kry.CompilerVersion
 
 func main() { os.Exit(run(os.Args[1:])) }
 func run(args []string) int {

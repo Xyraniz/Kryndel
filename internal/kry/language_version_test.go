@@ -27,7 +27,7 @@ func TestManifestLanguageVersionDefaultsAndRoundTrips(t *testing.T) {
 
 func TestManifestRejectsInvalidLanguageVersions(t *testing.T) {
 	for _, version := range []string{"1", "01.0.0", "1.0.0-beta", "2.0.0", "1.0.1"} {
-		manifest := "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nlanguage_version = \"" + version + "\"\n"
+		manifest := "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nkryndel = \">=1.3.0\"\nlanguage_version = \"" + version + "\"\n"
 		if _, err := ParseManifest(manifest); err == nil {
 			t.Errorf("accepted unsupported language version %q", version)
 		}

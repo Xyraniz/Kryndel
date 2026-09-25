@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,6 +47,9 @@ func TestPackageInstallHTTPAndHash(t *testing.T) {
 	root := t.TempDir()
 	packageDir := filepath.Join(root, "source")
 	if err := os.MkdirAll(packageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageDir, "kry.toml"), []byte("[package]\nname = \"util\"\nversion = \"1.0.0\"\nkryndel = \">=1.3.0\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(packageDir, "main.kry"), []byte("pub fn answer() -> Int { return 42 }\n"), 0o644); err != nil {
@@ -108,6 +112,181 @@ func TestPackageInstallHTTPAndHash(t *testing.T) {
 	}
 	if _, diag := Check(program, DefaultLimits()); diag != nil {
 		t.Fatal(diag)
+	}
+}
+
+func TestPackageInstallRejectsMismatchedArchiveBeforeVendoring(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "kry.toml"), []byte("[package]\nname = \"other\"\nversion = \"1.0.0\"\nkryndel = \">=1.3.0\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "main.kry"), []byte("pub fn answer() -> Int { return 42 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, "package.tar.gz")
+	if err := PackageArchive(source, archivePath); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(archive)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/index/util.json":
+			_ = json.NewEncoder(w).Encode(RegistryIndex{Name: "util", Versions: []RegistryVersion{{Version: "1.0.0", URL: "/packages/util-1.0.0.tar.gz", SHA256: hex.EncodeToString(sum[:])}}})
+		case "/packages/util-1.0.0.tar.gz":
+			_, _ = w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	project := filepath.Join(root, "project")
+	if err := NewProject(project, "consumer"); err != nil {
+		t.Fatal(err)
+	}
+	pm := &PackageManager{Registry: server.URL, Client: server.Client(), CacheDir: filepath.Join(root, "cache")}
+	if _, err := pm.Install(project, []string{"util"}); err == nil || !strings.Contains(err.Error(), "manifest coordinates are other@1.0.0, expected util@1.0.0") {
+		t.Fatalf("install accepted a hash-valid archive for different coordinates: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(project, "vendor", "util")); !os.IsNotExist(err) {
+		t.Fatalf("invalid archive was vendored: stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "cache", "archives", "util-1.0.0.tar.gz")); !os.IsNotExist(err) {
+		t.Fatalf("invalid archive was cached: stat error = %v", err)
+	}
+}
+
+func TestPackageDownloadRejectsDependencyMetadataMismatch(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "[package]\nname = \"util\"\nversion = \"1.0.0\"\nkryndel = \">=1.3.0\"\n\n[dependencies]\ndep = \"^1.0.0\"\n"
+	if err := os.WriteFile(filepath.Join(source, "kry.toml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "main.kry"), []byte("pub fn answer() -> Int { return 42 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, "package.tar.gz")
+	if err := PackageArchive(source, archivePath); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(archive)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer server.Close()
+	cache := filepath.Join(root, "cache")
+	pm := &PackageManager{Registry: server.URL, Client: server.Client(), CacheDir: cache}
+	version := RegistryVersion{Version: "1.0.0", URL: "/package.tar.gz", SHA256: hex.EncodeToString(sum[:])}
+	if _, err := pm.download("util", version); err == nil || !strings.Contains(err.Error(), "dependency metadata does not match") {
+		t.Fatalf("download accepted dependency metadata missing from the index: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "archives", "util-1.0.0.tar.gz")); !os.IsNotExist(err) {
+		t.Fatalf("archive with mismatched dependency metadata was cached: %v", err)
+	}
+}
+
+func TestPackageDownloadRejectsIncompatibleCompilerRequirement(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "kry.toml"), []byte("[package]\nname = \"future\"\nversion = \"1.0.0\"\nkryndel = \">=999.0.0\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "main.kry"), []byte("pub fn answer() -> Int { return 42 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, "package.tar.gz")
+	if err := PackageArchive(source, archivePath); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(archive)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer server.Close()
+	cache := filepath.Join(root, "cache")
+	pm := &PackageManager{Registry: server.URL, Client: server.Client(), CacheDir: cache}
+	version := RegistryVersion{Version: "1.0.0", URL: "/package.tar.gz", SHA256: hex.EncodeToString(sum[:])}
+	if _, err := pm.download("future", version); err == nil || !strings.Contains(err.Error(), `package "future" requires Kryndel ">=999.0.0", current compiler is `+CompilerVersion) {
+		t.Fatalf("download did not reject the incompatible package requirement: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "archives", "future-1.0.0.tar.gz")); !os.IsNotExist(err) {
+		t.Fatalf("incompatible package archive was cached: %v", err)
+	}
+}
+
+func TestPackageInstallRejectsIncompatibleProjectBeforeEditing(t *testing.T) {
+	dir := t.TempDir()
+	if err := NewProject(dir, "too-new"); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ReadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Kryndel = ">=999.0.0"
+	if err := WriteManifest(dir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	pm := &PackageManager{CacheDir: filepath.Join(t.TempDir(), "cache")}
+	if _, err := pm.Install(dir, []string{"util"}); err == nil || !strings.Contains(err.Error(), "requires Kryndel \">=999.0.0\"") {
+		t.Fatalf("install did not reject the incompatible project: %v", err)
+	}
+	manifest, err = ReadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := manifest.Dependencies["util"]; ok {
+		t.Fatal("failed compatibility check changed the project's dependencies")
+	}
+}
+
+func TestRegistryIndexRejectsInvalidVersionsAndConstraints(t *testing.T) {
+	cases := []struct {
+		name  string
+		index RegistryIndex
+	}{{
+		name:  "invalid package version",
+		index: RegistryIndex{Name: "util", Versions: []RegistryVersion{{Version: "1.2"}}},
+	}, {
+		name:  "invalid dependency constraint",
+		index: RegistryIndex{Name: "util", Versions: []RegistryVersion{{Version: "1.0.0", Dependencies: map[string]string{"dep": ">=garbage"}}}},
+	}, {
+		name:  "duplicate package version",
+		index: RegistryIndex{Name: "util", Versions: []RegistryVersion{{Version: "1.0.0"}, {Version: "1.0.0"}}},
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(tc.index)
+			}))
+			defer server.Close()
+			pm := &PackageManager{Registry: server.URL, Client: server.Client(), CacheDir: t.TempDir()}
+			if _, err := pm.index("util"); err == nil {
+				t.Fatal("invalid registry index was accepted")
+			}
+		})
 	}
 }
 
@@ -490,15 +669,49 @@ func TestPackageVersionResolution(t *testing.T) {
 		version, constraint string
 		want                bool
 	}{
-		{"1.4.2", "^1.2.0", true}, {"2.0.0", "^1.2.0", false}, {"1.2.9", "~1.2.0", true}, {"1.3.0", "~1.2.0", false}, {"2.0.0", ">=1.5.0", true}, {"1.0.0", "1.0.0", true},
+		{"1.4.2", "^1.2.0", true}, {"2.0.0", "^1.2.0", false}, {"1.2.9", "~1.2.0", true}, {"1.3.0", "~1.2.0", false}, {"2.0.0", ">=1.5.0", true}, {"1.0.0", "1.0.0", true}, {"1.2.3", "*", true},
+		{"0.2.5", "^0.2.3", true}, {"0.3.0", "^0.2.3", false}, {"0.0.4", "^0.0.3", false},
+		{"1.0.0", ">=garbage", false}, {"1.0.0", "^1", false}, {"1.0.0", "1.2", false}, {"1.0.0", "1.2.x", false}, {"1.0.0", ">>=1.2.3", false}, {"1.0.0", "1.0.0-beta", false},
 	}
 	for _, tc := range cases {
 		if got := satisfies(tc.version, tc.constraint); got != tc.want {
 			t.Errorf("satisfies(%q,%q)=%v, want %v", tc.version, tc.constraint, got, tc.want)
 		}
 	}
-	if validVersion("1.2.3") != true || validVersion("1.2") || validVersion("1.x.0") {
+	if !validVersion("1.2.3") || !validVersion("v1.2.3") || validVersion("1.2") || validVersion("1.x.0") || validVersion("01.2.3") {
 		t.Fatal("semver validation regression")
+	}
+	if _, err := parseVersionConstraint(">=garbage"); err == nil {
+		t.Fatal("malformed version constraint was accepted")
+	}
+}
+
+func TestManifestRejectsInvalidPackageVersionsAndRequirements(t *testing.T) {
+	base := "[package]\nname = \"demo\"\nversion = \"%s\"\nkryndel = \"%s\"\n"
+	for _, tc := range []struct{ version, requirement string }{
+		{"1.2", ">=1.0.0"}, {"1.2.x", ">=1.0.0"}, {"1.0.0-beta", ">=1.0.0"},
+		{"1.0.0", ">=garbage"}, {"1.0.0", "^1"}, {"1.0.0", "1.2"}, {"1.0.0", "1.2.x"}, {"1.0.0", ">>=1.2.3"}, {"1.0.0", "1.0.0-beta"},
+	} {
+		if _, err := ParseManifest(fmt.Sprintf(base, tc.version, tc.requirement)); err == nil {
+			t.Errorf("accepted version %q and compiler requirement %q", tc.version, tc.requirement)
+		}
+	}
+	if _, err := ParseManifest("[package]\nname = \"demo\"\nversion = \"1.0.0\"\n"); err == nil || !strings.Contains(err.Error(), "Kryndel requirement is required") {
+		t.Fatalf("manifest without a compiler requirement: %v", err)
+	}
+}
+
+func TestEngineRejectsIncompatibleProjectCompilerRequirement(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kry.toml"), []byte("[package]\nname = \"too-new\"\nversion = \"0.1.0\"\nkryndel = \">=999.0.0\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "main.kry")
+	if err := os.WriteFile(path, []byte("fn main() -> Nil { return nil }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, diagnostic := NewEngine().CheckPath(path); diagnostic == nil || !strings.Contains(diagnostic.Message, `package "too-new" requires Kryndel ">=999.0.0", current compiler is `+CompilerVersion) {
+		t.Fatalf("incompatible project requirement was not reported clearly: %#v", diagnostic)
 	}
 }
 
@@ -563,6 +776,25 @@ func TestFreshInstallBootstrapAndPublishValidation(t *testing.T) {
 	}
 	if err := validatePublishedArchive(data, "other", "1.0.0"); err == nil {
 		t.Fatal("archive with mismatched coordinates was accepted")
+	}
+	manifest, err := validatePackageArchive(data, "discord", "1.0.0")
+	if err != nil || manifest.Kryndel != ">=1.3.0" {
+		t.Fatalf("archive validation did not return the checked manifest: %#v, %v", manifest, err)
+	}
+	missingMain := t.TempDir()
+	if err := os.WriteFile(filepath.Join(missingMain, "kry.toml"), []byte("[package]\nname = \"discord\"\nversion = \"1.0.0\"\nkryndel = \">=1.3.0\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	missingMainArchive := filepath.Join(t.TempDir(), "missing-main.tar.gz")
+	if err := PackageArchive(missingMain, missingMainArchive); err != nil {
+		t.Fatal(err)
+	}
+	missingMainData, err := os.ReadFile(missingMainArchive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePublishedArchive(missingMainData, "discord", "1.0.0"); err == nil || !strings.Contains(err.Error(), "must contain main.kry") {
+		t.Fatalf("archive missing its entrypoint was accepted: %v", err)
 	}
 }
 
