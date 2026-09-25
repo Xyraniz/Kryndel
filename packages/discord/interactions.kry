@@ -1,11 +1,978 @@
 // Discord interaction responses and application command endpoints.
 
 pub fn interaction_message_response_json(content: String) -> Result[String, String] {
+    return interaction_message_response_visibility_json(content, false)
+}
+
+pub fn interaction_message_response_visibility_json(content: String, ephemeral: Bool) -> Result[String, String] {
     if discord_text_length(content) > 2000 {
         return err("interaction message content must be at most 2000 UTF-16 code units")
     }
     let encoded: String = json_quote(content)?
-    return ok("{\"type\":4,\"data\":{\"content\":" + encoded + ",\"allowed_mentions\":{\"parse\":[]}}}")
+    let mut flags: String = ""
+    if ephemeral { flags = ",\"flags\":64" }
+    return ok("{\"type\":4,\"data\":{\"content\":" + encoded + ",\"allowed_mentions\":{\"parse\":[]}" + flags + "}}")
+}
+
+fn component_field_exists(value: Json, key: String) -> Bool {
+    let found: Result[Json, String] = json_object_get(value, key)
+    match found { ok(_) => { return true } err(_) => { return false } }
+}
+
+fn validate_component_emoji(emoji: Json) -> Result[Nil, String] {
+    if json_kind(emoji) != "object" { return err("component emoji must be a JSON object") }
+    let has_id: Bool = component_field_exists(emoji, "id")
+    let has_name: Bool = component_field_exists(emoji, "name")
+    let mut valid_id: Bool = false
+    let mut valid_name: Bool = false
+    if has_id {
+        let raw_id: Json = json_object_get(emoji, "id")?
+        if json_kind(raw_id) != "null" {
+            let id: String = json_string(raw_id)?
+            if !valid_snowflake(id) { return err("component emoji id must be a Discord snowflake") }
+            valid_id = true
+        }
+    }
+    if has_name {
+        let raw_name: Json = json_object_get(emoji, "name")?
+        if json_kind(raw_name) != "null" {
+            let name: String = json_string(raw_name)?
+            if len(name) == 0 || len(name) > 32 { return err("component emoji name must contain 1 to 32 Unicode code points") }
+            valid_name = true
+        }
+    }
+    if !valid_id && !valid_name { return err("component emoji requires a valid id or a non-empty name") }
+    if component_field_exists(emoji, "animated") {
+        let raw_animated: Json = json_object_get(emoji, "animated")?
+        let _: Bool = json_bool(raw_animated)?
+    }
+    return ok(nil)
+}
+
+fn validate_interactive_button(button: Json) -> Result[String, String] {
+    if json_kind(button) != "object" { return err("each button must be a JSON object") }
+    let raw_type: Json = json_object_get(button, "type")?
+    if json_int(raw_type)? != 2 { return err("button components must have type 2") }
+    let raw_style: Json = json_object_get(button, "style")?
+    let style: Int = json_int(raw_style)?
+    if style < 1 || style > 4 { return err("interactive buttons must use style 1 to 4") }
+    if component_field_exists(button, "url") || component_field_exists(button, "sku_id") {
+        return err("interactive buttons cannot use url or sku_id")
+    }
+    let raw_custom_id: Json = json_object_get(button, "custom_id")?
+    let custom_id: String = json_string(raw_custom_id)?
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("button custom_id must contain 1 to 100 Unicode code points") }
+    let has_label: Bool = component_field_exists(button, "label")
+    let has_emoji: Bool = component_field_exists(button, "emoji")
+    if !has_label && !has_emoji { return err("a button requires a label or emoji") }
+    if has_emoji {
+        let emoji: Json = json_object_get(button, "emoji")?
+        validate_component_emoji(emoji)?
+    }
+    if has_label {
+        let raw_label: Json = json_object_get(button, "label")?
+        let label: String = json_string(raw_label)?
+        if len(label) > 80 || (len(label) == 0 && !has_emoji) { return err("button labels must contain 1 to 80 Unicode code points unless an emoji is provided") }
+    }
+    if component_field_exists(button, "disabled") {
+        let raw_disabled: Json = json_object_get(button, "disabled")?
+        let _: Bool = json_bool(raw_disabled)?
+    }
+    return ok(custom_id)
+}
+
+fn valid_link_button_url(value: String) -> Bool {
+    if len(value) > 512 { return false }
+    let mut value_index: Int = 0
+    while value_index < len(value) {
+        let character_result: Result[String, String] = substring(value, value_index, 1)
+        let mut character: String = ""
+        match character_result {
+            ok(text) => { character = text }
+            err(_) => { return false }
+        }
+        if trim(character) == "" || character == "\\" { return false }
+        value_index = value_index + 1
+    }
+    let lowered_value: String = string_to_lower(value)
+    let mut scheme_length: Int = 0
+    if starts_with(lowered_value, "https://") {
+        scheme_length = 8
+    } else if starts_with(lowered_value, "http://") {
+        scheme_length = 7
+    } else {
+        return false
+    }
+    let remainder_result: Result[String, String] = substring(value, scheme_length, len(value) - scheme_length)
+    let mut remainder: String = ""
+    match remainder_result {
+        ok(text) => { remainder = text }
+        err(_) => { return false }
+    }
+    let mut authority_end: Int = 0
+    while authority_end < len(remainder) {
+        let character_result: Result[String, String] = substring(remainder, authority_end, 1)
+        let mut character: String = ""
+        match character_result {
+            ok(text) => { character = text }
+            err(_) => { return false }
+        }
+        if character == "/" || character == "?" || character == "#" { break }
+        if trim(character) == "" || character == "\\" { return false }
+        authority_end = authority_end + 1
+    }
+    if authority_end == 0 { return false }
+    let authority_result: Result[String, String] = substring(remainder, 0, authority_end)
+    let mut authority: String = ""
+    match authority_result {
+        ok(text) => { authority = text }
+        err(_) => { return false }
+    }
+    let host_pattern_result: Result[Regex, String] = regex_compile("^(([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\\.)*[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(:[0-9]+)?|\\[[A-Fa-f0-9:.]+\\](:[0-9]+)?)$")
+    match host_pattern_result {
+        ok(pattern) => { return regex_is_match(pattern, authority) }
+        err(_) => { return false }
+    }
+}
+
+fn validate_button_component(button: Json) -> Result[String, String] {
+    if json_kind(button) != "object" { return err("each button must be a JSON object") }
+    if json_int(json_object_get(button, "type")?)? != 2 { return err("button components must have type 2") }
+    let style: Int = json_int(json_object_get(button, "style")?)?
+    if style >= 1 && style <= 4 { return validate_interactive_button(button) }
+    if style == 5 {
+        if component_field_exists(button, "custom_id") || component_field_exists(button, "sku_id") {
+            return err("link buttons cannot use custom_id or sku_id")
+        }
+        let url: String = json_string(json_object_get(button, "url")?)?
+        if !valid_link_button_url(url) { return err("link button URL must be an absolute HTTP or HTTPS URL of at most 512 characters") }
+        let has_label: Bool = component_field_exists(button, "label")
+        let has_emoji: Bool = component_field_exists(button, "emoji")
+        if !has_label && !has_emoji { return err("a link button requires a label or emoji") }
+        if has_label {
+            let label: String = json_string(json_object_get(button, "label")?)?
+            if len(label) > 80 || (len(label) == 0 && !has_emoji) { return err("button labels must contain 1 to 80 Unicode code points unless an emoji is provided") }
+        }
+        if has_emoji { validate_component_emoji(json_object_get(button, "emoji")?)? }
+        if component_field_exists(button, "disabled") { let _: Bool = json_bool(json_object_get(button, "disabled")?)? }
+        return ok("")
+    }
+    if style == 6 {
+        if component_field_exists(button, "custom_id") || component_field_exists(button, "url") || component_field_exists(button, "label") || component_field_exists(button, "emoji") {
+            return err("premium buttons cannot use custom_id, url, label, or emoji")
+        }
+        let sku_id: String = json_string(json_object_get(button, "sku_id")?)?
+        if !valid_snowflake(sku_id) { return err("premium button sku_id must be a Discord snowflake") }
+        if component_field_exists(button, "disabled") { let _: Bool = json_bool(json_object_get(button, "disabled")?)? }
+        return ok("")
+    }
+    return err("button style must be between 1 and 6")
+}
+
+fn validate_button_array(components: Json) -> Result[Array[String], String] {
+    let count: Int = json_array_len(components)?
+    if count < 1 || count > 5 { return err("a Discord button action row requires 1 to 5 buttons") }
+    let mut custom_ids: Array[String] = []
+    let mut index: Int = 0
+    while index < count {
+        let button: Json = json_array_get(components, index)?
+        let custom_id: String = validate_button_component(button)?
+        if custom_id != "" {
+            if array_contains(custom_ids, custom_id) { return err("interactive custom_id values must be unique within a message") }
+            custom_ids = array_push(custom_ids, custom_id)
+        }
+        index = index + 1
+    }
+    return ok(custom_ids)
+}
+
+fn validate_select_option_array(options: Json) -> Result[Nil, String] {
+    let count: Int = json_array_len(options)?
+    if count < 1 || count > 25 { return err("a Discord string select requires 1 to 25 options") }
+    let mut index: Int = 0
+    while index < count {
+        let option: Json = json_array_get(options, index)?
+        if json_kind(option) != "object" { return err("each string select option must be a JSON object") }
+        let raw_label: Json = json_object_get(option, "label")?
+        let label: String = json_string(raw_label)?
+        if len(label) < 1 || len(label) > 100 { return err("string select option labels must contain 1 to 100 Unicode code points") }
+        let raw_value: Json = json_object_get(option, "value")?
+        let value: String = json_string(raw_value)?
+        if len(value) < 1 || len(value) > 100 { return err("string select option values must contain 1 to 100 Unicode code points") }
+        if component_field_exists(option, "description") {
+            let raw_description: Json = json_object_get(option, "description")?
+            let description: String = json_string(raw_description)?
+            if len(description) < 1 || len(description) > 100 { return err("string select option descriptions must contain 1 to 100 Unicode code points") }
+        }
+        if component_field_exists(option, "default") {
+            let raw_default: Json = json_object_get(option, "default")?
+            let _: Bool = json_bool(raw_default)?
+        }
+        if component_field_exists(option, "emoji") {
+            validate_component_emoji(json_object_get(option, "emoji")?)?
+        }
+        index = index + 1
+    }
+    return ok(nil)
+}
+
+fn validate_string_select(select: Json) -> Result[String, String] {
+    if json_kind(select) != "object" { return err("a string select must be a JSON object") }
+    let raw_type: Json = json_object_get(select, "type")?
+    if json_int(raw_type)? != 3 { return err("string select components must have type 3") }
+    let raw_custom_id: Json = json_object_get(select, "custom_id")?
+    let custom_id: String = json_string(raw_custom_id)?
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("select custom_id must contain 1 to 100 Unicode code points") }
+    let options: Json = json_object_get(select, "options")?
+    validate_select_option_array(options)?
+    if component_field_exists(select, "placeholder") {
+        let raw_placeholder: Json = json_object_get(select, "placeholder")?
+        let placeholder: String = json_string(raw_placeholder)?
+        if len(placeholder) < 1 || len(placeholder) > 150 { return err("select placeholder must contain 1 to 150 Unicode code points") }
+    }
+    let mut minimum: Int = 1
+    let mut maximum: Int = 1
+    if component_field_exists(select, "min_values") { minimum = json_int(json_object_get(select, "min_values")?)? }
+    if component_field_exists(select, "max_values") { maximum = json_int(json_object_get(select, "max_values")?)? }
+    if minimum < 0 || minimum > 25 || maximum < 1 || maximum > 25 || minimum > maximum {
+        return err("select min_values must be 0 to 25 and max_values must be 1 to 25, with min_values no greater than max_values")
+    }
+    if component_field_exists(select, "disabled") {
+        let raw_disabled: Json = json_object_get(select, "disabled")?
+        let _: Bool = json_bool(raw_disabled)?
+    }
+    return ok(custom_id)
+}
+
+fn validate_entity_select_defaults(defaults: Json, component_type: Int, minimum: Int, maximum: Int) -> Result[Nil, String] {
+    let count: Int = json_array_len(defaults)?
+    if count < minimum || count > maximum || count > 25 {
+        return err("entity select default_values count must be within min_values and max_values")
+    }
+    let mut ids: Array[String] = []
+    let mut index: Int = 0
+    while index < count {
+        let default_value: Json = json_array_get(defaults, index)?
+        if json_kind(default_value) != "object" { return err("each entity select default value must be an object") }
+        let id: String = json_string(json_object_get(default_value, "id")?)?
+        if !valid_snowflake(id) { return err("entity select default value id must be a Discord snowflake") }
+        if array_contains(ids, id) { return err("entity select default value ids must be unique") }
+        ids = array_push(ids, id)
+        let kind: String = json_string(json_object_get(default_value, "type")?)?
+        if component_type == 5 && kind != "user" { return err("user select defaults must have type user") }
+        if component_type == 6 && kind != "role" { return err("role select defaults must have type role") }
+        if component_type == 7 && kind != "user" && kind != "role" { return err("mentionable select defaults must have type user or role") }
+        if component_type == 8 && kind != "channel" { return err("channel select defaults must have type channel") }
+        index = index + 1
+    }
+    return ok(nil)
+}
+
+fn validate_channel_type_array(channel_types: Json) -> Result[Nil, String] {
+    let count: Int = json_array_len(channel_types)?
+    if count > 25 { return err("channel select channel_types accepts at most 25 entries") }
+    let mut index: Int = 0
+    while index < count {
+        let channel_type: Int = json_int(json_array_get(channel_types, index)?)?
+        if !valid_discord_channel_type(channel_type) { return err("channel select channel_types contains an unsupported Discord channel type") }
+        index = index + 1
+    }
+    return ok(nil)
+}
+
+fn validate_entity_select(select: Json) -> Result[String, String] {
+    if json_kind(select) != "object" { return err("an entity select must be a JSON object") }
+    let component_type: Int = json_int(json_object_get(select, "type")?)?
+    if component_type < 5 || component_type > 8 { return err("entity select type must be 5, 6, 7, or 8") }
+    let custom_id: String = json_string(json_object_get(select, "custom_id")?)?
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("select custom_id must contain 1 to 100 Unicode code points") }
+    if component_field_exists(select, "placeholder") {
+        let placeholder: String = json_string(json_object_get(select, "placeholder")?)?
+        if len(placeholder) < 1 || len(placeholder) > 150 { return err("select placeholder must contain 1 to 150 Unicode code points") }
+    }
+    let mut minimum: Int = 1
+    let mut maximum: Int = 1
+    if component_field_exists(select, "min_values") { minimum = json_int(json_object_get(select, "min_values")?)? }
+    if component_field_exists(select, "max_values") { maximum = json_int(json_object_get(select, "max_values")?)? }
+    if minimum < 0 || minimum > 25 || maximum < 1 || maximum > 25 || minimum > maximum {
+        return err("select min_values must be 0 to 25 and max_values must be 1 to 25, with min_values no greater than max_values")
+    }
+    if component_field_exists(select, "default_values") {
+        validate_entity_select_defaults(json_object_get(select, "default_values")?, component_type, minimum, maximum)?
+    }
+    if component_field_exists(select, "channel_types") {
+        if component_type != 8 { return err("channel_types are supported only for channel selects") }
+        validate_channel_type_array(json_object_get(select, "channel_types")?)?
+    }
+    if component_field_exists(select, "disabled") {
+        let _: Bool = json_bool(json_object_get(select, "disabled")?)?
+    }
+    return ok(custom_id)
+}
+
+fn validate_modal_select_component(select: Json) -> Result[String, String] {
+    if json_kind(select) != "object" { return err("a modal select must be a JSON object") }
+    let component_type: Int = json_int(json_object_get(select, "type")?)?
+    let mut custom_id: String = ""
+    if component_type == 3 { custom_id = validate_string_select(select)? }
+    else if component_type >= 5 && component_type <= 8 { custom_id = validate_entity_select(select)? }
+    else { return err("modal selects must have type 3 or type 5 to 8") }
+    if component_field_exists(select, "disabled") { return err("disabled is not supported on modal selects") }
+    let mut required: Bool = true
+    if component_field_exists(select, "required") { required = json_bool(json_object_get(select, "required")?)? }
+    let mut minimum: Int = 1
+    if component_field_exists(select, "min_values") { minimum = json_int(json_object_get(select, "min_values")?)? }
+    if required && minimum == 0 { return err("a required modal select must have min_values of at least 1") }
+    return ok(custom_id)
+}
+
+fn validate_modal_text_input(input: Json) -> Result[String, String] {
+    if json_kind(input) != "object" { return err("a modal text input must be a JSON object") }
+    if json_int(json_object_get(input, "type")?)? != 4 { return err("modal text inputs must have type 4") }
+    let custom_id: String = json_string(json_object_get(input, "custom_id")?)?
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("text input custom_id must contain 1 to 100 Unicode code points") }
+    let style: Int = json_int(json_object_get(input, "style")?)?
+    if style != 1 && style != 2 { return err("text input style must be 1 or 2") }
+    let mut minimum: Int = 0
+    let mut maximum: Int = 4000
+    if component_field_exists(input, "min_length") { minimum = json_int(json_object_get(input, "min_length")?)? }
+    if component_field_exists(input, "max_length") { maximum = json_int(json_object_get(input, "max_length")?)? }
+    if minimum < 0 || minimum > 4000 || maximum < 1 || maximum > 4000 || minimum > maximum {
+        return err("text input min_length must be 0 to 4000 and max_length 1 to 4000, with min_length no greater than max_length")
+    }
+    if component_field_exists(input, "placeholder") {
+        let placeholder: String = json_string(json_object_get(input, "placeholder")?)?
+        if discord_text_length(placeholder) < 1 || discord_text_length(placeholder) > 100 { return err("text input placeholder must contain 1 to 100 UTF-16 code units") }
+    }
+    if component_field_exists(input, "value") {
+        let value: String = json_string(json_object_get(input, "value")?)?
+        let value_length: Int = discord_text_length(value)
+        if value_length > maximum { return err("text input value must not exceed max_length") }
+        if value_length > 0 && value_length < minimum { return err("a prefilled text input value must satisfy min_length") }
+    }
+    if component_field_exists(input, "required") {
+        let _: Bool = json_bool(json_object_get(input, "required")?)?
+    }
+    return ok(custom_id)
+}
+
+fn validate_modal_label_component(label_component: Json) -> Result[String, String] {
+    if json_kind(label_component) != "object" { return err("a modal label must be a JSON object") }
+    if json_int(json_object_get(label_component, "type")?)? != 18 { return err("modal label components must have type 18") }
+    let label: String = json_string(json_object_get(label_component, "label")?)?
+    if discord_text_length(label) < 1 || discord_text_length(label) > 45 { return err("modal label must contain 1 to 45 UTF-16 code units") }
+    if component_field_exists(label_component, "description") {
+        let description: String = json_string(json_object_get(label_component, "description")?)?
+        if discord_text_length(description) < 1 || discord_text_length(description) > 100 {
+            return err("modal label description must contain 1 to 100 UTF-16 code units")
+        }
+    }
+    let input: Json = json_object_get(label_component, "component")?
+    let component_type: Int = json_int(json_object_get(input, "type")?)?
+    if component_type == 4 { return validate_modal_text_input(input) }
+    return validate_modal_select_component(input)
+}
+
+fn validate_modal_text_input_row(action_row: Json) -> Result[String, String] {
+    if json_kind(action_row) != "object" { return err("a modal action row must be a JSON object") }
+    if json_int(json_object_get(action_row, "type")?)? != 1 { return err("modal action rows must have type 1") }
+    let components: Json = json_object_get(action_row, "components")?
+    if json_array_len(components)? != 1 { return err("a legacy modal action row must contain exactly one text input") }
+    let input: Json = json_array_get(components, 0)?
+    return validate_modal_text_input(input)
+}
+
+fn validate_modal_input_component(component: Json) -> Result[String, String] {
+    if json_kind(component) != "object" { return err("modal components must be JSON objects") }
+    let component_type: Int = json_int(json_object_get(component, "type")?)?
+    if component_type == 18 { return validate_modal_label_component(component) }
+    if component_type == 1 { return validate_modal_text_input_row(component) }
+    return err("modal components must be Labels or legacy text input action rows")
+}
+
+fn no_modal_text_value() -> Option[String] {
+    return none()
+}
+
+fn modal_text_input_value_in_component(component: Json, input_custom_id: String) -> Result[Option[String], String] {
+    if json_kind(component) != "object" { return err("modal submission components must be JSON objects") }
+    let component_type: Int = json_int(json_object_get(component, "type")?)?
+    if component_type == 18 {
+        let child: Json = json_object_get(component, "component")?
+        let child_type: Int = json_int(json_object_get(child, "type")?)?
+        let child_id: String = json_string(json_object_get(child, "custom_id")?)?
+        if child_type == 4 && child_id == input_custom_id {
+            let value: String = json_string(json_object_get(child, "value")?)?
+            return ok(some(value))
+        }
+        return ok(no_modal_text_value())
+    }
+    if component_type == 4 {
+        let custom_id: String = json_string(json_object_get(component, "custom_id")?)?
+        if custom_id == input_custom_id {
+            let value: String = json_string(json_object_get(component, "value")?)?
+            return ok(some(value))
+        }
+        return ok(no_modal_text_value())
+    }
+    if component_type == 1 {
+        let children: Json = json_object_get(component, "components")?
+        let count: Int = json_array_len(children)?
+        let mut index: Int = 0
+        while index < count {
+            let child: Json = json_array_get(children, index)?
+            match modal_text_input_value_in_component(child, input_custom_id)? {
+                some(value) => { return ok(some(value)) }
+                none => {}
+            }
+            index = index + 1
+        }
+    }
+    return ok(no_modal_text_value())
+}
+
+fn validate_legacy_message_component_rows(rows: Json) -> Result[Nil, String] {
+    let count: Int = json_array_len(rows)?
+    if count < 1 || count > 5 { return err("a legacy Discord message accepts 1 to 5 component action rows") }
+    let mut custom_ids: Array[String] = []
+    let mut index: Int = 0
+    while index < count {
+        let row: Json = json_array_get(rows, index)?
+        let row_ids: Array[String] = validate_component_action_row(row)?
+        for custom_id in row_ids {
+            if array_contains(custom_ids, custom_id) { return err("interactive custom_id values must be unique within a message") }
+            custom_ids = array_push(custom_ids, custom_id)
+        }
+        index = index + 1
+    }
+    return ok(nil)
+}
+
+fn validate_component_action_row(row: Json) -> Result[Array[String], String] {
+    if json_kind(row) != "object" { return err("each legacy action row must be a JSON object") }
+    let raw_type: Json = json_object_get(row, "type")?
+    if json_int(raw_type)? != 1 { return err("component action rows must have type 1") }
+    let components: Json = json_object_get(row, "components")?
+    let count: Int = json_array_len(components)?
+    if count == 1 {
+        let component: Json = json_array_get(components, 0)?
+        let raw_component_type: Json = json_object_get(component, "type")?
+        let component_type: Int = json_int(raw_component_type)?
+        if component_type == 3 {
+            let custom_id: String = validate_string_select(component)?
+            return ok([custom_id])
+        }
+        if component_type >= 5 && component_type <= 8 {
+            let custom_id: String = validate_entity_select(component)?
+            return ok([custom_id])
+        }
+    }
+    return validate_button_array(components)
+}
+
+pub fn button_json(label: String, custom_id: String, style: Int, disabled: Bool) -> Result[String, String] {
+    if len(label) < 1 || len(label) > 80 { return err("button labels must contain 1 to 80 Unicode code points") }
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("button custom_id must contain 1 to 100 Unicode code points") }
+    if style < 1 || style > 4 { return err("interactive buttons must use style 1 to 4") }
+    let encoded_label: String = json_quote(label)?
+    let encoded_custom_id: String = json_quote(custom_id)?
+    let mut disabled_text: String = "false"
+    if disabled { disabled_text = "true" }
+    return ok("{\"type\":2,\"style\":" + str(style) + ",\"label\":" + encoded_label + ",\"custom_id\":" + encoded_custom_id + ",\"disabled\":" + disabled_text + "}")
+}
+
+pub fn button_with_emoji_json(label: String, custom_id: String, style: Int, disabled: Bool, emoji_json: String) -> Result[String, String] {
+    if label != "" && len(label) > 80 { return err("button labels must contain at most 80 Unicode code points") }
+    if label == "" && emoji_json == "" { return err("a button requires a label or emoji") }
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("button custom_id must contain 1 to 100 Unicode code points") }
+    if style < 1 || style > 4 { return err("interactive buttons must use style 1 to 4") }
+    let encoded_custom_id: String = json_quote(custom_id)?
+    let mut label_field: String = ""
+    if label != "" { label_field = ",\"label\":" + json_quote(label)? }
+    let mut emoji_field: String = ""
+    if emoji_json != "" {
+        let emoji: Json = json_parse(emoji_json)?
+        validate_component_emoji(emoji)?
+        emoji_field = ",\"emoji\":" + json_stringify(emoji)
+    }
+    let mut disabled_text: String = "false"
+    if disabled { disabled_text = "true" }
+    return ok("{\"type\":2,\"style\":" + str(style) + label_field + emoji_field + ",\"custom_id\":" + encoded_custom_id + ",\"disabled\":" + disabled_text + "}")
+}
+
+pub fn link_button_json(label: String, url: String, disabled: Bool) -> Result[String, String] {
+    if len(label) < 1 || len(label) > 80 { return err("link button labels must contain 1 to 80 Unicode code points") }
+    if !valid_link_button_url(url) { return err("link button URL must be an absolute HTTP or HTTPS URL of at most 512 characters") }
+    let mut disabled_text: String = "false"
+    if disabled { disabled_text = "true" }
+    let button: String = "{\"type\":2,\"style\":5,\"label\":" + json_quote(label)? + ",\"url\":" + json_quote(url)? + ",\"disabled\":" + disabled_text + "}"
+    validate_button_component(json_parse(button)?)?
+    return ok(button)
+}
+
+pub fn premium_button_json(sku_id: String) -> Result[String, String] {
+    if !valid_snowflake(sku_id) { return err("premium button sku_id must be a Discord snowflake") }
+    return ok("{\"type\":2,\"style\":6,\"sku_id\":" + json_quote(sku_id)? + "}")
+}
+
+pub fn button_row_json(buttons_json: String) -> Result[String, String] {
+    let buttons: Json = json_parse(buttons_json)?
+    validate_button_array(buttons)?
+    return ok("{\"type\":1,\"components\":" + json_stringify(buttons) + "}")
+}
+
+pub fn string_select_option_json(label: String, value: String, description: String, is_default: Bool) -> Result[String, String] {
+    return string_select_option_with_emoji_json(label, value, description, is_default, "")
+}
+
+pub fn string_select_option_with_emoji_json(label: String, value: String, description: String, is_default: Bool, emoji_json: String) -> Result[String, String] {
+    if len(label) < 1 || len(label) > 100 { return err("string select option labels must contain 1 to 100 Unicode code points") }
+    if len(value) < 1 || len(value) > 100 { return err("string select option values must contain 1 to 100 Unicode code points") }
+    if description != "" && len(description) > 100 { return err("string select option descriptions must contain at most 100 Unicode code points") }
+    let encoded_label: String = json_quote(label)?
+    let encoded_value: String = json_quote(value)?
+    let mut description_field: String = ""
+    if description != "" { description_field = ",\"description\":" + json_quote(description)? }
+    let mut default_text: String = "false"
+    if is_default { default_text = "true" }
+    let mut emoji_field: String = ""
+    if emoji_json != "" {
+        let emoji: Json = json_parse(emoji_json)?
+        validate_component_emoji(emoji)?
+        emoji_field = ",\"emoji\":" + json_stringify(emoji)
+    }
+    return ok("{\"label\":" + encoded_label + ",\"value\":" + encoded_value + description_field + emoji_field + ",\"default\":" + default_text + "}")
+}
+
+pub fn string_select_json(custom_id: String, options_json: String, placeholder: String, min_values: Int, max_values: Int, disabled: Bool) -> Result[String, String] {
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("select custom_id must contain 1 to 100 Unicode code points") }
+    if placeholder != "" && len(placeholder) > 150 { return err("select placeholder must contain at most 150 Unicode code points") }
+    let options: Json = json_parse(options_json)?
+    validate_select_option_array(options)?
+    if min_values < 0 || min_values > 25 || max_values < 1 || max_values > 25 || min_values > max_values {
+        return err("select limits must satisfy 0 <= min_values <= max_values <= 25")
+    }
+    let mut disabled_text: String = "false"
+    if disabled { disabled_text = "true" }
+    let encoded_custom_id: String = json_quote(custom_id)?
+    let mut placeholder_field: String = ""
+    if placeholder != "" { placeholder_field = ",\"placeholder\":" + json_quote(placeholder)? }
+    let select_json: String = "{\"type\":3,\"custom_id\":" + encoded_custom_id + ",\"options\":" + json_stringify(options) + placeholder_field + ",\"min_values\":" + str(min_values) + ",\"max_values\":" + str(max_values) + ",\"disabled\":" + disabled_text + "}"
+    let parsed_select: Json = json_parse(select_json)?
+    validate_string_select(parsed_select)?
+    return ok(json_stringify(parsed_select))
+}
+
+pub fn string_select_row_json(select_json: String) -> Result[String, String] {
+    let select: Json = json_parse(select_json)?
+    validate_string_select(select)?
+    return ok("{\"type\":1,\"components\":[" + json_stringify(select) + "]}")
+}
+
+fn build_entity_select_json(component_type: Int, custom_id: String, placeholder: String, min_values: Int, max_values: Int, disabled: Bool, default_values_json: String, channel_types_json: String) -> Result[String, String] {
+    if component_type < 5 || component_type > 8 { return err("entity select type must be 5, 6, 7, or 8") }
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("select custom_id must contain 1 to 100 Unicode code points") }
+    if placeholder != "" && len(placeholder) > 150 { return err("select placeholder must contain at most 150 Unicode code points") }
+    if min_values < 0 || min_values > 25 || max_values < 1 || max_values > 25 || min_values > max_values {
+        return err("select limits must satisfy 0 <= min_values <= max_values <= 25")
+    }
+    let mut defaults_field: String = ""
+    if default_values_json != "" {
+        let defaults: Json = json_parse(default_values_json)?
+        validate_entity_select_defaults(defaults, component_type, min_values, max_values)?
+        defaults_field = ",\"default_values\":" + json_stringify(defaults)
+    }
+    let mut channel_types_field: String = ""
+    if channel_types_json != "" {
+        if component_type != 8 { return err("channel_types are supported only for channel selects") }
+        let channel_types: Json = json_parse(channel_types_json)?
+        validate_channel_type_array(channel_types)?
+        channel_types_field = ",\"channel_types\":" + json_stringify(channel_types)
+    }
+    let mut placeholder_field: String = ""
+    if placeholder != "" { placeholder_field = ",\"placeholder\":" + json_quote(placeholder)? }
+    let mut disabled_text: String = "false"
+    if disabled { disabled_text = "true" }
+    let select_json: String = "{\"type\":" + str(component_type) + ",\"custom_id\":" + json_quote(custom_id)? + placeholder_field + ",\"min_values\":" + str(min_values) + ",\"max_values\":" + str(max_values) + ",\"disabled\":" + disabled_text + defaults_field + channel_types_field + "}"
+    let select: Json = json_parse(select_json)?
+    validate_entity_select(select)?
+    return ok(json_stringify(select))
+}
+
+pub fn user_select_json(custom_id: String, placeholder: String, min_values: Int, max_values: Int, disabled: Bool, default_values_json: String) -> Result[String, String] {
+    return build_entity_select_json(5, custom_id, placeholder, min_values, max_values, disabled, default_values_json, "")
+}
+
+pub fn role_select_json(custom_id: String, placeholder: String, min_values: Int, max_values: Int, disabled: Bool, default_values_json: String) -> Result[String, String] {
+    return build_entity_select_json(6, custom_id, placeholder, min_values, max_values, disabled, default_values_json, "")
+}
+
+pub fn mentionable_select_json(custom_id: String, placeholder: String, min_values: Int, max_values: Int, disabled: Bool, default_values_json: String) -> Result[String, String] {
+    return build_entity_select_json(7, custom_id, placeholder, min_values, max_values, disabled, default_values_json, "")
+}
+
+pub fn channel_select_json(custom_id: String, placeholder: String, min_values: Int, max_values: Int, disabled: Bool, default_values_json: String, channel_types_json: String) -> Result[String, String] {
+    return build_entity_select_json(8, custom_id, placeholder, min_values, max_values, disabled, default_values_json, channel_types_json)
+}
+
+pub fn entity_select_row_json(select_json: String) -> Result[String, String] {
+    let select: Json = json_parse(select_json)?
+    validate_entity_select(select)?
+    return ok("{\"type\":1,\"components\":[" + json_stringify(select) + "]}")
+}
+
+pub fn text_input_json(custom_id: String, style: Int, min_length: Int, max_length: Int, placeholder: String, required: Bool, value: String) -> Result[String, String] {
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("text input custom_id must contain 1 to 100 Unicode code points") }
+    if style != 1 && style != 2 { return err("text input style must be 1 or 2") }
+    if min_length < 0 || min_length > 4000 || max_length < 1 || max_length > 4000 || min_length > max_length {
+        return err("text input min_length must be 0 to 4000 and max_length 1 to 4000, with min_length no greater than max_length")
+    }
+    if placeholder != "" && (discord_text_length(placeholder) < 1 || discord_text_length(placeholder) > 100) {
+        return err("text input placeholder must contain 1 to 100 UTF-16 code units")
+    }
+    if discord_text_length(value) > 4000 { return err("text input value must be at most 4000 UTF-16 code units") }
+    let encoded_id: String = json_quote(custom_id)?
+    let mut placeholder_field: String = ""
+    if placeholder != "" { placeholder_field = ",\"placeholder\":" + json_quote(placeholder)? }
+    let mut value_field: String = ""
+    if value != "" { value_field = ",\"value\":" + json_quote(value)? }
+    let mut required_text: String = "false"
+    if required { required_text = "true" }
+    let input: String = "{\"type\":4,\"custom_id\":" + encoded_id + ",\"style\":" + str(style) + ",\"min_length\":" + str(min_length) + ",\"max_length\":" + str(max_length) + placeholder_field + value_field + ",\"required\":" + required_text + "}"
+    validate_modal_text_input(json_parse(input)?)?
+    return ok(input)
+}
+
+pub fn modal_text_input_label_json(label: String, description: String, input_json: String) -> Result[String, String] {
+    if discord_text_length(label) < 1 || discord_text_length(label) > 45 { return err("modal label must contain 1 to 45 UTF-16 code units") }
+    if description != "" && (discord_text_length(description) < 1 || discord_text_length(description) > 100) {
+        return err("modal label description must contain 1 to 100 UTF-16 code units")
+    }
+    let input: Json = json_parse(input_json)?
+    validate_modal_text_input(input)?
+    let mut description_field: String = ""
+    if description != "" { description_field = ",\"description\":" + json_quote(description)? }
+    return ok("{\"type\":18,\"label\":" + json_quote(label)? + description_field + ",\"component\":" + json_stringify(input) + "}")
+}
+
+pub fn modal_string_select_json(custom_id: String, options_json: String, placeholder: String, min_values: Int, max_values: Int, required: Bool) -> Result[String, String] {
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("select custom_id must contain 1 to 100 Unicode code points") }
+    if placeholder != "" && len(placeholder) > 150 { return err("select placeholder must contain at most 150 Unicode code points") }
+    if min_values < 0 || min_values > 25 || max_values < 1 || max_values > 25 || min_values > max_values {
+        return err("select limits must satisfy 0 <= min_values <= max_values <= 25")
+    }
+    if required && min_values == 0 { return err("a required modal select must have min_values of at least 1") }
+    let options: Json = json_parse(options_json)?
+    validate_select_option_array(options)?
+    let mut placeholder_field: String = ""
+    if placeholder != "" { placeholder_field = ",\"placeholder\":" + json_quote(placeholder)? }
+    let mut required_text: String = "false"
+    if required { required_text = "true" }
+    let select_json: String = "{\"type\":3,\"custom_id\":" + json_quote(custom_id)? + ",\"options\":" + json_stringify(options) + placeholder_field + ",\"min_values\":" + str(min_values) + ",\"max_values\":" + str(max_values) + ",\"required\":" + required_text + "}"
+    let select: Json = json_parse(select_json)?
+    validate_modal_select_component(select)?
+    return ok(json_stringify(select))
+}
+
+pub fn modal_entity_select_json(component_type: Int, custom_id: String, placeholder: String, min_values: Int, max_values: Int, required: Bool, default_values_json: String, channel_types_json: String) -> Result[String, String] {
+    if component_type < 5 || component_type > 8 { return err("modal entity select type must be 5, 6, 7, or 8") }
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("select custom_id must contain 1 to 100 Unicode code points") }
+    if placeholder != "" && len(placeholder) > 150 { return err("select placeholder must contain at most 150 Unicode code points") }
+    if min_values < 0 || min_values > 25 || max_values < 1 || max_values > 25 || min_values > max_values {
+        return err("select limits must satisfy 0 <= min_values <= max_values <= 25")
+    }
+    if required && min_values == 0 { return err("a required modal select must have min_values of at least 1") }
+    let mut defaults_field: String = ""
+    if default_values_json != "" {
+        let defaults: Json = json_parse(default_values_json)?
+        validate_entity_select_defaults(defaults, component_type, min_values, max_values)?
+        defaults_field = ",\"default_values\":" + json_stringify(defaults)
+    }
+    let mut channel_types_field: String = ""
+    if channel_types_json != "" {
+        if component_type != 8 { return err("channel_types are supported only for channel selects") }
+        let channel_types: Json = json_parse(channel_types_json)?
+        validate_channel_type_array(channel_types)?
+        channel_types_field = ",\"channel_types\":" + json_stringify(channel_types)
+    }
+    let mut placeholder_field: String = ""
+    if placeholder != "" { placeholder_field = ",\"placeholder\":" + json_quote(placeholder)? }
+    let mut required_text: String = "false"
+    if required { required_text = "true" }
+    let select_json: String = "{\"type\":" + str(component_type) + ",\"custom_id\":" + json_quote(custom_id)? + placeholder_field + ",\"min_values\":" + str(min_values) + ",\"max_values\":" + str(max_values) + ",\"required\":" + required_text + defaults_field + channel_types_field + "}"
+    let select: Json = json_parse(select_json)?
+    validate_modal_select_component(select)?
+    return ok(json_stringify(select))
+}
+
+pub fn modal_select_label_json(label: String, description: String, select_json: String) -> Result[String, String] {
+    if discord_text_length(label) < 1 || discord_text_length(label) > 45 { return err("modal label must contain 1 to 45 UTF-16 code units") }
+    if description != "" && (discord_text_length(description) < 1 || discord_text_length(description) > 100) {
+        return err("modal label description must contain 1 to 100 UTF-16 code units")
+    }
+    let select: Json = json_parse(select_json)?
+    validate_modal_select_component(select)?
+    let mut description_field: String = ""
+    if description != "" { description_field = ",\"description\":" + json_quote(description)? }
+    return ok("{\"type\":18,\"label\":" + json_quote(label)? + description_field + ",\"component\":" + json_stringify(select) + "}")
+}
+
+pub fn interaction_modal_response_json(custom_id: String, title: String, components_json: String) -> Result[String, String] {
+    if len(custom_id) < 1 || len(custom_id) > 100 { return err("modal custom_id must contain 1 to 100 Unicode code points") }
+    if discord_text_length(title) < 1 || discord_text_length(title) > 45 { return err("modal title must contain 1 to 45 UTF-16 code units") }
+    let components: Json = json_parse(components_json)?
+    let count: Int = json_array_len(components)?
+    if count < 1 || count > 5 { return err("a Discord modal requires 1 to 5 top-level components") }
+    let mut input_ids: Array[String] = []
+    let mut index: Int = 0
+    while index < count {
+        let component: Json = json_array_get(components, index)?
+        let component_id: String = validate_modal_input_component(component)?
+        if array_contains(input_ids, component_id) { return err("modal component custom_id values must be unique within the modal") }
+        input_ids = array_push(input_ids, component_id)
+        index = index + 1
+    }
+    return ok("{\"type\":9,\"data\":{\"custom_id\":" + json_quote(custom_id)? + ",\"title\":" + json_quote(title)? + ",\"components\":" + json_stringify(components) + "}}")
+}
+
+pub fn interaction_modal_text_value(interaction_json: String, input_custom_id: String) -> Result[String, String] {
+    let interaction: Json = json_parse(interaction_json)?
+    if json_int(json_object_get(interaction, "type")?)? != 5 { return err("interaction is not a modal submission") }
+    if len(input_custom_id) < 1 || len(input_custom_id) > 100 { return err("text input custom_id must contain 1 to 100 Unicode code points") }
+    let data: Json = json_object_get(interaction, "data")?
+    let components: Json = json_object_get(data, "components")?
+    let count: Int = json_array_len(components)?
+    let mut index: Int = 0
+    while index < count {
+        let component: Json = json_array_get(components, index)?
+        match modal_text_input_value_in_component(component, input_custom_id)? {
+            some(value) => { return ok(value) }
+            none => {}
+        }
+        index = index + 1
+    }
+    return err("modal submission has no text input with that custom_id")
+}
+
+fn no_modal_select_values() -> Option[String] {
+    return none()
+}
+
+fn modal_select_values_in_component(component: Json, component_custom_id: String) -> Result[Option[String], String] {
+    if json_kind(component) != "object" { return err("modal submission components must be JSON objects") }
+    let component_type: Int = json_int(json_object_get(component, "type")?)?
+    if component_type == 18 {
+        let select: Json = json_object_get(component, "component")?
+        let select_type: Int = json_int(json_object_get(select, "type")?)?
+        if select_type != 3 && (select_type < 5 || select_type > 8) { return ok(no_modal_select_values()) }
+        let custom_id: String = json_string(json_object_get(select, "custom_id")?)?
+        if custom_id != component_custom_id { return ok(no_modal_select_values()) }
+        let values: Json = json_object_get(select, "values")?
+        let count: Int = json_array_len(values)?
+        if count > 25 { return err("modal select interactions can contain at most 25 selected values") }
+        let mut index: Int = 0
+        while index < count {
+            let value: String = json_string(json_array_get(values, index)?)?
+            if select_type != 3 && !valid_snowflake(value) { return err("modal entity select values must be Discord snowflakes") }
+            index = index + 1
+        }
+        return ok(some(json_stringify(values)))
+    }
+    if component_type == 1 {
+        let children: Json = json_object_get(component, "components")?
+        let count: Int = json_array_len(children)?
+        let mut index: Int = 0
+        while index < count {
+            match modal_select_values_in_component(json_array_get(children, index)?, component_custom_id)? {
+                some(values) => { return ok(some(values)) }
+                none => {}
+            }
+            index = index + 1
+        }
+    }
+    return ok(no_modal_select_values())
+}
+
+pub fn interaction_modal_select_values_json(interaction_json: String, component_custom_id: String) -> Result[String, String] {
+    let interaction: Json = json_parse(interaction_json)?
+    if json_int(json_object_get(interaction, "type")?)? != 5 { return err("interaction is not a modal submission") }
+    if len(component_custom_id) < 1 || len(component_custom_id) > 100 { return err("select custom_id must contain 1 to 100 Unicode code points") }
+    let data: Json = json_object_get(interaction, "data")?
+    let components: Json = json_object_get(data, "components")?
+    let count: Int = json_array_len(components)?
+    let mut index: Int = 0
+    while index < count {
+        match modal_select_values_in_component(json_array_get(components, index)?, component_custom_id)? {
+            some(values) => { return ok(values) }
+            none => {}
+        }
+        index = index + 1
+    }
+    return err("modal submission has no select with that custom_id")
+}
+
+pub fn interaction_modal_resolved_json(interaction_json: String) -> Result[String, String] {
+    let interaction: Json = json_parse(interaction_json)?
+    if json_int(json_object_get(interaction, "type")?)? != 5 { return err("interaction is not a modal submission") }
+    let data: Json = json_object_get(interaction, "data")?
+    let resolved: Json = json_object_get(data, "resolved")?
+    if json_kind(resolved) != "object" { return err("modal interaction resolved data must be an object") }
+    return ok(json_stringify(resolved))
+}
+
+fn interaction_command_leaf_options_from(options: Json) -> Result[Json, String] {
+    let count: Int = json_array_len(options)?
+    let mut index: Int = 0
+    while index < count {
+        let option: Json = json_array_get(options, index)?
+        let option_type: Int = json_int(json_object_get(option, "type")?)?
+        if option_type == 1 || option_type == 2 {
+            let nested_result: Result[Json, String] = json_object_get(option, "options")
+            let mut nested: Json = json_parse("[]")?
+            match nested_result {
+                ok(value) => { nested = value }
+                err(_) => { return json_parse("[]") }
+            }
+            return interaction_command_leaf_options_from(nested)
+        }
+        index = index + 1
+    }
+    return ok(options)
+}
+
+fn interaction_command_leaf_options(interaction: Json) -> Result[Json, String] {
+    let interaction_type: Int = json_int(json_object_get(interaction, "type")?)?
+    if interaction_type != 2 && interaction_type != 4 { return err("interaction is not an application command or autocomplete request") }
+    let data: Json = json_object_get(interaction, "data")?
+    let options_result: Result[Json, String] = json_object_get(data, "options")
+    match options_result {
+        ok(options) => { return interaction_command_leaf_options_from(options) }
+        err(_) => { return json_parse("[]") }
+    }
+}
+
+pub fn interaction_command_options_json(interaction_json: String) -> Result[String, String] {
+    let interaction: Json = json_parse(interaction_json)?
+    return ok(json_stringify(interaction_command_leaf_options(interaction)?))
+}
+
+pub fn interaction_command_option_value_json(interaction_json: String, option_name: String) -> Result[String, String] {
+    if option_name == "" { return err("application command option name must not be empty") }
+    let interaction: Json = json_parse(interaction_json)?
+    let options: Json = interaction_command_leaf_options(interaction)?
+    let count: Int = json_array_len(options)?
+    let mut index: Int = 0
+    while index < count {
+        let option: Json = json_array_get(options, index)?
+        let name: String = json_string(json_object_get(option, "name")?)?
+        if name == option_name {
+            return ok(json_stringify(json_object_get(option, "value")?))
+        }
+        index = index + 1
+    }
+    return err("application command option was not found: " + option_name)
+}
+
+pub fn interaction_autocomplete_focused_option_json(interaction_json: String) -> Result[String, String] {
+    let interaction: Json = json_parse(interaction_json)?
+    if json_int(json_object_get(interaction, "type")?)? != 4 { return err("interaction is not an autocomplete request") }
+    let options: Json = interaction_command_leaf_options(interaction)?
+    let count: Int = json_array_len(options)?
+    let mut index: Int = 0
+    while index < count {
+        let option: Json = json_array_get(options, index)?
+        let focused_result: Result[Json, String] = json_object_get(option, "focused")
+        match focused_result {
+            ok(focused_value) => {
+                if json_bool(focused_value)? { return ok(json_stringify(option)) }
+            }
+            err(_) => {}
+        }
+        index = index + 1
+    }
+    return err("autocomplete interaction has no focused leaf option")
+}
+
+fn interaction_context_target_json(interaction_json: String, expected_command_type: Int, resolved_kind: String) -> Result[String, String] {
+    let interaction: Json = json_parse(interaction_json)?
+    if json_int(json_object_get(interaction, "type")?)? != 2 { return err("interaction is not an application command") }
+    let data: Json = json_object_get(interaction, "data")?
+    if json_int(json_object_get(data, "type")?)? != expected_command_type {
+        return err("application command target has a different context command type")
+    }
+    let target_id: String = json_string(json_object_get(data, "target_id")?)?
+    if !valid_snowflake(target_id) { return err("application command target_id must be a Discord snowflake") }
+    let resolved: Json = json_object_get(data, "resolved")?
+    let entities: Json = json_object_get(resolved, resolved_kind)?
+    return ok(json_stringify(json_object_get(entities, target_id)?))
+}
+
+pub fn interaction_context_target_user_json(interaction_json: String) -> Result[String, String] {
+    return interaction_context_target_json(interaction_json, 2, "users")
+}
+
+pub fn interaction_context_target_member_json(interaction_json: String) -> Result[String, String] {
+    return interaction_context_target_json(interaction_json, 2, "members")
+}
+
+pub fn interaction_context_target_message_json(interaction_json: String) -> Result[String, String] {
+    return interaction_context_target_json(interaction_json, 3, "messages")
+}
+
+pub fn interaction_component_values_json(interaction_json: String) -> Result[String, String] {
+    let interaction: Json = json_parse(interaction_json)?
+    let raw_interaction_type: Json = json_object_get(interaction, "type")?
+    if json_int(raw_interaction_type)? != 3 { return err("interaction is not a message component interaction") }
+    let data: Json = json_object_get(interaction, "data")?
+    let raw_component_type: Json = json_object_get(data, "component_type")?
+    let component_type: Int = json_int(raw_component_type)?
+    if component_type != 3 && component_type != 5 && component_type != 6 && component_type != 7 && component_type != 8 {
+        return err("interaction component does not contain select values")
+    }
+    let values: Json = json_object_get(data, "values")?
+    let count: Int = json_array_len(values)?
+    if count > 25 { return err("select interactions can contain at most 25 selected values") }
+    let mut index: Int = 0
+    while index < count {
+        let raw_value: Json = json_array_get(values, index)?
+        let value: String = json_string(raw_value)?
+        if component_type != 3 && !valid_snowflake(value) { return err("entity select values must be Discord snowflakes") }
+        index = index + 1
+    }
+    return ok(json_stringify(values))
+}
+
+pub fn interaction_component_resolved_json(interaction_json: String) -> Result[String, String] {
+    let interaction: Json = json_parse(interaction_json)?
+    if json_int(json_object_get(interaction, "type")?)? != 3 { return err("interaction is not a message component interaction") }
+    let data: Json = json_object_get(interaction, "data")?
+    let component_type: Int = json_int(json_object_get(data, "component_type")?)?
+    if component_type < 5 || component_type > 8 { return err("interaction is not a user, role, mentionable, or channel select") }
+    let resolved: Json = json_object_get(data, "resolved")?
+    if json_kind(resolved) != "object" { return err("entity select interaction resolved data must be an object") }
+    return ok(json_stringify(resolved))
+}
+
+pub fn interaction_message_components_response_json(content: String, rows_json: String, ephemeral: Bool) -> Result[String, String] {
+    if discord_text_length(content) > 2000 { return err("interaction message content must be at most 2000 UTF-16 code units") }
+    let rows: Json = json_parse(rows_json)?
+    validate_legacy_message_component_rows(rows)?
+    let encoded_content: String = json_quote(content)?
+    let mut flags: String = ""
+    if ephemeral { flags = ",\"flags\":64" }
+    return ok("{\"type\":4,\"data\":{\"content\":" + encoded_content + ",\"allowed_mentions\":{\"parse\":[]},\"components\":" + json_stringify(rows) + flags + "}}")
+}
+
+pub fn interaction_defer_update_response_json() -> String {
+    return "{\"type\":6}"
+}
+
+pub fn interaction_message_update_response_json(content: String, rows_json: String) -> Result[String, String] {
+    if discord_text_length(content) > 2000 { return err("interaction message content must be at most 2000 UTF-16 code units") }
+    let rows: Json = json_parse(rows_json)?
+    validate_legacy_message_component_rows(rows)?
+    let encoded_content: String = json_quote(content)?
+    return ok("{\"type\":7,\"data\":{\"content\":" + encoded_content + ",\"allowed_mentions\":{\"parse\":[]},\"components\":" + json_stringify(rows) + "}}")
 }
 
 pub fn interaction_defer_response_json(ephemeral: Bool) -> String {
@@ -51,6 +1018,64 @@ pub fn interaction_defer(interaction_json: String, ephemeral: Bool) -> Result[Ni
 pub fn interaction_followup_json(interaction_json: String, body: String) -> Result[Json, String] {
     let route: String = interaction_webhook_route(interaction_json, "")?
     return response_json(discord_interaction_request("POST", route, body))
+}
+
+fn interaction_webhook_upload_files(method: String, interaction_json: String, suffix: String, body: String, filenames: Array[String], file_data: Array[Bytes]) -> Result[Json, String] {
+    if len(filenames) == 0 || len(filenames) > 10 || len(filenames) != len(file_data) {
+        return err("interaction upload requires matching filename and byte arrays with 1 to 10 files")
+    }
+    let route: String = interaction_webhook_route(interaction_json, suffix)?
+    let interaction: Json = json_parse(interaction_json)?
+    let token: String = json_string(json_object_get(interaction, "token")?)?
+    return response_json(discord_webhook_upload(method, route, body, filenames, file_data, token))
+}
+
+pub fn interaction_followup_files_json(interaction_json: String, body: String, filenames: Array[String], file_data: Array[Bytes]) -> Result[Json, String] {
+    return interaction_webhook_upload_files("POST", interaction_json, "?wait=true", body, filenames, file_data)
+}
+
+pub fn interaction_original_response_json(interaction_json: String) -> Result[Json, String] {
+    let route: String = interaction_webhook_route(interaction_json, "/messages/@original")?
+    return response_json(discord_interaction_request("GET", route, ""))
+}
+
+pub fn interaction_edit_original_response_json(interaction_json: String, body: String) -> Result[Json, String] {
+    let route: String = interaction_webhook_route(interaction_json, "/messages/@original")?
+    return response_json(discord_interaction_request("PATCH", route, body))
+}
+
+pub fn interaction_edit_original_response_files_json(interaction_json: String, body: String, filenames: Array[String], file_data: Array[Bytes]) -> Result[Json, String] {
+    return interaction_webhook_upload_files("PATCH", interaction_json, "/messages/@original", body, filenames, file_data)
+}
+
+pub fn interaction_delete_original_response(interaction_json: String) -> Result[Nil, String] {
+    let route: String = interaction_webhook_route(interaction_json, "/messages/@original")?
+    let response: Result[String, String] = discord_interaction_request("DELETE", route, "")
+    match response { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
+}
+
+pub fn interaction_get_followup_json(interaction_json: String, message_id: String) -> Result[Json, String] {
+    if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+    let route: String = interaction_webhook_route(interaction_json, "/messages/" + message_id)?
+    return response_json(discord_interaction_request("GET", route, ""))
+}
+
+pub fn interaction_edit_followup_json(interaction_json: String, message_id: String, body: String) -> Result[Json, String] {
+    if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+    let route: String = interaction_webhook_route(interaction_json, "/messages/" + message_id)?
+    return response_json(discord_interaction_request("PATCH", route, body))
+}
+
+pub fn interaction_edit_followup_files_json(interaction_json: String, message_id: String, body: String, filenames: Array[String], file_data: Array[Bytes]) -> Result[Json, String] {
+    if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+    return interaction_webhook_upload_files("PATCH", interaction_json, "/messages/" + message_id, body, filenames, file_data)
+}
+
+pub fn interaction_delete_followup(interaction_json: String, message_id: String) -> Result[Nil, String] {
+    if !valid_snowflake(message_id) { return err("message_id must be a Discord snowflake") }
+    let route: String = interaction_webhook_route(interaction_json, "/messages/" + message_id)?
+    let response: Result[String, String] = discord_interaction_request("DELETE", route, "")
+    match response { ok(_) => { return ok(nil) } err(problem) => { return err(problem) } }
 }
 
 impl Bot {

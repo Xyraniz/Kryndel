@@ -739,6 +739,64 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			}
 		}
 		return Res(TString, TString), nil
+	case "discord_api_request_with_reason":
+		for i := 0; i < 5; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("discord_api_request_with_reason expects String arguments")
+			}
+		}
+		return Res(TString, TString), nil
+	case "discord_gateway_session_bind":
+		socket, d := arg(0, &Type{Kind: TyWebSocket, Name: "WebSocket"})
+		if d != nil {
+			return TError, d
+		}
+		intents, d := arg(1, TInt)
+		if d != nil {
+			return TError, d
+		}
+		if socket.Kind != TyWebSocket || !typeEqual(intents, TInt) {
+			return bad("discord_gateway_session_bind expects WebSocket and Int")
+		}
+		return Res(TNil, TString), nil
+	case "discord_gateway_session_unbind":
+		return Arr(TString), nil
+	case "discord_gateway_request_members":
+		want := []*Type{TString, TString, TInt, Arr(TString), TBool, TString, TBool}
+		for i, expected := range want {
+			t, d := arg(i, expected)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, expected) {
+				return bad("discord_gateway_request_members expects guild ID, query, limit, user IDs, presences, nonce, and all-members flag")
+			}
+		}
+		return Res(TString, TString), nil
+	case "discord_gateway_member_chunk":
+		event, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(event, TString) {
+			return bad("discord_gateway_member_chunk expects event JSON")
+		}
+		return Res(TString, TString), nil
+	case "discord_gateway_rate_limit":
+		event, d := arg(0, TString)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(event, TString) {
+			return bad("discord_gateway_rate_limit expects event JSON")
+		}
+		return Res(TNil, TString), nil
+	case "discord_gateway_take_member_query_failures":
+		return Arr(TString), nil
 	case "discord_interaction_request":
 		for i := 0; i < 3; i++ {
 			t, d := arg(i, TString)
@@ -765,6 +823,21 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			}
 		}
 		return Res(TString, TString), nil
+	case "discord_api_upload_with_reason":
+		for i := 0; i < 7; i++ {
+			want := TString
+			if i == 4 {
+				want = TBytes
+			}
+			t, d := arg(i, want)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, want) {
+				return bad("discord_api_upload_with_reason expects String arguments and Bytes file data")
+			}
+		}
+		return Res(TString, TString), nil
 	case "discord_api_upload_files":
 		want := []*Type{TString, TString, TString, Arr(TString), Arr(TBytes), TString}
 		for i, expected := range want {
@@ -774,6 +847,18 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			}
 			if !typeEqual(t, expected) {
 				return bad("discord_api_upload_files expects method, route, payload, filenames, file bytes, and token")
+			}
+		}
+		return Res(TString, TString), nil
+	case "discord_api_upload_files_with_reason":
+		want := []*Type{TString, TString, TString, Arr(TString), Arr(TBytes), TString, TString}
+		for i, expected := range want {
+			t, d := arg(i, expected)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, expected) {
+				return bad("discord_api_upload_files_with_reason expects method, route, payload, filenames, file bytes, token, and reason")
 			}
 		}
 		return Res(TString, TString), nil
