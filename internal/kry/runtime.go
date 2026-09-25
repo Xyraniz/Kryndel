@@ -2409,10 +2409,14 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return r.httpRequestAuth(e, a[0].S, a[1].S, a[2].S, a[3].S)
 	case "discord_api_request":
 		return r.discordAPIRequest(a[0].S, a[1].S, a[2].S, a[3].S)
+	case "discord_user_api_request":
+		return r.discordUserAPIRequest(a[0].S, a[1].S, a[2].S, a[3].S)
 	case "discord_api_request_with_reason":
 		return r.discordAPIRequestWithReason(a[0].S, a[1].S, a[2].S, a[3].S, a[4].S)
 	case "discord_gateway_session_bind":
 		return r.discordGatewayBindSession(a[0].WS, a[1].I)
+	case "discord_gateway_send":
+		return r.discordGatewaySend(a[0].I, a[1].S)
 	case "discord_gateway_session_unbind":
 		return r.discordGatewayUnbindSession(), nil
 	case "discord_gateway_request_members":
@@ -2432,10 +2436,12 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return r.discordAPIUpload(a[0].S, a[1].S, a[2].S, a[3].S, a[4].Bytes, a[5].S)
 	case "discord_api_upload_with_reason":
 		return r.discordAPIUploadWithReason(a[0].S, a[1].S, a[2].S, a[3].S, a[4].Bytes, a[5].S, a[6].S)
-	case "discord_api_upload_files", "discord_api_upload_files_with_reason", "discord_webhook_upload":
+	case "discord_api_upload_files", "discord_api_upload_files_with_reason", "discord_user_api_upload_files", "discord_webhook_upload":
 		uploadName := "Discord webhook upload"
 		if b.Name == "discord_api_upload_files" || b.Name == "discord_api_upload_files_with_reason" {
 			uploadName = "Discord API upload"
+		} else if b.Name == "discord_user_api_upload_files" {
+			uploadName = "Discord user API upload"
 		}
 		if a[3].Kind != VArray || a[4].Kind != VArray {
 			return resVal(false, stringVal(uploadName+" expects arrays of filenames and bytes")), nil
@@ -2456,6 +2462,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		if b.Name == "discord_api_upload_files" {
 			return r.discordAPIUploadFiles(a[0].S, a[1].S, a[2].S, files, a[5].S)
+		}
+		if b.Name == "discord_user_api_upload_files" {
+			return r.discordUserAPIUploadFiles(a[0].S, a[1].S, a[2].S, files, a[5].S)
 		}
 		return r.discordWebhookUpload(a[0].S, a[1].S, a[2].S, files, a[5].S)
 	case "discord_verify_interaction":

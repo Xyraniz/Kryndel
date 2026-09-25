@@ -1,0 +1,104 @@
+// Isolated account API built on Kryndel's shared Discord transport.
+import "discord"
+
+pub struct Client {
+    private inner: Bot,
+}
+
+pub fn self_client(token: String) -> Result[Client, String] {
+    let inner: Bot = user_account_client(token)?
+    return ok(Client{inner: inner})
+}
+
+// These are usable inside discord_self.on_event callbacks while Client.run is active.
+pub fn set_presence_json(status: String, activities_json: String, afk: Bool) -> Result[Nil, String] {
+    return gateway_set_presence_json(status, activities_json, afk)
+}
+
+pub fn set_voice_state(guild_id: String, channel_id: String, self_mute: Bool, self_deaf: Bool) -> Result[Nil, String] {
+    return gateway_set_voice_state(guild_id, channel_id, self_mute, self_deaf)
+}
+
+impl Client {
+    pub fn run() -> Result[Nil, String] {
+        return self.inner.run()
+    }
+
+    pub fn request(method: String, route: String, body: String) -> Result[String, String] {
+        return self.inner.request(method, route, body)
+    }
+
+    pub fn current_user() -> Result[Json, String] {
+        return self.inner.get_current_user()
+    }
+
+    pub fn fetch_user(user_id: String) -> Result[Json, String] {
+        return self.inner.get_user(user_id)
+    }
+
+    pub fn fetch_guild(guild_id: String) -> Result[Json, String] {
+        return self.inner.get_guild(guild_id)
+    }
+
+    pub fn fetch_guild_member(guild_id: String, user_id: String) -> Result[Json, String] {
+        return self.inner.get_guild_member(guild_id, user_id)
+    }
+
+    pub fn list_guild_members(guild_id: String, after: String, limit: Int) -> Result[Json, String] {
+        return self.inner.list_guild_members(guild_id, after, limit)
+    }
+
+    pub fn search_guild_members(guild_id: String, query: String, limit: Int) -> Result[Json, String] {
+        return self.inner.search_guild_members(guild_id, query, limit)
+    }
+
+    pub fn fetch_channel(channel_id: String) -> Result[Json, String] {
+        return self.inner.get_channel(channel_id)
+    }
+
+    pub fn fetch_message(channel_id: String, message_id: String) -> Result[Json, String] {
+        return self.inner.get_message(channel_id, message_id)
+    }
+
+    pub fn guilds() -> Result[Json, String] {
+        let response: String = self.request("GET", "/users/@me/guilds", "")?
+        return json_parse(response)
+    }
+
+    pub fn send_message(channel_id: String, content: String) -> Result[Json, String] {
+        return self.inner.send_message(channel_id, content)
+    }
+
+    pub fn send_files(channel_id: String, content: String, filenames: Array[String], file_data: Array[Bytes]) -> Result[Json, String] {
+        return self.inner.send_files(channel_id, content, filenames, file_data)
+    }
+
+    pub fn edit_message(channel_id: String, message_id: String, content: String) -> Result[Json, String] {
+        return self.inner.edit_message(channel_id, message_id, content)
+    }
+
+    pub fn delete_message(channel_id: String, message_id: String) -> Result[Nil, String] {
+        return self.inner.delete_message(channel_id, message_id)
+    }
+
+    pub fn create_dm(user_id: String) -> Result[Json, String] {
+        return self.inner.create_dm(user_id)
+    }
+
+    pub fn set_presence_json(status: String, activities_json: String, afk: Bool) -> Result[Nil, String] {
+        return self.inner.set_presence_json(status, activities_json, afk)
+    }
+
+    pub fn set_voice_state(guild_id: String, channel_id: String, self_mute: Bool, self_deaf: Bool) -> Result[Nil, String] {
+        return self.inner.set_voice_state(guild_id, channel_id, self_mute, self_deaf)
+    }
+
+    pub fn join_voice(guild_id: String, channel_id: String, self_mute: Bool, self_deaf: Bool) -> Result[Nil, String] {
+        if channel_id == "" { return err("channel_id must be a Discord voice channel ID") }
+        return self.inner.set_voice_state(guild_id, channel_id, self_mute, self_deaf)
+    }
+
+    pub fn leave_voice(guild_id: String) -> Result[Nil, String] {
+        return self.inner.set_voice_state(guild_id, "", false, false)
+    }
+}

@@ -28,7 +28,7 @@ fn main() -> Nil {
     println(to_base64url(string_to_bytes("hello world")))
 }
 `, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\naGVsbG8gd29ybGQ\n"},
-		{"discord", "2.2.1", `import "discord"
+		{"discord", "2.3.0", `import "discord"
 fn main() -> Nil {
     let response: Result[String, String] = interaction_message_response_json("hello")
     match response {

@@ -2,6 +2,19 @@
 
 `packages/discord` is a bot-account client for Discord API v10. It exposes bounded REST helpers, application-command builders and sync, Gateway interaction routing, basic prefix-command callbacks, autocomplete responses, asynchronous Gateway member queries, configurable single-shard connections, and a bounded event cache. It never automates normal user accounts.
 
+The separate `discord-self` package exposes the user-token API under the distinct `discord-self` import path. Discord forbids automating ordinary user accounts; use a bot account for supported integrations. `discord-self` is an opt-in compatibility experiment and does not include stealth or client-fingerprint spoofing.
+
+## User-account client (`discord-self`)
+
+Install it alongside the regular client with `kry add discord-self ^1.1.0`; it depends on `discord ^2.3.0`. Import both `discord` and `discord-self` when an application needs both APIs. The modules have separate package paths. `discord-self` exposes `fetch_user`, `fetch_guild`, `fetch_guild_member`, `list_guild_members`, `search_guild_members`, `fetch_channel`, `fetch_message`, `send_files`, message send/edit/delete, DM creation, plus Gateway presence and voice-state updates.
+
+Register `discord_self.on_event` before `client.run()`. Its callback receives an object containing the Gateway event `name` and `data`. Inside that callback, the package-level `set_presence_json(...)` and `set_voice_state(...)` functions send opcode 3 and 4 updates through the active session. `leave_voice(guild_id)` sends a null channel ID. `rpc_activity_json(name, activity_type, state, details)` builds a basic activity; pass complete activity objects through `set_presence_json` when richer fields are needed.
+
+> [!WARNING]
+> Discord explicitly prohibits automating normal user accounts outside the bot API. It can terminate accounts used this way. This package is for isolated experimentation; it does not attempt to hide automation. See [Discord's API guidance](https://discord.com/developers/docs/topics/oauth2).
+
+`examples/discord_self.kry` sets `DISCORD_USER_TOKEN` from the environment and changes presence after `READY`. The self-client uses the Gateway connection shared with `discord`; only one Gateway session can be active per Kryndel runtime.
+
 The package source is split into `models.kry`, `validation.kry`, `rest.kry`, `interactions.kry`, `application_commands.kry`, `gateway.kry`, and `cache.kry`; `main.kry` imports these modules as the package entry point. `Bot` and `Webhook` credential fields are private, so callers must use their validated constructors and methods. This privacy change is a breaking API change and was released as package version 2.0.0.
 
 ## Create a bot
@@ -143,8 +156,10 @@ Partial Gateway updates merge fields into cached guilds, channels, threads, role
 
 Gateway `VOICE_STATE_UPDATE` and `VOICE_SERVER_UPDATE` events are available through `discord.on_event` and the event cache. Connecting to a voice channel, UDP/Opus media transport, and DAVE end-to-end media encryption are not implemented. DAVE is required for current non-stage voice calls; the client does not report voice support when the cryptographic negotiation and media transport are absent.
 
+`discord-self` exposes Gateway presence and voice-state updates while its client is running. `set_presence_json` accepts a status plus an array of activity objects; `rpc_activity_json(name, type, state, details)` builds a basic activity, and arbitrary activity fields can be supplied as JSON. `set_voice_state(guild_id, channel_id, self_mute, self_deaf)` joins, leaves (empty channel ID), and changes self-mute/deaf flags. These calls update Gateway state only: voice websocket/media, audio codecs, and DAVE are not implemented.
+
 ## Runtime support
 
 `discord_api_request` performs bounded API v10 requests with Bot authentication, JSON validation, a shared rate-limit scheduler, and bounded retries. `discord_interaction_request` calls interaction and webhook routes without Bot authentication. `discord_api_upload` supports one Bot-authenticated multipart file; `Bot.upload_files`, `Bot.send_files`, and `Webhook.upload_files_json` support up to ten files. `discord_verify_interaction` checks Ed25519 signatures and replay age, `discord_cache_*` provides bounded storage and dispatch ingestion, and `discord_gateway_*` sends and aggregates Gateway member requests during `Bot.run()`. Text and binary WebSocket helpers support fragmented frames, payload limits, and timeout-safe reads; binary helpers provide the framing needed to build protocol integrations. These primitives do not implement the DAVE cryptographic session.
 
-Load bot tokens from environment variables through `std/env.kry`; never write them into source code or commit them. Self-bots are unsupported.
+Load bot tokens from environment variables through `std/env.kry`; never write them into source code or commit them. The `discord-self` example reads `DISCORD_USER_TOKEN` the same way and keeps it out of logs.

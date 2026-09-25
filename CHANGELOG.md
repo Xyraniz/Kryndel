@@ -10,6 +10,14 @@ Package manager HTTP requests block cross-origin redirects, and the unauthentica
 
 Project and package `kryndel` requirements are now mandatory and enforced before compilation, execution, installation, caching, or vendoring. Version constraints reject malformed versions, and package downloads are checked against their manifest coordinates, entrypoint, and dependency metadata before installation. Generated native feature metadata now has stable ordering and is covered by `make check-generated`.
 
+## discord-self 1.1.0
+
+`Client` now exposes the shared Discord package's validated user, guild, member, channel, and message fetch helpers, paginated member lookup, and safe multipart message upload. These additions reuse the existing REST implementation.
+
+## Discord packages 2.3.0 / discord-self 1.0.0
+
+The bot client now supports validated Gateway presence and voice-state updates. A separate `discord-self` package exposes a `discord_self` client with user-token REST, Gateway event dispatch, message operations, RPC-style activity payloads, and join/leave/self-mute/deaf controls. It depends on the shared `discord` transport, so both packages can be installed without colliding import names. User-account automation remains prohibited by Discord; voice audio, Opus, and DAVE transport are not included.
+
 ## Unreleased — Kryndel language server
 
 `kry lsp` now serves the Language Server Protocol over standard input/output. Editors receive live checker diagnostics, go-to-definition, hover signatures and types, visible symbol and builtin completion, and whole-document formatting. Open buffers, including unsaved imported modules, are checked through the existing module resolver and type checker. LSP document positions use UTF-16 code units, and diagnostics are cleared when a document closes. The server keeps the Go 1.22 toolchain requirement by using a Go 1.17-compatible JSON-RPC transport.

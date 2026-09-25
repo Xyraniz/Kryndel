@@ -60,3 +60,5 @@ Thumbs.db
 *.Z
 *.lz
 *.lzo
+# Checked-in Kryndel package releases are part of the static registry.
+!registry/packages/*.tar.gz

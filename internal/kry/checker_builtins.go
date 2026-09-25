@@ -739,6 +739,17 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			}
 		}
 		return Res(TString, TString), nil
+	case "discord_user_api_request":
+		for i := 0; i < 4; i++ {
+			t, d := arg(i, TString)
+			if d != nil {
+				return TError, d
+			}
+			if !typeEqual(t, TString) {
+				return bad("discord_user_api_request expects String arguments")
+			}
+		}
+		return Res(TString, TString), nil
 	case "discord_api_request_with_reason":
 		for i := 0; i < 5; i++ {
 			t, d := arg(i, TString)
@@ -761,6 +772,19 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		}
 		if socket.Kind != TyWebSocket || !typeEqual(intents, TInt) {
 			return bad("discord_gateway_session_bind expects WebSocket and Int")
+		}
+		return Res(TNil, TString), nil
+	case "discord_gateway_send":
+		opcode, d := arg(0, TInt)
+		if d != nil {
+			return TError, d
+		}
+		data, d := arg(1, TString)
+		if d != nil {
+			return TError, d
+		}
+		if !typeEqual(opcode, TInt) || !typeEqual(data, TString) {
+			return bad("discord_gateway_send expects Int and String arguments")
 		}
 		return Res(TNil, TString), nil
 	case "discord_gateway_session_unbind":
@@ -838,7 +862,7 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			}
 		}
 		return Res(TString, TString), nil
-	case "discord_api_upload_files":
+	case "discord_api_upload_files", "discord_user_api_upload_files":
 		want := []*Type{TString, TString, TString, Arr(TString), Arr(TBytes), TString}
 		for i, expected := range want {
 			t, d := arg(i, expected)
@@ -846,7 +870,7 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 				return TError, d
 			}
 			if !typeEqual(t, expected) {
-				return bad("discord_api_upload_files expects method, route, payload, filenames, file bytes, and token")
+				return bad("Discord multipart upload expects method, route, payload, filenames, file bytes, and token")
 			}
 		}
 		return Res(TString, TString), nil

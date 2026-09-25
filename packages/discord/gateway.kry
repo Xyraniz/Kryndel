@@ -4,6 +4,89 @@ fn discord_internal_ignore_event_v10(event_json: String) -> String {
     return ""
 }
 
+pub fn rpc_activity_json(name: String, activity_type: Int, state: String, details: String) -> Result[String, String] {
+    if trim(name) == "" || len(name) > 128 { return err("activity name must contain 1 to 128 code points") }
+    if activity_type < 0 || activity_type > 5 { return err("activity_type must be between 0 and 5") }
+    let quoted_name: Result[String, String] = json_quote(name)
+    let mut encoded_name: String = ""
+    match quoted_name {
+        ok(value) => { encoded_name = value }
+        err(problem) => { return err(problem) }
+    }
+    let mut activity: String = "{\"name\":" + encoded_name + ",\"type\":" + str(activity_type)
+    if state != "" {
+        let quoted_state: Result[String, String] = json_quote(state)
+        match quoted_state {
+            ok(value) => { activity = activity + ",\"state\":" + value }
+            err(problem) => { return err(problem) }
+        }
+    }
+    if details != "" {
+        let quoted_details: Result[String, String] = json_quote(details)
+        match quoted_details {
+            ok(value) => { activity = activity + ",\"details\":" + value }
+            err(problem) => { return err(problem) }
+        }
+    }
+    return ok(activity + "}")
+}
+
+pub fn gateway_set_presence_json(status: String, activities_json: String, afk: Bool) -> Result[Nil, String] {
+    if status != "online" && status != "idle" && status != "dnd" && status != "invisible" && status != "offline" {
+        return err("status must be online, idle, dnd, invisible, or offline")
+    }
+    let parsed: Result[Json, String] = json_parse(activities_json)
+    let mut activities: Json = result_unwrap(json_parse("[]"))
+    match parsed {
+        ok(value) => {
+            if json_kind(value) != "array" { return err("activities_json must be a JSON array") }
+            let count: Int = json_array_len(value)?
+            let mut index: Int = 0
+            while index < count {
+                if json_kind(json_array_get(value, index)?) != "object" { return err("each activity must be a JSON object") }
+                index = index + 1
+            }
+            activities = value
+        }
+        err(problem) => { return err("activities_json is invalid: " + problem) }
+    }
+    let status_json: Result[String, String] = json_quote(status)
+    let mut encoded_status: String = ""
+    match status_json {
+        ok(value) => { encoded_status = value }
+        err(problem) => { return err(problem) }
+    }
+    let mut afk_json: String = "false"
+    if afk { afk_json = "true" }
+    let data: String = "{\"status\":" + encoded_status + ",\"activities\":" + json_stringify(activities) + ",\"since\":0,\"afk\":" + afk_json + "}"
+    return discord_gateway_send(3, data)
+}
+
+pub fn gateway_set_voice_state(guild_id: String, channel_id: String, self_mute: Bool, self_deaf: Bool) -> Result[Nil, String] {
+    if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+    let mut channel_json: String = "null"
+    if channel_id != "" {
+        if !valid_snowflake(channel_id) { return err("channel_id must be empty or a Discord snowflake") }
+        let encoded_channel: Result[String, String] = json_quote(channel_id)
+        match encoded_channel {
+            ok(value) => { channel_json = value }
+            err(problem) => { return err(problem) }
+        }
+    }
+    let guild_json: Result[String, String] = json_quote(guild_id)
+    let mut encoded_guild: String = ""
+    match guild_json {
+        ok(value) => { encoded_guild = value }
+        err(problem) => { return err(problem) }
+    }
+    let mut mute_json: String = "false"
+    let mut deaf_json: String = "false"
+    if self_mute { mute_json = "true" }
+    if self_deaf { deaf_json = "true" }
+    let data: String = "{\"guild_id\":" + encoded_guild + ",\"channel_id\":" + channel_json + ",\"self_mute\":" + mute_json + ",\"self_deaf\":" + deaf_json + "}"
+    return discord_gateway_send(4, data)
+}
+
 fn discord_internal_ignore_message_v10(message_json: String) -> String {
     return ""
 }
@@ -466,13 +549,26 @@ fn gateway_close_transition(code: Int, session_id: String, sequence: Int, resume
 
 impl Bot {
 
+    pub fn set_presence_json(status: String, activities_json: String, afk: Bool) -> Result[Nil, String] {
+        return gateway_set_presence_json(status, activities_json, afk)
+    }
+
+    pub fn set_voice_state(guild_id: String, channel_id: String, self_mute: Bool, self_deaf: Bool) -> Result[Nil, String] {
+        return gateway_set_voice_state(guild_id, channel_id, self_mute, self_deaf)
+    }
+
     // Establishes a real Gateway v10 session, sends Identify, maintains
     // heartbeat/ack state, and remains connected until Discord or the caller's
     // runtime ends the connection. Gateway dispatches are routed to the
     // generic event slot; MESSAGE_CREATE also supports a reply-specific slot.
     pub fn run() -> Result[Nil, String] {
         let prefixes: Array[String] = self.command_prefixes()
-        let event_fallback: Result[Nil, String] = poly_register("discord.on_event", "discord_internal_ignore_event_v10", -1000000)
+        let event_slot: String = self.event_namespace + ".on_event"
+        let message_slot: String = self.event_namespace + ".on_message"
+        let interaction_slot: String = self.event_namespace + ".on_interaction"
+        let member_slot: String = self.event_namespace + ".on_guild_members_complete"
+        let member_error_slot: String = self.event_namespace + ".on_guild_members_error"
+        let event_fallback: Result[Nil, String] = poly_register(event_slot, "discord_internal_ignore_event_v10", -1000000)
         match event_fallback {
             ok(_) => {}
             err(problem) => {
@@ -481,7 +577,7 @@ impl Bot {
                 }
             }
         }
-        let message_fallback: Result[Nil, String] = poly_register("discord.on_message", "discord_internal_ignore_message_v10", -1000000)
+        let message_fallback: Result[Nil, String] = poly_register(message_slot, "discord_internal_ignore_message_v10", -1000000)
         match message_fallback {
             ok(_) => {}
             err(problem) => {
@@ -490,7 +586,7 @@ impl Bot {
                 }
             }
         }
-        let interaction_fallback: Result[Nil, String] = poly_register("discord.on_interaction", "discord_internal_ignore_interaction_v10", -1000000)
+        let interaction_fallback: Result[Nil, String] = poly_register(interaction_slot, "discord_internal_ignore_interaction_v10", -1000000)
         match interaction_fallback {
             ok(_) => {}
             err(problem) => {
@@ -499,7 +595,7 @@ impl Bot {
                 }
             }
         }
-        let member_query_fallback: Result[Nil, String] = poly_register("discord.on_guild_members_complete", "discord_internal_ignore_member_query", -1000000)
+        let member_query_fallback: Result[Nil, String] = poly_register(member_slot, "discord_internal_ignore_member_query", -1000000)
         match member_query_fallback {
             ok(_) => {}
             err(problem) => {
@@ -508,7 +604,7 @@ impl Bot {
                 }
             }
         }
-        let member_query_error_fallback: Result[Nil, String] = poly_register("discord.on_guild_members_error", "discord_internal_ignore_member_query", -1000000)
+        let member_query_error_fallback: Result[Nil, String] = poly_register(member_error_slot, "discord_internal_ignore_member_query", -1000000)
         match member_query_error_fallback {
             ok(_) => {}
             err(problem) => {
@@ -517,22 +613,24 @@ impl Bot {
                 }
             }
         }
-        let info_result: Result[Json, String] = response_json(self.request("GET", "/gateway/bot", ""))
         let mut info: Json = result_unwrap(json_parse("null"))
-        match info_result {
-            ok(value) => { info = value }
-            err(problem) => { return err(problem) }
-        }
-        let raw_gateway: Result[Json, String] = json_field(info, "url")
-        let mut gateway: String = ""
-        match raw_gateway {
-            ok(value) => {
-                match json_string(value) {
-                    ok(url) => { gateway = url }
-                    err(problem) => { return err("Gateway URL is invalid: " + problem) }
-                }
+        let mut gateway: String = self.gateway
+        if !self.user_account {
+            let info_result: Result[Json, String] = response_json(self.request("GET", "/gateway/bot", ""))
+            match info_result {
+                ok(value) => { info = value }
+                err(problem) => { return err(problem) }
             }
-            err(problem) => { return err("Gateway discovery response has no URL: " + problem) }
+            let raw_gateway: Result[Json, String] = json_field(info, "url")
+            match raw_gateway {
+                ok(value) => {
+                    match json_string(value) {
+                        ok(url) => { gateway = url }
+                        err(problem) => { return err("Gateway URL is invalid: " + problem) }
+                    }
+                }
+                err(problem) => { return err("Gateway discovery response has no URL: " + problem) }
+            }
         }
         if !trusted_gateway_url(gateway) { return err("Discord returned an untrusted Gateway URL") }
         let mut session_id: String = ""
@@ -560,7 +658,7 @@ impl Bot {
                     let connection: Result[GatewaySessionState, String] = run_gateway_session(value, self, session_id, sequence, resume_url, use_resume, prefixes)
                     let member_query_failures: Array[String] = discord_gateway_session_unbind()
                     for failure in member_query_failures {
-                        let error_handler: Result[String, String] = poly_dispatch("discord.on_guild_members_error", failure)
+                        let error_handler: Result[String, String] = poly_dispatch(member_error_slot, failure)
                         match error_handler {
                             ok(_) => {}
                             err(problem) => { println("Discord member-query error handler failed: " + problem) }
@@ -672,7 +770,11 @@ fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String,
                 err(problem) => { websocket_close(socket); return err(problem) }
             }
         } else {
-            identify = "{\"op\":2,\"d\":{\"token\":" + encoded_token + ",\"intents\":" + str(intents_value) + ",\"shard\":[" + str(bot.shard_id) + "," + str(bot.shard_count) + "],\"properties\":{\"$os\":\"kryndel\",\"$browser\":\"kryndel\",\"$device\":\"kryndel\"}}}"
+            if bot.user_account {
+                identify = "{\"op\":2,\"d\":{\"token\":" + encoded_token + ",\"capabilities\":0,\"properties\":{\"os\":\"Kryndel\",\"browser\":\"Kryndel\",\"device\":\"Kryndel\"},\"presence\":{\"status\":\"online\",\"activities\":[],\"afk\":false,\"since\":0},\"compress\":false,\"client_state\":{\"guild_versions\":{}}}}"
+            } else {
+                identify = "{\"op\":2,\"d\":{\"token\":" + encoded_token + ",\"intents\":" + str(intents_value) + ",\"shard\":[" + str(bot.shard_id) + "," + str(bot.shard_count) + "],\"properties\":{\"$os\":\"kryndel\",\"$browser\":\"kryndel\",\"$device\":\"kryndel\"}}}"
+            }
         }
         let sent: Result[Nil, String] = websocket_send(socket, identify)
         match sent {
@@ -686,6 +788,7 @@ fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String,
         let mut sequence: Int = previous_sequence
         let mut current_session_id: String = previous_session_id
         let mut current_resume_url: String = resume_url
+        let mut current_user_id: String = ""
         let mut awaiting_ack: Bool = false
         let mut ready: Bool = false
         let mut heartbeat_wait: Int = datetime_unix_ms() % heartbeat_interval
@@ -798,14 +901,14 @@ fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String,
                                                 err(problem) => { println("Discord member-query aggregation skipped: " + problem) }
                                             }
                                         }
-                                        let event_handler_result: Result[String, String] = poly_dispatch("discord.on_event", event_payload)
+                                        let event_handler_result: Result[String, String] = poly_dispatch(bot.event_namespace + ".on_event", event_payload)
                                         let mut reply: String = ""
                                         match event_handler_result {
                                             ok(value) => { reply = value }
                                             err(problem) => { return err("Discord event handler failed: " + problem) }
                                         }
                                         if complete_member_query != "" {
-                                            let complete_handler: Result[String, String] = poly_dispatch("discord.on_guild_members_complete", complete_member_query)
+                                            let complete_handler: Result[String, String] = poly_dispatch(bot.event_namespace + ".on_guild_members_complete", complete_member_query)
                                             match complete_handler {
                                                 ok(_) => {}
                                                 err(problem) => { return err("Discord member-query completion handler failed: " + problem) }
@@ -813,6 +916,24 @@ fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String,
                                         }
                                         discord_dispatch_member_query_failures()
                                         if event_name == "READY" && !ready {
+                                            if bot.user_account {
+                                                let raw_user: Result[Json, String] = json_field(event_data, "user")
+                                                match raw_user {
+                                                    ok(user) => {
+                                                        let raw_id: Result[Json, String] = json_field(user, "id")
+                                                        match raw_id {
+                                                            ok(value) => {
+                                                                match json_string(value) {
+                                                                    ok(value) => { current_user_id = value }
+                                                                    err(_) => {}
+                                                                }
+                                                            }
+                                                            err(_) => {}
+                                                        }
+                                                    }
+                                                    err(_) => {}
+                                                }
+                                            }
                                             let raw_session_id: Result[Json, String] = json_field(event_data, "session_id")
                                             match raw_session_id {
                                                 ok(value) => {
@@ -848,6 +969,7 @@ fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String,
                                             }
                                             discord_cache_message_author_if_missing(bot, author)
                                             let mut from_bot: Bool = false
+                                            let mut from_self: Bool = false
                                             let raw_bot_flag: Result[Json, String] = json_field(author, "bot")
                                             match raw_bot_flag {
                                                 ok(value) => {
@@ -858,16 +980,28 @@ fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String,
                                                 }
                                                 err(_) => {}
                                             }
-                                            if !from_bot {
+                                            if bot.user_account {
+                                                let raw_author_id: Result[Json, String] = json_field(author, "id")
+                                                match raw_author_id {
+                                                    ok(value) => {
+                                                        match json_string(value) {
+                                                            ok(value) => { from_self = current_user_id != "" && value == current_user_id }
+                                                            err(_) => {}
+                                                        }
+                                                    }
+                                                    err(_) => {}
+                                                }
+                                            }
+                                            if (bot.user_account && !from_self) || (!bot.user_account && !from_bot) {
                                                 if reply == "" {
                                                     let encoded_event: String = json_stringify(event_data)
-                                                    let handler_result: Result[String, String] = poly_dispatch("discord.on_message", encoded_event)
+                                                    let handler_result: Result[String, String] = poly_dispatch(bot.event_namespace + ".on_message", encoded_event)
                                                     match handler_result {
                                                         ok(value) => { reply = value }
                                                         err(problem) => { return err("Discord on_message handler failed: " + problem) }
                                                     }
                                                 }
-                                                if reply == "" && len(prefixes) > 0 {
+                                                if reply == "" && len(prefixes) > 0 && !bot.user_account {
                                                     let command_result: Result[String, String] = discord_dispatch_prefix_command(event_data, prefixes)
                                                     match command_result {
                                                         ok(value) => { reply = value }
@@ -894,7 +1028,7 @@ fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String,
                                                 }
                                             }
                                         }
-                                        if event_name == "INTERACTION_CREATE" {
+                                        if event_name == "INTERACTION_CREATE" && !bot.user_account {
                                             let handled: Result[Nil, String] = discord_dispatch_interaction(bot, event_data, reply)
                                             match handled {
                                                 ok(_) => {}

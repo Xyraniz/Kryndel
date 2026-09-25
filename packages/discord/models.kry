@@ -1,7 +1,7 @@
 // Shared Discord API value types and validated constructors.
 
-// Discord bot account client. Self-bots and normal-user account automation
-// are intentionally unsupported.
+// Discord bot account client. User-account automation is exposed separately
+// through the discord-self package.
 pub struct Bot {
     private token: String,
     private intents: Array[String],
@@ -9,6 +9,8 @@ pub struct Bot {
     private shard_id: Int,
     private shard_count: Int,
     private prefixes: Array[String],
+    private user_account: Bool,
+    private event_namespace: String,
 }
 
 struct GatewaySessionState {
@@ -30,7 +32,12 @@ pub fn bot(token: String, intents: Array[String]) -> Result[Bot, String] {
         err(problem) => { return err(problem) }
         ok(_) => {}
     }
-    return ok(Bot{token: token, intents: intents, gateway: "https://discord.com/api/v10/gateway/bot", shard_id: 0, shard_count: 1, prefixes: []})
+    return ok(Bot{token: token, intents: intents, gateway: "https://discord.com/api/v10/gateway/bot", shard_id: 0, shard_count: 1, prefixes: [], user_account: false, event_namespace: "discord"})
+}
+
+pub fn user_account_client(token: String) -> Result[Bot, String] {
+    if !valid_token(token) { return err("Discord user token must be non-empty and contain no control characters") }
+    return ok(Bot{token: token, intents: [], gateway: "wss://gateway.discord.gg", shard_id: 0, shard_count: 1, prefixes: [], user_account: true, event_namespace: "discord_self"})
 }
 
 pub fn webhook(id: String, token: String) -> Result[Webhook, String] {

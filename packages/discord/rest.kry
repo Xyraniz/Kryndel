@@ -141,12 +141,14 @@ impl Webhook {
 impl Bot {
 
     // Raw REST access keeps the complete API v10 route surface available.
-    // The host and authentication scheme are fixed by the runtime builtin.
+    // The host is fixed by the runtime; user tokens use a separate request path.
     pub fn request(method: String, route: String, body: String) -> Result[String, String] {
+        if self.user_account { return discord_user_api_request(method, route, body, self.token) }
         return discord_api_request(method, route, body, self.token)
     }
 
     pub fn request_with_audit_reason(method: String, route: String, body: String, reason: String) -> Result[String, String] {
+        if self.user_account { return err("audit-log reasons are only supported with Discord bot tokens") }
         return discord_api_request_with_reason(method, route, body, self.token, reason)
     }
 
@@ -154,7 +156,7 @@ impl Bot {
         if shard_count < 1 || shard_count > 1024 || shard_id < 0 || shard_id >= shard_count {
             return err("shard_id must be within a shard_count from 1 to 1024")
         }
-        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: shard_id, shard_count: shard_count, prefixes: self.prefixes})
+        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: shard_id, shard_count: shard_count, prefixes: self.prefixes, user_account: self.user_account, event_namespace: self.event_namespace})
     }
 
     pub fn with_prefixes(prefixes: Array[String]) -> Result[Bot, String] {
@@ -165,7 +167,7 @@ impl Bot {
             if array_contains(checked, prefix) { return err("command prefixes must be unique") }
             checked = array_push(checked, prefix)
         }
-        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: self.shard_id, shard_count: self.shard_count, prefixes: checked})
+        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: self.shard_id, shard_count: self.shard_count, prefixes: checked, user_account: self.user_account, event_namespace: self.event_namespace})
     }
 
     pub fn command_prefixes() -> Array[String] {
@@ -188,7 +190,11 @@ impl Bot {
 
     pub fn upload_files_with_audit_reason(method: String, route: String, payload_json: String, filenames: Array[String], file_data: Array[Bytes], reason: String) -> Result[String, String] {
         if len(filenames) == 0 || len(filenames) > 10 || len(filenames) != len(file_data) {
-            return err("Bot upload_files requires matching filename and byte arrays with 1 to 10 files")
+            return err("upload_files requires matching filename and byte arrays with 1 to 10 files")
+        }
+        if self.user_account {
+            if reason != "" { return err("audit log reasons require a bot token") }
+            return discord_user_api_upload_files(method, route, payload_json, filenames, file_data, self.token)
         }
         return discord_api_upload_files_with_reason(method, route, payload_json, filenames, file_data, self.token, reason)
     }

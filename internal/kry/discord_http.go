@@ -252,7 +252,14 @@ func (r *Runtime) discordAPIRequestWithReason(method, route, body, token, reason
 	if err != nil {
 		return resVal(false, stringVal(err.Error())), nil
 	}
-	return r.discordHTTPRequest(method, route, strings.NewReader(body), "application/json", token, true, encodedReason, discordRequestRedactions(route, token))
+	return r.discordHTTPRequest(method, route, strings.NewReader(body), "application/json", token, "Bot", encodedReason, discordRequestRedactions(route, token))
+}
+
+func (r *Runtime) discordUserAPIRequest(method, route, body, token string) (Value, *Diagnostic) {
+	if body != "" && !json.Valid([]byte(body)) {
+		return resVal(false, stringVal("Discord API request body must be valid JSON")), nil
+	}
+	return r.discordHTTPRequest(method, route, strings.NewReader(body), "application/json", token, "User", "", discordRequestRedactions(route, token))
 }
 
 func (r *Runtime) discordInteractionRequest(method, route, body string) (Value, *Diagnostic) {
@@ -266,7 +273,7 @@ func (r *Runtime) discordInteractionRequest(method, route, body string) (Value, 
 		return resVal(false, stringVal("Discord interaction request body must be valid JSON")), nil
 	}
 	redact := discordRequestRedactions(route, "")
-	return r.discordHTTPRequest(method, route, strings.NewReader(body), "application/json", "", false, "", redact)
+	return r.discordHTTPRequest(method, route, strings.NewReader(body), "application/json", "", "", "", redact)
 }
 
 type discordUploadFile struct {
@@ -280,7 +287,7 @@ func (r *Runtime) discordAPIUpload(method, route, payload, filename string, data
 
 func (r *Runtime) discordAPIUploadWithReason(method, route, payload, filename string, data []byte, token, reason string) (Value, *Diagnostic) {
 	files := []discordUploadFile{{filename: filename, data: data}}
-	return r.discordMultipartUpload(method, route, payload, files, token, true, reason)
+	return r.discordMultipartUpload(method, route, payload, files, token, "Bot", reason)
 }
 
 func (r *Runtime) discordAPIUploadFiles(method, route, payload string, files []discordUploadFile, token string) (Value, *Diagnostic) {
@@ -288,18 +295,22 @@ func (r *Runtime) discordAPIUploadFiles(method, route, payload string, files []d
 }
 
 func (r *Runtime) discordAPIUploadFilesWithReason(method, route, payload string, files []discordUploadFile, token, reason string) (Value, *Diagnostic) {
-	return r.discordMultipartUpload(method, route, payload, files, token, true, reason)
+	return r.discordMultipartUpload(method, route, payload, files, token, "Bot", reason)
+}
+
+func (r *Runtime) discordUserAPIUploadFiles(method, route, payload string, files []discordUploadFile, token string) (Value, *Diagnostic) {
+	return r.discordMultipartUpload(method, route, payload, files, token, "User", "")
 }
 
 func (r *Runtime) discordWebhookUpload(method, route, payload string, files []discordUploadFile, token string) (Value, *Diagnostic) {
-	return r.discordMultipartUpload(method, route, payload, files, token, false, "")
+	return r.discordMultipartUpload(method, route, payload, files, token, "", "")
 }
 
-func (r *Runtime) discordMultipartUpload(method, route, payload string, files []discordUploadFile, token string, botAuth bool, reason string) (Value, *Diagnostic) {
+func (r *Runtime) discordMultipartUpload(method, route, payload string, files []discordUploadFile, token, authScheme, reason string) (Value, *Diagnostic) {
 	if method != "POST" && method != "PUT" && method != "PATCH" {
 		return resVal(false, stringVal("Discord uploads require POST, PUT, or PATCH")), nil
 	}
-	if !validDiscordRoute(route) || token == "" || (!botAuth && !strings.HasPrefix(route, "/webhooks/")) || len(files) == 0 || len(files) > discordMaxUploadFiles {
+	if !validDiscordRoute(route) || token == "" || (authScheme == "" && !strings.HasPrefix(route, "/webhooks/")) || (authScheme != "" && authScheme != "Bot" && authScheme != "User") || len(files) == 0 || len(files) > discordMaxUploadFiles {
 		return resVal(false, stringVal("invalid Discord upload route, token, or filename")), nil
 	}
 	if !json.Valid([]byte(payload)) {
@@ -339,12 +350,12 @@ func (r *Runtime) discordMultipartUpload(method, route, payload string, files []
 	if body.Len() > r.Lim.MaxSourceBytes {
 		return resVal(false, stringVal("multipart Discord upload exceeds configured input limit")), nil
 	}
-	return r.discordHTTPRequest(method, route, &body, writer.FormDataContentType(), token, botAuth, encodedReason, discordRequestRedactions(route, token))
+	return r.discordHTTPRequest(method, route, &body, writer.FormDataContentType(), token, authScheme, encodedReason, discordRequestRedactions(route, token))
 }
 
-func (r *Runtime) discordHTTPRequest(method, route string, body io.Reader, contentType, credential string, botAuth bool, auditLogReason, redact string) (Value, *Diagnostic) {
-	if credential == "" && botAuth {
-		return resVal(false, stringVal("invalid Discord bot token")), nil
+func (r *Runtime) discordHTTPRequest(method, route string, body io.Reader, contentType, credential, authScheme, auditLogReason, redact string) (Value, *Diagnostic) {
+	if credential == "" && authScheme != "" {
+		return resVal(false, stringVal("invalid Discord credential")), nil
 	}
 	if credential != "" && strings.IndexFunc(credential, func(value rune) bool { return value < 32 || value == 127 }) >= 0 {
 		return resVal(false, stringVal("invalid Discord credential")), nil
@@ -394,8 +405,14 @@ func (r *Runtime) discordHTTPRequest(method, route string, body io.Reader, conte
 		if err != nil {
 			return resVal(false, stringVal("invalid Discord API request")), nil
 		}
-		if botAuth {
+		switch authScheme {
+		case "Bot":
 			req.Header.Set("Authorization", "Bot "+credential)
+		case "User":
+			req.Header.Set("Authorization", credential)
+		case "":
+		default:
+			return resVal(false, stringVal("unsupported Discord authentication scheme")), nil
 		}
 		req.Header.Set("User-Agent", "Kryndel (https://github.com/Xyraniz/Kryndel)")
 		if contentType != "" {
