@@ -6,9 +6,11 @@ The package source is split into `models.kry`, `validation.kry`, `rest.kry`, `in
 
 ## Create a bot
 
+Create a project with `kry new my-bot`, then install the package with `kry install discord`. Use this import in `main.kry`:
+
 ```kry
 import "std/env"
-import "packages/discord"
+import "discord"
 
 fn reply_to_ping(message_json: String) -> String {
     let message: Json = result_unwrap(json_parse(message_json))
@@ -48,9 +50,10 @@ fn main() -> Result[Nil, String] {
 
 > [!WARNING]
 > The CLI stops programs at its default ten-second wall-clock limit. Start a
-> persistent bot with `kry --max-wall-ms 0 run examples/discord_bot.kry`;
+> persistent bot in an installed project with `kry --max-wall-ms 0 run main.kry`;
 > network operations still have individual ten-second timeouts. Press Ctrl+C
-> to stop it.
+> to stop it. The repository's copyable example runs from
+> `examples/discord_bot.kry`.
 
 Every dispatch reaches `discord.on_event` as `{"name":"READY","data":{...}}`. `MESSAGE_CREATE` additionally reaches `discord.on_message` when the generic handler returns an empty string; a non-empty return sends a message reply. If that callback returns an empty string, a Bot configured with `with_prefixes(prefixes)` also checks the message for the longest matching non-empty prefix and dispatches it as a prefix command. Prefixes default to disabled; configure the `MessageContent` intent in code and in the Developer Portal. Bot-authored messages are ignored. Kryndel installs low-priority no-op handlers so an unused callback does not stop the connection. Since Kryndel has named dispatch slots rather than function decorators or closures, register top-level `String -> String` functions with `poly_register`.
 

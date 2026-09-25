@@ -2,6 +2,11 @@
   "name": "fs",
   "versions": [
     {
+      "version": "1.2.1",
+      "url": "/packages/fs-1.2.1.tar.gz",
+      "sha256": "6d3afaf0327e7229f23ecedec27694aae200041b568d4224ba3c3db16520786e"
+    },
+    {
       "version": "1.2.0",
       "url": "/packages/fs-1.2.0.tar.gz",
       "sha256": "36cd4b0cb57e83452532650d15f6d70c438c448214fd73cdf0d2982a37d2246b"
