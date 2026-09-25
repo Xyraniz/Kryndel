@@ -1276,7 +1276,8 @@ fn emit_array_indices(state: EmitState, expression: Json) -> Result[EmitState, S
     if result_unwrap(json_array_len(arguments)) != 1 || !starts_with(expr_type(result_unwrap(json_array_get(arguments, 0))), "Array[") { return err("dynamic backend: array_indices expects one Array argument") }
     let emitted: Result[EmitState, String] = emit_expression(state, result_unwrap(json_array_get(arguments, 0)))
     if is_err(emitted) { return err(expression_error(emitted)) }
-    let mut current: EmitState = append_code(result_unwrap(emitted), [u8(80), u8(72), u8(139), u8(4), u8(36), u8(72), u8(139), u8(0)])
+    let mut current: EmitState = emit_push_rax(result_unwrap(emitted))
+    current = append_code(current, [u8(72), u8(139), u8(4), u8(36), u8(72), u8(139), u8(0)])
     current = emit_array_alloc_call(current)
     current = append_code(current, [u8(80), u8(72), u8(49), u8(201)])
     let loop_label: LabelState = new_label(current)
@@ -1289,7 +1290,9 @@ fn emit_array_indices(state: EmitState, expression: Json) -> Result[EmitState, S
     current = emit_jump(current, loop_label.label, false, u8(0))
     let bound_done: Result[EmitState, String] = bind_label(current, done_label.label)
     if is_err(bound_done) { return err(unwrap_or(result_error(bound_done), "dynamic backend: cannot bind array_indices completion")) }
-    return ok(append_code(result_unwrap(bound_done), [u8(88), u8(72), u8(131), u8(196), u8(8)]))
+    let completed: EmitState = append_code(result_unwrap(bound_done), [u8(88), u8(72), u8(131), u8(196), u8(8)])
+    if completed.assembler.windows_abi { return ok(state_with_windows_stack_depth(completed, completed.assembler.windows_stack_depth - 8)) }
+    return ok(completed)
 }
 
 fn emit_array_index(state: EmitState, expression: Json) -> Result[EmitState, String] {
@@ -1346,16 +1349,25 @@ fn emit_array_push_runtime(state: EmitState) -> Result[EmitState, String] {
         u8(73), u8(137), u8(252), u8(73), u8(137), u8(245), u8(73), u8(139), u8(4), u8(36), u8(73), u8(137), u8(198),
         u8(77), u8(137), u8(247), u8(73), u8(131), u8(199), u8(1)
     ])
+    if current.assembler.windows_abi { current = append_code(current, [u8(86), u8(87)]) }
     current = emit_jump(current, current.env.trap_label, true, u8(128))
     current = append_code(current, [u8(76), u8(137), u8(255)])
-    current = emit_label_call(current, current.assembler.array_alloc_label)
+    if current.assembler.windows_abi {
+        // The helper has eight saved registers, so reserve shadow space plus
+        // eight bytes to align RSP at the Win64 call boundary.
+        current = emit_windows_stack_adjust(current, true, 40)
+        current = emit_relative_call(current, current.assembler.array_alloc_label)
+        current = emit_windows_stack_adjust(current, false, 40)
+    } else {
+        current = emit_label_call(current, current.assembler.array_alloc_label)
+    }
     current = append_code(current, [
         u8(72), u8(137), u8(195), u8(73), u8(141), u8(116), u8(36), u8(8), u8(72), u8(141), u8(123), u8(8),
         u8(76), u8(137), u8(241), u8(243), u8(72), u8(165), u8(76), u8(137), u8(242), u8(72), u8(193), u8(226), u8(3),
-        u8(72), u8(1), u8(218), u8(72), u8(131), u8(194), u8(8), u8(76), u8(137), u8(42), u8(72), u8(137), u8(216),
-        u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)
+        u8(72), u8(1), u8(218), u8(72), u8(131), u8(194), u8(8), u8(76), u8(137), u8(42), u8(72), u8(137), u8(216)
     ])
-    return ok(current)
+    if current.assembler.windows_abi { current = append_code(current, [u8(95), u8(94)]) }
+    return ok(append_code(current, [u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)]))
 }
 
 fn emit_array_concat_runtime(state: EmitState) -> Result[EmitState, String] {
@@ -1366,15 +1378,24 @@ fn emit_array_concat_runtime(state: EmitState) -> Result[EmitState, String] {
         u8(73), u8(137), u8(252), u8(73), u8(137), u8(245), u8(73), u8(139), u8(4), u8(36), u8(73), u8(137), u8(198),
         u8(73), u8(139), u8(69), u8(0), u8(73), u8(137), u8(199), u8(76), u8(137), u8(245), u8(76), u8(1), u8(253)
     ])
+    if current.assembler.windows_abi { current = append_code(current, [u8(86), u8(87)]) }
     current = emit_jump(current, current.env.trap_label, true, u8(128))
     current = append_code(current, [u8(72), u8(137), u8(239)])
-    current = emit_label_call(current, current.assembler.array_alloc_label)
+    if current.assembler.windows_abi {
+        // Six saved registers plus RDI/RSI leave RSP eight bytes off alignment.
+        current = emit_windows_stack_adjust(current, true, 40)
+        current = emit_relative_call(current, current.assembler.array_alloc_label)
+        current = emit_windows_stack_adjust(current, false, 40)
+    } else {
+        current = emit_label_call(current, current.assembler.array_alloc_label)
+    }
     current = append_code(current, [
         u8(72), u8(137), u8(195), u8(73), u8(141), u8(116), u8(36), u8(8), u8(72), u8(141), u8(123), u8(8),
-        u8(76), u8(137), u8(241), u8(243), u8(72), u8(165), u8(73), u8(141), u8(117), u8(8), u8(76), u8(137), u8(249), u8(243), u8(72), u8(165),
-        u8(72), u8(137), u8(216), u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)
+        u8(76), u8(137), u8(241), u8(243), u8(72), u8(165), u8(73), u8(141), u8(117), u8(8), u8(76), u8(137), u8(249), u8(243), u8(72), u8(165)
     ])
-    return ok(current)
+    current = append_code(current, [u8(72), u8(137), u8(216)])
+    if current.assembler.windows_abi { current = append_code(current, [u8(95), u8(94)]) }
+    return ok(append_code(current, [u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)]))
 }
 
 fn map_key_kind(type_name: String) -> UInt64 {
@@ -5627,7 +5648,7 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
         return pe_validate_map_call(expression, enums, structs)
     }
     if starts_with(call_target, "builtin:map_") { return err("PE backend: map builtins are not supported except read-only String-keyed lookup") }
-    if starts_with(call_target, "builtin:array_") { return err("PE backend: array builtins are not supported except len(Array[T]) and local indexing") }
+    if starts_with(call_target, "builtin:array_") && call_target != "builtin:array_push" && call_target != "builtin:array_concat" && call_target != "builtin:array_indices" { return err("PE backend: array builtins are not supported except len(Array[T]), array_push, array_concat, array_indices, and local indexing") }
     if kind == "enum" {
         let enum_name: String = text(field(expression, "enum_type"))
         let variant_name: String = text(field(expression, "enum_variant"))
@@ -5673,12 +5694,16 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
         return ok(true)
     }
     if kind == "binary" && (starts_with(expr_type(field(expression, "left")), "Array[") || starts_with(expr_type(field(expression, "right")), "Array[")) {
-        return err("PE backend: array binary operations are not supported")
+        let left_type: String = expr_type(field(expression, "left"))
+        let right_type: String = expr_type(field(expression, "right"))
+        if text(field(expression, "operator")) != "+" || left_type != right_type || type_name != left_type || !pe_is_supported_array_type(enums, left_type) {
+            return err("PE backend: array concatenation requires '+' and matching supported Array[T] values")
+        }
     }
     if starts_with(type_name, "Map[") { return pe_validate_map_expression(expression, enums, structs) }
     if starts_with(type_name, "Array[") && !pe_is_supported_array_type(enums, type_name) { return err("PE backend: arrays require scalar or fieldless-enum element types") }
-    if pe_is_supported_array_type(enums, type_name) && kind != "array" && kind != "var" && !pe_is_function_call(expression) {
-        return err("PE backend: array values are only supported as literals and local variables")
+    if pe_is_supported_array_type(enums, type_name) && kind != "array" && kind != "var" && kind != "binary" && !pe_is_function_call(expression) && !(kind == "call" && (call_target == "builtin:array_push" || call_target == "builtin:array_concat" || call_target == "builtin:array_indices")) {
+        return err("PE backend: array values must be literals, local variables, concatenations, builtin results, or supported function results")
     }
     if !pe_supported_type_with_structs(enums, structs, type_name) && !pe_is_supported_array_type(enums, type_name) && !nil_builtin { return err("PE backend: unsupported expression type '" + type_name + "'") }
     if kind == "array" {
@@ -5758,6 +5783,36 @@ fn pe_validate_expression(expression: Json, allow_nil: Bool, allow_output: Bool,
             if is_err(checked_array) { return checked_array }
             return ok(true)
         }
+        if target == "builtin:array_push" {
+            if count != 2 { return err("PE backend: array_push expects two arguments") }
+            let array_argument: Json = result_unwrap(json_array_get(args, 0))
+            let value_argument: Json = result_unwrap(json_array_get(args, 1))
+            let element_type: String = pe_array_element_type(expr_type(array_argument))
+            if !pe_is_supported_array_type(enums, expr_type(array_argument)) || type_name != expr_type(array_argument) || expr_type(value_argument) != element_type {
+                return err("PE backend: array_push expects a supported Array[T] and a matching value")
+            }
+            let checked_array: Result[Bool, String] = pe_validate_expression(array_argument, false, false, enums, structs)
+            if is_err(checked_array) { return checked_array }
+            return pe_validate_expression(value_argument, false, false, enums, structs)
+        }
+        if target == "builtin:array_indices" {
+            if count != 1 || type_name != "Array[Int]" { return err("PE backend: array_indices expects one supported Array[T] and returns Array[Int]") }
+            let array_argument: Json = result_unwrap(json_array_get(args, 0))
+            if !pe_is_supported_array_type(enums, expr_type(array_argument)) { return err("PE backend: array_indices supports arrays with scalar or fieldless-enum elements") }
+            return pe_validate_expression(array_argument, false, false, enums, structs)
+        }
+        if target == "builtin:array_concat" {
+            if count != 2 { return err("PE backend: array_concat expects two arguments") }
+            let left: Json = result_unwrap(json_array_get(args, 0))
+            let right: Json = result_unwrap(json_array_get(args, 1))
+            let array_type: String = expr_type(left)
+            if !pe_is_supported_array_type(enums, array_type) || expr_type(right) != array_type || type_name != array_type {
+                return err("PE backend: array_concat expects two matching supported Array[T] values")
+            }
+            let checked_left: Result[Bool, String] = pe_validate_expression(left, false, false, enums, structs)
+            if is_err(checked_left) { return checked_left }
+            return pe_validate_expression(right, false, false, enums, structs)
+        }
         if target == "builtin:u8" || target == "builtin:u16" || target == "builtin:u32" || target == "builtin:u64" {
             if count != 1 { return err("PE backend: unsigned conversion expects one argument") }
             if !starts_with(expr_type(result_unwrap(json_array_get(args, 0))), "UInt") && expr_type(result_unwrap(json_array_get(args, 0))) != "Int" { return err("PE backend: unsigned conversion requires an integer") }
@@ -5797,10 +5852,9 @@ fn pe_validate_statements(statements: Json, enums: Json, structs: Json) -> Resul
             if starts_with(expr_type(init), "Map[") && !pe_is_supported_string_map_type(enums, expr_type(init)) { return err("PE backend: maps require String keys and scalar or fieldless-enum values") }
             if starts_with(expr_type(init), "Array[") && !pe_is_supported_array_type(enums, expr_type(init)) { return err("PE backend: arrays require scalar or fieldless-enum element types") }
             if !pe_supported_local_type(enums, structs, expr_type(init)) { return err("PE backend: binding '" + text(field(statement, "name")) + "' has an unsupported type") }
-            if text(field(init, "kind")) == "call" && starts_with(text(field(init, "call_target")), "builtin:array_") { return err("PE backend: array builtins are not supported except len(Array[T]) and local indexing") }
+            if text(field(init, "kind")) == "call" && starts_with(text(field(init, "call_target")), "builtin:array_") && text(field(init, "call_target")) != "builtin:array_push" && text(field(init, "call_target")) != "builtin:array_concat" && text(field(init, "call_target")) != "builtin:array_indices" { return err("PE backend: array builtins are not supported except len(Array[T]), array_push, array_concat, array_indices, and local indexing") }
             if text(field(init, "kind")) == "call" && starts_with(text(field(init, "call_target")), "builtin:map_") && text(field(init, "call_target")) != "builtin:map_contains_key" { return err("PE backend: map builtins are not supported except read-only String-keyed lookup") }
-            if starts_with(expr_type(init), "Array[") && text(field(init, "kind")) == "binary" { return err("PE backend: array binary operations are not supported") }
-            if pe_is_supported_array_type(enums, expr_type(init)) && text(field(init, "kind")) != "array" && text(field(init, "kind")) != "var" && !pe_is_function_call(init) { return err("PE backend: array locals require a literal, an existing local array, or a function result") }
+            if pe_is_supported_array_type(enums, expr_type(init)) && text(field(init, "kind")) != "array" && text(field(init, "kind")) != "var" && text(field(init, "kind")) != "binary" && !pe_is_function_call(init) && !(text(field(init, "kind")) == "call" && (text(field(init, "call_target")) == "builtin:array_push" || text(field(init, "call_target")) == "builtin:array_concat" || text(field(init, "call_target")) == "builtin:array_indices")) { return err("PE backend: array locals require a literal, an existing local, concatenation, an array builtin, or a function result") }
             if pe_is_supported_string_map_type(enums, expr_type(init)) && text(field(init, "kind")) != "map" && text(field(init, "kind")) != "var" && !pe_is_function_call(init) { return err("PE backend: map locals require a literal, an existing local map, or a function result") }
             if pe_is_struct_type(structs, expr_type(init)) && text(field(init, "kind")) != "struct" && text(field(init, "kind")) != "var" && !pe_is_function_call(init) { return err("PE backend: struct locals require a literal, an existing local struct, or a function result") }
             let checked: Result[Bool, String] = pe_validate_expression(init, false, false, enums, structs)
