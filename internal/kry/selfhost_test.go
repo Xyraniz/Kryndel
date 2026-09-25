@@ -131,7 +131,7 @@ func loadBootstrapLock(t *testing.T, path string) bootstrapLock {
 	if err := json.Unmarshal(data, &lock); err != nil {
 		t.Fatalf("decode bootstrap lock %q: %v", path, err)
 	}
-	if lock.SchemaVersion != 3 || lock.Target != "linux-amd64" || lock.HostGo != "go1.26.0" || lock.SourceRevision == "" || lock.Stage0Build == "" || lock.SourceCompilerKIRBytes <= 0 || lock.SourceCompilerKIRMaxBytes <= lock.SourceCompilerKIRBytes || lock.Command == "" {
+	if lock.SchemaVersion != 3 || lock.Target != "linux-amd64" || lock.HostGo != "go1.27.1" || lock.SourceRevision == "" || lock.Stage0Build == "" || lock.SourceCompilerKIRBytes <= 0 || lock.SourceCompilerKIRMaxBytes <= lock.SourceCompilerKIRBytes || lock.Command == "" {
 		t.Fatalf("invalid bootstrap lock metadata: %#v", lock)
 	}
 	return lock

@@ -1,14 +1,14 @@
 {
   "schema_version": 3,
-  "source_revision": "694b08820ab5c4ed461e56dfb6f54159af076a16",
+  "source_revision": "745c3f69d6a3de7df300500b5bdb0d58009c4dad",
   "target": "linux-amd64",
-  "host_go": "go1.26.0",
+  "host_go": "go1.27.1",
   "stage0_build": "CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry",
   "source_compiler_kir_bytes": 75587728,
   "source_compiler_kir_max_bytes": 134217728,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
-    "stage0-host-kry-linux-amd64": "078ab60579e12d5dd1a1b6e3b8792ad6a05084c264648804f086e5c14ee07690",
+    "stage0-host-kry-linux-amd64": "cad045122b1edb7524a9902b23bf894a83993b2a91477a850e50c484aad399dc",
     "source-compiler.kir": "8055e70ad907c14f2e5dcc0f50971afb418db7312b6b0b2806e3d1bb18a92e9c",
     "stage1-source-kir-compiler.elf": "6291bf72dd3b72c3077bdb80f1ab422e95e769d373772bbc9f68bc6bbdb14671",
     "source_kir_compiler.kry": "195df88a4937357d47e09340f026d70f4f0844853b31e242d2d02003adadaba2",
