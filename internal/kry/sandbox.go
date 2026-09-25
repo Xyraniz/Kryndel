@@ -13,6 +13,22 @@ type Sandbox struct {
 	Restricted bool
 }
 
+func (s Sandbox) allowsBuiltin(b Builtin) bool {
+	if !s.Restricted {
+		return true
+	}
+	switch b.Effects {
+	case "pure", "diagnostic", "io", "collections", "json", "crypto", "random", "thread", "concurrency", "actor", "shared", "async", "dispatch", "filesystem", "fs":
+		return true
+	case "time":
+		return b.Name == "datetime_format" || b.Name == "datetime_parse"
+	default:
+		// New effect categories remain denied until explicitly reviewed.
+		// ponytail: block SQLite entirely until an authorizer can confine ATTACH DATABASE paths.
+		return false
+	}
+}
+
 func (s Sandbox) Resolve(name string, write bool) (string, error) {
 	if strings.IndexByte(name, 0) >= 0 {
 		return "", errors.New("path contains NUL")

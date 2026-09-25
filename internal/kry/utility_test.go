@@ -12,15 +12,7 @@ func TestUtilityBuiltinsInterpreter(t *testing.T) {
 	} else if values["GREETING"] != "hello Kryndel" || values["QUOTED"] != "a b" {
 		t.Fatalf("dotenv fixture values: %#v", values)
 	}
-	src := `fn main() -> Nil {
-    match uuid_v4() {
-        ok(value) => { println(str(uuid_is_valid(value))) }
-        err(problem) => { println("uuid err") }
-    }
-    match uuid_v5("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "www.example.com") {
-        ok(value) => { println(value); println(str(uuid_is_valid(value))) }
-        err(problem) => { println("uuid5 err") }
-    }
+	hostOutput := runInterpUnrestricted(t, `fn main() -> Nil {
     println(platform_os())
     println(platform_arch())
     println(platform_runtime())
@@ -31,6 +23,23 @@ func TestUtilityBuiltinsInterpreter(t *testing.T) {
     match platform_hostname() {
         ok(value) => { println(str(len(value) > 0)) }
         err(problem) => { println("hostname err") }
+    }
+    return nil
+}
+main()
+`)
+	hostLines := strings.Split(strings.TrimSuffix(hostOutput, "\n"), "\n")
+	if len(hostLines) != 5 || hostLines[0] != runtime.GOOS || hostLines[1] != runtime.GOARCH || !strings.HasPrefix(hostLines[2], "go") || hostLines[3] != "true" || hostLines[4] != "true" {
+		t.Fatalf("unexpected host utility output: %q", hostOutput)
+	}
+	src := `fn main() -> Nil {
+    match uuid_v4() {
+        ok(value) => { println(str(uuid_is_valid(value))) }
+        err(problem) => { println("uuid err") }
+    }
+    match uuid_v5("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "www.example.com") {
+        ok(value) => { println(value); println(str(uuid_is_valid(value))) }
+        err(problem) => { println("uuid5 err") }
     }
     let first: Random = random_new(42)
     let second: Random = random_new(42)
@@ -82,10 +91,10 @@ func TestUtilityBuiltinsInterpreter(t *testing.T) {
 `
 	got := runInterp(t, src)
 	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
-	if len(lines) != 19 {
+	if len(lines) != 14 {
 		t.Fatalf("unexpected utility output (%d lines): %q", len(lines), got)
 	}
-	if lines[0] != "true" || lines[2] != "true" || lines[3] != runtime.GOOS || lines[6] != "true" || lines[7] != "true" || lines[8] != lines[9] || lines[10] != "true" || lines[12] != "abc" || lines[16] != "2024-01-02" || lines[17] != "some(hello Kryndel)" || lines[18] != "some(a b)" {
+	if lines[0] != "true" || lines[2] != "true" || lines[3] != lines[4] || lines[5] != "true" || lines[7] != "abc" || lines[11] != "2024-01-02" || lines[12] != "some(hello Kryndel)" || lines[13] != "some(a b)" {
 		t.Fatalf("unexpected utility output: %q", got)
 	}
 }

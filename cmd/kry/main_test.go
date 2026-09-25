@@ -55,6 +55,12 @@ func TestGlobalHelpAndVersionFlags(t *testing.T) {
 	}
 }
 
+func TestRestrictedRejectsEmptyRoot(t *testing.T) {
+	if status := run([]string{"--restricted", "", "run", "unused.kry"}); status != 2 {
+		t.Fatalf("empty restricted root returned status %d, want 2", status)
+	}
+}
+
 func TestLSPCommandRejectsPositionalArguments(t *testing.T) {
 	if status := run([]string{"lsp", "unexpected"}); status != 2 {
 		t.Fatalf("lsp accepted positional arguments with status %d", status)
