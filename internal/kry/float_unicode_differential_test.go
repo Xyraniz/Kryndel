@@ -184,6 +184,90 @@ func TestDifferentialCorpusInterpreterAndNative(t *testing.T) {
 			t.Fatalf("corpus case %d differs: interpreter=%q native=%q exit=%d", i, interp, native, code)
 		}
 	}
+
+	interactions := []struct {
+		name   string
+		source string
+	}{
+		{
+			name: "json_map_format",
+			source: `fn json_size(source: String) -> Result[Int, String] {
+    let document: Json = json_parse(source)?
+    return ok(len(json_stringify(document)))
+}
+fn main() -> Nil {
+    match json_size("{\"items\":[3,5,8]}") {
+        ok(size) => {
+            let scores: Map[String, Int] = {"answer": size}
+            println(string_format("json={} map={}", [str(size), str(unwrap_or(map_get(scores, "answer"), -1))]))
+        }
+        err(problem) => { println(problem) }
+    }
+}`,
+		},
+		{
+			name: "unicode_substring_bytes",
+			source: `fn main() -> Nil {
+    let text: String = "aé🙂z"
+    match substring(text, 1, 2) {
+        ok(slice) => {
+            let encoded: Bytes = string_to_bytes(slice)
+            println(str(len(slice)))
+            println(str(len(encoded)))
+            println(bytes_to_string(encoded))
+            println(base64_encode(encoded))
+        }
+        err(problem) => { println(problem) }
+    }
+}`,
+		},
+		{
+			name: "loop_result_defer",
+			source: `fn sum_nonnegative(values: Array[Int]) -> Result[Int, String] {
+    let mut total: Int = 0
+    for value in values {
+        if value < 0 { return err("negative") }
+        total = total + value
+    }
+    return ok(total)
+}
+fn main() -> Nil {
+    defer { println("finished") }
+    match sum_nonnegative([2, 3, 5]) {
+        ok(value) => { println(value) }
+        err(problem) => { println(problem) }
+    }
+    match sum_nonnegative([2, -1, 5]) {
+        ok(value) => { println(value) }
+        err(problem) => { println(problem) }
+    }
+}`,
+		},
+		{
+			name: "thread_array_result",
+			source: `fn values() -> Array[Int] { return [2, 4, 8] }
+fn main() -> Nil {
+    let thread: Thread[Array[Int]] = thread_spawn("values")
+    let result: Array[Int] = await(thread)
+    println(array_sum(result))
+}`,
+		},
+	}
+	for _, interaction := range interactions {
+		t.Run(interaction.name, func(t *testing.T) {
+			interp, interpErr := runInterpreterCapture(t, interaction.source)
+			if interpErr != nil {
+				t.Fatalf("interpreter failed: %s", interpErr.Message)
+			}
+			native, code, err := buildAndRunLinuxELF(t, interaction.source)
+			if err != nil {
+				t.Fatalf("native failed: %v", err)
+			}
+			if code != 0 || native != interp {
+				t.Fatalf("outputs differ: interpreter=%q native=%q exit=%d", interp, native, code)
+			}
+		})
+	}
 }
 
 func TestDifferentialCorpusReducer(t *testing.T) {
