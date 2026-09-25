@@ -16,6 +16,10 @@ fn valid_snowflake(value: String) -> Bool {
     return true
 }
 
+fn valid_discord_channel_type(channel_type: Int) -> Bool {
+    return channel_type == 0 || channel_type == 1 || channel_type == 2 || channel_type == 3 || channel_type == 4 || channel_type == 5 || channel_type == 10 || channel_type == 11 || channel_type == 12 || channel_type == 13 || channel_type == 14 || channel_type == 15 || channel_type == 16
+}
+
 fn valid_cache_id(value: String) -> Bool {
     let mut separators: Int = 0
     let mut digits_before_separator: Int = 0
@@ -128,6 +132,21 @@ fn webhook_thread_query(thread_id: String) -> Result[String, String] {
     if thread_id == "" { return ok("") }
     if !valid_snowflake(thread_id) { return err("thread_id must be a Discord snowflake") }
     return ok("thread_id=" + thread_id)
+}
+
+fn discord_query_component(value: String) -> Result[String, String] {
+    let hex_digits: String = "0123456789ABCDEF"
+    let bytes_value: Bytes = string_to_bytes(value)
+    let mut encoded_parts: Array[String] = []
+    let mut index: Int = 0
+    while index < len(bytes_value) {
+        let current: Int = byte_at(value, index)?
+        let high: String = substring(hex_digits, current / 16, 1)?
+        let low: String = substring(hex_digits, current % 16, 1)?
+        encoded_parts = array_push(encoded_parts, "%" + high + low)
+        index = index + 1
+    }
+    return ok(array_join(encoded_parts, ""))
 }
 
 fn discord_files_payload(content: String, filenames: Array[String]) -> Result[String, String] {

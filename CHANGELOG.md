@@ -2,7 +2,7 @@
 
 ## Discord package 2.2.0
 
-The Discord package adds a local global/guild `CommandTree`, named Gateway callbacks for application commands, autocomplete and component interactions, and helpers for message, defer, and autocomplete responses. The current release still does not provide typed declarations, local command checks/cooldowns, or voice media and DAVE support.
+The Discord package adds a local global/guild `CommandTree`, named Gateway callbacks for application commands, autocomplete and component interactions, asynchronous Gateway member queries, multipart uploads, encoded audit-log reasons, and helpers for message, defer, and autocomplete responses. Prefix callback contexts now include parsed arguments and route malformed quoting to an error callback while preserving the existing fields. Gateway query aggregation reports failed requests through callbacks, link buttons validate their URL host, and member-prefix limits accept 1–100. The current release still does not provide typed declarations, local command checks/cooldowns, or voice media and DAVE support.
 
 ## Discord package 2.1.0
 

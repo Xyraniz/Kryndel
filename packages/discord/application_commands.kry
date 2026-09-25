@@ -4,7 +4,7 @@ fn valid_chat_command_name(value: String) -> Bool {
     if len(value) == 0 || len(value) > 32 { return false }
     for point in codepoints(value) {
         let allowed: Bool = (point >= 97 && point <= 122) ||
-            (point >= 48 && point <= 57) || point == 45 || point == 95
+            (point >= 48 && point <= 57) || point == 39 || point == 45 || point == 95
         if !allowed { return false }
     }
     return true
@@ -18,38 +18,314 @@ fn valid_context_command_name(value: String) -> Bool {
     return true
 }
 
-fn validate_application_command_options(value: String) -> Result[String, String] {
-    let parsed: Json = json_parse(value)?
-    let count: Int = json_array_len(parsed)?
-    if count > 25 { return err("Discord slash commands accept at most 25 options") }
+fn application_option_has(value: Json, key: String) -> Bool {
+    let found: Result[Json, String] = json_object_get(value, key)
+    match found {
+        ok(_) => { return true }
+        err(_) => { return false }
+    }
+}
 
+fn application_option_bool(value: Json, key: String, fallback: Bool) -> Result[Bool, String] {
+    let raw: Result[Json, String] = json_object_get(value, key)
+    match raw {
+        ok(found) => { return json_bool(found) }
+        err(_) => { return ok(fallback) }
+    }
+}
+
+fn validate_application_command_choices(choices: Json, option_type: Int) -> Result[Nil, String] {
+    let count: Int = json_array_len(choices)?
+    if count < 1 || count > 25 { return err("Discord command options require 1 to 25 choices") }
+    if option_type != 3 && option_type != 4 && option_type != 10 {
+        return err("choices are supported only for string, integer, or number options")
+    }
     let mut index: Int = 0
     while index < count {
-        let option: Json = json_array_get(parsed, index)?
-        if json_kind(option) != "object" {
-            return err("each Discord slash command option must be a JSON object")
+        let choice: Json = json_array_get(choices, index)?
+        if json_kind(choice) != "object" { return err("each command choice must be a JSON object") }
+        let raw_name: Json = json_object_get(choice, "name")?
+        let name: String = json_string(raw_name)?
+        if len(name) < 1 || len(name) > 100 { return err("choice names must contain 1 to 100 Unicode code points") }
+        let raw_value: Json = json_object_get(choice, "value")?
+        if option_type == 3 {
+            let value: String = json_string(raw_value)?
+            if len(value) < 1 || len(value) > 100 { return err("string choice values must contain 1 to 100 Unicode code points") }
+        } else if option_type == 4 {
+            let value: Int = json_int(raw_value)?
+            if value < -9007199254740991 || value > 9007199254740991 {
+                return err("integer choice values must be between -9007199254740991 and 9007199254740991")
+            }
+        } else {
+            let value: Float = json_float(raw_value)?
+            if value < -9007199254740992.0 || value > 9007199254740992.0 {
+                return err("number choice values must be between -9007199254740992 and 9007199254740992")
+            }
         }
         index = index + 1
     }
+    return ok(nil)
+}
+
+fn validate_application_command_option_fields(option: Json, option_type: Int) -> Result[Nil, String] {
+    let has_autocomplete: Bool = application_option_has(option, "autocomplete")
+    let autocomplete: Bool = application_option_bool(option, "autocomplete", false)?
+    let has_choices: Bool = application_option_has(option, "choices")
+    if has_autocomplete && (option_type != 3 && option_type != 4 && option_type != 10) {
+        return err("autocomplete is supported only for string, integer, or number options")
+    }
+    if autocomplete && has_choices { return err("an option cannot use both choices and autocomplete") }
+    if has_choices {
+        let choices: Json = json_object_get(option, "choices")?
+        validate_application_command_choices(choices, option_type)?
+    }
+
+    let has_channel_types: Bool = application_option_has(option, "channel_types")
+    if has_channel_types {
+        if option_type != 7 { return err("channel_types is supported only for channel options") }
+        let channel_types: Json = json_object_get(option, "channel_types")?
+        let count: Int = json_array_len(channel_types)?
+        let mut index: Int = 0
+        while index < count {
+            let raw_channel_type: Json = json_array_get(channel_types, index)?
+            let channel_type: Int = json_int(raw_channel_type)?
+            if !valid_discord_channel_type(channel_type) { return err("channel_types entries must be supported Discord channel types") }
+            index = index + 1
+        }
+    }
+
+    let has_min_length: Bool = application_option_has(option, "min_length")
+    let has_max_length: Bool = application_option_has(option, "max_length")
+    if has_min_length || has_max_length {
+        if option_type != 3 { return err("min_length and max_length are supported only for string options") }
+        let mut minimum: Int = 0
+        let mut maximum: Int = 6000
+        if has_min_length { minimum = json_int(json_object_get(option, "min_length")?)? }
+        if has_max_length { maximum = json_int(json_object_get(option, "max_length")?)? }
+        if minimum < 0 || maximum < 1 || minimum > 6000 || maximum > 6000 || minimum > maximum {
+            return err("string option min_length must be 0 to 6000 and max_length must be 1 to 6000, with min_length no greater than max_length")
+        }
+    }
+
+    let has_min_value: Bool = application_option_has(option, "min_value")
+    let has_max_value: Bool = application_option_has(option, "max_value")
+    if has_min_value || has_max_value {
+        if option_type != 4 && option_type != 10 { return err("min_value and max_value are supported only for integer or number options") }
+        if option_type == 4 {
+            let mut minimum: Int = 0
+            let mut maximum: Int = 0
+            if has_min_value { minimum = json_int(json_object_get(option, "min_value")?)? }
+            if has_max_value { maximum = json_int(json_object_get(option, "max_value")?)? }
+            if (has_min_value && (minimum < -9007199254740991 || minimum > 9007199254740991)) || (has_max_value && (maximum < -9007199254740991 || maximum > 9007199254740991)) {
+                return err("integer option values must be between -9007199254740991 and 9007199254740991")
+            }
+            if has_min_value && has_max_value && minimum > maximum { return err("min_value must not exceed max_value") }
+        } else {
+            let mut minimum: Float = 0.0
+            let mut maximum: Float = 0.0
+            if has_min_value { minimum = json_float(json_object_get(option, "min_value")?)? }
+            if has_max_value { maximum = json_float(json_object_get(option, "max_value")?)? }
+            if (has_min_value && (minimum < -9007199254740992.0 || minimum > 9007199254740992.0)) || (has_max_value && (maximum < -9007199254740992.0 || maximum > 9007199254740992.0)) {
+                return err("number option values must be between -9007199254740992 and 9007199254740992")
+            }
+            if has_min_value && has_max_value && minimum > maximum { return err("min_value must not exceed max_value") }
+        }
+    }
+    return ok(nil)
+}
+
+fn validate_application_command_option_array(options: Json, parent_mode: Int) -> Result[Nil, String] {
+    let count: Int = json_array_len(options)?
+    if count > 25 { return err("Discord command option arrays accept at most 25 entries") }
+    if parent_mode == 2 && count == 0 { return err("a subcommand group must contain at least one subcommand") }
+    let mut names: Array[String] = []
+    let mut option_class: Int = 0
+    let mut optional_seen: Bool = false
+    let mut index: Int = 0
+    while index < count {
+        let option: Json = json_array_get(options, index)?
+        if json_kind(option) != "object" { return err("each Discord command option must be a JSON object") }
+        let raw_type: Json = json_object_get(option, "type")?
+        let option_type: Int = json_int(raw_type)?
+        if option_type < 1 || option_type > 11 { return err("Discord command option type must be between 1 and 11") }
+        let raw_name: Json = json_object_get(option, "name")?
+        let name: String = json_string(raw_name)?
+        if !valid_chat_command_name(name) { return err("command option name must use 1 to 32 lowercase ASCII letters, digits, hyphens, or underscores") }
+        if array_contains(names, name) { return err("command option names must be unique at each level") }
+        names = array_push(names, name)
+        let raw_description: Json = json_object_get(option, "description")?
+        let description: String = json_string(raw_description)?
+        if len(description) < 1 || len(description) > 100 { return err("command option descriptions must contain 1 to 100 Unicode code points") }
+
+        if parent_mode == 1 && option_type < 3 { return err("subcommands can contain only value options") }
+        if parent_mode == 2 && option_type != 1 { return err("subcommand groups can contain only subcommands") }
+        if parent_mode != 0 && parent_mode != 1 && parent_mode != 2 { return err("invalid command option nesting level") }
+
+        if option_type == 1 || option_type == 2 {
+            if parent_mode == 1 || (parent_mode == 2 && option_type != 1) {
+                return err("subcommands and groups cannot be nested at this level")
+            }
+            if option_type == 2 && parent_mode != 0 { return err("subcommand groups may appear only at the command root") }
+            if application_option_has(option, "required") || application_option_has(option, "choices") || application_option_has(option, "autocomplete") || application_option_has(option, "channel_types") || application_option_has(option, "min_value") || application_option_has(option, "max_value") || application_option_has(option, "min_length") || application_option_has(option, "max_length") {
+                return err("subcommand and group options cannot use value-option fields")
+            }
+            let nested_result: Result[Json, String] = json_object_get(option, "options")
+            match nested_result {
+                ok(nested) => {
+                    if option_type == 1 { validate_application_command_option_array(nested, 1)? }
+                    else { validate_application_command_option_array(nested, 2)? }
+                }
+                err(_) => {
+                    if option_type == 2 { return err("a subcommand group requires an options array") }
+                }
+            }
+            if parent_mode == 0 {
+                if option_class == 2 { return err("a command cannot mix subcommands with value options") }
+                option_class = 1
+            }
+        } else {
+            if parent_mode == 2 { return err("subcommand groups can contain only subcommands") }
+            if application_option_has(option, "options") { return err("only subcommands and groups can define nested options") }
+            if parent_mode == 0 {
+                if option_class == 1 { return err("a command cannot mix subcommands with value options") }
+                option_class = 2
+            }
+            let required: Bool = application_option_bool(option, "required", false)?
+            if optional_seen && required { return err("required options must appear before optional options") }
+            if !required { optional_seen = true }
+            validate_application_command_option_fields(option, option_type)?
+        }
+        index = index + 1
+    }
+    return ok(nil)
+}
+
+fn validate_application_command_options(value: String) -> Result[String, String] {
+    let parsed: Json = json_parse(value)?
+    validate_application_command_option_array(parsed, 0)?
     return ok(value)
 }
 
-fn application_command_key(command: Json) -> Result[String, String] {
+fn application_command_type(command: Json) -> Result[Int, String] {
+    let raw_type: Result[Json, String] = json_object_get(command, "type")
+    match raw_type {
+        ok(value) => { return json_int(value) }
+        err(_) => { return ok(1) }
+    }
+}
+
+fn validate_application_command_enum_array(values: Json, maximum_value: Int, field_name: String) -> Result[Nil, String] {
+    let count: Int = json_array_len(values)?
+    if count > maximum_value + 1 { return err(field_name + " contains too many values") }
+    let mut seen: Array[Int] = []
+    let mut index: Int = 0
+    while index < count {
+        let value: Int = json_int(json_array_get(values, index)?)?
+        if value < 0 || value > maximum_value { return err(field_name + " contains an unsupported Discord value") }
+        if array_contains(seen, value) { return err(field_name + " values must be unique") }
+        seen = array_push(seen, value)
+        index = index + 1
+    }
+    return ok(nil)
+}
+
+fn validate_application_command_settings(command: Json) -> Result[Nil, String] {
+    if application_option_has(command, "default_member_permissions") {
+        let value: Json = json_object_get(command, "default_member_permissions")?
+        if json_kind(value) != "null" {
+            let permissions: String = json_string(value)?
+            if !valid_snowflake(permissions) { return err("default_member_permissions must be a decimal permission bitfield string or null") }
+        }
+    }
+    if application_option_has(command, "integration_types") {
+        validate_application_command_enum_array(json_object_get(command, "integration_types")?, 1, "integration_types")?
+    }
+    if application_option_has(command, "contexts") {
+        let contexts: Json = json_object_get(command, "contexts")?
+        if json_kind(contexts) != "null" { validate_application_command_enum_array(contexts, 2, "contexts")? }
+    }
+    if application_option_has(command, "nsfw") {
+        let _: Bool = json_bool(json_object_get(command, "nsfw")?)?
+    }
+    return ok(nil)
+}
+
+fn validate_application_command_definition(command: Json) -> Result[Nil, String] {
     if json_kind(command) != "object" { return err("Discord application command must be a JSON object") }
     let raw_name: Json = json_object_get(command, "name")?
     let name: String = json_string(raw_name)?
-    let mut command_type: Int = 1
-    let raw_type: Result[Json, String] = json_object_get(command, "type")
-    match raw_type {
-        ok(value) => { command_type = json_int(value)? }
-        err(_) => {}
-    }
+    let command_type: Int = application_command_type(command)?
     if command_type < 1 || command_type > 3 { return err("Discord application command type must be 1, 2, or 3") }
     if command_type == 1 {
         if !valid_chat_command_name(name) { return err("chat-input command name is invalid") }
-    } else if !valid_context_command_name(name) {
-        return err("context-menu command name is invalid")
+        let raw_description: Json = json_object_get(command, "description")?
+        let description: String = json_string(raw_description)?
+        if len(description) < 1 || len(description) > 100 { return err("chat-input command descriptions must contain 1 to 100 Unicode code points") }
+        let options_result: Result[Json, String] = json_object_get(command, "options")
+        match options_result {
+            ok(options) => { validate_application_command_option_array(options, 0)? }
+            err(_) => {}
+        }
+    } else {
+        if !valid_context_command_name(name) { return err("context-menu command name is invalid") }
+        if application_option_has(command, "description") || application_option_has(command, "options") {
+            return err("context-menu commands cannot define descriptions or options")
+        }
     }
+    validate_application_command_settings(command)?
+    return ok(nil)
+}
+
+pub fn slash_option_json(name: String, description: String, option_type: Int, required: Bool, properties_json: String) -> Result[String, String] {
+    if option_type < 3 || option_type > 11 { return err("value option type must be between 3 and 11") }
+    if !valid_chat_command_name(name) { return err("command option name must use 1 to 32 lowercase ASCII letters, digits, hyphens, underscores, or apostrophes") }
+    if len(description) < 1 || len(description) > 100 { return err("command option descriptions must contain 1 to 100 Unicode code points") }
+    let properties: Json = json_parse(properties_json)?
+    if json_kind(properties) != "object" { return err("command option properties must be a JSON object") }
+    if application_option_has(properties, "name") || application_option_has(properties, "type") || application_option_has(properties, "description") || application_option_has(properties, "required") {
+        return err("command option properties cannot override name, type, description, or required")
+    }
+    let encoded_name: String = json_quote(name)?
+    let encoded_description: String = json_quote(description)?
+    let mut required_text: String = "false"
+    if required { required_text = "true" }
+    let normalized_properties: String = json_stringify(properties)
+    let mut extra_fields: String = ""
+    if normalized_properties != "{}" {
+        extra_fields = "," + substring(normalized_properties, 1, len(normalized_properties) - 2)?
+    }
+    let option_json: String = "{\"name\":" + encoded_name + ",\"type\":" + str(option_type) + ",\"description\":" + encoded_description + ",\"required\":" + required_text + extra_fields + "}"
+    let parsed_options: Json = json_parse("[" + option_json + "]")?
+    validate_application_command_option_array(parsed_options, 0)?
+    let parsed_option: Json = json_array_get(parsed_options, 0)?
+    return ok(json_stringify(parsed_option))
+}
+
+fn application_command_container_option_json(name: String, description: String, option_type: Int, options_json: String) -> Result[String, String] {
+    if option_type != 1 && option_type != 2 { return err("command container type must be 1 (subcommand) or 2 (group)") }
+    if !valid_chat_command_name(name) { return err("command option name must use 1 to 32 lowercase ASCII letters, digits, hyphens, underscores, or apostrophes") }
+    if len(description) < 1 || len(description) > 100 { return err("command option descriptions must contain 1 to 100 Unicode code points") }
+    let options: Json = json_parse(options_json)?
+    if option_type == 1 { validate_application_command_option_array(options, 1)? }
+    else { validate_application_command_option_array(options, 2)? }
+    let encoded_name: String = json_quote(name)?
+    let encoded_description: String = json_quote(description)?
+    return ok("{\"name\":" + encoded_name + ",\"type\":" + str(option_type) + ",\"description\":" + encoded_description + ",\"options\":" + json_stringify(options) + "}")
+}
+
+pub fn slash_subcommand_json(name: String, description: String, options_json: String) -> Result[String, String] {
+    return application_command_container_option_json(name, description, 1, options_json)
+}
+
+pub fn slash_subcommand_group_json(name: String, description: String, subcommands_json: String) -> Result[String, String] {
+    return application_command_container_option_json(name, description, 2, subcommands_json)
+}
+
+fn application_command_key(command: Json) -> Result[String, String] {
+    validate_application_command_definition(command)?
+    let raw_name: Json = json_object_get(command, "name")?
+    let name: String = json_string(raw_name)?
+    let command_type: Int = application_command_type(command)?
     return ok(name + ":" + str(command_type))
 }
 
@@ -87,6 +363,9 @@ impl CommandTree {
     pub fn add(command_json: String) -> Result[CommandTree, String] {
         let command: Json = json_parse(command_json)?
         let key: String = application_command_key(command)?
+        if self.guild_id != "" && (application_option_has(command, "integration_types") || application_option_has(command, "contexts")) {
+            return err("integration_types and contexts are supported only for global application commands")
+        }
         for existing_json in self.commands {
             let existing: Json = json_parse(existing_json)?
             if application_command_key(existing)? == key {
@@ -169,13 +448,12 @@ pub fn autocomplete_response_json(choices_json: String) -> Result[String, String
     return ok("{\"type\":8,\"data\":{\"choices\":" + normalized + "}}")
 }
 
-// This builder accepts the ASCII subset of Discord's CHAT_INPUT name rule.
-// The Discord API also accepts certain Unicode letter/number categories;
-// Kryndel has no Unicode-category predicate yet, so this helper rejects them
-// instead of claiming to validate names it cannot classify.
+// These builders accept the ASCII subset of Discord's CHAT_INPUT name rule.
+// The API also accepts certain Unicode letter/number categories; Kryndel has
+// no Unicode-category predicate yet, so these helpers reject them.
 pub fn slash_command_json(name: String, description: String, options_json: String) -> Result[String, String] {
     if !valid_chat_command_name(name) {
-        return err("slash command name must be 1 to 32 lowercase ASCII letters, digits, hyphens, or underscores")
+        return err("slash command name must use 1 to 32 lowercase ASCII letters, digits, hyphens, underscores, or apostrophes")
     }
     if len(description) == 0 || len(description) > 100 {
         return err("slash command description must contain 1 to 100 Unicode code points")
@@ -185,6 +463,24 @@ pub fn slash_command_json(name: String, description: String, options_json: Strin
     let quoted_name: String = json_quote(name)?
     let quoted_description: String = json_quote(description)?
     return ok("{\"name\":" + quoted_name + ",\"type\":1,\"description\":" + quoted_description + ",\"options\":" + checked_options + "}")
+}
+
+pub fn slash_command_with_settings_json(name: String, description: String, options_json: String, settings_json: String) -> Result[String, String] {
+    let settings: Json = json_parse(settings_json)?
+    if json_kind(settings) != "object" { return err("application command settings must be a JSON object") }
+    if application_option_has(settings, "name") || application_option_has(settings, "type") || application_option_has(settings, "description") || application_option_has(settings, "options") {
+        return err("application command settings cannot override name, type, description, or options")
+    }
+    validate_application_command_settings(settings)?
+    let base: String = slash_command_json(name, description, options_json)?
+    let normalized_settings: String = json_stringify(settings)
+    if normalized_settings == "{}" { return ok(base) }
+    let normalized_base: String = json_stringify(json_parse(base)?)
+    let prefix: String = substring(normalized_base, 0, len(normalized_base) - 1)?
+    let fields: String = substring(normalized_settings, 1, len(normalized_settings) - 2)?
+    let command: Json = json_parse(prefix + "," + fields + "}")?
+    validate_application_command_definition(command)?
+    return ok(json_stringify(command))
 }
 
 // Context menu commands have no description or options in Discord's schema.

@@ -1,11 +1,11 @@
 import "std/env"
 import "packages/discord"
 
-fn respond_to_ping(message_json: String) -> String {
-    let message: Json = result_unwrap(json_parse(message_json))
-    let raw_content: Json = result_unwrap(json_object_get(message, "content"))
-    let content: String = result_unwrap(json_string(raw_content))
-    if content == "!ping" { return "Pong!" }
+fn respond_to_ping(context_json: String) -> String {
+    let context: Json = result_unwrap(json_parse(context_json))
+    let raw_command: Json = result_unwrap(json_object_get(context, "command"))
+    let command: String = result_unwrap(json_string(raw_command))
+    if command == "ping" { return "Pong!" }
     return ""
 }
 
@@ -19,10 +19,16 @@ fn main() -> Result[Nil, String] {
                 ok(connected) => {
                     let configured: Result[Bot, String] = connected.with_shard(0, 1)
                     match configured {
-                        ok(client) => {
-                            let registration: Result[Nil, String] = poly_register("discord.on_message", "respond_to_ping", 0)
-                            match registration {
-                                ok(_) => { return client.run() }
+                        ok(sharded) => {
+                            let prefixed: Result[Bot, String] = sharded.with_prefixes(["!"])
+                            match prefixed {
+                                ok(client) => {
+                                    let registration: Result[Nil, String] = poly_register("discord.on_prefix_command.ping", "respond_to_ping", 0)
+                                    match registration {
+                                        ok(_) => { return client.run() }
+                                        err(problem) => { return err(problem) }
+                                    }
+                                }
                                 err(problem) => { return err(problem) }
                             }
                         }

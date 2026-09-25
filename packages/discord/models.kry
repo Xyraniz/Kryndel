@@ -8,6 +8,7 @@ pub struct Bot {
     private gateway: String,
     private shard_id: Int,
     private shard_count: Int,
+    private prefixes: Array[String],
 }
 
 struct GatewaySessionState {
@@ -29,7 +30,7 @@ pub fn bot(token: String, intents: Array[String]) -> Result[Bot, String] {
         err(problem) => { return err(problem) }
         ok(_) => {}
     }
-    return ok(Bot{token: token, intents: intents, gateway: "https://discord.com/api/v10/gateway/bot", shard_id: 0, shard_count: 1})
+    return ok(Bot{token: token, intents: intents, gateway: "https://discord.com/api/v10/gateway/bot", shard_id: 0, shard_count: 1, prefixes: []})
 }
 
 pub fn webhook(id: String, token: String) -> Result[Webhook, String] {

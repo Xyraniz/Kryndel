@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const discordAPIBase = "https://discord.com/api/v10"
@@ -189,15 +190,19 @@ func (l *discordRateLimiter) observe(appKey, routeKey string, response *http.Res
 }
 
 func validDiscordRoute(route string) bool {
-	if route == "" || len(route) > 4096 || route[0] != '/' || strings.ContainsAny(route, "\x00\r\n#|\\") || strings.Contains(route, "//") {
-		return false
-	}
-	lower := strings.ToLower(route)
-	if strings.Contains(lower, "%2f") || strings.Contains(lower, "%5c") || strings.Contains(lower, "%00") {
+	if route == "" || len(route) > 4096 || route[0] != '/' || strings.ContainsAny(route, "\x00\r\n#|\\") {
 		return false
 	}
 	u, err := url.Parse(route)
 	if err != nil || u.IsAbs() || u.Host != "" || u.User != nil {
+		return false
+	}
+	escapedPath := u.EscapedPath()
+	if strings.Contains(escapedPath, "//") {
+		return false
+	}
+	lowerPath := strings.ToLower(escapedPath)
+	if strings.Contains(lowerPath, "%2f") || strings.Contains(lowerPath, "%5c") || strings.Contains(lowerPath, "%00") {
 		return false
 	}
 	path, err := url.PathUnescape(u.EscapedPath())
@@ -213,10 +218,41 @@ func validDiscordRoute(route string) bool {
 }
 
 func (r *Runtime) discordAPIRequest(method, route, body, token string) (Value, *Diagnostic) {
+	return r.discordAPIRequestWithReason(method, route, body, token, "")
+}
+
+func encodeDiscordAuditLogReason(reason string) (string, error) {
+	if reason == "" {
+		return "", nil
+	}
+	if !utf8.ValidString(reason) {
+		return "", fmt.Errorf("Discord audit log reason must be valid UTF-8")
+	}
+	const hexDigits = "0123456789ABCDEF"
+	encoded := make([]byte, 0, len(reason))
+	for _, value := range []byte(reason) {
+		switch {
+		case value >= 'a' && value <= 'z', value >= 'A' && value <= 'Z', value >= '0' && value <= '9', strings.ContainsRune("-._~", rune(value)):
+			encoded = append(encoded, value)
+		default:
+			encoded = append(encoded, '%', hexDigits[value>>4], hexDigits[value&0x0f])
+		}
+		if len(encoded) > 512 {
+			return "", fmt.Errorf("Discord audit log reason must be at most 512 URL-encoded UTF-8 characters")
+		}
+	}
+	return string(encoded), nil
+}
+
+func (r *Runtime) discordAPIRequestWithReason(method, route, body, token, reason string) (Value, *Diagnostic) {
 	if body != "" && !json.Valid([]byte(body)) {
 		return resVal(false, stringVal("Discord API request body must be valid JSON")), nil
 	}
-	return r.discordHTTPRequest(method, route, strings.NewReader(body), "application/json", token, true, discordRequestRedactions(route, token))
+	encodedReason, err := encodeDiscordAuditLogReason(reason)
+	if err != nil {
+		return resVal(false, stringVal(err.Error())), nil
+	}
+	return r.discordHTTPRequest(method, route, strings.NewReader(body), "application/json", token, true, encodedReason, discordRequestRedactions(route, token))
 }
 
 func (r *Runtime) discordInteractionRequest(method, route, body string) (Value, *Diagnostic) {
@@ -230,7 +266,7 @@ func (r *Runtime) discordInteractionRequest(method, route, body string) (Value, 
 		return resVal(false, stringVal("Discord interaction request body must be valid JSON")), nil
 	}
 	redact := discordRequestRedactions(route, "")
-	return r.discordHTTPRequest(method, route, strings.NewReader(body), "application/json", "", false, redact)
+	return r.discordHTTPRequest(method, route, strings.NewReader(body), "application/json", "", false, "", redact)
 }
 
 type discordUploadFile struct {
@@ -239,19 +275,27 @@ type discordUploadFile struct {
 }
 
 func (r *Runtime) discordAPIUpload(method, route, payload, filename string, data []byte, token string) (Value, *Diagnostic) {
+	return r.discordAPIUploadWithReason(method, route, payload, filename, data, token, "")
+}
+
+func (r *Runtime) discordAPIUploadWithReason(method, route, payload, filename string, data []byte, token, reason string) (Value, *Diagnostic) {
 	files := []discordUploadFile{{filename: filename, data: data}}
-	return r.discordMultipartUpload(method, route, payload, files, token, true)
+	return r.discordMultipartUpload(method, route, payload, files, token, true, reason)
 }
 
 func (r *Runtime) discordAPIUploadFiles(method, route, payload string, files []discordUploadFile, token string) (Value, *Diagnostic) {
-	return r.discordMultipartUpload(method, route, payload, files, token, true)
+	return r.discordAPIUploadFilesWithReason(method, route, payload, files, token, "")
+}
+
+func (r *Runtime) discordAPIUploadFilesWithReason(method, route, payload string, files []discordUploadFile, token, reason string) (Value, *Diagnostic) {
+	return r.discordMultipartUpload(method, route, payload, files, token, true, reason)
 }
 
 func (r *Runtime) discordWebhookUpload(method, route, payload string, files []discordUploadFile, token string) (Value, *Diagnostic) {
-	return r.discordMultipartUpload(method, route, payload, files, token, false)
+	return r.discordMultipartUpload(method, route, payload, files, token, false, "")
 }
 
-func (r *Runtime) discordMultipartUpload(method, route, payload string, files []discordUploadFile, token string, botAuth bool) (Value, *Diagnostic) {
+func (r *Runtime) discordMultipartUpload(method, route, payload string, files []discordUploadFile, token string, botAuth bool, reason string) (Value, *Diagnostic) {
 	if method != "POST" && method != "PUT" && method != "PATCH" {
 		return resVal(false, stringVal("Discord uploads require POST, PUT, or PATCH")), nil
 	}
@@ -260,6 +304,10 @@ func (r *Runtime) discordMultipartUpload(method, route, payload string, files []
 	}
 	if !json.Valid([]byte(payload)) {
 		return resVal(false, stringVal("Discord upload payload must be valid JSON")), nil
+	}
+	encodedReason, err := encodeDiscordAuditLogReason(reason)
+	if err != nil {
+		return resVal(false, stringVal(err.Error())), nil
 	}
 	totalFileBytes := 0
 	for _, file := range files {
@@ -291,10 +339,10 @@ func (r *Runtime) discordMultipartUpload(method, route, payload string, files []
 	if body.Len() > r.Lim.MaxSourceBytes {
 		return resVal(false, stringVal("multipart Discord upload exceeds configured input limit")), nil
 	}
-	return r.discordHTTPRequest(method, route, &body, writer.FormDataContentType(), token, botAuth, discordRequestRedactions(route, token))
+	return r.discordHTTPRequest(method, route, &body, writer.FormDataContentType(), token, botAuth, encodedReason, discordRequestRedactions(route, token))
 }
 
-func (r *Runtime) discordHTTPRequest(method, route string, body io.Reader, contentType, credential string, botAuth bool, redact string) (Value, *Diagnostic) {
+func (r *Runtime) discordHTTPRequest(method, route string, body io.Reader, contentType, credential string, botAuth bool, auditLogReason, redact string) (Value, *Diagnostic) {
 	if credential == "" && botAuth {
 		return resVal(false, stringVal("invalid Discord bot token")), nil
 	}
@@ -352,6 +400,9 @@ func (r *Runtime) discordHTTPRequest(method, route string, body io.Reader, conte
 		req.Header.Set("User-Agent", "Kryndel (https://github.com/Xyraniz/Kryndel)")
 		if contentType != "" {
 			req.Header.Set("Content-Type", contentType)
+		}
+		if auditLogReason != "" {
+			req.Header.Set("X-Audit-Log-Reason", auditLogReason)
 		}
 		resp, err := client.Do(req)
 		if err != nil {

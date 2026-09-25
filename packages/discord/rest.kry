@@ -17,9 +17,9 @@ impl Webhook {
         }
     }
 
-    // Uploads raw file bytes as Discord multipart fields files[0]..files[9].
-    // The JSON payload must include attachment metadata for those files.
-    pub fn upload_files_json(payload_json: String, filenames: Array[String], file_data: Array[Bytes], thread_id: String) -> Result[String, String] {
+    // Executes a raw multipart webhook payload with optional response waiting.
+    // The JSON payload may include thread_name, applied_tags, and attachment metadata.
+    pub fn execute_files_json(payload_json: String, filenames: Array[String], file_data: Array[Bytes], wait: Bool, thread_id: String) -> Result[String, String] {
         if len(filenames) == 0 || len(filenames) > 10 || len(filenames) != len(file_data) {
             return err("webhook upload requires matching filename and byte arrays with 1 to 10 files")
         }
@@ -27,11 +27,17 @@ impl Webhook {
         match checked_thread {
             err(problem) => { return err(problem) }
             ok(thread_query) => {
-                let mut route: String = "/webhooks/" + self.id + "/" + self.token + "?wait=true"
+                let mut route: String = "/webhooks/" + self.id + "/" + self.token + "?wait=false"
+                if wait { route = "/webhooks/" + self.id + "/" + self.token + "?wait=true" }
                 if thread_query != "" { route = route + "&" + thread_query }
                 return discord_webhook_upload("POST", route, payload_json, filenames, file_data, self.token)
             }
         }
+    }
+
+    // Backwards-compatible upload helper that returns the created message body.
+    pub fn upload_files_json(payload_json: String, filenames: Array[String], file_data: Array[Bytes], thread_id: String) -> Result[String, String] {
+        return self.execute_files_json(payload_json, filenames, file_data, true, thread_id)
     }
 
     pub fn send_files(content: String, filenames: Array[String], file_data: Array[Bytes], thread_id: String) -> Result[Json, String] {
@@ -140,24 +146,51 @@ impl Bot {
         return discord_api_request(method, route, body, self.token)
     }
 
+    pub fn request_with_audit_reason(method: String, route: String, body: String, reason: String) -> Result[String, String] {
+        return discord_api_request_with_reason(method, route, body, self.token, reason)
+    }
+
     pub fn with_shard(shard_id: Int, shard_count: Int) -> Result[Bot, String] {
         if shard_count < 1 || shard_count > 1024 || shard_id < 0 || shard_id >= shard_count {
             return err("shard_id must be within a shard_count from 1 to 1024")
         }
-        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: shard_id, shard_count: shard_count})
+        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: shard_id, shard_count: shard_count, prefixes: self.prefixes})
+    }
+
+    pub fn with_prefixes(prefixes: Array[String]) -> Result[Bot, String] {
+        if len(prefixes) == 0 { return err("prefixes must contain at least one non-empty string") }
+        let mut checked: Array[String] = []
+        for prefix in prefixes {
+            if len(prefix) == 0 { return err("command prefixes must not be empty") }
+            if array_contains(checked, prefix) { return err("command prefixes must be unique") }
+            checked = array_push(checked, prefix)
+        }
+        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: self.shard_id, shard_count: self.shard_count, prefixes: checked})
+    }
+
+    pub fn command_prefixes() -> Array[String] {
+        return self.prefixes
     }
 
     pub fn upload(method: String, route: String, payload_json: String, filename: String, data: Bytes) -> Result[String, String] {
-        return discord_api_upload(method, route, payload_json, filename, data, self.token)
+        return self.upload_with_audit_reason(method, route, payload_json, filename, data, "")
+    }
+
+    pub fn upload_with_audit_reason(method: String, route: String, payload_json: String, filename: String, data: Bytes, reason: String) -> Result[String, String] {
+        return discord_api_upload_with_reason(method, route, payload_json, filename, data, self.token, reason)
     }
 
     // Raw Bot-authenticated multipart access for routes that accept attachments.
     // The caller supplies payload_json, including attachment metadata.
     pub fn upload_files(method: String, route: String, payload_json: String, filenames: Array[String], file_data: Array[Bytes]) -> Result[String, String] {
+        return self.upload_files_with_audit_reason(method, route, payload_json, filenames, file_data, "")
+    }
+
+    pub fn upload_files_with_audit_reason(method: String, route: String, payload_json: String, filenames: Array[String], file_data: Array[Bytes], reason: String) -> Result[String, String] {
         if len(filenames) == 0 || len(filenames) > 10 || len(filenames) != len(file_data) {
             return err("Bot upload_files requires matching filename and byte arrays with 1 to 10 files")
         }
-        return discord_api_upload_files(method, route, payload_json, filenames, file_data, self.token)
+        return discord_api_upload_files_with_reason(method, route, payload_json, filenames, file_data, self.token, reason)
     }
 
     // Sends a channel message with files and suppresses mentions by default.
@@ -220,6 +253,63 @@ impl Bot {
     pub fn get_guild(guild_id: String) -> Result[Json, String] {
         if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
         return response_json(self.request("GET", "/guilds/" + guild_id, ""))
+    }
+
+    pub fn get_guild_member(guild_id: String, user_id: String) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) || !valid_snowflake(user_id) {
+            return err("guild_id and user_id must be Discord snowflakes")
+        }
+        return response_json(self.request("GET", "/guilds/" + guild_id + "/members/" + user_id, ""))
+    }
+
+    // The REST endpoint returns one page. Pass the last user ID from the
+    // previous page as after; use an empty string for the first page.
+    pub fn list_guild_members(guild_id: String, after: String, limit: Int) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        if after != "" && !valid_snowflake(after) { return err("after must be empty or a Discord snowflake") }
+        if limit < 1 || limit > 1000 { return err("limit must be between 1 and 1000") }
+        let mut route: String = "/guilds/" + guild_id + "/members?limit=" + str(limit)
+        if after != "" { route = route + "&after=" + after }
+        return response_json(self.request("GET", route, ""))
+    }
+
+    pub fn search_guild_members(guild_id: String, query: String, limit: Int) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        if limit < 1 || limit > 1000 { return err("limit must be between 1 and 1000") }
+        let encoded_query: String = discord_query_component(query)?
+        let route: String = "/guilds/" + guild_id + "/members/search?query=" + encoded_query + "&limit=" + str(limit)
+        return response_json(self.request("GET", route, ""))
+    }
+
+    pub fn edit_guild_member_json(guild_id: String, user_id: String, payload_json: String) -> Result[Json, String] {
+        return self.edit_guild_member_json_with_reason(guild_id, user_id, payload_json, "")
+    }
+
+    pub fn edit_guild_member_json_with_reason(guild_id: String, user_id: String, payload_json: String, reason: String) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) || !valid_snowflake(user_id) {
+            return err("guild_id and user_id must be Discord snowflakes")
+        }
+        let payload: Json = json_parse(payload_json)?
+        if json_kind(payload) != "object" { return err("member edit payload must be a JSON object") }
+        return response_json(self.request_with_audit_reason("PATCH", "/guilds/" + guild_id + "/members/" + user_id, payload_json, reason))
+    }
+
+    pub fn list_guild_bans(guild_id: String, before: String, after: String, limit: Int) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        if before != "" && !valid_snowflake(before) { return err("before must be empty or a Discord snowflake") }
+        if after != "" && !valid_snowflake(after) { return err("after must be empty or a Discord snowflake") }
+        if limit < 1 || limit > 1000 { return err("limit must be between 1 and 1000") }
+        let mut route: String = "/guilds/" + guild_id + "/bans?limit=" + str(limit)
+        if before != "" { route = route + "&before=" + before }
+        if after != "" { route = route + "&after=" + after }
+        return response_json(self.request("GET", route, ""))
+    }
+
+    pub fn get_guild_ban(guild_id: String, user_id: String) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) || !valid_snowflake(user_id) {
+            return err("guild_id and user_id must be Discord snowflakes")
+        }
+        return response_json(self.request("GET", "/guilds/" + guild_id + "/bans/" + user_id, ""))
     }
 
     pub fn get_channel(channel_id: String) -> Result[Json, String] {
@@ -315,10 +405,14 @@ impl Bot {
     }
 
     pub fn add_member_role(guild_id: String, user_id: String, role_id: String) -> Result[Nil, String] {
+        return self.add_member_role_with_reason(guild_id, user_id, role_id, "")
+    }
+
+    pub fn add_member_role_with_reason(guild_id: String, user_id: String, role_id: String, reason: String) -> Result[Nil, String] {
         if !valid_snowflake(guild_id) || !valid_snowflake(user_id) || !valid_snowflake(role_id) {
             return err("guild_id, user_id, and role_id must be Discord snowflakes")
         }
-        let result: Result[String, String] = self.request("PUT", "/guilds/" + guild_id + "/members/" + user_id + "/roles/" + role_id, "")
+        let result: Result[String, String] = self.request_with_audit_reason("PUT", "/guilds/" + guild_id + "/members/" + user_id + "/roles/" + role_id, "", reason)
         match result {
             ok(_) => { return ok(nil) }
             err(problem) => { return err(problem) }
@@ -326,10 +420,31 @@ impl Bot {
     }
 
     pub fn remove_member_role(guild_id: String, user_id: String, role_id: String) -> Result[Nil, String] {
+        return self.remove_member_role_with_reason(guild_id, user_id, role_id, "")
+    }
+
+    pub fn remove_member_role_with_reason(guild_id: String, user_id: String, role_id: String, reason: String) -> Result[Nil, String] {
         if !valid_snowflake(guild_id) || !valid_snowflake(user_id) || !valid_snowflake(role_id) {
             return err("guild_id, user_id, and role_id must be Discord snowflakes")
         }
-        let result: Result[String, String] = self.request("DELETE", "/guilds/" + guild_id + "/members/" + user_id + "/roles/" + role_id, "")
+        let result: Result[String, String] = self.request_with_audit_reason("DELETE", "/guilds/" + guild_id + "/members/" + user_id + "/roles/" + role_id, "", reason)
+        match result {
+            ok(_) => { return ok(nil) }
+            err(problem) => { return err(problem) }
+        }
+    }
+
+    pub fn ban_with_options(guild_id: String, user_id: String, delete_message_seconds: Int) -> Result[Nil, String] {
+        return self.ban_with_options_and_reason(guild_id, user_id, delete_message_seconds, "")
+    }
+
+    pub fn ban_with_options_and_reason(guild_id: String, user_id: String, delete_message_seconds: Int, reason: String) -> Result[Nil, String] {
+        if !valid_snowflake(guild_id) || !valid_snowflake(user_id) { return err("guild_id and user_id must be Discord snowflakes") }
+        if delete_message_seconds < 0 || delete_message_seconds > 604800 {
+            return err("delete_message_seconds must be between 0 and 604800")
+        }
+        let body: String = "{\"delete_message_seconds\":" + str(delete_message_seconds) + "}"
+        let result: Result[String, String] = self.request_with_audit_reason("PUT", "/guilds/" + guild_id + "/bans/" + user_id, body, reason)
         match result {
             ok(_) => { return ok(nil) }
             err(problem) => { return err(problem) }
@@ -337,17 +452,46 @@ impl Bot {
     }
 
     pub fn ban(guild_id: String, user_id: String) -> Result[Nil, String] {
-        if !valid_snowflake(guild_id) || !valid_snowflake(user_id) { return err("guild_id and user_id must be Discord snowflakes") }
-        let result: Result[String, String] = self.request("PUT", "/guilds/" + guild_id + "/bans/" + user_id, "{\"delete_message_seconds\":0}")
-        match result {
-            ok(_) => { return ok(nil) }
-            err(problem) => { return err(problem) }
+        return self.ban_with_options(guild_id, user_id, 0)
+    }
+
+    pub fn ban_with_reason(guild_id: String, user_id: String, reason: String) -> Result[Nil, String] {
+        return self.ban_with_options_and_reason(guild_id, user_id, 0, reason)
+    }
+
+    pub fn bulk_ban(guild_id: String, user_ids: Array[String], delete_message_seconds: Int) -> Result[Json, String] {
+        return self.bulk_ban_with_reason(guild_id, user_ids, delete_message_seconds, "")
+    }
+
+    pub fn bulk_ban_with_reason(guild_id: String, user_ids: Array[String], delete_message_seconds: Int, reason: String) -> Result[Json, String] {
+        if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        if len(user_ids) < 1 || len(user_ids) > 200 { return err("bulk ban requires between 1 and 200 user IDs") }
+        if delete_message_seconds < 0 || delete_message_seconds > 604800 {
+            return err("delete_message_seconds must be between 0 and 604800")
         }
+        let mut checked_ids: Array[String] = []
+        let mut encoded_ids: String = "["
+        let mut first: Bool = true
+        for user_id in user_ids {
+            if !valid_snowflake(user_id) { return err("user_ids must contain only Discord snowflakes") }
+            if array_contains(checked_ids, user_id) { return err("user_ids must be unique") }
+            if !first { encoded_ids = encoded_ids + "," }
+            encoded_ids = encoded_ids + json_quote(user_id)?
+            checked_ids = array_push(checked_ids, user_id)
+            first = false
+        }
+        encoded_ids = encoded_ids + "]"
+        let body: String = "{\"user_ids\":" + encoded_ids + ",\"delete_message_seconds\":" + str(delete_message_seconds) + "}"
+        return response_json(self.request_with_audit_reason("POST", "/guilds/" + guild_id + "/bulk-ban", body, reason))
     }
 
     pub fn unban(guild_id: String, user_id: String) -> Result[Nil, String] {
+        return self.unban_with_reason(guild_id, user_id, "")
+    }
+
+    pub fn unban_with_reason(guild_id: String, user_id: String, reason: String) -> Result[Nil, String] {
         if !valid_snowflake(guild_id) || !valid_snowflake(user_id) { return err("guild_id and user_id must be Discord snowflakes") }
-        let result: Result[String, String] = self.request("DELETE", "/guilds/" + guild_id + "/bans/" + user_id, "")
+        let result: Result[String, String] = self.request_with_audit_reason("DELETE", "/guilds/" + guild_id + "/bans/" + user_id, "", reason)
         match result {
             ok(_) => { return ok(nil) }
             err(problem) => { return err(problem) }
@@ -355,8 +499,12 @@ impl Bot {
     }
 
     pub fn kick(guild_id: String, user_id: String) -> Result[Nil, String] {
+        return self.kick_with_reason(guild_id, user_id, "")
+    }
+
+    pub fn kick_with_reason(guild_id: String, user_id: String, reason: String) -> Result[Nil, String] {
         if !valid_snowflake(guild_id) || !valid_snowflake(user_id) { return err("guild_id and user_id must be Discord snowflakes") }
-        let result: Result[String, String] = self.request("DELETE", "/guilds/" + guild_id + "/members/" + user_id, "")
+        let result: Result[String, String] = self.request_with_audit_reason("DELETE", "/guilds/" + guild_id + "/members/" + user_id, "", reason)
         match result {
             ok(_) => { return ok(nil) }
             err(problem) => { return err(problem) }

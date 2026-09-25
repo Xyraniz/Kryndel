@@ -837,6 +837,7 @@ type Runtime struct {
 	discordRates      *discordRateLimiter
 	discordCache      *discordObjectCache
 	discordAPIBaseURL string
+	discordGateway    *discordGatewayState
 }
 
 type runtimeResource struct {
@@ -915,7 +916,7 @@ func NewRuntimeWithArgs(prog *Program, c *Checker, lim Limits, sb Sandbox, args 
 	} else {
 		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
 	}
-	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Args: append([]string(nil), args...), Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(), discordCache: newDiscordObjectCache(10_000, 30*time.Minute), discordAPIBaseURL: discordAPIBase}
+	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Args: append([]string(nil), args...), Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(), discordCache: newDiscordObjectCache(10_000, 30*time.Minute), discordAPIBaseURL: discordAPIBase, discordGateway: newDiscordGatewayState()}
 	return r, nil
 }
 func (r *Runtime) fail(e *Expr, format string, args ...any) *Diagnostic {
@@ -2405,13 +2406,32 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return r.httpRequestAuth(e, a[0].S, a[1].S, a[2].S, a[3].S)
 	case "discord_api_request":
 		return r.discordAPIRequest(a[0].S, a[1].S, a[2].S, a[3].S)
+	case "discord_api_request_with_reason":
+		return r.discordAPIRequestWithReason(a[0].S, a[1].S, a[2].S, a[3].S, a[4].S)
+	case "discord_gateway_session_bind":
+		return r.discordGatewayBindSession(a[0].WS, a[1].I)
+	case "discord_gateway_session_unbind":
+		return r.discordGatewayUnbindSession(), nil
+	case "discord_gateway_request_members":
+		if a[3].Kind != VArray {
+			return resVal(false, stringVal("Discord member request user_ids must be an Array[String]")), nil
+		}
+		return r.discordGatewayRequestMembers(a[0].S, a[1].S, a[2].I, arrayValues(a[3]), a[4].Bool, a[5].S, a[6].Bool)
+	case "discord_gateway_member_chunk":
+		return r.discordGatewayMemberChunkResult(a[0].S)
+	case "discord_gateway_rate_limit":
+		return r.discordGatewayRateLimitResult(a[0].S)
+	case "discord_gateway_take_member_query_failures":
+		return r.discordGatewayTakeMemberQueryFailures(), nil
 	case "discord_interaction_request":
 		return r.discordInteractionRequest(a[0].S, a[1].S, a[2].S)
 	case "discord_api_upload":
 		return r.discordAPIUpload(a[0].S, a[1].S, a[2].S, a[3].S, a[4].Bytes, a[5].S)
-	case "discord_api_upload_files", "discord_webhook_upload":
+	case "discord_api_upload_with_reason":
+		return r.discordAPIUploadWithReason(a[0].S, a[1].S, a[2].S, a[3].S, a[4].Bytes, a[5].S, a[6].S)
+	case "discord_api_upload_files", "discord_api_upload_files_with_reason", "discord_webhook_upload":
 		uploadName := "Discord webhook upload"
-		if b.Name == "discord_api_upload_files" {
+		if b.Name == "discord_api_upload_files" || b.Name == "discord_api_upload_files_with_reason" {
 			uploadName = "Discord API upload"
 		}
 		if a[3].Kind != VArray || a[4].Kind != VArray {
@@ -2427,6 +2447,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 				return resVal(false, stringVal(uploadName+" expects String filenames and Bytes file data")), nil
 			}
 			files[index] = discordUploadFile{filename: filenames[index].S, data: fileData[index].Bytes}
+		}
+		if b.Name == "discord_api_upload_files_with_reason" {
+			return r.discordAPIUploadFilesWithReason(a[0].S, a[1].S, a[2].S, files, a[5].S, a[6].S)
 		}
 		if b.Name == "discord_api_upload_files" {
 			return r.discordAPIUploadFiles(a[0].S, a[1].S, a[2].S, files, a[5].S)
@@ -4166,7 +4189,7 @@ func (r *Runtime) spawn(e *Expr, name string) (Value, *Diagnostic) {
 	}
 	go func() {
 		defer close(t.Done)
-		wr := &Runtime{Prog: r.Prog, Checker: r.Checker, Funcs: r.Funcs, Global: newRunScope(nil), Lim: r.Lim, Sandbox: r.Sandbox, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: r.Lim}, Channels: channelsSnapshot, Threads: threadsSnapshot, Worker: true, discordRates: r.discordRates, discordCache: r.discordCache, discordAPIBaseURL: r.discordAPIBaseURL}
+		wr := &Runtime{Prog: r.Prog, Checker: r.Checker, Funcs: r.Funcs, Global: newRunScope(nil), Lim: r.Lim, Sandbox: r.Sandbox, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: r.Lim}, Channels: channelsSnapshot, Threads: threadsSnapshot, Worker: true, discordRates: r.discordRates, discordCache: r.discordCache, discordAPIBaseURL: r.discordAPIBaseURL, discordGateway: r.discordGateway}
 		wr.Worker = true
 		for n, v := range channelSnapshot {
 			_ = wr.Global.define(n, v, false)

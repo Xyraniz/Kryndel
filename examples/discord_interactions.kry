@@ -6,10 +6,102 @@ fn ping_interaction(interaction_json: String) -> String {
 }
 
 fn color_autocomplete(interaction_json: String) -> String {
+    let focused_json: String = result_unwrap(interaction_autocomplete_focused_option_json(interaction_json))
+    let focused_option: Json = result_unwrap(json_parse(focused_json))
+    let raw_query: Json = result_unwrap(json_object_get(focused_option, "value"))
+    let query: String = result_unwrap(json_string(raw_query))
     let blue: String = result_unwrap(string_choice_json("Blue", "blue"))
     let green: String = result_unwrap(string_choice_json("Green", "green"))
-    let choices: String = "[" + blue + "," + green + "]"
+    let mut choices: String = "["
+    let mut has_choice: Bool = false
+    if starts_with("blue", query) { choices = choices + blue; has_choice = true }
+    if starts_with("green", query) {
+        if has_choice { choices = choices + "," }
+        choices = choices + green
+    }
+    choices = choices + "]"
     return result_unwrap(autocomplete_response_json(choices))
+}
+
+fn confirm_interaction(interaction_json: String) -> String {
+    let button: String = result_unwrap(button_json("Confirm", "confirm_yes", 1, false))
+    let help_link: String = result_unwrap(link_button_json("Help", "https://discord.com/developers/docs", false))
+    let row: String = result_unwrap(button_row_json("[" + button + "," + help_link + "]"))
+    return result_unwrap(interaction_message_components_response_json("Press the button to confirm", "[" + row + "]", true))
+}
+
+fn confirm_button_interaction(interaction_json: String) -> String {
+    return result_unwrap(interaction_message_response_visibility_json("Confirmed", true))
+}
+
+fn pick_color_interaction(interaction_json: String) -> String {
+    let red: String = result_unwrap(string_select_option_json("Red", "red", "Warm color", false))
+    let blue: String = result_unwrap(string_select_option_json("Blue", "blue", "Cool color", false))
+    let select: String = result_unwrap(string_select_json("color_choice", "[" + red + "," + blue + "]", "Choose a color", 1, 1, false))
+    let row: String = result_unwrap(string_select_row_json(select))
+    return result_unwrap(interaction_message_components_response_json("Pick one color", "[" + row + "]", true))
+}
+
+fn color_select_interaction(interaction_json: String) -> String {
+    let values_json: String = result_unwrap(interaction_component_values_json(interaction_json))
+    let values: Json = result_unwrap(json_parse(values_json))
+    let first: Json = result_unwrap(json_array_get(values, 0))
+    let selected: String = result_unwrap(json_string(first))
+    return result_unwrap(interaction_message_response_visibility_json("Selected " + selected, true))
+}
+
+fn pick_user_interaction(interaction_json: String) -> String {
+    let select: String = result_unwrap(user_select_json("user_choice", "Choose a user", 1, 1, false, ""))
+    let row: String = result_unwrap(entity_select_row_json(select))
+    return result_unwrap(interaction_message_components_response_json("Choose a user", "[" + row + "]", true))
+}
+
+fn user_select_interaction(interaction_json: String) -> String {
+    let values_json: String = result_unwrap(interaction_component_values_json(interaction_json))
+    let values: Json = result_unwrap(json_parse(values_json))
+    let first: Json = result_unwrap(json_array_get(values, 0))
+    let user_id: String = result_unwrap(json_string(first))
+    let resolved_json: String = result_unwrap(interaction_component_resolved_json(interaction_json))
+    let resolved: Json = result_unwrap(json_parse(resolved_json))
+    let users: Json = result_unwrap(json_object_get(resolved, "users"))
+    let user: Json = result_unwrap(json_object_get(users, user_id))
+    let raw_username: Json = result_unwrap(json_object_get(user, "username"))
+    let username: String = result_unwrap(json_string(raw_username))
+    return result_unwrap(interaction_message_response_visibility_json("Selected " + username, true))
+}
+
+fn admin_kick_interaction(interaction_json: String) -> String {
+    let target_json: String = result_unwrap(interaction_command_option_value_json(interaction_json, "target"))
+    let target_value: Json = result_unwrap(json_parse(target_json))
+    let target_id: String = result_unwrap(json_string(target_value))
+    return result_unwrap(interaction_message_response_visibility_json("Moderation command routed for user " + target_id, true))
+}
+
+fn inspect_user_context_interaction(interaction_json: String) -> String {
+    let user_json: String = result_unwrap(interaction_context_target_user_json(interaction_json))
+    let user: Json = result_unwrap(json_parse(user_json))
+    let raw_username: Json = result_unwrap(json_object_get(user, "username"))
+    let username: String = result_unwrap(json_string(raw_username))
+    return result_unwrap(interaction_message_response_visibility_json("Selected user: " + username, true))
+}
+
+fn feedback_modal_interaction(interaction_json: String) -> String {
+    let text_input: String = result_unwrap(text_input_json("feedback_text", 2, 1, 1000, "Your feedback", true, ""))
+    let label: String = result_unwrap(modal_text_input_label_json("Feedback", "Tell us what to improve", text_input))
+    let general_option: String = result_unwrap(string_select_option_json("General", "general", "A general suggestion", false))
+    let bug_option: String = result_unwrap(string_select_option_json("Bug", "bug", "Report a problem", false))
+    let kind_select: String = result_unwrap(modal_string_select_json("feedback_kind", "[" + general_option + "," + bug_option + "]", "Feedback type", 1, 1, true))
+    let kind_label: String = result_unwrap(modal_select_label_json("Type", "Choose the kind of feedback", kind_select))
+    return result_unwrap(interaction_modal_response_json("feedback_modal", "Send feedback", "[" + label + "," + kind_label + "]"))
+}
+
+fn feedback_submit_interaction(interaction_json: String) -> String {
+    let feedback: String = result_unwrap(interaction_modal_text_value(interaction_json, "feedback_text"))
+    let kind_json: String = result_unwrap(interaction_modal_select_values_json(interaction_json, "feedback_kind"))
+    let kind_values: Json = result_unwrap(json_parse(kind_json))
+    let kind_value: Json = result_unwrap(json_array_get(kind_values, 0))
+    let kind: String = result_unwrap(json_string(kind_value))
+    return result_unwrap(interaction_message_response_visibility_json("Received " + kind + " feedback: " + feedback, true))
 }
 
 fn main() -> Result[Nil, String] {
@@ -19,16 +111,52 @@ fn main() -> Result[Nil, String] {
     let client: Bot = bot(token, ["Guilds"])?
 
     let ping: String = slash_command_json("ping", "Check if the bot is online", "[]")?
-    let color: String = "{\"name\":\"color\",\"type\":1,\"description\":\"Choose a color\",\"options\":[{\"name\":\"color\",\"description\":\"Search available colors\",\"type\":3,\"required\":true,\"autocomplete\":true}]}"
+    let color_option: String = slash_option_json("color", "Search available colors", 3, true, "{\"autocomplete\":true}")?
+    let color: String = slash_command_json("color", "Choose a color", "[" + color_option + "]")?
+    let confirm: String = slash_command_json("confirm", "Show an interactive confirmation button", "[]")?
+    let pick_color: String = slash_command_json("pick-color", "Pick a color from a menu", "[]")?
+    let pick_user: String = slash_command_json("pick-user", "Choose a user from a select menu", "[]")?
+    let target_option: String = slash_option_json("target", "User to target", 6, true, "{}")?
+    let kick_subcommand: String = slash_subcommand_json("kick", "Kick a member", "[" + target_option + "]")?
+    let moderation_group: String = slash_subcommand_group_json("moderation", "Moderation actions", "[" + kick_subcommand + "]")?
+    let admin: String = slash_command_json("admin", "Manage server members", "[" + moderation_group + "]")?
+    let feedback: String = slash_command_json("feedback", "Send feedback", "[]")?
+    let inspect_user: String = user_context_command_json("Inspect User")?
     let empty_tree: CommandTree = guild_command_tree(application_id, guild_id)?
     let with_ping: CommandTree = empty_tree.add(ping)?
-    let tree: CommandTree = with_ping.add(color)?
+    let with_color: CommandTree = with_ping.add(color)?
+    let with_confirm: CommandTree = with_color.add(confirm)?
+    let with_pick_color: CommandTree = with_confirm.add(pick_color)?
+    let with_pick_user: CommandTree = with_pick_color.add(pick_user)?
+    let with_admin: CommandTree = with_pick_user.add(admin)?
+    let with_feedback: CommandTree = with_admin.add(feedback)?
+    let tree: CommandTree = with_feedback.add(inspect_user)?
     let synced: Json = tree.sync(client)?
 
     let ping_handler: Result[Nil, String] = poly_register("discord.on_command.ping", "ping_interaction", 0)
     ping_handler?
     let autocomplete_handler: Result[Nil, String] = poly_register("discord.on_autocomplete.color", "color_autocomplete", 0)
     autocomplete_handler?
+    let confirm_handler: Result[Nil, String] = poly_register("discord.on_command.confirm", "confirm_interaction", 0)
+    confirm_handler?
+    let confirm_button_handler: Result[Nil, String] = poly_register("discord.on_component.confirm_yes", "confirm_button_interaction", 0)
+    confirm_button_handler?
+    let pick_color_handler: Result[Nil, String] = poly_register("discord.on_command.pick-color", "pick_color_interaction", 0)
+    pick_color_handler?
+    let color_select_handler: Result[Nil, String] = poly_register("discord.on_component.color_choice", "color_select_interaction", 0)
+    color_select_handler?
+    let pick_user_handler: Result[Nil, String] = poly_register("discord.on_command.pick-user", "pick_user_interaction", 0)
+    pick_user_handler?
+    let user_select_handler: Result[Nil, String] = poly_register("discord.on_component.user_choice", "user_select_interaction", 0)
+    user_select_handler?
+    let admin_handler: Result[Nil, String] = poly_register("discord.on_command.admin.moderation.kick", "admin_kick_interaction", 0)
+    admin_handler?
+    let inspect_user_handler: Result[Nil, String] = poly_register("discord.on_command.Inspect User", "inspect_user_context_interaction", 0)
+    inspect_user_handler?
+    let feedback_handler: Result[Nil, String] = poly_register("discord.on_command.feedback", "feedback_modal_interaction", 0)
+    feedback_handler?
+    let feedback_submit_handler: Result[Nil, String] = poly_register("discord.on_component.feedback_modal", "feedback_submit_interaction", 0)
+    feedback_submit_handler?
     return client.run()
 }
 

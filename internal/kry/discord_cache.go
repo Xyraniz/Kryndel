@@ -428,6 +428,17 @@ func (c *discordObjectCache) ingest(event, payload string) error {
 			mergeComposite("member", object["guild_id"], object)
 			mergeObject("user", user)
 		}
+	case "GUILD_MEMBERS_CHUNK":
+		guildID, ok := discordJSONID(object["guild_id"])
+		if ok {
+			members, _ := object["members"].([]any)
+			for _, value := range members {
+				putComposite("member", guildID, value)
+				member, _ := value.(map[string]any)
+				user, _ := member["user"].(map[string]any)
+				putObject("user", user)
+			}
+		}
 	case "GUILD_MEMBER_REMOVE":
 		user, _ := object["user"].(map[string]any)
 		if user != nil {
