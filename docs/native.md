@@ -101,6 +101,9 @@ self-hosted subset status. JSON consumers can run `kry --json capabilities
 inventories; `partial` marks the documented direct-ELF subset or current
 self-hosted frontend subset.
 
+> [!IMPORTANT]
+> `supported` describes backend support for a format and target; it does not confirm that the required external compiler is installed. Run `kry doctor` to check the current host.
+
 Use `kry capabilities --features` for the combined language matrix. It lists
 every registered builtin, expression kind, statement kind, pattern kind,
 unary and binary operator, and declared language type for every native target.
