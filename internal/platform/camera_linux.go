@@ -11,7 +11,6 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
-	"strings"
 	"time"
 
 	"github.com/blackjack/webcam"
@@ -92,14 +91,11 @@ func CaptureCamera(ctx context.Context, device string, width, height int64, maxB
 }
 
 func preferredCameraFormat(formats map[webcam.PixelFormat]string) (webcam.PixelFormat, bool) {
-	for format, description := range formats {
-		lower := strings.ToLower(description)
-		if strings.Contains(lower, "mjpeg") || strings.Contains(lower, "motion-jpeg") {
+	for _, name := range []string{"MJPG", "JPEG", "YUYV", "RGB3"} {
+		format := fourCC(name)
+		if _, ok := formats[format]; ok {
 			return format, true
 		}
-	}
-	for format := range formats {
-		return format, true
 	}
 	return 0, false
 }

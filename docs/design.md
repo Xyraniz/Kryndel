@@ -18,7 +18,7 @@ This model makes ordinary source evaluation deterministic and prevents accidenta
 
 ## Threads and shared state
 
-The stable language provides OS-backed `Thread[T]` workers and bounded single-slot `Channel[T]` values through explicit `thread_*` builtins. A worker is spawned by the name of a zero-argument function, receives a private child scope containing only global channel handles, and reports its first diagnostic through `thread_join`. `thread_send` permits only recursively Copy values: primitives, strings, bytes, enums, and arrays, options, or results composed of Copy values. Structs and synchronization handles are not transferable.
+The stable language provides OS-backed `Thread[T]` workers and bounded FIFO `Channel[T]` values through explicit `thread_*` builtins. Channels have a default capacity of 64; `thread_channel_with_capacity` accepts a configured positive capacity. A worker is spawned by the name of a zero-argument function, receives a private child scope containing only global channel handles, and reports its first diagnostic through `thread_join`. `thread_send` permits only recursively Copy values: primitives, strings, bytes, enums, and arrays, options, or results composed of Copy values. Structs and synchronization handles are not transferable.
 
 Channel operations use Go synchronization primitives and predicate-based waits. Send and receive wait on state predicates, and close wakes blocked operations. The parent runtime closes channels and joins outstanding workers at shutdown, including after an earlier runtime failure. This is a deliberately small concurrency model; async scheduling, atomics, read-write locks, cancellation tokens, and arbitrary shared mutable state are outside the stable API.
 

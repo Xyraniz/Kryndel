@@ -47,7 +47,7 @@ Supported statements are `let`, `let mut`, expression statements, assignment, `f
 | `Nil` | `nil` | Explicit empty value. |
 | `Option[T]` | `some(7)`, `none()` | Explicit presence or absence. |
 | `Result[T, E]` | `ok(7)`, `err("bad")` | Explicit success or error value. |
-| `Channel[T]` | `thread_channel()` | Bounded synchronized channel for copy-safe values. |
+| `Channel[T]` | `thread_channel()`, `thread_channel_with_capacity(n)` | FIFO synchronized queue; capacity 64 by default or a configured positive capacity. |
 | `Thread[T]` | `thread_spawn("worker")` | OS-backed worker handle whose result type is `T`. |
 | `Struct` | `Point{ x: 1, y: 2 }` | Named fields checked against a declaration. |
 | `Enum` | `Color::Red` | Tagged variant checked against a declaration. |
@@ -107,11 +107,11 @@ match color {
 
 ## Threads, actors, and async effects
 
-The stable concurrency API uses seven explicit builtins: `thread_channel`, `thread_spawn`, `thread_send`, `thread_receive`, `thread_receive_timeout`, `thread_join`, and `thread_close`. A channel is a bounded single-slot synchronization object. Worker functions are named, take no arguments, and return a declared type. `thread_send` accepts only Copy values: primitives, strings, bytes, enums, and recursively Copy arrays, options, and results. Structs, channel handles, and thread handles are not transferable values.
+The thread API provides channel creation, capacity configuration, blocking and nonblocking send/receive, timed operations, cancellation, joining, and close through `thread_channel`, `thread_channel_with_capacity`, `thread_spawn`, `thread_send`, `thread_try_send`, `thread_send_timeout`, `thread_receive`, `thread_try_receive`, `thread_receive_timeout`, `thread_join`, `thread_join_timeout`, `thread_cancel`, and `thread_close`. `thread_channel` creates a FIFO queue with capacity 64; `thread_channel_with_capacity` requires a positive capacity. Worker functions are named, take no arguments, and return a declared type. `thread_send` accepts only Copy values: primitives, strings, bytes, enums, and recursively Copy arrays, options, and results. Structs, channel handles, and thread handles are not transferable values.
 
 Workers receive only global channel handles through a private runtime scope; ordinary global values and mutable application data are not exposed to a worker. Channel operations are synchronized with a mutex and condition variables. Closing a channel wakes blocked senders and receivers; `thread_receive_timeout` provides a bounded millisecond deadline; the runtime closes channels and joins outstanding workers during program shutdown. Worker failures are propagated by `thread_join` and by shutdown when no earlier error exists.
 
-`Actor[T]` is an isolated, bounded mailbox for recursively Copy messages. `actor_channel` creates one, `actor_send` blocks with cancellation, and `actor_try_receive`, `actor_receive_timeout`, and `actor_close` provide non-panicking mailbox operations. `await` and `await_timeout` are explicit effect boundaries over `Thread[T]`; `yield_now` and `sleep_ms` cooperate with the runtime context instead of busy-waiting. There is no hidden scheduler or shared mutable memory in these APIs.
+`Actor[T]` is an isolated FIFO mailbox for recursively Copy messages. `actor_channel` creates a mailbox with capacity 64; `actor_channel_with_capacity` requires a positive capacity. `actor_send` blocks with cancellation, `actor_try_receive` returns a `Result`, and `actor_receive_timeout` returns a message or raises a runtime diagnostic on timeout. `actor_close` closes the mailbox. `await` and `await_timeout` are explicit effect boundaries over `Thread[T]`; `yield_now` and `sleep_ms` cooperate with the runtime context instead of busy-waiting. There is no hidden scheduler or shared mutable memory in these APIs.
 
 `TaskGroup` provides structured concurrency for named zero-argument workers. `task_spawn(group, "worker")` registers each child with its group, `task_group_wait` joins every child, and the first worker failure cancels and waits for its siblings before returning the failure. `task_group_cancel` cancels all children and makes the group wait result an error. Child handles remain joinable after group completion, but the group owns their lifetime and no child is silently detached.
 

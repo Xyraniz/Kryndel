@@ -24,6 +24,12 @@ func run(args []string) int {
 	i := 0
 	for i < len(args) && strings.HasPrefix(args[i], "--") {
 		switch args[i] {
+		case "--help":
+			printHelp()
+			return 0
+		case "--version":
+			fmt.Println("Kryndel " + version)
+			return 0
 		case "--json":
 			jsonMode = true
 			i++
@@ -912,11 +918,11 @@ func printHelp() {
 	fmt.Println("Kryndel " + version + " — self-contained language toolchain")
 	fmt.Println("usage: kry [global-options] command [arguments]")
 	fmt.Println("       kry [global-options] FILE.kry|FILE.kexe")
-	fmt.Println("commands: check, run, build, emit, inspect, capabilities, fmt, lsp, repl, doctor, version")
+	fmt.Println("commands: help, check, run, build, emit, inspect, capabilities, fmt, lsp, repl, doctor, version")
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
 	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (Linux subset); pe-direct (Windows x64 scalar/function subset); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
 	fmt.Println("check options: -Werror, -Werror=KRYW002,KRYW004, -Wno=KRYW003")
-	fmt.Println("global options: --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-json BYTES, --max-instructions N, --max-wall-ms N (0 disables the wall-time limit)")
+	fmt.Println("global options: --help, --version, --json, --restricted ROOT, --max-source BYTES, --max-artifact BYTES, --max-json BYTES, --max-instructions N, --max-wall-ms N (0 disables the wall-time limit)")
 	fmt.Println("sealed artifacts: --passphrase VALUE, --passphrase-file PATH (AES-256-GCM + PBKDF2-SHA256)")
 }

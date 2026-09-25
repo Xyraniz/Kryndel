@@ -2,7 +2,7 @@
 
 ## Unreleased — Dispatch and local editor completion
 
-`poly_register` and `poly_reorder` accept `String` expressions for handler names; invalid dynamic names return the documented `Result` errors, while literal names retain early signature checks. LSP completion now includes in-scope parameters and local bindings plus accessible fields after `.` when the receiver is a struct-valued identifier. Windows Make builds and runs `build/kry.exe`, and `make test-static` formats only Go files changed from the branch base instead of failing on pre-existing formatting drift. The offline test suite checks the Discord bot example without starting a credential-dependent connection.
+`poly_register` and `poly_reorder` accept `String` expressions for handler names; invalid dynamic names return the documented `Result` errors, while literal names retain early signature checks. LSP completion now includes in-scope parameters and local bindings plus accessible fields after `.` when the receiver is a struct-valued identifier. The documented `--help` and `--version` global flags are now accepted by the CLI. Windows Make builds and runs `build/kry.exe`, and `make test-static` formats only Go files changed from the branch base instead of failing on pre-existing formatting drift. The offline test suite checks the Discord bot example without starting a credential-dependent connection.
 
 ## Unreleased — Kryndel language server
 

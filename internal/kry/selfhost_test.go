@@ -40,11 +40,13 @@ func runStage37ModuleTypeFixture(t *testing.T, compiler, label string) {
 	t.Helper()
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "main.kry")
-	geometryPath := filepath.Join(dir, "geometry.kry")
+	geometryDir := filepath.Join(dir, "geometry")
+	geometryPath := filepath.Join(geometryDir, "point.kry")
+	scalingPath := filepath.Join(geometryDir, "scaling.kry")
 	modesPath := filepath.Join(dir, "modes.kry")
 	outputPath := filepath.Join(dir, "module-types")
 	files := map[string]string{
-		mainPath: `import "geometry"
+		mainPath: `import "geometry/point"
 import "modes"
 
 fn main() -> Nil {
@@ -53,10 +55,15 @@ fn main() -> Nil {
     println(score(Mode::Ready, point.x + point.y))
 }
 `,
-		geometryPath: `pub struct Point { x: Int, y: Int }
+		geometryPath: `import "scaling"
+pub struct Point { x: Int, y: Int }
 
 pub fn translate(point: Point) -> Point {
-    return Point{x: point.x + 1, y: point.y}
+    return Point{x: scale_x(point.x), y: point.y}
+}
+`,
+		scalingPath: `pub fn scale_x(value: Int) -> Int {
+    return value + 1
 }
 `,
 		modesPath: `pub enum Mode { Idle, Ready }
@@ -66,6 +73,9 @@ pub fn score(mode: Mode, value: Int) -> Int {
     return 0
 }
 `,
+	}
+	if err := os.MkdirAll(geometryDir, 0o700); err != nil {
+		t.Fatal(err)
 	}
 	for path, source := range files {
 		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
@@ -85,6 +95,17 @@ pub fn score(mode: Mode, value: Int) -> Int {
 	}
 	if string(programOutput) != "Mode::Ready\n42\n" {
 		t.Fatalf("%s compiler's imported struct/enum output = %q, want %q", label, programOutput, "Mode::Ready\n42\n")
+	}
+	for _, importPath := range []string{"../escape", "geometry/../escape", "geometry//escape", "/absolute"} {
+		invalidPath := filepath.Join(dir, "invalid.kry")
+		invalidSource := "import \"" + importPath + "\"\nfn main() -> Nil {}\n"
+		if err := os.WriteFile(invalidPath, []byte(invalidSource), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command(compiler, invalidPath, outputPath).CombinedOutput()
+		if err == nil || !strings.Contains(string(output), "unsafe module path") {
+			t.Fatalf("%s compiler accepted unsafe module path %q or returned an unexpected error: %v; output: %s", label, importPath, err, output)
+		}
 	}
 }
 
