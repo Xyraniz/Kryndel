@@ -41,7 +41,7 @@ The direct file form is useful for desktop integrations. On Windows, the release
 | `kry add` / `kry install` | Manages vendored package dependencies. |
 | `kry test` | Runs the project entrypoint, defaulting to `main.kry`. |
 
-Use `kry --help` for global limits, JSON diagnostics, restricted filesystem execution, emit options, registry commands, and package commands.
+Use `kry --help` for global limits, JSON diagnostics, restricted execution, emit options, registry commands, and package commands. `--restricted ROOT` confines Kryndel-managed filesystem access and denies unmediated host capabilities; it is not an operating system sandbox. See [system integration](docs/system.md#system-integration-guide).
 
 Start a project and run its generated entry point:
 

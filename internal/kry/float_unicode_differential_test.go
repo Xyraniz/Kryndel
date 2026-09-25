@@ -21,7 +21,7 @@ func runInterpreterCapture(t *testing.T, source string) (string, *Diagnostic) {
 	if d != nil {
 		return "", d
 	}
-	runtimeValue, d := NewRuntime(program, checker, DefaultLimits(), Sandbox{Root: t.TempDir(), Restricted: true})
+	runtimeValue, d := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
 	if d != nil {
 		return "", d
 	}

@@ -30,7 +30,7 @@ func TestGeocodeIPBuiltinUsesValidatedJSON(t *testing.T) {
     return nil
 }
 `
-	got := runInterp(t, src)
+	got := runInterpUnrestricted(t, src)
 	want := "{\"country_code\":\"US\",\"latitude\":37.751,\"ok\":true}\ninvalid rejected\n"
 	if got != want {
 		t.Fatalf("unexpected geocoder output: got %q want %q", got, want)

@@ -17,6 +17,14 @@ import (
 // hardening tests below so every assertion is made against real output rather
 // than an assumed result.
 func runInterp(t *testing.T, src string) string {
+	return runInterpWithSandbox(t, src, Sandbox{Root: t.TempDir(), Restricted: true})
+}
+
+func runInterpUnrestricted(t *testing.T, src string) string {
+	return runInterpWithSandbox(t, src, Sandbox{})
+}
+
+func runInterpWithSandbox(t *testing.T, src string, sb Sandbox) string {
 	t.Helper()
 	p, d := Parse(&Source{Name: "test.kry", Text: src}, DefaultLimits())
 	if d != nil {
@@ -26,7 +34,6 @@ func runInterp(t *testing.T, src string) string {
 	if d != nil {
 		t.Fatalf("check: %s", d.Message)
 	}
-	sb := Sandbox{Root: t.TempDir(), Restricted: true}
 	r, d := NewRuntime(p, c, DefaultLimits(), sb)
 	if d != nil {
 		t.Fatal(d)

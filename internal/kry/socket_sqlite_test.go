@@ -37,7 +37,7 @@ func TestSQLiteBuiltinsInterpreter(t *testing.T) {
     return nil
 }
 `
-	got := runInterp(t, src)
+	got := runInterpUnrestricted(t, src)
 	want := "[[1, Ada], [2, Grace]]\nquery rejected\n"
 	if got != want {
 		t.Fatalf("unexpected SQLite output: got %q want %q", got, want)
@@ -94,7 +94,7 @@ func TestTCPBuiltinsInterpreter(t *testing.T) {
     return nil
 }
 `, port)
-	got := runInterp(t, src)
+	got := runInterpUnrestricted(t, src)
 	if got != "pong\ninvalid port rejected\n" {
 		t.Fatalf("unexpected TCP output: %q", got)
 	}
@@ -138,7 +138,7 @@ func TestUDPBuiltinsInterpreter(t *testing.T) {
     return nil
 }
 `, port)
-	got := runInterp(t, src)
+	got := runInterpUnrestricted(t, src)
 	if !strings.HasSuffix(got, "\n") || strings.TrimSpace(got) != "4" {
 		t.Fatalf("unexpected UDP output: %q", got)
 	}

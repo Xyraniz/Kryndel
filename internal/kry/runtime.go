@@ -1734,6 +1734,9 @@ func remI(a, b int64) (int64, bool) {
 func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 	if e.Receiver == nil {
 		if b, ok := r.Checker.Env.Builtins[e.Name]; ok {
+			if !r.Sandbox.allowsBuiltin(b) {
+				return nilVal(), r.fail(e, "builtin %q is unavailable with --restricted", b.Name)
+			}
 			args := make([]Value, len(e.Args))
 			for i, a := range e.Args {
 				v, d := r.evalExpr(sc, a)

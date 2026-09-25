@@ -67,7 +67,7 @@ func TestFFIBuiltinsInterpreter(t *testing.T) {
 }
 `
 	src = strings.ReplaceAll(src, "LIBRARY", library)
-	got := runInterp(t, src)
+	got := runInterpUnrestricted(t, src)
 	want := "5\nbad signature rejected\n"
 	if got != want {
 		t.Fatalf("unexpected FFI output: got %q want %q", got, want)
