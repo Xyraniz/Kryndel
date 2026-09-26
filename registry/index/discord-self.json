@@ -2,6 +2,14 @@
   "name": "discord-self",
   "versions": [
     {
+      "version": "1.3.0",
+      "url": "/packages/discord-self-1.3.0.tar.gz",
+      "sha256": "4cdff759f04d0faf6edef49ec862b2eef571b2c0e5d645313d9098a0fe07d8fb",
+      "dependencies": {
+        "discord": "^2.3.0"
+      }
+    },
+    {
       "version": "1.2.0",
       "url": "/packages/discord-self-1.2.0.tar.gz",
       "sha256": "de24a814f8aa9965ae22be1ef951f95cb903a48316df220a8c4f665bf1c9fe3f",
