@@ -88,6 +88,14 @@ run_enum_match_fixture() {
 run_fixture "$seed_path" stage1
 run_enum_match_fixture "$seed_path" stage1
 
+selfhost_pe_output="${KRY_STAGE38_SELFHOST_PE_OUTPUT:-}"
+if [[ -n "$selfhost_pe_output" ]]; then
+  mkdir -p "$(dirname "$selfhost_pe_output")"
+  bash "$repo_root/scripts/build-selfhost-pe.sh" \
+    "$repo_root/selfhost/fixtures/source_enum_match_stage38.kry" \
+    "$selfhost_pe_output"
+fi
+
 stage2="$tmp/stage2-source-kir-compiler"
 "$seed_path" selfhost/source_kir_compiler.kry "$stage2"
 chmod 700 "$stage2"

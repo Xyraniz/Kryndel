@@ -108,13 +108,13 @@ On non-Linux hosts, `TestStage36KryndelSecondCompilerBootstrap` skips before emi
 
 ## Windows PE output from the self-hosted source frontend
 
-`source_kir_compiler.kry` can request the C-free Windows x86-64 PE32+ serializer for programs inside a deliberately bounded subset:
+`source_kir_compiler.kry` can request the C-free Windows x86-64 PE32+ serializer for programs inside a deliberately bounded subset. Use the checked-in Stage 1 ELF directly through the build helper:
 
 ```text
-kry run selfhost/source_kir_compiler.kry program.kry program.exe windows-amd64
+bash scripts/build-selfhost-pe.sh program.kry program.exe
 ```
 
-The compiler frontend and dynamic backend are written in Kryndel. The bootstrap builds them into a standalone Linux amd64 compiler ELF; that ELF emits the Windows `.exe` without invoking C, MinGW, an assembler, or an external linker. The compiler itself is not yet a Windows executable, and the generated `.exe` supports only the subset below.
+The helper runs on Linux amd64 or WSL2 and invokes the locked Stage 1 Linux ELF directly. The compiler frontend and dynamic backend are written in Kryndel; neither Go, C, MinGW, an assembler, nor an external linker participates in this build. The generated Windows `.exe` supports only the subset below. `kry run selfhost/source_kir_compiler.kry program.kry program.exe windows-amd64` remains a Go-hosted convenience, not the independent bootstrap path.
 
 The PE subset includes native `process_args()`: it excludes the executable path, decodes Windows quoting through `CommandLineToArgvW`, converts UTF-16 arguments to UTF-8, and releases the parser's allocated argument block. The regression executes the PE on Windows with no user arguments and with empty, spaced, quoted, backslash, and non-ASCII arguments. The Stage 2 compiler remains a Linux ELF; its own filesystem host runtime is not available in PE output yet.
 

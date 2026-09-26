@@ -161,8 +161,8 @@ func ParseNativeTarget(raw string) (NativeTarget, error) {
 }
 
 // BuildNative compiles a checked program into a runnable executable using the
-// requested backend. The "elf-direct" format bypasses C; the "elf", "exe", and
-// "pe" formats lower to C and invoke an external C compiler.
+// requested backend. The "elf-direct" and "pe-direct" formats bypass C; the
+// "elf", "exe", and "pe" formats lower to C and invoke an external C compiler.
 func BuildNative(p *Program, c *Checker, target NativeTarget, format string) ([]byte, error) {
 	return BuildNativeOpts(p, c, target, format, false)
 }
@@ -190,7 +190,7 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 		return nil, err
 	}
 	if noExternalToolchain && backend.RequiresExternalToolchain {
-		return nil, fmt.Errorf("--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use --format=elf-direct for the supported direct ELF backend", format, backend.Name)
+		return nil, fmt.Errorf("--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use --format=elf-direct or --format=pe-direct for a supported C-free backend", format, backend.Name)
 	}
 	if format == "elf-direct" {
 		if err := validateNativeOutputTarget(format, target); err != nil {

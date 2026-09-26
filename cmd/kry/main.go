@@ -507,22 +507,42 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 		fmt.Println("built " + out + " (backend=portable KRYNATIVE4; external-toolchain=none)")
 		return 0
 	}
-	backend, err := kry.DescribeNativeBackend(format)
+	effectiveFormat := format
+	var t kry.NativeTarget
+	targetParsed := false
+	if noExternalToolchain && (format == "exe" || format == "pe") {
+		var err error
+		t, err = kry.ParseNativeTarget(target)
+		if err != nil {
+			return report(kry.Diag(kry.CatCLI, nil, 1, 1, "%v", err), jsonMode)
+		}
+		targetParsed = true
+		if t.OS == "windows" {
+			effectiveFormat = "pe-direct"
+		}
+	}
+	backend, err := kry.DescribeNativeBackend(effectiveFormat)
 	if err != nil {
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "%v", err), jsonMode)
 	}
 	if noExternalToolchain && backend.RequiresExternalToolchain {
-		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use --format=elf-direct for the supported direct ELF backend", format, backend.Name), jsonMode)
+		directFormat := "--format=elf-direct"
+		if format == "exe" || format == "pe" {
+			directFormat = "--format=pe-direct"
+		}
+		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use %s for the supported direct backend", format, backend.Name, directFormat), jsonMode)
 	}
 	p, c, d := e.CheckPath(src)
 	if d != nil {
 		return report(d, jsonMode)
 	}
-	t, err := kry.ParseNativeTarget(target)
-	if err != nil {
-		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "%v", err), jsonMode)
+	if !targetParsed {
+		t, err = kry.ParseNativeTarget(target)
+		if err != nil {
+			return report(kry.Diag(kry.CatCLI, nil, 1, 1, "%v", err), jsonMode)
+		}
 	}
-	data, err := kry.BuildNativeWithPolicyOpts(p, c, t, format, obfuscate, noExternalToolchain)
+	data, err := kry.BuildNativeWithPolicyOpts(p, c, t, effectiveFormat, obfuscate, noExternalToolchain)
 	if err != nil {
 		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "native build failed: %v", err), jsonMode)
 	}
@@ -923,7 +943,7 @@ func printHelp() {
 	fmt.Println("       kry [global-options] FILE.kry|FILE.kexe")
 	fmt.Println("commands: help, check, run, build, emit, inspect, capabilities, fmt, lsp, repl, doctor, version")
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
-	fmt.Println("build formats: kexe, exe/pe, elf (C AOT); elf-direct (Linux subset); pe-direct (Windows x64 scalar/function subset); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
+	fmt.Println("build formats: kexe, exe/pe (C AOT by default; --no-external-toolchain selects direct PE for Windows x64); elf (C AOT); elf-direct (Linux subset); pe-direct (Windows x64 subset); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
 	fmt.Println("check options: -Werror, -Werror=KRYW002,KRYW004, -Wno=KRYW003")
 	fmt.Println("global options: --help, --version, --json, --restricted ROOT (deny unconfined host APIs), --max-source BYTES, --max-artifact BYTES, --max-json BYTES, --max-instructions N, --max-wall-ms N (0 disables the wall-time limit)")

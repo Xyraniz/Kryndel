@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"debug/pe"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -110,6 +114,59 @@ func TestNoExternalToolchainCLIRejectsCBackendBeforeSourceIO(t *testing.T) {
 	}
 	if !strings.Contains(string(message), "--no-external-toolchain forbids --format=elf") || !strings.Contains(string(message), "external C compiler") {
 		t.Fatalf("build did not explain the forbidden backend dependency: %s", message)
+	}
+}
+
+func TestNoExternalToolchainWindowsExeBuildUsesDirectPE(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "app.kry")
+	output := filepath.Join(dir, "app.exe")
+	program := `fn twice(value: Int) -> Int {
+    return value * 2
+}
+fn main() -> Nil {
+    println(twice(21))
+}
+`
+	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldCompiler, hadCompiler := os.LookupEnv("KRY_CC")
+	if err := os.Setenv("KRY_CC", filepath.Join(dir, "c-compiler-must-not-run.exe")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if hadCompiler {
+			_ = os.Setenv("KRY_CC", oldCompiler)
+		} else {
+			_ = os.Unsetenv("KRY_CC")
+		}
+	})
+
+	if status := run([]string{"build", source, "--format=exe", "--target=windows-x64", "--no-external-toolchain", "-o", output}); status != 0 {
+		t.Fatalf("C-free Windows EXE build returned status %d", status)
+	}
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := pe.NewFile(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("CLI output is not a PE executable: %v", err)
+	}
+	defer image.Close()
+	if image.Machine != pe.IMAGE_FILE_MACHINE_AMD64 {
+		t.Fatalf("PE machine = %#x, want amd64", image.Machine)
+	}
+	if runtime.GOOS == "windows" && runtime.GOARCH == "amd64" {
+		got, err := exec.Command(output).CombinedOutput()
+		if err != nil {
+			t.Fatalf("C-free Windows EXE failed to run: %v; output %q", err, got)
+		}
+		if string(got) != "42\n" {
+			t.Fatalf("C-free Windows EXE output = %q, want %q", got, "42\n")
+		}
 	}
 }
 

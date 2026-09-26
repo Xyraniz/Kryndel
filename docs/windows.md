@@ -14,7 +14,8 @@ Process execution in the language uses `exec.CommandContext` without a shell; th
 
 The CLI recognizes `windows-x64` and `windows-arm64` target aliases. The
 `exe`/`pe` C AOT formats produce Windows amd64 PE through a MinGW-capable
-`gcc`; `pe-direct` writes PE32+ itself without a C compiler, assembler, or
+`gcc` by default. The command `kry build app.kry --format=exe --target=windows-x64 --no-external-toolchain` selects the C-free direct PE backend; `pe-direct`
+requests it explicitly. `pe-direct` writes PE32+ itself without a C compiler, assembler, or
 linker for a bounded scalar subset on Windows amd64: `Int`, `UInt`, `Bool`, and
 `String` values; functions with up to four register arguments; `if`, `while`,
 `break`, `continue`; and `print`/`println`. It emits PE imports and Win64 unwind

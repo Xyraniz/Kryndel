@@ -43,6 +43,7 @@ jobs:
         env:
           PATH: /usr/bin:/bin
           KRY_STAGE36_WINDOWS_PE_OUTPUT: ${{ runner.temp }}/stage36-selfhost.exe
+          KRY_STAGE38_SELFHOST_PE_OUTPUT: ${{ runner.temp }}/stage38-selfhost.exe
         run: bash scripts/bootstrap-stage3.sh
         timeout-minutes: 30
       - name: Verify Stage 0 reproduces the checked-in seed
@@ -50,11 +51,13 @@ jobs:
           KRY_REQUIRE_LOCKED_BOOTSTRAP: '1'
         run: go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v
         timeout-minutes: 30
-      - name: Upload Stage 2 Windows executable
+      - name: Upload self-hosted Windows executables
         uses: actions/upload-artifact@v4
         with:
-          name: stage36-selfhost-windows-amd64
-          path: ${{ runner.temp }}/stage36-selfhost.exe
+          name: selfhost-windows-amd64
+          path: |
+            ${{ runner.temp }}/stage36-selfhost.exe
+            ${{ runner.temp }}/stage38-selfhost.exe
           if-no-files-found: error
 
   windows:
@@ -73,10 +76,10 @@ jobs:
           CGO_ENABLED: '0'
         run: go test ./...
         timeout-minutes: 30
-      - name: Download Stage 2 Windows executable
+      - name: Download self-hosted Windows executables
         uses: actions/download-artifact@v4
         with:
-          name: stage36-selfhost-windows-amd64
+          name: selfhost-windows-amd64
           path: stage36-pe
       - name: Execute Stage 2 generated Windows executable
         shell: pwsh
@@ -84,6 +87,9 @@ jobs:
           $output = & .\stage36-pe\stage36-selfhost.exe
           if ($LASTEXITCODE -ne 0) { throw "Stage 2 PE exited with $LASTEXITCODE" }
           if (($output -join "`n") -ne "Mode::Ready`n42") { throw "Unexpected Stage 2 PE output: $output" }
+          $output = & .\stage36-pe\stage38-selfhost.exe
+          if ($LASTEXITCODE -ne 0) { throw "Stage 1 PE exited with $LASTEXITCODE" }
+          if (($output -join "`n") -ne "red`nyellow`ngreen`nwildcard") { throw "Unexpected Stage 1 PE output: $output" }
 
   race:
     name: Go race detector
