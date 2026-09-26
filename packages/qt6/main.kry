@@ -1,0 +1,354 @@
+// Native Qt 6 access through the C ABI adapter in native/.
+
+pub struct Qt6 {
+    library: FFILibrary,
+    request_symbol: FFISymbol,
+}
+
+pub struct QtObject {
+    object_id: Int,
+    class_name: String,
+}
+
+pub struct QtValue {
+    value_id: Int,
+    type_name: String,
+}
+
+pub fn open(library_path: String) -> Result[Qt6, String] {
+    ffi_thread_pin()
+    match ffi_library_open(library_path) {
+        err(problem) => {
+            ffi_thread_unpin()
+            return err(problem)
+        }
+        ok(library) => {
+            match ffi_symbol(library, "kry_qt6_request") {
+                err(problem) => {
+                    ffi_library_close(library)
+                    ffi_thread_unpin()
+                    return err(problem)
+                }
+                ok(request_symbol) => {
+                    match ffi_symbol(library, "kry_qt6_abi_version") {
+                        err(problem) => {
+                            ffi_library_close(library)
+                            ffi_thread_unpin()
+                            return err(problem)
+                        }
+                        ok(version_symbol) => {
+                            match ffi_call(version_symbol, "i()", []) {
+                                err(problem) => {
+                                    ffi_library_close(library)
+                                    ffi_thread_unpin()
+                                    return err(problem)
+                                }
+                                ok(version) => {
+                                    if version != 1 {
+                                        ffi_library_close(library)
+                                        ffi_thread_unpin()
+                                        return err("unsupported Qt bridge ABI version " + str(version))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return ok(Qt6 { library: library, request_symbol: request_symbol })
+                }
+            }
+        }
+    }
+}
+
+pub fn close(runtime: Qt6) -> Nil {
+    let _: Result[Nil, String] = shutdown(runtime)
+    ffi_library_close(runtime.library)
+    ffi_thread_unpin()
+    return nil
+}
+
+pub fn shutdown(runtime: Qt6) -> Result[Nil, String] {
+    match request_json(runtime, "{\"op\":\"shutdown\"}", 65536) {
+        err(problem) => { return err(problem) }
+        ok(_) => { return ok(nil) }
+    }
+}
+
+pub fn start(runtime: Qt6) -> Result[Nil, String] {
+    let result: Result[Json, String] = request_json(runtime, "{\"op\":\"application\"}", 65536)
+    match result {
+        err(problem) => { return err(problem) }
+        ok(_) => { return ok(nil) }
+    }
+}
+
+pub fn constructors(runtime: Qt6) -> Result[Json, String] {
+    return request_json(runtime, "{\"op\":\"constructors\"}", 1048576)
+}
+
+pub fn meta_classes(runtime: Qt6) -> Result[Json, String] {
+    return request_json(runtime, "{\"op\":\"meta_classes\"}", 1048576)
+}
+
+pub fn describe_class(runtime: Qt6, class_name: String) -> Result[Json, String] {
+    let quoted_class: String = quote_string(class_name)?
+    return request_json(runtime, "{\"op\":\"describe_class\",\"class\":" + quoted_class + "}", 1048576)
+}
+
+pub fn value_types(runtime: Qt6) -> Result[Json, String] {
+    return request_json(runtime, "{\"op\":\"value_types\"}", 1048576)
+}
+
+pub fn describe_value_type(runtime: Qt6, type_name: String) -> Result[Json, String] {
+    let quoted_type: String = quote_string(type_name)?
+    return request_json(runtime, "{\"op\":\"describe_value_type\",\"type\":" + quoted_type + "}", 1048576)
+}
+
+pub fn value_new(runtime: Qt6, type_name: String) -> Result[QtValue, String] {
+    let quoted_type: String = quote_string(type_name)?
+    let request: String = "{\"op\":\"value_new\",\"type\":" + quoted_type + "}"
+    let response: Json = request_json(runtime, request, 65536)?
+    let value_id: Int = json_int(json_object_get(response, "value_id")?)?
+    let actual_type: String = json_string(json_object_get(response, "type")?)?
+    return ok(QtValue { value_id: value_id, type_name: actual_type })
+}
+
+pub fn value_new_args(runtime: Qt6, type_name: String, args_json: String) -> Result[QtValue, String] {
+    let quoted_type: String = quote_string(type_name)?
+    let checked_args: String = canonical_json(args_json, "array")?
+    let request: String = "{\"op\":\"value_new\",\"type\":" + quoted_type + ",\"args\":" + checked_args + "}"
+    let response: Json = request_json(runtime, request, 65536)?
+    let value_id: Int = json_int(json_object_get(response, "value_id")?)?
+    let actual_type: String = json_string(json_object_get(response, "type")?)?
+    return ok(QtValue { value_id: value_id, type_name: actual_type })
+}
+
+pub fn value_handle(response: Json) -> Result[QtValue, String] {
+    let value_id: Int = json_int(json_object_get(response, "value_id")?)?
+    let type_name: String = json_string(json_object_get(response, "type")?)?
+    return ok(QtValue { value_id: value_id, type_name: type_name })
+}
+
+pub fn value_json(value: QtValue) -> String {
+    return "{\"value_id\":" + str(value.value_id) + "}"
+}
+
+pub fn value_id(value: QtValue) -> Int {
+    return value.value_id
+}
+
+pub fn value_type(value: QtValue) -> String {
+    return value.type_name
+}
+
+pub fn value_describe(runtime: Qt6, value: QtValue) -> Result[Json, String] {
+    return request_json(runtime, "{\"op\":\"value_describe\",\"value_id\":" + str(value.value_id) + "}", 1048576)
+}
+
+pub fn value_get(runtime: Qt6, value: QtValue, name: String) -> Result[Json, String] {
+    let quoted_name: String = quote_string(name)?
+    let request: String = "{\"op\":\"value_get\",\"value_id\":" + str(value.value_id) + ",\"name\":" + quoted_name + "}"
+    return request_json(runtime, request, 65536)
+}
+
+pub fn value_set(runtime: Qt6, value: QtValue, name: String, value_json: String) -> Result[Nil, String] {
+    let quoted_name: String = quote_string(name)?
+    let checked_value: String = canonical_json(value_json, "")?
+    let request: String = "{\"op\":\"value_set\",\"value_id\":" + str(value.value_id) + ",\"name\":" + quoted_name + ",\"value\":" + checked_value + "}"
+    match request_json(runtime, request, 65536) {
+        err(problem) => { return err(problem) }
+        ok(_) => { return ok(nil) }
+    }
+}
+
+pub fn value_call(runtime: Qt6, value: QtValue, signature: String, args_json: String) -> Result[Json, String] {
+    let quoted_signature: String = quote_string(signature)?
+    let checked_args: String = canonical_json(args_json, "array")?
+    let request: String = "{\"op\":\"value_call\",\"value_id\":" + str(value.value_id) + ",\"method\":" + quoted_signature + ",\"args\":" + checked_args + "}"
+    return request_json(runtime, request, 65536)
+}
+
+pub fn value_delete(runtime: Qt6, value: QtValue) -> Result[Nil, String] {
+    let request: String = "{\"op\":\"value_delete\",\"value_id\":" + str(value.value_id) + "}"
+    match request_json(runtime, request, 65536) {
+        err(problem) => { return err(problem) }
+        ok(_) => { return ok(nil) }
+    }
+}
+
+pub fn new(runtime: Qt6, class_name: String, args_json: String, parent: Int) -> Result[QtObject, String] {
+    if parent < 0 { return err("Qt parent handle cannot be negative") }
+    let quoted_class: String = quote_string(class_name)?
+    let checked_args: String = canonical_json(args_json, "array")?
+    let mut parent_json: String = "null"
+    if parent > 0 { parent_json = str(parent) }
+    let request: String = "{\"op\":\"new\",\"class\":" + quoted_class + ",\"parent\":" + parent_json + ",\"args\":" + checked_args + "}"
+    let response: Json = request_json(runtime, request, 65536)?
+    let object_id: Int = json_int(json_object_get(response, "object_id")?)?
+    let actual_class: String = json_string(json_object_get(response, "class")?)?
+    return ok(QtObject { object_id: object_id, class_name: actual_class })
+}
+
+pub fn new_default(runtime: Qt6, class_name: String, parent: Int) -> Result[QtObject, String] {
+    return new(runtime, class_name, "[]", parent)
+}
+
+pub fn object_id(object: QtObject) -> Int {
+    return object.object_id
+}
+
+pub fn class_name(object: QtObject) -> String {
+    return object.class_name
+}
+
+pub fn get(runtime: Qt6, object: QtObject, name: String) -> Result[Json, String] {
+    let quoted_name: String = quote_string(name)?
+    let request: String = "{\"op\":\"get\",\"object_id\":" + str(object.object_id) + ",\"name\":" + quoted_name + "}"
+    return request_json(runtime, request, 65536)
+}
+
+pub fn describe(runtime: Qt6, object: QtObject) -> Result[Json, String] {
+    let request: String = "{\"op\":\"describe\",\"object_id\":" + str(object.object_id) + "}"
+    return request_json(runtime, request, 1048576)
+}
+
+pub fn set(runtime: Qt6, object: QtObject, name: String, value_json: String) -> Result[Nil, String] {
+    let quoted_name: String = quote_string(name)?
+    let checked_value: String = canonical_json(value_json, "")?
+    let request: String = "{\"op\":\"set\",\"object_id\":" + str(object.object_id) + ",\"name\":" + quoted_name + ",\"value\":" + checked_value + "}"
+    match request_json(runtime, request, 65536) {
+        err(problem) => { return err(problem) }
+        ok(_) => { return ok(nil) }
+    }
+}
+
+pub fn call(runtime: Qt6, object: QtObject, signature: String, args_json: String) -> Result[Json, String] {
+    let quoted_signature: String = quote_string(signature)?
+    let checked_args: String = canonical_json(args_json, "array")?
+    let request: String = "{\"op\":\"call\",\"object_id\":" + str(object.object_id) + ",\"method\":" + quoted_signature + ",\"args\":" + checked_args + "}"
+    return request_json(runtime, request, 65536)
+}
+
+pub fn call_static(runtime: Qt6, class_name: String, signature: String, args_json: String) -> Result[Json, String] {
+    let quoted_class: String = quote_string(class_name)?
+    let quoted_signature: String = quote_string(signature)?
+    let checked_args: String = canonical_json(args_json, "array")?
+    let request: String = "{\"op\":\"call_static\",\"class\":" + quoted_class + ",\"method\":" + quoted_signature + ",\"args\":" + checked_args + "}"
+    return request_json(runtime, request, 65536)
+}
+
+pub fn connect(runtime: Qt6, object: QtObject, signature: String) -> Result[Nil, String] {
+    let quoted_signature: String = quote_string(signature)?
+    let request: String = "{\"op\":\"connect\",\"object_id\":" + str(object.object_id) + ",\"signal\":" + quoted_signature + "}"
+    match request_json(runtime, request, 65536) {
+        err(problem) => { return err(problem) }
+        ok(_) => { return ok(nil) }
+    }
+}
+
+pub fn events(runtime: Qt6, wait_ms: Int, maximum: Int) -> Result[Json, String] {
+    let request: String = "{\"op\":\"events\",\"wait_ms\":" + str(wait_ms) + ",\"max\":" + str(maximum) + "}"
+    return request_json(runtime, request, 1048576)
+}
+
+pub fn delete(runtime: Qt6, object: QtObject) -> Result[Nil, String] {
+    let request: String = "{\"op\":\"delete\",\"object_id\":" + str(object.object_id) + "}"
+    match request_json(runtime, request, 65536) {
+        err(problem) => { return err(problem) }
+        ok(_) => { return ok(nil) }
+    }
+}
+
+pub fn request_json(runtime: Qt6, request_json: String, capacity: Int) -> Result[Json, String] {
+    if capacity < 1 || capacity > 16777216 {
+        return err("Qt response capacity must be in 1..16777216 bytes")
+    }
+    let parsed_request: Json = json_parse(request_json)?
+    if json_kind(parsed_request) != "object" { return err("Qt request must be a JSON object") }
+
+    let request_bytes: Bytes = string_to_bytes(request_json)
+    let request_length: Int = len(request_bytes)
+    if request_length > 16777216 { return err("Qt request exceeds 16777216 bytes") }
+    let request_buffer: FFIBuffer = ffi_buffer_new(request_bytes)
+    let response_result: Result[FFIBuffer, String] = ffi_buffer_new_sized(capacity)
+    match response_result {
+        err(problem) => {
+            ffi_buffer_close(request_buffer)
+            return err(problem)
+        }
+        ok(response_buffer) => {
+            let request_address_result: Result[Int, String] = ffi_buffer_address(request_buffer)
+            match request_address_result {
+                err(problem) => {
+                    ffi_buffer_close(request_buffer)
+                    ffi_buffer_close(response_buffer)
+                    return err(problem)
+                }
+                ok(request_address) => {
+                    let response_address_result: Result[Int, String] = ffi_buffer_address(response_buffer)
+                    match response_address_result {
+                        err(problem) => {
+                            ffi_buffer_close(request_buffer)
+                            ffi_buffer_close(response_buffer)
+                            return err(problem)
+                        }
+                        ok(response_address) => {
+                            let call_result: Result[Int, String] = ffi_call(runtime.request_symbol, "i(p,i,p,i)", [request_address, request_length, response_address, capacity])
+                            match call_result {
+                                err(problem) => {
+                                    ffi_buffer_close(request_buffer)
+                                    ffi_buffer_close(response_buffer)
+                                    return err(problem)
+                                }
+                                ok(written) => {
+                                    let raw_result: Result[Bytes, String] = ffi_buffer_read(response_buffer)
+                                    ffi_buffer_close(request_buffer)
+                                    ffi_buffer_close(response_buffer)
+                                    if written < 1 { return err("native Qt bridge rejected the request") }
+                                    if written > capacity { return err("Qt response needs " + str(written) + " bytes; retry with a larger capacity") }
+                                    match raw_result {
+                                        err(problem) => { return err(problem) }
+                                        ok(raw_bytes) => {
+                                            let raw_text: String = bytes_to_string(raw_bytes)
+                                            let encoded: String = string_slice(raw_text, 0, written)?
+                                            let response_bytes: Bytes = base64_decode(encoded)?
+                                            let response_text: String = bytes_to_string(response_bytes)
+                                            let envelope: Json = json_parse(response_text)?
+                                            let ok_value: Bool = json_bool(json_object_get(envelope, "ok")?)?
+                                            if !ok_value {
+                                                return err(json_string(json_object_get(envelope, "error")?)?)
+                                            }
+                                            return json_object_get(envelope, "value")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn canonical_json(value: String, expected_kind: String) -> Result[String, String] {
+    let parsed: Json = json_parse(value)?
+    if expected_kind != "" && json_kind(parsed) != expected_kind {
+        return err("expected JSON " + expected_kind)
+    }
+    return ok(json_stringify(parsed))
+}
+
+fn quote_string(value: String) -> Result[String, String] {
+    for point in codepoints(value) {
+        if point < 32 && point != 9 && point != 10 && point != 13 {
+            return err("Qt request string contains an unsupported control character")
+        }
+    }
+    let mut escaped: String = replace(value, "\\", "\\\\")
+    escaped = replace(escaped, "\"", "\\\"")
+    escaped = replace(escaped, "\n", "\\n")
+    escaped = replace(escaped, "\r", "\\r")
+    escaped = replace(escaped, "\t", "\\t")
+    return ok("\"" + escaped + "\"")
+}

@@ -2984,6 +2984,12 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		r.trackResource(e, "FFILibrary", library.isClosed, func() error { return ffiLibraryClose(library) })
 		return resVal(true, Value{Kind: VFFILibrary, FFILib: library}), nil
+	case "ffi_thread_pin":
+		runtime.LockOSThread()
+		return nilVal(), nil
+	case "ffi_thread_unpin":
+		runtime.UnlockOSThread()
+		return nilVal(), nil
 	case "ffi_symbol":
 		symbol, err := ffiSymbol(a[0].FFILib, a[1].S)
 		if err != nil {
@@ -3000,6 +3006,16 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		buffer := ffiBufferNew(a[0].Bytes)
 		r.trackResource(e, "FFIBuffer", buffer.isClosed, func() error { return ffiBufferClose(buffer) })
 		return Value{Kind: VFFIBuffer, FFIBuf: buffer}, nil
+	case "ffi_buffer_new_sized":
+		if a[0].I < 1 || a[0].I > int64(r.Lim.MaxStringBytes) {
+			return resVal(false, stringVal(fmt.Sprintf("FFI buffer capacity must be in 1..%d bytes", r.Lim.MaxStringBytes))), nil
+		}
+		buffer, err := ffiBufferNewSized(int(a[0].I))
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		r.trackResource(e, "FFIBuffer", buffer.isClosed, func() error { return ffiBufferClose(buffer) })
+		return resVal(true, Value{Kind: VFFIBuffer, FFIBuf: buffer}), nil
 	case "ffi_buffer_address":
 		address, err := ffiBufferAddress(a[0].FFIBuf)
 		if err != nil {

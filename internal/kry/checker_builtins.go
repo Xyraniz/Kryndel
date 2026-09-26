@@ -2223,6 +2223,8 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return TError, d
 		}
 		return Res(&Type{Kind: TyFFILibrary, Name: "FFILibrary"}, TString), nil
+	case "ffi_thread_pin", "ffi_thread_unpin":
+		return TNil, nil
 	case "ffi_symbol":
 		if library, d := arg(0, &Type{Kind: TyFFILibrary, Name: "FFILibrary"}); d != nil || library.Kind != TyFFILibrary {
 			if d != nil {
@@ -2257,6 +2259,11 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return TError, d
 		}
 		return &Type{Kind: TyFFIBuffer, Name: "FFIBuffer"}, nil
+	case "ffi_buffer_new_sized":
+		if _, d := arg(0, TInt); d != nil {
+			return TError, d
+		}
+		return Res(&Type{Kind: TyFFIBuffer, Name: "FFIBuffer"}, TString), nil
 	case "ffi_buffer_address":
 		if buffer, d := arg(0, &Type{Kind: TyFFIBuffer, Name: "FFIBuffer"}); d != nil || buffer.Kind != TyFFIBuffer {
 			if d != nil {
