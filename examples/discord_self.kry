@@ -16,7 +16,16 @@ fn set_activity_when_ready(event_json: String) -> String {
     return ""
 }
 
-fn inspect_self_account(client: Client, user_id: String, guild_id: String, channel_id: String) -> Result[Nil, String] {
+fn inspect_self_account(
+    client: Client,
+    user_id: String,
+    guild_id: String,
+    channel_id: String,
+    invite_code: String,
+    sticker_id: String,
+    sticker_pack_id: String,
+    join_request_id: String
+) -> Result[Nil, String] {
     let guild_preview: Json = client.fetch_guild_preview(guild_id)?
     let guild_profile: Json = client.fetch_guild_profile(guild_id)?
     let stage_instance: Json = client.fetch_stage_instance(channel_id)?
@@ -26,6 +35,16 @@ fn inspect_self_account(client: Client, user_id: String, guild_id: String, chann
     let connections: Json = client.fetch_connections()?
     let notes: Json = client.fetch_notes()?
     let note: Json = client.fetch_note(user_id)?
+    let invite: Json = client.fetch_invite(invite_code)?
+    let widget: Json = client.fetch_widget(guild_id)?
+    let sticker: Json = client.fetch_sticker(sticker_id)?
+    let sticker_pack: Json = client.fetch_sticker_pack(sticker_pack_id)?
+    let verification: Json = client.fetch_member_verification(guild_id, false, invite_code)?
+    let join_request: Json = client.fetch_join_request(join_request_id)?
+    let join_request_guilds: Json = client.join_request_guilds()?
+    let settings: Json = client.fetch_settings()?
+    let tracking_settings: Json = client.fetch_tracking_settings()?
+    let friend_suggestions: Json = client.friend_suggestions()?
     return ok(nil)
 }
 
