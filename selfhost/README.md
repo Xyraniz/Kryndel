@@ -90,13 +90,16 @@ go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count
 ```
 
 The standalone Stage 1–3 bootstrap command is `./scripts/bootstrap-stage3.sh`.
-It requires Linux x86-64 and the Go version in `selfhost/bootstrap.lock.json`.
-The test builds and hash-checks the Stage 0 Go CLI, then uses that executable
-to emit the source KIR and run `kir_backend.kry`. It checks SHA-256 values for
-the KIR, module sources, fixture, and generated Stage 1, Stage 2, and Stage 3
-compiler ELFs against that lock.
-Stage 2 and Stage 3 must also be byte-identical. This remains a bounded subset
-bootstrap rather than full self-hosting.
+On Linux x86-64 it starts from the checked-in, hash-locked Stage 1 ELF seed and
+does not require Go, C, an assembler, or a linker. It builds Stage 2 and Stage 3
+from the Kryndel source modules, runs a fixture at each stage, verifies the
+locked hashes, and requires byte-identical Stage 2 and Stage 3 compiler ELFs.
+
+To regenerate the Stage 1 seed from source and verify its provenance, run
+`go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v`
+with the locked Go version. The normal bootstrap does not need Go. The
+self-hosted compiler still supports a bounded language subset rather than the
+complete published language.
 
 On non-Linux hosts, `TestStage36KryndelSecondCompilerBootstrap` skips before emitting KIR or validating an ELF. Cross-platform compile checks do not establish execution of this bootstrap; both levels must pass on Linux amd64 before this stage is considered complete.
 

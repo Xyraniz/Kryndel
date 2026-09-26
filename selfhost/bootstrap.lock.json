@@ -2,6 +2,7 @@
   "schema_version": 3,
   "source_revision": "745c3f69d6a3de7df300500b5bdb0d58009c4dad",
   "target": "linux-amd64",
+  "stage1_seed_path": "selfhost/bootstrap/linux-amd64/source-kir-compiler-stage1.elf",
   "host_go": "go1.27.1",
   "stage0_build": "CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry",
   "source_compiler_kir_bytes": 76094241,

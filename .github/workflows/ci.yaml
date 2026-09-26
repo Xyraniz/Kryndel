@@ -39,11 +39,16 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.27.1'
-      - name: Rebuild and verify bootstrap stages
+      - name: Rebuild stages from the checked-in Kryndel seed without Go
         env:
-          KRY_REQUIRE_LOCKED_BOOTSTRAP: '1'
+          PATH: /usr/bin:/bin
           KRY_STAGE36_WINDOWS_PE_OUTPUT: ${{ runner.temp }}/stage36-selfhost.exe
         run: bash scripts/bootstrap-stage3.sh
+        timeout-minutes: 30
+      - name: Verify Stage 0 reproduces the checked-in seed
+        env:
+          KRY_REQUIRE_LOCKED_BOOTSTRAP: '1'
+        run: go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v
         timeout-minutes: 30
       - name: Upload Stage 2 Windows executable
         uses: actions/upload-artifact@v4

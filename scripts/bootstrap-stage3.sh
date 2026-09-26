@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
@@ -9,11 +9,103 @@ if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
   exit 2
 fi
 
-go_version="$(go version | awk '{print $3}')"
-locked_go_version="$(sed -n 's/.*"host_go": "\([^"]*\)".*/\1/p' selfhost/bootstrap.lock.json)"
-if [[ "$go_version" != "$locked_go_version" ]]; then
-  echo "Stage 3 bootstrap lock requires $locked_go_version; found $go_version." >&2
+seed_path="$(sed -n 's/.*"stage1_seed_path": "\([^"]*\)".*/\1/p' selfhost/bootstrap.lock.json)"
+if [[ -z "$seed_path" || ! -x "$seed_path" ]]; then
+  echo "The locked executable Stage 1 seed is missing: $seed_path" >&2
   exit 2
 fi
 
-go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v
+locked_hash() {
+  sed -n "s/.*\"$1\": \"\([0-9a-f]\{64\}\)\".*/\1/p" selfhost/bootstrap.lock.json
+}
+
+sha256() {
+  sha256sum "$1" | sed 's/ .*//'
+}
+
+verify_hash() {
+  local key="$1"
+  local path="$2"
+  local expected actual
+  expected="$(locked_hash "$key")"
+  actual="$(sha256 "$path")"
+  if [[ -z "$expected" || "$actual" != "$expected" ]]; then
+    echo "SHA-256 mismatch for $key: expected $expected, got $actual" >&2
+    exit 1
+  fi
+  printf '[bootstrap] %s %s\n' "$key" "$actual"
+}
+
+verify_hash stage1-source-kir-compiler.elf "$seed_path"
+verify_hash source_kir_compiler.kry selfhost/source_kir_compiler.kry
+verify_hash dynamic_backend.kry selfhost/dynamic_backend.kry
+verify_hash elf_backend.kry selfhost/elf_backend.kry
+verify_hash pe_backend.kry selfhost/pe_backend.kry
+verify_hash bootstrap-fixture.kry selfhost/fixtures/bootstrap_hello_stage27.kry
+
+tmp="$(mktemp -d /tmp/kryndel-bootstrap.XXXXXX)"
+trap 'rm -rf "$tmp"' EXIT
+fixture=selfhost/fixtures/bootstrap_hello_stage27.kry
+
+run_fixture() {
+  local compiler="$1"
+  local label="$2"
+  local output="$tmp/$label-fixture"
+  "$compiler" "$fixture" "$output"
+  chmod 700 "$output"
+  local actual
+  actual="$("$output")"
+  if [[ "$actual" != "hello from bootstrap" ]]; then
+    echo "$label fixture output mismatch: $actual" >&2
+    exit 1
+  fi
+  printf '[bootstrap] %s fixture passed\n' "$label"
+}
+
+run_fixture "$seed_path" stage1
+
+stage2="$tmp/stage2-source-kir-compiler"
+"$seed_path" selfhost/source_kir_compiler.kry "$stage2"
+chmod 700 "$stage2"
+verify_hash stage2-source-kir-compiler.elf "$stage2"
+run_fixture "$stage2" stage2
+
+windows_pe_output="${KRY_STAGE36_WINDOWS_PE_OUTPUT:-}"
+if [[ -n "$windows_pe_output" ]]; then
+  windows_dir="$tmp/windows"
+  mkdir -p "$windows_dir"
+  cat > "$windows_dir/geometry.kry" <<'KRY'
+pub struct Point { x: Int, y: Int }
+pub fn translate(point: Point, delta: Int) -> Point {
+    return Point { x: point.x + delta, y: point.y - delta }
+}
+KRY
+  cat > "$windows_dir/modes.kry" <<'KRY'
+pub enum Mode { Idle, Ready }
+KRY
+  cat > "$windows_dir/windows-program.kry" <<'KRY'
+import "geometry"
+import "modes"
+fn main() -> Nil {
+    let point = translate(Point { x: 40, y: 2 }, 2)
+    println(Mode::Ready)
+    println(point.x + point.y)
+}
+KRY
+  windows_pe="$windows_dir/windows-program.exe"
+  "$stage2" "$windows_dir/windows-program.kry" "$windows_pe" windows-amd64
+  mkdir -p "$(dirname "$windows_pe_output")"
+  cp "$windows_pe" "$windows_pe_output"
+  printf '[bootstrap] Stage 2 Windows amd64 PE written to %s\n' "$windows_pe_output"
+fi
+
+stage3="$tmp/stage3-source-kir-compiler"
+"$stage2" selfhost/source_kir_compiler.kry "$stage3"
+verify_hash stage3-source-kir-compiler.elf "$stage3"
+if ! cmp -s "$stage2" "$stage3"; then
+  echo "Stage 2 and Stage 3 compiler ELFs are not byte-identical." >&2
+  exit 1
+fi
+chmod 700 "$stage3"
+run_fixture "$stage3" stage3
+printf '[bootstrap] Stage 2 and Stage 3 are byte-identical; no Go, C, assembler, or linker was invoked.\n'

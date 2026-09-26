@@ -114,6 +114,7 @@ type bootstrapLock struct {
 	SourceRevision            string            `json:"source_revision"`
 	Target                    string            `json:"target"`
 	HostGo                    string            `json:"host_go"`
+	Stage1SeedPath            string            `json:"stage1_seed_path"`
 	Stage0Build               string            `json:"stage0_build"`
 	SourceCompilerKIRBytes    int               `json:"source_compiler_kir_bytes"`
 	SourceCompilerKIRMaxBytes int               `json:"source_compiler_kir_max_bytes"`
@@ -131,7 +132,7 @@ func loadBootstrapLock(t *testing.T, path string) bootstrapLock {
 	if err := json.Unmarshal(data, &lock); err != nil {
 		t.Fatalf("decode bootstrap lock %q: %v", path, err)
 	}
-	if lock.SchemaVersion != 3 || lock.Target != "linux-amd64" || lock.HostGo != "go1.27.1" || lock.SourceRevision == "" || lock.Stage0Build == "" || lock.SourceCompilerKIRBytes <= 0 || lock.SourceCompilerKIRMaxBytes <= lock.SourceCompilerKIRBytes || lock.Command == "" {
+	if lock.SchemaVersion != 3 || lock.Target != "linux-amd64" || lock.HostGo != "go1.27.1" || lock.Stage1SeedPath == "" || lock.SourceRevision == "" || lock.Stage0Build == "" || lock.SourceCompilerKIRBytes <= 0 || lock.SourceCompilerKIRMaxBytes <= lock.SourceCompilerKIRBytes || lock.Command == "" {
 		t.Fatalf("invalid bootstrap lock metadata: %#v", lock)
 	}
 	return lock
@@ -889,6 +890,13 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	assertLinuxAMD64ELF(t, compilerELF, "stage35 generated source compiler")
 	verifyBootstrapHash(t, lock, verifiedHashes, "stage1-source-kir-compiler.elf", compilerELF)
+	stage1Seed, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(lock.Stage1SeedPath)))
+	if err != nil {
+		t.Fatalf("read checked-in Stage 1 seed %q: %v", lock.Stage1SeedPath, err)
+	}
+	if !bytes.Equal(compilerELF, stage1Seed) {
+		t.Fatalf("Stage 0 rebuilt Stage 1 compiler differs from checked-in seed %q", lock.Stage1SeedPath)
+	}
 	if err := os.Chmod(generatedCompiler, 0o700); err != nil {
 		t.Fatal(err)
 	}
