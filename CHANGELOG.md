@@ -1,5 +1,9 @@
 # Changelog
 
+## discord-self 1.5.0
+
+Bundles twenty-six Discord REST lookups for client location, application discovery, teams, gifts and entitlements, store listings and subscription plans, live build IDs, and price tiers. Results are Kryndel `Json`; snowflake, gift-code, country-code, and batch inputs are validated.
+
 ## Unreleased — Package security hardening
 
 Package manager HTTP requests block cross-origin redirects, and the unauthenticated registry server refuses non-loopback bind addresses. Source builds now require Go 1.27.1 or newer to include the standard-library security fixes for sparse TAR allocation and proxy-credential redirect handling. Dynamic diagnostic text is passed literally so percent signs cannot be misread as format directives.

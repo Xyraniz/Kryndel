@@ -37,7 +37,7 @@ fn main() -> Nil {
     }
 }
 `, "{\"type\":4,\"data\":{\"content\":\"hello\",\"allowed_mentions\":{\"parse\":[]}}}\n"},
-		{"discord-self", "1.4.0", `import "discord-self"
+		{"discord-self", "1.5.0", `import "discord-self"
 fn main() -> Nil {
     let client: Result[Client, String] = self_client("synthetic-user-token")
     match client {
