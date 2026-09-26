@@ -5,20 +5,21 @@
   "stage1_seed_path": "selfhost/bootstrap/linux-amd64/source-kir-compiler-stage1.elf",
   "host_go": "go1.27.1",
   "stage0_build": "CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry",
-  "source_compiler_kir_bytes": 76094241,
+  "source_compiler_kir_bytes": 77731228,
   "source_compiler_kir_max_bytes": 134217728,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
     "stage0-host-kry-linux-amd64": "7f3ff301db0371cd4dc81f656f82b4095a4a130fb2236ca0bfbc77784133897c",
-    "source-compiler.kir": "76d45eb02c14a8049534db55c55b888bd9df35ec88039ef57d044961b17242f0",
-    "stage1-source-kir-compiler.elf": "015e70f107796c282c1d1cbf1049aadb0e81b1751ef2eb9f2e18947002e5faa9",
-    "source_kir_compiler.kry": "195df88a4937357d47e09340f026d70f4f0844853b31e242d2d02003adadaba2",
-    "dynamic_backend.kry": "9218175476bdc241b5d6aa9348e9c05fc1e02e9fb73e9ef600323214985821fd",
+    "source-compiler.kir": "c8789c12e5ece0639828bef054870582d404784f9fc9fa80a7c3807320d235de",
+    "stage1-source-kir-compiler.elf": "2fd0d1dfbd8b19635062c3d5d836990649c8071a87b86214234d2c0f80b2ad50",
+    "source_kir_compiler.kry": "473d9cd2bcbc9d08eb31775ab94fd7e5878f70552380afe94cf9efda5b774ed2",
+    "dynamic_backend.kry": "f21e493c9050ed08a3b498ea5706bc900408b103de582ea8c76c4ca7f7448faa",
     "elf_backend.kry": "0348e0230050815a2d5c5d37ead0e3216f831e65f6ce00ddd49c98067a5eaf57",
     "kir_backend.kry": "3a1be5137d9d8fa08f86e310adde81c83a3269ad156b89258f2a02fe1e37331a",
     "pe_backend.kry": "9e70ecede3ffa80ccddb954a45c1022f8e05db659d1b51d0c30abff2d8ea428b",
     "bootstrap-fixture.kry": "eb24d52f08ffb85bba3946c15273abd8f2c85a2b3b2b91018e91800533206c0d",
-    "stage2-source-kir-compiler.elf": "7c2914ce8fcf52c09f46dc87c79069766c375530fa8569b2b24ae6d4511ec310",
-    "stage3-source-kir-compiler.elf": "7c2914ce8fcf52c09f46dc87c79069766c375530fa8569b2b24ae6d4511ec310"
+    "stage2-source-kir-compiler.elf": "e090c10619c57d17e47cff993021e27ea69f6be39a57c39e879c8dc181d30a5d",
+    "stage3-source-kir-compiler.elf": "e090c10619c57d17e47cff993021e27ea69f6be39a57c39e879c8dc181d30a5d",
+    "enum-match-fixture.kry": "5716d11439c1e1ba98d848c09a3e94d938acd48f217e784fe01e6859e92734f6"
   }
 }

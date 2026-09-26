@@ -1,0 +1,20 @@
+enum TrafficLight { Red, Yellow, Green }
+
+fn announce(light: TrafficLight) -> Nil {
+    match light {
+        TrafficLight::Red => { println("red") }
+        TrafficLight::Yellow => { println("yellow") }
+        TrafficLight::Green => { println("green") }
+    }
+}
+
+fn main() -> Nil {
+    announce(TrafficLight::Red)
+    announce(TrafficLight::Yellow)
+    announce(TrafficLight::Green)
+
+    match TrafficLight::Yellow {
+        TrafficLight::Red => { println("unexpected") }
+        _ => { println("wildcard") }
+    }
+}

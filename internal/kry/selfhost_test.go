@@ -109,6 +109,32 @@ pub fn score(mode: Mode, value: Int) -> Int {
 	}
 }
 
+func runStage38EnumMatchFixture(t *testing.T, compiler, fixturePath, label string) {
+	t.Helper()
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "enum-match")
+	compileOutput, err := exec.Command(compiler, fixturePath, outputPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s compiler rejected the exhaustive enum match fixture: %v; output: %s", label, err, compileOutput)
+	}
+	artifact, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("%s compiler did not write the enum match fixture: %v", label, err)
+	}
+	assertLinuxAMD64ELF(t, artifact, label+" enum match fixture")
+	if err := os.Chmod(outputPath, 0o700); err != nil {
+		t.Fatalf("make %s enum match fixture executable: %v", label, err)
+	}
+	programOutput, err := exec.Command(outputPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s enum match fixture failed: %v; output: %s", label, err, programOutput)
+	}
+	const want = "red\nyellow\ngreen\nwildcard\n"
+	if string(programOutput) != want {
+		t.Fatalf("%s enum match fixture output = %q, want %q", label, programOutput, want)
+	}
+}
+
 type bootstrapLock struct {
 	SchemaVersion             int               `json:"schema_version"`
 	SourceRevision            string            `json:"source_revision"`
@@ -827,6 +853,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	compilerPath := filepath.Join(selfhost, "source_kir_compiler.kry")
 	backendPath := filepath.Join(selfhost, "kir_backend.kry")
 	fixturePath := filepath.Join(selfhost, "fixtures", "bootstrap_hello_stage27.kry")
+	enumMatchFixturePath := filepath.Join(selfhost, "fixtures", "source_enum_match_stage38.kry")
 	invalidPath := filepath.Join(t.TempDir(), "invalid-source.kry")
 	kirBackendSource, err := os.ReadFile(backendPath)
 	if err != nil {
@@ -890,7 +917,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	assertLinuxAMD64ELF(t, compilerELF, "stage35 generated source compiler")
 	verifyBootstrapHash(t, lock, verifiedHashes, "stage1-source-kir-compiler.elf", compilerELF)
-	stage1Seed, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(lock.Stage1SeedPath)))
+	stage1Seed, err := os.ReadFile(filepath.Join(root, "..", "..", filepath.FromSlash(lock.Stage1SeedPath)))
 	if err != nil {
 		t.Fatalf("read checked-in Stage 1 seed %q: %v", lock.Stage1SeedPath, err)
 	}
@@ -921,6 +948,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatalf("unexpected stage35 generated fixture output %q", programOutput)
 	}
 	t.Log("stage35 generated compiler compiled and ran the fixture")
+	runStage38EnumMatchFixture(t, generatedCompiler, enumMatchFixturePath, "stage1")
 	runStage37ModuleTypeFixture(t, generatedCompiler, "stage1")
 
 	frontendSource, err := os.ReadFile(compilerPath)
@@ -961,6 +989,12 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	fixtureText := strings.ReplaceAll(string(fixtureSource), "\r\n", "\n")
 	verifyBootstrapHash(t, lock, verifiedHashes, "bootstrap-fixture.kry", []byte(fixtureText))
+	enumMatchFixtureSource, err := os.ReadFile(enumMatchFixturePath)
+	if err != nil {
+		t.Fatalf("read Stage 38 enum match fixture: %v", err)
+	}
+	enumMatchFixtureText := strings.ReplaceAll(string(enumMatchFixtureSource), "\r\n", "\n")
+	verifyBootstrapHash(t, lock, verifiedHashes, "enum-match-fixture.kry", []byte(enumMatchFixtureText))
 	t.Log("stage36 compiling the checked-in compiler module graph through its import resolver")
 	secondCompiler := filepath.Join(dir, "second-source-kir-compiler")
 	secondCompilerOutput, err := exec.Command(generatedCompiler, compilerPath, secondCompiler).CombinedOutput()
@@ -998,16 +1032,18 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		t.Fatalf("unexpected stage36 second-level fixture output %q", secondProgramOutput)
 	}
 	t.Log("stage36 second-level compiler compiled and ran the fixture")
+	runStage38EnumMatchFixture(t, secondCompiler, enumMatchFixturePath, "stage2")
 	runStage37ModuleTypeFixture(t, secondCompiler, "stage2")
 
-	if err := os.WriteFile(invalidPath, []byte("match value { }\n"), 0o600); err != nil {
+	invalidMatch := "enum Mode { Idle, Ready }\nfn main() -> Nil { match Mode::Ready { Mode::Ready => {} } }\n"
+	if err := os.WriteFile(invalidPath, []byte(invalidMatch), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	invalidOutput, invalidErr := exec.Command(secondCompiler, invalidPath, filepath.Join(dir, "invalid-output")).CombinedOutput()
 	if invalidErr == nil {
 		t.Fatalf("stage36 second-level compiler accepted invalid source: %s", invalidOutput)
 	}
-	if !strings.Contains(string(invalidOutput), "unsupported statement") {
+	if !strings.Contains(string(invalidOutput), "non-exhaustive match") {
 		t.Fatalf("stage36 second-level compiler returned an unexpected invalid-source diagnostic (exit %v): %s", invalidErr, invalidOutput)
 	}
 
@@ -1029,8 +1065,14 @@ pub fn translate(point: Point, delta: Int) -> Point {
 import "modes"
 fn main() -> Nil {
     let point = translate(Point { x: 40, y: 2 }, 2)
-    println(Mode::Ready)
+    println(mode_name(Mode::Ready))
     println(point.x + point.y)
+}
+fn mode_name(mode: Mode) -> String {
+    match mode {
+        Mode::Idle => { return "Mode::Idle" }
+        Mode::Ready => { return "Mode::Ready" }
+    }
 }
 `
 	if err := os.WriteFile(windowsSource, []byte(program), 0o600); err != nil {
@@ -1055,7 +1097,7 @@ fn main() -> Nil {
 	if _, ok := windowsPE.OptionalHeader.(*pe.OptionalHeader64); !ok {
 		t.Fatal("stage36 second-level compiler emitted PE32, want PE32+")
 	}
-	t.Log("stage36 second-level compiler emitted a valid Windows amd64 PE32+ executable with imported struct and enum modules")
+	t.Log("stage36 second-level compiler emitted a valid Windows amd64 PE32+ executable with imported struct and exhaustive enum match")
 	if artifactPath := os.Getenv("KRY_STAGE36_WINDOWS_PE_OUTPUT"); artifactPath != "" {
 		if err := os.MkdirAll(filepath.Dir(artifactPath), 0o700); err != nil {
 			t.Fatalf("create Stage36 Windows PE artifact directory: %v", err)
@@ -1080,6 +1122,10 @@ fn main() -> Nil {
 	if !bytes.Equal(secondCompilerELF, thirdCompilerELF) {
 		t.Fatalf("stage3 self-rebuild was not byte-reproducible: Stage 2 sha256=%x Stage 3 sha256=%x", sha256.Sum256(secondCompilerELF), sha256.Sum256(thirdCompilerELF))
 	}
+	if err := os.Chmod(thirdCompiler, 0o700); err != nil {
+		t.Fatalf("make Stage 3 compiler executable: %v", err)
+	}
+	runStage38EnumMatchFixture(t, thirdCompiler, enumMatchFixturePath, "stage3")
 	if len(verifiedHashes) != len(lock.SHA256) {
 		t.Fatalf("verified %d bootstrap hashes, but lock contains %d", len(verifiedHashes), len(lock.SHA256))
 	}
@@ -1147,7 +1193,7 @@ func TestStage3SourceKIRCompilerRejectsUnsupportedSyntax(t *testing.T) {
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, "unsupported.kry")
 	outputPath := filepath.Join(dir, "unsupported-output")
-	if err := os.WriteFile(inputPath, []byte("match value { }\n"), 0o600); err != nil {
+	if err := os.WriteFile(inputPath, []byte("defer { println(\"later\") }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, DefaultLimits(), Sandbox{}, []string{inputPath, outputPath})

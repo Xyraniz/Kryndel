@@ -404,6 +404,11 @@ fn state_with_env(state: EmitState, env: CompileEnv) -> EmitState {
     return EmitState{ assembler: state.assembler, env: env, code_patches: state.code_patches, code_pages: state.code_pages }
 }
 
+fn state_with_scope(state: EmitState, scope: CompileEnv, next_slot: Int) -> EmitState {
+    let env: CompileEnv = CompileEnv{ slots: scope.slots, static_values: scope.static_values, struct_fields: scope.struct_fields, function_labels: scope.function_labels, function_returns: scope.function_returns, next_slot: next_slot, breaks: scope.breaks, continues: scope.continues, end_label: scope.end_label, trap_label: scope.trap_label, buffer_offset: scope.buffer_offset, in_function: scope.in_function, current_function: scope.current_function }
+    return state_with_env(state, env)
+}
+
 fn state_with_windows_abi(state: EmitState, enabled: Bool) -> EmitState {
     let a: Assembler = state.assembler
     let updated: Assembler = Assembler{ code: a.code, code_chunks: a.code_chunks, code_length: a.code_length, data: a.data, data_by_text: a.data_by_text, string_data_by_text: a.string_data_by_text, labels: a.labels, jumps: a.jumps, data_patches: a.data_patches, frame_patch: a.frame_patch, string_concat_label: a.string_concat_label, string_concat_used: a.string_concat_used, array_alloc_label: a.array_alloc_label, array_push_label: a.array_push_label, array_concat_label: a.array_concat_label, array_runtime_used: a.array_runtime_used, box_alloc_label: a.box_alloc_label, box_runtime_used: a.box_runtime_used, host_runtime_used: a.host_runtime_used, windows_abi: enabled, windows_stack_depth: a.windows_stack_depth, import_patches: a.import_patches, function_ranges: a.function_ranges }
@@ -4758,6 +4763,9 @@ fn compile_statement(state: EmitState, statement: Json) -> Result[EmitState, Str
         if target == "builtin:println" { return emit_write(result_unwrap(output_state), "\n") }
         return ok(result_unwrap(output_state))
     }
+    if kind == "match" {
+        return emit_fieldless_enum_match(state, statement)
+    }
     if kind == "if" {
         let else_label: LabelState = new_label(state)
         let condition: Result[EmitState, String] = emit_expression(else_label.state, field(statement, "cond"))
@@ -5035,6 +5043,17 @@ fn count_slots(statements: Json) -> Int {
         if kind == "for" {
             total = total + 3 + count_slots(field(statement, "body"))
         }
+        if kind == "match" {
+            total = total + 1
+            let arms: Json = field(statement, "arms")
+            let arm_count: Int = result_unwrap(json_array_len(arms))
+            let mut arm_index: Int = 0
+            while arm_index < arm_count {
+                let arm: Json = result_unwrap(json_array_get(arms, arm_index))
+                total = total + count_slots(field(arm, "body"))
+                arm_index = arm_index + 1
+            }
+        }
         index = index + 1
     }
     return total
@@ -5070,6 +5089,19 @@ fn count_function_slots(statements: Json, struct_fields: Map[String, Json]) -> R
             let body_count: Result[Int, String] = count_function_slots(field(statement, "body"), struct_fields)
             if is_err(body_count) { return err(unwrap_or(result_error(body_count), "dynamic backend: function loop scan failed")) }
             total = total + result_unwrap(body_count)
+        }
+        if kind == "match" {
+            total = total + 1
+            let arms: Json = field(statement, "arms")
+            let arm_count: Int = result_unwrap(json_array_len(arms))
+            let mut arm_index: Int = 0
+            while arm_index < arm_count {
+                let arm: Json = result_unwrap(json_array_get(arms, arm_index))
+                let body_count: Result[Int, String] = count_function_slots(field(arm, "body"), struct_fields)
+                if is_err(body_count) { return err(unwrap_or(result_error(body_count), "dynamic backend: function match arm scan failed")) }
+                total = total + result_unwrap(body_count)
+                arm_index = arm_index + 1
+            }
         }
         index = index + 1
     }
@@ -5111,6 +5143,118 @@ fn enum_variant_index(type_fields: Map[String, Json], enum_name: String, variant
         index = index + 1
     }
     return -1
+}
+
+fn validate_fieldless_enum_match(statement: Json, enum_name: String, variants: Json, backend: String) -> Result[Bool, String] {
+    let arms: Json = field(statement, "arms")
+    if json_kind(arms) != "array" { return err(backend + ": match arms must be an array") }
+    let arm_count: Int = result_unwrap(json_array_len(arms))
+    if arm_count == 0 { return err(backend + ": enum match must contain at least one arm") }
+    if json_kind(variants) != "array" { return err(backend + ": enum '" + enum_name + "' has malformed variants") }
+    let variant_count: Int = result_unwrap(json_array_len(variants))
+    if variant_count == 0 { return err(backend + ": enum '" + enum_name + "' has no variants") }
+    let mut declared: Map[String, Bool] = {}
+    let mut variant_index: Int = 0
+    while variant_index < variant_count {
+        let variant_value: Json = result_unwrap(json_array_get(variants, variant_index))
+        if json_kind(variant_value) != "string" { return err(backend + ": enum '" + enum_name + "' has a malformed variant") }
+        let declared_variant_name: String = text(variant_value)
+        if declared_variant_name == "" || map_contains_key(declared, declared_variant_name) { return err(backend + ": enum '" + enum_name + "' has an empty or duplicate variant") }
+        declared = map_insert(declared, declared_variant_name, true)
+        variant_index = variant_index + 1
+    }
+    let mut seen: Map[String, Bool] = {}
+    let mut has_wildcard: Bool = false
+    let mut arm_index: Int = 0
+    while arm_index < arm_count {
+        let arm: Json = result_unwrap(json_array_get(arms, arm_index))
+        if json_kind(arm) != "object" { return err(backend + ": enum match contains a malformed arm") }
+        let pattern: Json = field(arm, "pattern")
+        if json_kind(pattern) != "object" { return err(backend + ": enum match arm has no pattern") }
+        let pattern_kind: String = text(field(pattern, "kind"))
+        if pattern_kind == "wildcard" {
+            if arm_index != arm_count - 1 { return err(backend + ": wildcard enum match arm must be last") }
+            if text(field(pattern, "type")) != "" || text(field(pattern, "variant")) != "" || text(field(pattern, "binding")) != "" { return err(backend + ": malformed wildcard enum match pattern") }
+            has_wildcard = true
+        } else if pattern_kind == "enum" {
+            if text(field(pattern, "type")) != enum_name { return err(backend + ": match pattern type must be '" + enum_name + "'") }
+            if text(field(pattern, "binding")) != "" { return err(backend + ": fieldless-enum patterns cannot bind a payload") }
+            let pattern_variant_name: String = text(field(pattern, "variant"))
+            if !map_contains_key(declared, pattern_variant_name) { return err(backend + ": unknown enum variant '" + enum_name + "::" + pattern_variant_name + "'") }
+            if map_contains_key(seen, pattern_variant_name) { return err(backend + ": enum match repeats variant '" + pattern_variant_name + "'") }
+            seen = map_insert(seen, pattern_variant_name, true)
+        } else {
+            return err(backend + ": only fieldless-enum patterns and a final wildcard are supported in match")
+        }
+        let body: Json = field(arm, "body")
+        if json_kind(body) != "array" { return err(backend + ": enum match arm body must be an array") }
+        arm_index = arm_index + 1
+    }
+    if !has_wildcard {
+        variant_index = 0
+        while variant_index < variant_count {
+            let missing_variant_name: String = text(result_unwrap(json_array_get(variants, variant_index)))
+            if !map_contains_key(seen, missing_variant_name) { return err(backend + ": enum match is not exhaustive; missing '" + missing_variant_name + "'") }
+            variant_index = variant_index + 1
+        }
+    }
+    return ok(true)
+}
+
+fn emit_fieldless_enum_match(state: EmitState, statement: Json) -> Result[EmitState, String] {
+    let scrutinee: Json = field(statement, "scrutinee")
+    if json_kind(scrutinee) != "object" { return err("dynamic backend: match is missing its scrutinee") }
+    let enum_name: String = expr_type(scrutinee)
+    if !is_enum_type(state.env.struct_fields, enum_name) { return err("dynamic backend: match scrutinee must be a fieldless enum") }
+    let variants_option: Option[Json] = map_get(state.env.struct_fields, enum_name)
+    let variants: Json = unwrap_or(variants_option, result_unwrap(json_parse("[]")))
+    let valid: Result[Bool, String] = validate_fieldless_enum_match(statement, enum_name, variants, "dynamic backend")
+    if is_err(valid) { return err(unwrap_or(result_error(valid), "dynamic backend: invalid enum match")) }
+    let temporary_slot: Int = state.env.next_slot + 8
+    let evaluated: Result[EmitState, String] = emit_expression(state, scrutinee)
+    if is_err(evaluated) { return err(expression_error(evaluated)) }
+    let stored: EmitState = emit_store_slot(result_unwrap(evaluated), temporary_slot)
+    let scope: CompileEnv = stored.env
+    let join: LabelState = new_label(stored)
+    let mut current: EmitState = join.state
+    let mut maximum_slot: Int = temporary_slot
+    let arms: Json = field(statement, "arms")
+    let arm_count: Int = result_unwrap(json_array_len(arms))
+    let mut arm_index: Int = 0
+    while arm_index < arm_count {
+        let arm: Json = result_unwrap(json_array_get(arms, arm_index))
+        let pattern: Json = field(arm, "pattern")
+        let pattern_kind: String = text(field(pattern, "kind"))
+        let mut next_arm_label: Int = -1
+        if pattern_kind == "enum" {
+            let variant_name: String = text(field(pattern, "variant"))
+            let tag: Int = enum_variant_index(scope.struct_fields, enum_name, variant_name)
+            if tag < 0 { return err("dynamic backend: unknown enum variant '" + enum_name + "::" + variant_name + "'") }
+            let next_arm: LabelState = new_label(current)
+            next_arm_label = next_arm.label
+            current = emit_load_slot(next_arm.state, temporary_slot)
+            current = append_code(current, array_concat([u8(72), u8(61)], i32_bytes(tag)))
+            current = emit_jump(current, next_arm.label, true, u8(133))
+        }
+        let arm_scope: EmitState = state_with_scope(current, scope, temporary_slot)
+        let body: Result[EmitState, String] = compile_statements(arm_scope, field(arm, "body"))
+        if is_err(body) { return err(compile_error(body)) }
+        let body_state: EmitState = result_unwrap(body)
+        if body_state.env.next_slot > maximum_slot { maximum_slot = body_state.env.next_slot }
+        current = emit_jump(body_state, join.label, false, u8(0))
+        if next_arm_label >= 0 {
+            let bound_next: Result[EmitState, String] = bind_label(current, next_arm_label)
+            if is_err(bound_next) { return err(unwrap_or(result_error(bound_next), "dynamic backend: cannot bind enum match arm")) }
+            current = state_with_scope(result_unwrap(bound_next), scope, temporary_slot)
+        }
+        arm_index = arm_index + 1
+    }
+    let last_arm: Json = result_unwrap(json_array_get(arms, arm_count - 1))
+    let last_pattern: Json = field(last_arm, "pattern")
+    if text(field(last_pattern, "kind")) != "wildcard" { current = emit_jump(current, scope.trap_label, false, u8(0)) }
+    let bound_join: Result[EmitState, String] = bind_label(current, join.label)
+    if is_err(bound_join) { return err(unwrap_or(result_error(bound_join), "dynamic backend: cannot bind enum match join")) }
+    return ok(state_with_scope(result_unwrap(bound_join), scope, maximum_slot))
 }
 
 fn entry_statements(document: Json) -> Json {
@@ -5608,6 +5752,17 @@ fn pe_has_enum_variant(enums: Json, type_name: String, variant_name: String) -> 
     return false
 }
 
+fn pe_enum_variants(enums: Json, type_name: String) -> Json {
+    let count: Int = result_unwrap(json_array_len(enums))
+    let mut index: Int = 0
+    while index < count {
+        let definition: Json = result_unwrap(json_array_get(enums, index))
+        if text(field(definition, "name")) == type_name { return field(definition, "variants") }
+        index = index + 1
+    }
+    return result_unwrap(json_parse("[]"))
+}
+
 fn pe_validate_enums(enums: Json) -> Result[Bool, String] {
     let count: Int = result_unwrap(json_array_len(enums))
     let mut names: Map[String, Bool] = {}
@@ -5883,6 +6038,25 @@ fn pe_validate_statements(statements: Json, enums: Json, structs: Json) -> Resul
             if is_err(checked_then) { return checked_then }
             let checked_else: Result[Bool, String] = pe_validate_statements(field(statement, "else"), enums, structs)
             if is_err(checked_else) { return checked_else }
+        } else if kind == "match" {
+            let scrutinee: Json = field(statement, "scrutinee")
+            if json_kind(scrutinee) != "object" { return err("PE backend: match is missing its scrutinee") }
+            let enum_name: String = expr_type(scrutinee)
+            if !pe_is_enum_type(enums, enum_name) { return err("PE backend: match scrutinee must be a fieldless enum") }
+            let checked_scrutinee: Result[Bool, String] = pe_validate_expression(scrutinee, false, false, enums, structs)
+            if is_err(checked_scrutinee) { return checked_scrutinee }
+            let variants: Json = pe_enum_variants(enums, enum_name)
+            let checked_match: Result[Bool, String] = validate_fieldless_enum_match(statement, enum_name, variants, "PE backend")
+            if is_err(checked_match) { return checked_match }
+            let arms: Json = field(statement, "arms")
+            let arm_count: Int = result_unwrap(json_array_len(arms))
+            let mut arm_index: Int = 0
+            while arm_index < arm_count {
+                let arm: Json = result_unwrap(json_array_get(arms, arm_index))
+                let checked_body: Result[Bool, String] = pe_validate_statements(field(arm, "body"), enums, structs)
+                if is_err(checked_body) { return checked_body }
+                arm_index = arm_index + 1
+            }
         } else if kind == "while" {
             let condition: Json = field(statement, "cond")
             if expr_type(condition) != "Bool" { return err("PE backend: while condition must be Bool") }

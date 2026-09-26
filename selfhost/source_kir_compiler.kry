@@ -314,7 +314,7 @@ fn lex(source: String) -> Result[Array[SourceToken], String] {
             continue
         }
         let next: String = char_at(chars, index + 1)
-        if (current == "=" && next == "=") || (current == "!" && next == "=") || (current == "<" && next == "=") || (current == ">" && next == "=") || (current == "&" && next == "&") || (current == "|" && next == "|") || (current == "<" && next == "<") || (current == ">" && next == ">") || (current == "-" && next == ">") || (current == ":" && next == ":") {
+        if (current == "=" && next == "=") || (current == "=" && next == ">") || (current == "!" && next == "=") || (current == "<" && next == "=") || (current == ">" && next == "=") || (current == "&" && next == "&") || (current == "|" && next == "|") || (current == "<" && next == "<") || (current == ">" && next == ">") || (current == "-" && next == ">") || (current == ":" && next == ":") {
             tokens = push_token(tokens, "symbol", current + next)
             if len(tokens) >= 128 {
                 token_chunks = array_push(token_chunks, tokens)
@@ -2112,6 +2112,73 @@ fn parse_if(parser: SourceParser) -> Result[ParsedStatements, String] {
     return ok(ParsedStatements{ parser: after_then, json: statement_json("if", body) })
 }
 
+fn parse_match(parser: SourceParser) -> Result[ParsedStatements, String] {
+    let scrutinee_result: Result[ParsedExpr, String] = parse_expression(advance(parser))
+    if is_err(scrutinee_result) { return err(source_expression_error(scrutinee_result)) }
+    let scrutinee: ParsedExpr = result_unwrap(scrutinee_result)
+    let enum_declaration: Option[SourceStruct] = map_get(scrutinee.parser.structs, scrutinee.expression.type_name)
+    if is_none(enum_declaration) { return err("parser: match scrutinee must be a fieldless enum") }
+    let enum_shape: SourceStruct = unwrap_or(enum_declaration, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} })
+    if !source_type_is_enum(enum_shape) { return err("parser: match scrutinee must be a fieldless enum") }
+    let opened: Result[SourceParser, String] = expect(scrutinee.parser, "{")
+    if is_err(opened) { return err(parser_error(opened)) }
+    let mut current: SourceParser = skip_separators(result_unwrap(opened))
+    let mut arm_items: Array[String] = []
+    let mut seen_variants: Array[String] = []
+    let mut wildcard_seen: Bool = false
+    while current_token(current).text != "}" {
+        if current_token(current).kind == "eof" { return err("parser: unterminated match arms") }
+        if wildcard_seen { return err("parser: wildcard pattern must be the final match arm") }
+        let pattern_token: SourceToken = current_token(current)
+        let mut pattern_json: String = ""
+        if pattern_token.kind != "identifier" { return err("parser: expected an enum variant or '_' match pattern") }
+        if pattern_token.text == "_" {
+            pattern_json = "{\"kind\":\"wildcard\",\"type\":\"\",\"variant\":\"\",\"binding\":\"\"}"
+            wildcard_seen = true
+            current = advance(current)
+        } else {
+            let pattern_type: String = pattern_token.text
+            let pattern_declaration: Option[SourceStruct] = map_get(current.structs, pattern_type)
+            if is_none(pattern_declaration) {
+                if map_contains_key(current.structs, "private:" + pattern_type) { return err("parser: imported enum '" + pattern_type + "' is private") }
+                return err("parser: unknown enum '" + pattern_type + "' in match pattern")
+            }
+            let pattern_shape: SourceStruct = unwrap_or(pattern_declaration, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} })
+            if !source_type_is_enum(pattern_shape) { return err("parser: match pattern type '" + pattern_type + "' is not an enum") }
+            if pattern_shape.symbol != enum_shape.symbol { return err("parser: match pattern enum type does not match the scrutinee type") }
+            let separator: Result[SourceParser, String] = expect(advance(current), "::")
+            if is_err(separator) { return err(parser_error(separator)) }
+            let variant: SourceToken = current_token(result_unwrap(separator))
+            if variant.kind != "identifier" { return err("parser: expected an enum variant after '::' in match pattern") }
+            if !source_string_array_contains(pattern_shape.names, variant.text) { return err("parser: unknown enum variant '" + pattern_type + "::" + variant.text + "' in match pattern") }
+            if source_string_array_contains(seen_variants, variant.text) { return err("parser: duplicate enum match pattern '" + pattern_type + "::" + variant.text + "'") }
+            seen_variants = array_push(seen_variants, variant.text)
+            pattern_json = "{\"kind\":\"enum\",\"type\":" + json_quote(pattern_shape.symbol) + ",\"variant\":" + json_quote(variant.text) + ",\"binding\":\"\"}"
+            current = advance(result_unwrap(separator))
+        }
+        let arrow: Result[SourceParser, String] = expect(current, "=>")
+        if is_err(arrow) { return err(parser_error(arrow)) }
+        let body: Result[ParsedStatements, String] = parse_block(result_unwrap(arrow))
+        if is_err(body) { return err(statements_error(body)) }
+        let parsed_body: ParsedStatements = result_unwrap(body)
+        arm_items = array_push(arm_items, "{\"pattern\":" + pattern_json + ",\"body\":" + parsed_body.json + "}")
+        current = SourceParser{ tokens: parsed_body.parser.tokens, position: parsed_body.parser.position, module_id: parsed_body.parser.module_id, bindings: scrutinee.parser.bindings, functions: parsed_body.parser.functions, structs: parsed_body.parser.structs }
+        current = skip_separators(current)
+    }
+    if !wildcard_seen {
+        let mut variant_index: Int = 0
+        while variant_index < len(enum_shape.names) {
+            let expected_variant: String = unwrap_or(array_get(enum_shape.names, variant_index), "")
+            if !source_string_array_contains(seen_variants, expected_variant) { return err("parser: non-exhaustive match; missing enum variant '" + expected_variant + "'") }
+            variant_index = variant_index + 1
+        }
+    }
+    let closed: Result[SourceParser, String] = expect(current, "}")
+    if is_err(closed) { return err(parser_error(closed)) }
+    let arms_json: String = "[" + join_json_items(arm_items, 0, len(arm_items)) + "]"
+    return ok(ParsedStatements{ parser: result_unwrap(closed), json: statement_json("match", "\"scrutinee\":" + scrutinee.expression.json + ",\"arms\":" + arms_json) })
+}
+
 fn parse_while(parser: SourceParser) -> Result[ParsedStatements, String] {
     let condition: Result[ParsedExpr, String] = parse_expression(advance(parser))
     if is_err(condition) { return err(source_expression_error(condition)) }
@@ -2151,6 +2218,7 @@ fn parse_statement(parser: SourceParser) -> Result[ParsedStatements, String] {
     if token.text == "let" || token.text == "const" { return parse_binding(current) }
     if token.text == "print" || token.text == "println" { return parse_output(current) }
     if token.text == "if" { return parse_if(current) }
+    if token.text == "match" { return parse_match(current) }
     if token.text == "while" { return parse_while(current) }
     if token.text == "for" { return parse_for(current) }
     if token.text == "break" || token.text == "continue" {

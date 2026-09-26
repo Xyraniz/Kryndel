@@ -42,6 +42,7 @@ verify_hash dynamic_backend.kry selfhost/dynamic_backend.kry
 verify_hash elf_backend.kry selfhost/elf_backend.kry
 verify_hash pe_backend.kry selfhost/pe_backend.kry
 verify_hash bootstrap-fixture.kry selfhost/fixtures/bootstrap_hello_stage27.kry
+verify_hash enum-match-fixture.kry selfhost/fixtures/source_enum_match_stage38.kry
 
 tmp="$(mktemp -d /tmp/kryndel-bootstrap.XXXXXX)"
 trap 'rm -rf "$tmp"' EXIT
@@ -62,13 +63,37 @@ run_fixture() {
   printf '[bootstrap] %s fixture passed\n' "$label"
 }
 
+run_enum_match_fixture() {
+  local compiler="$1"
+  local label="$2"
+  local fixture=selfhost/fixtures/source_enum_match_stage38.kry
+  local output="$tmp/$label-enum-match-fixture"
+  "$compiler" "$fixture" "$output"
+  chmod 700 "$output"
+  local actual="$tmp/$label-enum-match-stdout"
+  local expected="$tmp/enum-match-expected"
+  if ! "$output" > "$actual"; then
+    echo "$label enum match fixture failed to execute" >&2
+    exit 1
+  fi
+  printf 'red\nyellow\ngreen\nwildcard\n' > "$expected"
+  if ! cmp -s "$expected" "$actual"; then
+    echo "$label enum match fixture output did not match the expected bytes" >&2
+    cat "$actual" >&2
+    exit 1
+  fi
+  printf '[bootstrap] %s exhaustive enum match fixture passed\n' "$label"
+}
+
 run_fixture "$seed_path" stage1
+run_enum_match_fixture "$seed_path" stage1
 
 stage2="$tmp/stage2-source-kir-compiler"
 "$seed_path" selfhost/source_kir_compiler.kry "$stage2"
 chmod 700 "$stage2"
 verify_hash stage2-source-kir-compiler.elf "$stage2"
 run_fixture "$stage2" stage2
+run_enum_match_fixture "$stage2" stage2
 
 windows_pe_output="${KRY_STAGE36_WINDOWS_PE_OUTPUT:-}"
 if [[ -n "$windows_pe_output" ]]; then
@@ -88,8 +113,14 @@ import "geometry"
 import "modes"
 fn main() -> Nil {
     let point = translate(Point { x: 40, y: 2 }, 2)
-    println(Mode::Ready)
+    println(mode_name(Mode::Ready))
     println(point.x + point.y)
+}
+fn mode_name(mode: Mode) -> String {
+    match mode {
+        Mode::Idle => { return "Mode::Idle" }
+        Mode::Ready => { return "Mode::Ready" }
+    }
 }
 KRY
   windows_pe="$windows_dir/windows-program.exe"
@@ -108,4 +139,5 @@ if ! cmp -s "$stage2" "$stage3"; then
 fi
 chmod 700 "$stage3"
 run_fixture "$stage3" stage3
+run_enum_match_fixture "$stage3" stage3
 printf '[bootstrap] Stage 2 and Stage 3 are byte-identical; no Go, C, assembler, or linker was invoked.\n'
