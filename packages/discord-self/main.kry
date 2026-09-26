@@ -5,6 +5,19 @@ pub struct Client {
     private inner: Bot,
 }
 
+fn valid_user_snowflake(value: String) -> Bool {
+    if len(value) < 1 || len(value) > 20 { return false }
+    for point in codepoints(value) {
+        if point < 48 || point > 57 { return false }
+    }
+    return true
+}
+
+fn bool_query_value(value: Bool) -> String {
+    if value { return "true" }
+    return "false"
+}
+
 pub fn self_client(token: String) -> Result[Client, String] {
     let inner: Bot = user_account_client(token)?
     return ok(Client{inner: inner})
@@ -69,6 +82,66 @@ impl Client {
 
     pub fn guilds() -> Result[Json, String] {
         return self.fetch_guilds(false)
+    }
+
+    pub fn fetch_guild_preview(guild_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/guilds/" + guild_id + "/preview", "")?)
+    }
+
+    pub fn fetch_guild_profile(guild_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/guilds/" + guild_id + "/profile", "")?)
+    }
+
+    pub fn fetch_stage_instance(channel_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(channel_id) { return err("channel_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/stage-instances/" + channel_id, "")?)
+    }
+
+    pub fn fetch_user_profile(
+        user_id: String,
+        with_mutual_guilds: Bool = true,
+        with_mutual_friends_count: Bool = false,
+        with_mutual_friends: Bool = true,
+        guild_id: String = ""
+    ) -> Result[Json, String] {
+        if !valid_user_snowflake(user_id) { return err("user_id must be a Discord snowflake") }
+        if guild_id != "" && !valid_user_snowflake(guild_id) { return err("guild_id must be empty or a Discord snowflake") }
+        let mut route: String = "/users/" + user_id + "/profile?with_mutual_guilds=" + bool_query_value(with_mutual_guilds)
+        route = route + "&with_mutual_friends=" + bool_query_value(with_mutual_friends)
+        route = route + "&with_mutual_friends_count=" + bool_query_value(with_mutual_friends_count)
+        if guild_id != "" { route = route + "&guild_id=" + guild_id }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_private_channels() -> Result[Json, String] {
+        return json_parse(self.request("GET", "/users/@me/channels", "")?)
+    }
+
+    pub fn fetch_relationships() -> Result[Json, String] {
+        return json_parse(self.request("GET", "/users/@me/relationships", "")?)
+    }
+
+    pub fn fetch_connections() -> Result[Json, String] {
+        return json_parse(self.request("GET", "/users/@me/connections", "")?)
+    }
+
+    pub fn fetch_notes() -> Result[Json, String] {
+        return json_parse(self.request("GET", "/users/@me/notes", "")?)
+    }
+
+    pub fn fetch_note(user_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(user_id) { return err("user_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/users/@me/notes/" + user_id, "")?)
+    }
+
+    pub fn edit_note(user_id: String, note: String) -> Result[Nil, String] {
+        if !valid_user_snowflake(user_id) { return err("user_id must be a Discord snowflake") }
+        let quoted_note: String = json_quote(note)?
+        let body: String = "{\"note\":" + quoted_note + "}"
+        let _response: String = self.request("PUT", "/users/@me/notes/" + user_id, body)?
+        return ok(nil)
     }
 
     pub fn send_message(channel_id: String, content: String) -> Result[Json, String] {
