@@ -13,6 +13,17 @@ fn valid_user_snowflake(value: String) -> Bool {
     return true
 }
 
+fn valid_invite_code(value: String) -> Bool {
+    if len(value) < 1 || len(value) > 100 { return false }
+    for point in codepoints(value) {
+        let digit: Bool = point >= 48 && point <= 57
+        let lower: Bool = point >= 97 && point <= 122
+        let upper: Bool = point >= 65 && point <= 90
+        if !digit && !lower && !upper && point != 45 && point != 95 { return false }
+    }
+    return true
+}
+
 fn bool_query_value(value: Bool) -> String {
     if value { return "true" }
     return "false"
@@ -142,6 +153,73 @@ impl Client {
         let body: String = "{\"note\":" + quoted_note + "}"
         let _response: String = self.request("PUT", "/users/@me/notes/" + user_id, body)?
         return ok(nil)
+    }
+
+    pub fn fetch_invite(
+        invite_code: String,
+        with_counts: Bool = true,
+        with_permissions: Bool = true,
+        with_profile: Bool = true,
+        scheduled_event_id: String = ""
+    ) -> Result[Json, String] {
+        if !valid_invite_code(invite_code) { return err("invite_code must contain only letters, digits, '-' or '_'") }
+        if scheduled_event_id != "" && !valid_user_snowflake(scheduled_event_id) {
+            return err("scheduled_event_id must be empty or a Discord snowflake")
+        }
+        let mut route: String = "/invites/" + invite_code + "?with_counts=" + bool_query_value(with_counts)
+        route = route + "&with_expiration=true&with_permissions=" + bool_query_value(with_permissions)
+        route = route + "&with_profile=" + bool_query_value(with_profile)
+        if scheduled_event_id != "" { route = route + "&guild_scheduled_event_id=" + scheduled_event_id }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_widget(guild_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/guilds/" + guild_id + "/widget.json", "")?)
+    }
+
+    pub fn fetch_sticker(sticker_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(sticker_id) { return err("sticker_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/stickers/" + sticker_id, "")?)
+    }
+
+    pub fn fetch_sticker_pack(pack_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(pack_id) { return err("pack_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/sticker-packs/" + pack_id, "")?)
+    }
+
+    pub fn fetch_member_verification(
+        guild_id: String,
+        with_guild: Bool = true,
+        invite: String = ""
+    ) -> Result[Json, String] {
+        if !valid_user_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+        if invite != "" && !valid_invite_code(invite) { return err("invite must be empty or a valid invite code") }
+        let mut route: String = "/guilds/" + guild_id + "/member-verification?with_guild=" + bool_query_value(with_guild)
+        if invite != "" { route = route + "&invite_code=" + invite }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_join_request(request_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(request_id) { return err("request_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/join-requests/" + request_id, "")?)
+    }
+
+    pub fn join_request_guilds() -> Result[Json, String] {
+        return json_parse(self.request("GET", "/users/@me/join-request-guilds", "")?)
+    }
+
+    pub fn fetch_settings() -> Result[Json, String] {
+        let response: Json = json_parse(self.request("GET", "/users/@me/settings-proto/1", "")?)?
+        return json_object_get(response, "settings")
+    }
+
+    pub fn fetch_tracking_settings() -> Result[Json, String] {
+        return json_parse(self.request("GET", "/users/@me/consent", "")?)
+    }
+
+    pub fn friend_suggestions() -> Result[Json, String] {
+        return json_parse(self.request("GET", "/friend-suggestions", "")?)
     }
 
     pub fn send_message(channel_id: String, content: String) -> Result[Json, String] {
