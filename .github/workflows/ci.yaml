@@ -81,7 +81,7 @@ jobs:
         with:
           name: selfhost-windows-amd64
           path: stage36-pe
-      - name: Execute Stage 2 generated Windows executable
+      - name: Execute Stage 1 and Stage 2 generated Windows executables
         shell: pwsh
         run: |
           $output = & .\stage36-pe\stage36-selfhost.exe

@@ -519,6 +519,8 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 		targetParsed = true
 		if t.OS == "windows" {
 			effectiveFormat = "pe-direct"
+		} else {
+			return report(kry.Diag(kry.CatCLI, nil, 1, 1, "PE output requires a Windows target; use --target=windows-x64 for C-free Windows executables"), jsonMode)
 		}
 	}
 	backend, err := kry.DescribeNativeBackend(effectiveFormat)
