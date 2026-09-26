@@ -37,6 +37,15 @@ fn main() -> Nil {
     }
 }
 `, "{\"type\":4,\"data\":{\"content\":\"hello\",\"allowed_mentions\":{\"parse\":[]}}}\n"},
+		{"discord-self", "1.4.0", `import "discord-self"
+fn main() -> Nil {
+    let client: Result[Client, String] = self_client("synthetic-user-token")
+    match client {
+        ok(_) => { println("discord-self-ok") }
+        err(problem) => { println(problem) }
+    }
+}
+`, "discord-self-ok\n"},
 		{"fs", "1.2.1", `import "fs"
 fn main() -> Nil {
     let written: Result[Nil, String] = write_text("probe.txt", "fs-ok")
