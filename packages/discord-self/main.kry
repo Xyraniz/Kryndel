@@ -60,9 +60,15 @@ impl Client {
         return self.inner.get_message(channel_id, message_id)
     }
 
-    pub fn guilds() -> Result[Json, String] {
-        let response: String = self.request("GET", "/users/@me/guilds", "")?
+    pub fn fetch_guilds(with_counts: Bool = true) -> Result[Json, String] {
+        let mut include_counts: String = "false"
+        if with_counts { include_counts = "true" }
+        let response: String = self.request("GET", "/users/@me/guilds?with_counts=" + include_counts, "")?
         return json_parse(response)
+    }
+
+    pub fn guilds() -> Result[Json, String] {
+        return self.fetch_guilds(false)
     }
 
     pub fn send_message(channel_id: String, content: String) -> Result[Json, String] {
