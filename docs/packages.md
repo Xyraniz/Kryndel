@@ -8,7 +8,7 @@ Version requirements accept exact three-part numeric versions, `^`, `~`, `>=`, a
 | --- | --- | --- |
 | `kry new app` | Creates a project with `kry.toml` and `main.kry`. | Does not introduce an external runtime. |
 | `kry add discord ^2.3.0` | Declares the current Discord bot API library release in `[dependencies]`. | The manifest is serialized deterministically; `kry install` still checks compiler compatibility. |
-| `kry add discord-self ^1.4.0` | Adds the separate user-account package and its `discord` transport dependency. | It is opt-in and automating ordinary user accounts is prohibited by Discord. |
+| `kry add discord-self ^1.5.0` | Adds the separate user-account package and its `discord` transport dependency. | It is opt-in and automating ordinary user accounts is prohibited by Discord. |
 | `kry install` | Resolves, downloads, verifies, extracts, and writes `kry.lock`. | Hashes and URLs remain recorded. |
 | `kry update` | Repeats resolution from the configured registry. | The installation can be audited from the lockfile. |
 | `kry uninstall name [name ...]` | Removes direct dependencies and prunes `vendor/`. | Reachable transitive dependencies are preserved and the global cache is not deleted. |
@@ -21,9 +21,9 @@ Version requirements accept exact three-part numeric versions, `^`, `~`, `>=`, a
 > `kry.lock` before sharing or releasing a project; it records the exact archive
 > URLs and SHA-256 hashes.
 
-By default, the client uses Kryndel's static public registry at `https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry`. Its index and archives are versioned repository files. The current official releases `async` 1.2.1, `crypto` 1.3.1, `discord` 2.3.0, `discord-self` 1.4.0, `fs` 1.2.1, and `json` 1.1.1 all support compiler 1.3.0 and declare `kryndel = ">=1.3.0"`. `KRY_REGISTRY` selects a mirror, private registry, or local registry; `kry registry serve ROOT --addr 127.0.0.1:8765` serves the minimum layout `ROOT/index/<name>.json` and `ROOT/packages/<archive>.tar.gz`. Since publishing has no authentication, the server refuses non-loopback bind addresses. Package-manager requests block cross-origin redirects. `KRY_CACHE` changes the cache location, and `KRY_OFFLINE=1` restricts the client to already stored indexes and archives.
+By default, the client uses Kryndel's static public registry at `https://raw.githubusercontent.com/Xyraniz/Kryndel/main/registry`. Its index and archives are versioned repository files. The current official releases `async` 1.2.1, `crypto` 1.3.1, `discord` 2.3.0, `discord-self` 1.5.0, `fs` 1.2.1, and `json` 1.1.1 all support compiler 1.3.0 and declare `kryndel = ">=1.3.0"`. `KRY_REGISTRY` selects a mirror, private registry, or local registry; `kry registry serve ROOT --addr 127.0.0.1:8765` serves the minimum layout `ROOT/index/<name>.json` and `ROOT/packages/<archive>.tar.gz`. Since publishing has no authentication, the server refuses non-loopback bind addresses. Package-manager requests block cross-origin redirects. `KRY_CACHE` changes the cache location, and `KRY_OFFLINE=1` restricts the client to already stored indexes and archives.
 
-The `discord` index contains only package `2.3.0`; historical Discord archives have been removed. `discord-self` 1.4.0 is a separate package and depends on `discord ^2.3.0`.
+The `discord` index contains only package `2.3.0`; historical Discord archives have been removed. `discord-self` 1.5.0 is a separate package and depends on `discord ^2.3.0`.
 
 > The installer rejects absolute paths, alternate separators that escape the root, `..`, symbolic links, directories in the archive, duplicate entries, and files larger than the per-file limit. Cryptographic verification happens before extraction.
 

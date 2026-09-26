@@ -24,6 +24,27 @@ fn valid_invite_code(value: String) -> Bool {
     return true
 }
 
+fn valid_template_code(value: String) -> Bool {
+    if len(value) < 1 || len(value) > 100 { return false }
+    for point in codepoints(value) {
+        let digit: Bool = point >= 48 && point <= 57
+        let lower: Bool = point >= 97 && point <= 122
+        let upper: Bool = point >= 65 && point <= 90
+        if !digit && !lower && !upper && point != 45 && point != 95 { return false }
+    }
+    return true
+}
+
+fn valid_country_code(value: String) -> Bool {
+    if len(value) != 2 { return false }
+    for point in codepoints(value) {
+        let upper: Bool = point >= 65 && point <= 90
+        let lower: Bool = point >= 97 && point <= 122
+        if !upper && !lower { return false }
+    }
+    return true
+}
+
 fn bool_query_value(value: Bool) -> String {
     if value { return "true" }
     return "false"
@@ -220,6 +241,241 @@ impl Client {
 
     pub fn friend_suggestions() -> Result[Json, String] {
         return json_parse(self.request("GET", "/friend-suggestions", "")?)
+    }
+
+    pub fn fetch_template(template_code: String) -> Result[Json, String] {
+        if !valid_template_code(template_code) { return err("template_code must contain only letters, digits, '-' or '_'") }
+        return json_parse(self.request("GET", "/guilds/templates/" + template_code, "")?)
+    }
+
+    pub fn fetch_country_code() -> Result[Json, String] {
+        return json_parse(self.request("GET", "/users/@me/billing/country-code", "")?)
+    }
+
+    pub fn fetch_location_info() -> Result[Json, String] {
+        return json_parse(self.request("GET", "/users/@me/billing/location-info", "")?)
+    }
+
+    pub fn applications(with_team_applications: Bool = true) -> Result[Json, String] {
+        return json_parse(self.request(
+            "GET",
+            "/applications?with_team_applications=" + bool_query_value(with_team_applications),
+            ""
+        )?)
+    }
+
+    pub fn detectable_applications() -> Result[Json, String] {
+        return json_parse(self.request("GET", "/applications/detectable", "")?)
+    }
+
+    pub fn fetch_application(application_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(application_id) { return err("application_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/applications/" + application_id, "")?)
+    }
+
+    pub fn fetch_partial_application(application_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(application_id) { return err("application_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/oauth2/applications/" + application_id + "/rpc", "")?)
+    }
+
+    pub fn fetch_public_application(application_id: String, with_guild: Bool = false) -> Result[Json, String] {
+        if !valid_user_snowflake(application_id) { return err("application_id must be a Discord snowflake") }
+        let route: String = "/applications/" + application_id + "/public?with_guild=" + bool_query_value(with_guild)
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_public_applications(application_ids: Array[String]) -> Result[Json, String] {
+        if len(application_ids) == 0 { return json_parse("[]") }
+        if len(application_ids) > 100 { return err("application_ids must contain at most 100 Discord snowflakes") }
+        let mut route: String = "/applications/public?"
+        let mut first: Bool = true
+        for application_id in application_ids {
+            if !valid_user_snowflake(application_id) { return err("application_ids must contain only Discord snowflakes") }
+            if !first { route = route + "&" }
+            route = route + "application_ids=" + application_id
+            first = false
+        }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn teams(with_payout_account_status: Bool = false) -> Result[Json, String] {
+        let mut route: String = "/teams"
+        if with_payout_account_status { route = route + "?include_payout_account_status=true" }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_team(team_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(team_id) { return err("team_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/teams/" + team_id, "")?)
+    }
+
+    pub fn fetch_company(company_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(company_id) { return err("company_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/company/" + company_id, "")?)
+    }
+
+    pub fn fetch_entitlements(application_id: String, include_consumed: Bool = true) -> Result[Json, String] {
+        if !valid_user_snowflake(application_id) { return err("application_id must be a Discord snowflake") }
+        let mut exclude_consumed: String = "false"
+        if !include_consumed { exclude_consumed = "true" }
+        let route: String = "/users/@me/applications/" + application_id + "/entitlements?exclude_consumed=" + exclude_consumed
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_sku(sku_id: String, localize: Bool = true) -> Result[Json, String] {
+        if !valid_user_snowflake(sku_id) { return err("sku_id must be a Discord snowflake") }
+        let mut route: String = "/store/skus/" + sku_id
+        if !localize { route = route + "?localize=false" }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_store_listing(listing_id: String, localize: Bool = true) -> Result[Json, String] {
+        if !valid_user_snowflake(listing_id) { return err("listing_id must be a Discord snowflake") }
+        let mut route: String = "/store/listings/" + listing_id
+        if !localize { route = route + "?localize=false" }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_eula(eula_id: String) -> Result[Json, String] {
+        if !valid_user_snowflake(eula_id) { return err("eula_id must be a Discord snowflake") }
+        return json_parse(self.request("GET", "/store/eulas/" + eula_id, "")?)
+    }
+
+    pub fn fetch_gift(
+        gift_code: String,
+        with_application: Bool = false,
+        with_subscription_plan: Bool = true
+    ) -> Result[Json, String] {
+        if !valid_template_code(gift_code) { return err("gift_code must contain only letters, digits, '-' or '_'") }
+        let route: String = "/entitlements/gift-codes/" + gift_code + "?with_application=" + bool_query_value(with_application)
+            + "&with_subscription_plan=" + bool_query_value(with_subscription_plan)
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_published_store_listing(sku_id: String, localize: Bool = true) -> Result[Json, String] {
+        if !valid_user_snowflake(sku_id) { return err("sku_id must be a Discord snowflake") }
+        let mut route: String = "/store/published-listings/skus/" + sku_id
+        if !localize { route = route + "?localize=false" }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_published_store_listings(application_id: String, localize: Bool = true) -> Result[Json, String] {
+        if !valid_user_snowflake(application_id) { return err("application_id must be a Discord snowflake") }
+        let mut route: String = "/store/published-listings/skus?application_id=" + application_id
+        if !localize { route = route + "&localize=false" }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_primary_store_listing(application_id: String, localize: Bool = true) -> Result[Json, String] {
+        if !valid_user_snowflake(application_id) { return err("application_id must be a Discord snowflake") }
+        let mut route: String = "/store/published-listings/applications/" + application_id
+        if !localize { route = route + "?localize=false" }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_primary_store_listings(application_ids: Array[String], localize: Bool = true) -> Result[Json, String] {
+        if len(application_ids) == 0 { return json_parse("[]") }
+        if len(application_ids) > 100 { return err("application_ids must contain at most 100 Discord snowflakes") }
+        let mut route: String = "/store/published-listings/applications?"
+        let mut first: Bool = true
+        for application_id in application_ids {
+            if !valid_user_snowflake(application_id) { return err("application_ids must contain only Discord snowflakes") }
+            if !first { route = route + "&" }
+            route = route + "application_ids=" + application_id
+            first = false
+        }
+        if !localize { route = route + "&localize=false" }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_sku_subscription_plans(
+        sku_id: String,
+        country_code: String = "",
+        payment_source_id: String = "",
+        with_unpublished: Bool = false
+    ) -> Result[Json, String] {
+        if !valid_user_snowflake(sku_id) { return err("sku_id must be a Discord snowflake") }
+        if country_code != "" && !valid_country_code(country_code) { return err("country_code must be empty or two letters") }
+        if payment_source_id != "" && !valid_user_snowflake(payment_source_id) { return err("payment_source_id must be empty or a Discord snowflake") }
+        let mut route: String = "/store/published-listings/skus/" + sku_id + "/subscription-plans"
+        let mut first: Bool = true
+        if country_code != "" {
+            route = route + "?country_code=" + country_code
+            first = false
+        }
+        if payment_source_id != "" {
+            if first { route = route + "?" } else { route = route + "&" }
+            route = route + "payment_source_id=" + payment_source_id
+            first = false
+        }
+        if with_unpublished {
+            if first { route = route + "?" } else { route = route + "&" }
+            route = route + "include_unpublished=true"
+        }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_skus_subscription_plans(
+        sku_ids: Array[String],
+        country_code: String = "",
+        payment_source_id: String = "",
+        with_unpublished: Bool = false
+    ) -> Result[Json, String] {
+        if len(sku_ids) == 0 { return json_parse("[]") }
+        if len(sku_ids) > 100 { return err("sku_ids must contain at most 100 Discord snowflakes") }
+        if country_code != "" && !valid_country_code(country_code) { return err("country_code must be empty or two letters") }
+        if payment_source_id != "" && !valid_user_snowflake(payment_source_id) { return err("payment_source_id must be empty or a Discord snowflake") }
+        let mut route: String = "/store/published-listings/skus/subscription-plans?"
+        let mut first: Bool = true
+        for sku_id in sku_ids {
+            if !valid_user_snowflake(sku_id) { return err("sku_ids must contain only Discord snowflakes") }
+            if !first { route = route + "&" }
+            route = route + "sku_ids=" + sku_id
+            first = false
+        }
+        if country_code != "" { route = route + "&country_code=" + country_code }
+        if payment_source_id != "" { route = route + "&payment_source_id=" + payment_source_id }
+        if with_unpublished { route = route + "&include_unpublished=true" }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn fetch_live_build_ids(branch_ids: Array[String]) -> Result[Json, String] {
+        if len(branch_ids) == 0 { return json_parse("{}") }
+        if len(branch_ids) > 100 { return err("branch_ids must contain at most 100 Discord snowflakes") }
+        let mut branch_ids_json: String = "["
+        let mut first: Bool = true
+        for branch_id in branch_ids {
+            if !valid_user_snowflake(branch_id) { return err("branch_ids must contain only Discord snowflakes") }
+            if !first { branch_ids_json = branch_ids_json + "," }
+            branch_ids_json = branch_ids_json + branch_id
+            first = false
+        }
+        branch_ids_json = branch_ids_json + "]"
+        let body: String = "{\"branch_ids\":" + branch_ids_json + "}"
+        return json_parse(self.request("POST", "/branches", body)?)
+    }
+
+    pub fn price_tiers(price_tier_type: Int = 0, guild_id: String = "") -> Result[Json, String] {
+        if price_tier_type < 0 { return err("price_tier_type must not be negative") }
+        if guild_id != "" && !valid_user_snowflake(guild_id) { return err("guild_id must be empty or a Discord snowflake") }
+        let mut route: String = "/store/price-tiers"
+        let mut first: Bool = true
+        if price_tier_type > 0 {
+            route = route + "?price_tier_type=" + str(price_tier_type)
+            first = false
+        }
+        if guild_id != "" {
+            if first { route = route + "?" } else { route = route + "&" }
+            route = route + "guild_id=" + guild_id
+        }
+        return json_parse(self.request("GET", route, "")?)
+    }
+
+    pub fn giftable_entitlements(country_code: String = "") -> Result[Json, String] {
+        if country_code != "" && !valid_country_code(country_code) { return err("country_code must be empty or two letters") }
+        let mut route: String = "/users/@me/entitlements/gifts"
+        if country_code != "" { route = route + "?country_code=" + country_code }
+        return json_parse(self.request("GET", route, "")?)
     }
 
     pub fn send_message(channel_id: String, content: String) -> Result[Json, String] {
