@@ -16,6 +16,23 @@ fn set_activity_when_ready(event_json: String) -> String {
     return ""
 }
 
+fn inspect_self_account(client: Client, user_id: String, guild_id: String, channel_id: String) -> Result[Nil, String] {
+    let guild_preview: Json = client.fetch_guild_preview(guild_id)?
+    let guild_profile: Json = client.fetch_guild_profile(guild_id)?
+    let stage_instance: Json = client.fetch_stage_instance(channel_id)?
+    let user_profile: Json = client.fetch_user_profile(user_id)?
+    let private_channels: Json = client.fetch_private_channels()?
+    let relationships: Json = client.fetch_relationships()?
+    let connections: Json = client.fetch_connections()?
+    let notes: Json = client.fetch_notes()?
+    let note: Json = client.fetch_note(user_id)?
+    return ok(nil)
+}
+
+fn update_self_note(client: Client, user_id: String, note: String) -> Result[Nil, String] {
+    return client.edit_note(user_id, note)
+}
+
 fn main() -> Result[Nil, String] {
     let token: String = require("DISCORD_USER_TOKEN")?
     let client: Client = self_client(token)?

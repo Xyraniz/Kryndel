@@ -10,6 +10,10 @@ Package manager HTTP requests block cross-origin redirects, and the unauthentica
 
 Project and package `kryndel` requirements are now mandatory and enforced before compilation, execution, installation, caching, or vendoring. Version constraints reject malformed versions, and package downloads are checked against their manifest coordinates, entrypoint, and dependency metadata before installation. Generated native feature metadata now has stable ordering and is covered by `make check-generated`.
 
+## discord-self 1.3.0
+
+The separate user-account package adds ten REST methods adapted from discord.py-self for guild previews and profiles, Stage instances, user profiles, private channels, relationships, connections, and user notes. The methods return Kryndel `Json` values and validate Snowflake path parameters; note updates JSON-escape their input.
+
 ## discord-self 1.1.0
 
 `Client` now exposes the shared Discord package's validated user, guild, member, channel, and message fetch helpers, paginated member lookup, and safe multipart message upload. These additions reuse the existing REST implementation.
