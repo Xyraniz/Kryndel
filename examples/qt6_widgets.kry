@@ -1,0 +1,43 @@
+import "packages/qt6"
+
+fn main() -> Result[Nil, String] {
+    let runtime: Qt6 = open("kry_qt6.dll")?
+    start(runtime)?
+
+let window: QtObject = new(runtime, "QMainWindow", "[]", 0)?
+call(runtime, window, "resize(int,int)", "[480,260]")?
+let panel: QtObject = new(runtime, "QWidget", "[]", object_id(window))?
+call(runtime, window, "setCentralWidget(QWidget*)", "[{\"object_id\":" + str(object_id(panel)) + "}]")?
+let layout: QtObject = new(runtime, "QVBoxLayout", "[]", object_id(panel))?
+let label: QtObject = new(runtime, "QLabel", "[\"Ready\"]", object_id(panel))?
+let button: QtObject = new(runtime, "QPushButton", "[\"Click me\"]", object_id(panel))?
+call(runtime, layout, "addWidget(QWidget*)", "[{\"object_id\":" + str(object_id(label)) + "}]")?
+call(runtime, layout, "addWidget(QWidget*)", "[{\"object_id\":" + str(object_id(button)) + "}]")?
+set(runtime, window, "windowTitle", "\"Kryndel + Qt 6\"")?
+connect(runtime, button, "clicked(bool)")?
+call(runtime, window, "show()", "[]")?
+
+let mut open: Bool = true
+while open {
+    let received: Json = events(runtime, 50, 64)?
+    let count: Int = json_array_len(received)?
+    let mut index: Int = 0
+    while index < count {
+        let event: Json = json_array_get(received, index)?
+        let signal: String = json_string(json_object_get(event, "signal")?)?
+        if signal == "clicked(bool)" {
+            set(runtime, label, "text", "\"Button clicked from Kryndel\"")?
+        }
+        index = index + 1
+    }
+    let visible: Json = get(runtime, window, "visible")?
+    match json_bool(visible) {
+        ok(value) => { open = value }
+        err(_) => { open = false }
+    }
+}
+
+    delete(runtime, window)?
+    close(runtime)
+    return ok(nil)
+}

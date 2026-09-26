@@ -207,6 +207,13 @@ func ffiBufferNew(data []byte) *ffiBufferHandle {
 	return &ffiBufferHandle{data: buffer, length: len(data)}
 }
 
+func ffiBufferNewSized(capacity int) (*ffiBufferHandle, error) {
+	if capacity < 1 || capacity > 16<<20 {
+		return nil, fmt.Errorf("FFI buffer capacity must be in 1..16777216 bytes")
+	}
+	return &ffiBufferHandle{data: make([]byte, capacity+1), length: capacity}, nil
+}
+
 func ffiBufferAddress(buffer *ffiBufferHandle) (int64, error) {
 	if buffer == nil {
 		return 0, fmt.Errorf("invalid or closed FFIBuffer handle")
