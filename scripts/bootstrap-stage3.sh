@@ -96,6 +96,14 @@ if [[ -n "$selfhost_pe_output" ]]; then
     "$selfhost_pe_output"
 fi
 
+selfhost_fibonacci_pe_output="${KRY_FIBONACCI_SELFHOST_PE_OUTPUT:-}"
+if [[ -n "$selfhost_fibonacci_pe_output" ]]; then
+  mkdir -p "$(dirname "$selfhost_fibonacci_pe_output")"
+  bash "$repo_root/scripts/build-selfhost-pe.sh" \
+    "$repo_root/examples/fibonacci.kry" \
+    "$selfhost_fibonacci_pe_output"
+fi
+
 stage2="$tmp/stage2-source-kir-compiler"
 "$seed_path" selfhost/source_kir_compiler.kry "$stage2"
 chmod 700 "$stage2"

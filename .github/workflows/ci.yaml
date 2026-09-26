@@ -44,6 +44,7 @@ jobs:
           PATH: /usr/bin:/bin
           KRY_STAGE36_WINDOWS_PE_OUTPUT: ${{ runner.temp }}/stage36-selfhost.exe
           KRY_STAGE38_SELFHOST_PE_OUTPUT: ${{ runner.temp }}/stage38-selfhost.exe
+          KRY_FIBONACCI_SELFHOST_PE_OUTPUT: ${{ runner.temp }}/fibonacci-selfhost.exe
         run: bash scripts/bootstrap-stage3.sh
         timeout-minutes: 30
       - name: Verify Stage 0 reproduces the checked-in seed
@@ -58,6 +59,7 @@ jobs:
           path: |
             ${{ runner.temp }}/stage36-selfhost.exe
             ${{ runner.temp }}/stage38-selfhost.exe
+            ${{ runner.temp }}/fibonacci-selfhost.exe
           if-no-files-found: error
 
   windows:
@@ -81,7 +83,7 @@ jobs:
         with:
           name: selfhost-windows-amd64
           path: stage36-pe
-      - name: Execute Stage 1 and Stage 2 generated Windows executables
+      - name: Execute Stage 1, Stage 2 and self-hosted Fibonacci Windows executables
         shell: pwsh
         run: |
           $output = & .\stage36-pe\stage36-selfhost.exe
@@ -90,6 +92,9 @@ jobs:
           $output = & .\stage36-pe\stage38-selfhost.exe
           if ($LASTEXITCODE -ne 0) { throw "Stage 1 PE exited with $LASTEXITCODE" }
           if (($output -join "`n") -ne "red`nyellow`ngreen`nwildcard") { throw "Unexpected Stage 1 PE output: $output" }
+          $output = & .\stage36-pe\fibonacci-selfhost.exe
+          if ($LASTEXITCODE -ne 0) { throw "Self-hosted Fibonacci PE exited with $LASTEXITCODE" }
+          if (($output -join "`n") -ne "55") { throw "Unexpected self-hosted Fibonacci output: $output" }
 
   race:
     name: Go race detector
