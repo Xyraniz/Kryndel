@@ -153,7 +153,7 @@ fn main() -> Nil {
     println(u64(17) / u64(5))
     println(u64(17) % u64(5))
     println(-17 / 5)
-    println(u64(-1))
+    println(u64(0) - u64(1))
     println("selfhost pe ok")
 }
 `

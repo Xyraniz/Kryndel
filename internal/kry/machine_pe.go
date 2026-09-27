@@ -32,6 +32,13 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 		return nil, fmt.Errorf("missing checked program")
 	}
 	limits := c.Env.Lim
+	// Report an unsupported builtin before the KIR subset validator reaches
+	// secondary opaque-type, statement, or operator limitations in the same
+	// program. Keep this preflight at the public backend boundary as callers may
+	// invoke BuildDirectPE without going through BuildNative.
+	if err := validateNativeBuiltinSupport(p, c, "pe-direct", target); err != nil {
+		return nil, err
+	}
 	kir, err := EmitKIR(p, c, target)
 	if err != nil {
 		return nil, err

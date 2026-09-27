@@ -191,6 +191,8 @@ func expressionKindName(kind ExprKind) string {
 		return "ExSet"
 	case ExPropagate:
 		return "ExPropagate"
+	case ExLambda:
+		return "ExLambda"
 	default:
 		return ""
 	}
