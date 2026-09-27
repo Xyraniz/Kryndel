@@ -84,7 +84,11 @@ fn choose(value: Int) -> String { return "int" }
 fn choose(value: String) -> String { return "text" }
 ```
 
-The built-in constraints are `Copy`, `Numeric`, and `Comparable`. `Copy` is structural and excludes channels, threads, actors, sockets, and other owned handles.
+The built-in constraints are `Copy`, `Integer`, `Numeric`, and `Comparable`.
+`Integer` accepts `Int` and all `UInt` widths. `Numeric` also accepts `Float`;
+generic numeric bodies can use arithmetic and ordered comparisons, while `%`
+requires `Integer`. `Copy` is structural and excludes channels, threads, actors,
+sockets, and other owned handles.
 
 Overload resolution is multiple dispatch over the complete argument tuple, not just the function name or first argument. Every visible candidate is checked against the static argument types; exactly one candidate must match. If two concrete or generic candidates match equally, compilation fails with an ambiguity diagnostic instead of depending on declaration order.
 

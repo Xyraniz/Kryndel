@@ -324,7 +324,7 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 	}
 	defer func() { c.currentFunction = nil; c.currentReturn = nil; c.Env.TypeParams = previousParams }()
 	for _, param := range f.TypeParams {
-		if param.Constraint != "" && param.Constraint != "Copy" && param.Constraint != "Numeric" && param.Constraint != "Comparable" {
+		if param.Constraint != "" && param.Constraint != "Copy" && param.Constraint != "Integer" && param.Constraint != "Numeric" && param.Constraint != "Comparable" {
 			return Diag(CatType, param.Tok.Source, param.Tok.Line, param.Tok.Column, "unknown type constraint '%s'", param.Constraint)
 		}
 	}
@@ -810,6 +810,8 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unary sign expects Int, UInt, or Float")
 			} else if isUInt(ot) && e.Op == MINUS {
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unary '-' is not defined for UInt; use wrapping subtraction")
+			} else if ot.Kind == TyGeneric && e.Op == MINUS {
+				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unary '-' is not available for a generic numeric type because it may be UInt")
 			} else {
 				t = ot
 			}
@@ -878,6 +880,14 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "ordered operands must have matching numeric types")
 			} else {
 				t = TBool
+			}
+			break
+		}
+		if e.Op == PERCENT {
+			if !integer(lt) || !typeEqual(lt, rt) {
+				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "remainder operands must have matching Int or UInt types")
+			} else {
+				t = lt
 			}
 			break
 		}
@@ -1338,11 +1348,13 @@ func satisfiesConstraint(t *Type, constraint string) bool {
 		case "", "Any":
 			return true
 		case "Copy":
-			return inherited == "Copy" || inherited == "Numeric"
+			return inherited == "Copy" || inherited == "Integer" || inherited == "Numeric" || inherited == "Comparable"
 		case "Numeric":
-			return inherited == "Numeric"
+			return inherited == "Integer" || inherited == "Numeric"
+		case "Integer":
+			return inherited == "Integer"
 		case "Comparable":
-			return inherited == "Comparable" || inherited == "Numeric"
+			return inherited == "Comparable" || inherited == "Integer" || inherited == "Numeric"
 		default:
 			return false
 		}
@@ -1354,6 +1366,8 @@ func satisfiesConstraint(t *Type, constraint string) bool {
 		return TypeCopyable(t)
 	case "Numeric":
 		return numeric(t)
+	case "Integer":
+		return t != nil && (t.Kind == TyInt || t.Kind == TyUInt)
 	case "Comparable":
 		return t != nil && (t.Kind == TyNil || t.Kind == TyInt || t.Kind == TyUInt || t.Kind == TyFloat || t.Kind == TyBool || t.Kind == TyString || t.Kind == TyBytes || t.Kind == TyEnum)
 	default:

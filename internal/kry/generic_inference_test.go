@@ -31,6 +31,69 @@ let defaulted: Int = use_default(4)
 	}
 }
 
+func TestNumericConstraintsEnableGenericOperations(t *testing.T) {
+	p, c := testProgram(t, `
+fn add[T: Numeric](a: T, b: T) -> T { return a + b }
+fn divide[T: Numeric](a: T, b: T) -> T { return a / b }
+fn positive[T: Numeric](value: T) -> T { return +value }
+fn less[T: Numeric](a: T, b: T) -> Bool { return a < b }
+fn remainder[T: Integer](a: T, b: T) -> T { return a % b }
+assert_eq(add(3, 4), 7)
+assert_eq(add(u8(250), u8(10)), u8(4))
+assert_eq(add(1.5, 2.25), 3.75)
+assert_eq(divide(8.0, 2.0), 4.0)
+assert_eq(positive(2.5), 2.5)
+assert_eq(less(u16(4), u16(5)), true)
+assert_eq(remainder(-7, 3), -1)
+assert_eq(remainder(u8(255), u8(16)), u8(15))
+`)
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("generic numeric execution failed: %s", d.Message)
+	}
+}
+
+func TestGenericNumericConstraintsRejectUnsafeAndMismatchedOperations(t *testing.T) {
+	cases := []struct {
+		name, source, diagnostic string
+	}{
+		{
+			name:       "unsigned negation",
+			source:     `fn negate[T: Numeric](value: T) -> T { return -value }`,
+			diagnostic: "because it may be UInt",
+		},
+		{
+			name:       "remainder needs integer constraint",
+			source:     `fn remainder[T: Numeric](a: T, b: T) -> T { return a % b }`,
+			diagnostic: "remainder operands must have matching Int or UInt types",
+		},
+		{
+			name:       "distinct type parameters",
+			source:     `fn add[T: Numeric, U: Numeric](a: T, b: U) -> T { return a + b }`,
+			diagnostic: "arithmetic operands must have matching numeric types",
+		},
+		{
+			name:       "float remainder",
+			source:     `let invalid: Float = 7.0 % 2.0`,
+			diagnostic: "remainder operands must have matching Int or UInt types",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, d := Parse(&Source{Name: "generic-operation-error.kry", Text: tc.source}, DefaultLimits())
+			if d != nil {
+				t.Fatalf("parse: %s", d.Message)
+			}
+			if _, d = Check(p, DefaultLimits()); d == nil || !strings.Contains(d.Message, tc.diagnostic) {
+				t.Fatalf("expected diagnostic %q, got %#v", tc.diagnostic, d)
+			}
+		})
+	}
+}
+
 func TestGenericInferenceRejectsConflictsAndConstraintViolations(t *testing.T) {
 	cases := []struct {
 		name, source string

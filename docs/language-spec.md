@@ -56,7 +56,7 @@ handles. Handle types are excluded from the structural `Copy` constraint.
 
 Functions are statically resolved declarations, not values in this dialect.
 There are no function types or closures. Parameters have explicit types;
-generic type parameters use the declared `Copy`, `Numeric`, or `Comparable`
+generic type parameters use the declared `Copy`, `Integer`, `Numeric`, or `Comparable`
 constraints. Overloads are selected from the complete argument type tuple. Zero
 matches and multiple equally specific matches are type errors.
 
@@ -81,6 +81,11 @@ Overload candidate sets are bounded by `MaxOverloadsPerName` (256 by default)
 so a call cannot trigger an unbounded overload search. The current compiler
 checks generic calls but does not monomorphize or generate per-instantiation
 code.
+`Integer` accepts `Int` and all `UInt` widths, and enables `%` in generic
+bodies. `Numeric` accepts `Integer` types and `Float`, and enables `+`, `-`,
+`*`, `/`, and ordered comparisons. Generic unary negation remains unavailable
+because a `Numeric` or `Integer` parameter may be an unsigned type. Concrete
+`Float` remainder is rejected by the checker.
 Function values and higher-order generic parameters are unsupported because
 functions are declarations rather than values. Generic struct declarations,
 type-associated items, and monomorphization controls are also not implemented.

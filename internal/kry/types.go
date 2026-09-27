@@ -182,6 +182,9 @@ func typeEqual(a, b *Type) bool {
 		if x.Kind == TyEnum {
 			return x.Enum == y.Enum
 		}
+		if x.Kind == TyGeneric {
+			return x.Name == y.Name && genericConstraint(x) == genericConstraint(y)
+		}
 		k := [2]*Type{x, y}
 		if seen[k] {
 			return true
@@ -213,7 +216,31 @@ func typeKnown(t *Type) bool {
 	return true
 }
 func numeric(t *Type) bool {
-	return t != nil && (t.Kind == TyInt || t.Kind == TyUInt || t.Kind == TyFloat)
+	if t == nil {
+		return false
+	}
+	if t.Kind == TyGeneric {
+		constraint := genericConstraint(t)
+		return constraint == "Numeric" || constraint == "Integer"
+	}
+	return t.Kind == TyInt || t.Kind == TyUInt || t.Kind == TyFloat
+}
+
+func integer(t *Type) bool {
+	if t == nil {
+		return false
+	}
+	if t.Kind == TyGeneric {
+		return genericConstraint(t) == "Integer"
+	}
+	return t.Kind == TyInt || t.Kind == TyUInt
+}
+
+func genericConstraint(t *Type) string {
+	if t == nil || t.Kind != TyGeneric || t.B == nil {
+		return ""
+	}
+	return t.B.Name
 }
 
 type copyState uint8
@@ -245,7 +272,8 @@ func TypeCopyable(root *Type) bool {
 		case TyNil, TyInt, TyUInt, TyFloat, TyBool, TyString, TyBytes, TyEnum, TyJSON:
 			ok = true
 		case TyGeneric:
-			ok = t.B != nil && (t.B.Name == "Copy" || t.B.Name == "Numeric")
+			constraint := genericConstraint(t)
+			ok = constraint == "Copy" || constraint == "Integer" || constraint == "Numeric" || constraint == "Comparable"
 		case TyArray, TyOption, TySet, TyActor, TyShared:
 			if t.Kind == TyShared {
 				ok = true
