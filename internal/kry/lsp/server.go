@@ -447,8 +447,8 @@ func (s *Server) notify(ctx context.Context, method string, params any) error {
 }
 
 func (s *Server) definition(uri string, pos Position) (any, error) {
-	doc, prog, _, d := s.analysis(uri)
-	if doc.URI == "" || d != nil || prog == nil {
+	doc, prog, _, _ := s.analysis(uri)
+	if doc.URI == "" || prog == nil {
 		return nil, nil
 	}
 	selected, ok := tokenAt(doc.Text, pos)

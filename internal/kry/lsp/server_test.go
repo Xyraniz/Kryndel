@@ -234,6 +234,14 @@ func TestServerLSPRoundTrip(t *testing.T) {
 	if changed.Diagnostics[0].Range.Start.Line != 3 {
 		t.Fatalf("diagnostic range should point into the changed buffer: %#v", changed.Diagnostics[0].Range)
 	}
+	var definitionAfterError map[string]any
+	callLSP(t, ctx, client, "textDocument/definition", map[string]any{
+		"textDocument": map[string]any{"uri": mainURI},
+		"position":     Position{Line: 1, Character: 20},
+	}, &definitionAfterError)
+	if definitionAfterError["uri"] != libURI {
+		t.Fatalf("definition should remain available before a later type error: %#v", definitionAfterError)
+	}
 	var referencesAfterError []map[string]any
 	callLSP(t, ctx, client, "textDocument/references", map[string]any{
 		"textDocument": map[string]any{"uri": mainURI},
