@@ -90,6 +90,67 @@ func TestCAOTFilesystemReadDirOrderingMatchesInterpreter(t *testing.T) {
 	}
 }
 
+func TestCAOTFilesystemRemoveDirAllMatchesInterpreter(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("C AOT filesystem differential test requires linux/amd64")
+	}
+	root := t.TempDir()
+	targets := [2]string{filepath.Join(root, "interpreter-target"), filepath.Join(root, "native-target")}
+	links := [2]string{filepath.Join(root, "interpreter-link"), filepath.Join(root, "native-link")}
+	files := [2]string{filepath.Join(root, "interpreter-file"), filepath.Join(root, "native-file")}
+	missing := filepath.Join(root, "missing")
+	blocker := filepath.Join(root, "regular-file")
+	errorPath := filepath.Join(blocker, "child")
+	if err := os.WriteFile(blocker, []byte("blocker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := range targets {
+		if err := os.Mkdir(targets[i], 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(targets[i], "keep.txt"), []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(targets[i], links[i]); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(files[i], []byte("remove"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	program := func(file, link string) string {
+		return "fn main() -> Nil {\n" +
+			"    println(fs_remove_dir_all(" + strconv.Quote(missing) + "))\n" +
+			"    println(fs_remove_dir_all(" + strconv.Quote(file) + "))\n" +
+			"    println(fs_remove_dir_all(" + strconv.Quote(link) + "))\n" +
+			"    println(fs_remove_dir_all(" + strconv.Quote(errorPath) + "))\n" +
+			"    println(fs_remove_dir_all(\"bad\\x00path\"))\n" +
+			"}\n"
+	}
+	interpreted, diagnostic := runInterpreterCapture(t, program(files[0], links[0]))
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
+	}
+	native, status, err := buildAndRunLinuxELF(t, program(files[1], links[1]))
+	if err != nil {
+		t.Fatalf("C AOT build failed: %v", err)
+	}
+	if status != 0 || native != interpreted {
+		t.Fatalf("fs_remove_dir_all differs:\ninterpreter (%d): %q\nC AOT (%d): %q", 0, interpreted, status, native)
+	}
+	for _, path := range []string{files[0], files[1], links[0], links[1]} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Errorf("%q still exists after fs_remove_dir_all: %v", path, err)
+		}
+	}
+	for _, target := range targets {
+		if got, err := os.ReadFile(filepath.Join(target, "keep.txt")); err != nil || string(got) != "keep" {
+			t.Errorf("symlink target %q was modified: contents=%q err=%v", target, got, err)
+		}
+	}
+}
+
 func TestCAOTFilesystemNULPathsMatchInterpreter(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("C AOT filesystem differential test requires linux/amd64")

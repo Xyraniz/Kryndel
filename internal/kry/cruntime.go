@@ -1486,6 +1486,58 @@ static KValue k_json_is_null(KValue value) { return kv_bool(k_json_unwrap(value)
 static char *k_cpath(KValue path) {
     char *p=(char*)kalloc(path.u.s.len+1); memcpy(p,path.u.s.data,path.u.s.len); p[path.u.s.len]=0; return p;
 }
+#ifdef _WIN32
+static void k_fs_set_errno(DWORD error) {
+    switch (error) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND: errno=ENOENT; break;
+    case ERROR_ACCESS_DENIED:
+    case ERROR_SHARING_VIOLATION:
+    case ERROR_LOCK_VIOLATION: errno=EACCES; break;
+    case ERROR_ALREADY_EXISTS:
+    case ERROR_FILE_EXISTS: errno=EEXIST; break;
+    case ERROR_INVALID_NAME:
+    case ERROR_INVALID_PARAMETER: errno=EINVAL; break;
+    case ERROR_DIR_NOT_EMPTY: errno=ENOTEMPTY; break;
+    case ERROR_DIRECTORY: errno=ENOTDIR; break;
+    default: errno=EIO; break;
+    }
+}
+static int k_fs_lstat(const char *path, struct stat *st, int *is_link, int *is_dir) {
+    HANDLE handle=CreateFileA(path,FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,NULL);
+    if (handle==INVALID_HANDLE_VALUE) { k_fs_set_errno(GetLastError()); return -1; }
+    BY_HANDLE_FILE_INFORMATION info;
+    if (!GetFileInformationByHandle(handle,&info)) {
+        DWORD error=GetLastError(); CloseHandle(handle); k_fs_set_errno(error); return -1;
+    }
+    CloseHandle(handle);
+    *is_link=(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)!=0;
+    *is_dir=(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=0;
+    if (*is_link) { memset(st,0,sizeof(*st)); return 0; }
+    if (stat(path,st)!=0) return -1;
+    *is_dir=S_ISDIR(st->st_mode);
+    return 0;
+}
+static int k_fs_remove_entry(const char *path, int is_dir) {
+    if (is_dir) {
+        if (RemoveDirectoryA(path)) return 0;
+        k_fs_set_errno(GetLastError()); return -1;
+    }
+    if (DeleteFileA(path)) return 0;
+    k_fs_set_errno(GetLastError()); return -1;
+}
+#else
+static int k_fs_lstat(const char *path, struct stat *st, int *is_link, int *is_dir) {
+    if (lstat(path,st)!=0) return -1;
+    *is_link=S_ISLNK(st->st_mode);
+    *is_dir=S_ISDIR(st->st_mode);
+    return 0;
+}
+static int k_fs_remove_entry(const char *path, int is_dir) {
+    (void)is_dir;
+    return remove(path);
+}
+#endif
 static int k_fs_dir_entry_compare(const void *left, const void *right) {
     const KValue *a=(const KValue*)left, *b=(const KValue*)right;
     return strcmp(a->u.s.data,b->u.s.data);
@@ -1559,21 +1611,41 @@ static KValue k_fs_remove_file(KValue path) {
     return kv_res(1, kv_nil());
 }
 static KValue k_fs_remove_dir_all(KValue path) {
+    if (k_fs_path_has_nul(path)) return kv_res(0, kv_cstr("path contains NUL"));
     char *p=k_cpath(path);
-    DIR *d=opendir(p);
-    if (d) {
-        struct dirent *e;
-        while ((e=readdir(d))) {
-            if (!strcmp(e->d_name,".")||!strcmp(e->d_name,"..")) continue;
-            size_t pl=strlen(p), nl=strlen(e->d_name);
-            char *child=(char*)kalloc(pl+nl+2); memcpy(child,p,pl); child[pl]='/'; memcpy(child+pl+1,e->d_name,nl+1);
-            struct stat st;
-            if (stat(child,&st)==0 && S_ISDIR(st.st_mode)) k_fs_remove_dir_all(kv_cstr(child));
-            else remove(child);
-        }
-        closedir(d);
+    struct stat st;
+    int is_link=0, is_dir=0;
+    if (k_fs_lstat(p,&st,&is_link,&is_dir)!=0) {
+        if (errno==ENOENT) return kv_res(1,kv_nil());
+        return kv_res(0,k_fs_path_error("unlinkat",path));
     }
-    if (k_rmdir(p)!=0) return kv_res(0, kv_cstr("cannot remove directory"));
+    if (is_link || !is_dir) {
+        if (k_fs_remove_entry(p,is_dir)==0 || errno==ENOENT) return kv_res(1,kv_nil());
+        return kv_res(0,k_fs_path_error("unlinkat",path));
+    }
+    DIR *d=opendir(p);
+    if (!d) {
+        if (errno==ENOENT) return kv_res(1,kv_nil());
+        return kv_res(0,k_fs_path_error("open",path));
+    }
+    struct dirent *e;
+    KValue result=kv_res(1,kv_nil());
+    int read_error=0;
+    for (;;) {
+        errno=0;
+        e=readdir(d);
+        if (!e) { read_error=errno; break; }
+        if (!strcmp(e->d_name,".")||!strcmp(e->d_name,"..")) continue;
+        size_t pl=strlen(p), nl=strlen(e->d_name);
+        char *child=(char*)kalloc(pl+nl+2); memcpy(child,p,pl); child[pl]='/'; memcpy(child+pl+1,e->d_name,nl+1);
+        result=k_fs_remove_dir_all(kv_cstr(child));
+        if (!result.u.res.ok) break;
+    }
+    int close_error=closedir(d)==0 ? 0 : errno;
+    if (!result.u.res.ok) return result;
+    if (read_error) { errno=read_error; return kv_res(0,k_fs_path_error("readdirent",path)); }
+    if (close_error) { errno=close_error; return kv_res(0,k_fs_path_error("closedir",path)); }
+    if (k_rmdir(p)!=0 && errno!=ENOENT) return kv_res(0,k_fs_path_error("unlinkat",path));
     return kv_res(1, kv_nil());
 }
 static KValue k_fs_copy_file(KValue src, KValue dst) {
