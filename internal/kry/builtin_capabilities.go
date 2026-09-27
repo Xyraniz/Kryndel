@@ -12,6 +12,7 @@ type BuiltinCapability struct {
 	Interpreter string `json:"interpreter"`
 	CAOT        string `json:"c_aot"`
 	ELFDirect   string `json:"elf_direct"`
+	PEDirect    string `json:"pe_direct"`
 	SelfHosted  string `json:"self_hosted"`
 }
 
@@ -41,6 +42,7 @@ func BuiltinCapabilityMatrix() []BuiltinCapability {
 				Interpreter: interpreter,
 				CAOT:        nativeBuiltinBackendStatus(builtin.Name, cFormat, target.target),
 				ELFDirect:   nativeBuiltinBackendStatus(builtin.Name, "elf-direct", target.target),
+				PEDirect:    nativeBuiltinBackendStatus(builtin.Name, "pe-direct", target.target),
 				SelfHosted:  selfHosted,
 			})
 		}
@@ -71,8 +73,10 @@ func nativeBuiltinBackendStatus(name, format string, target NativeTarget) string
 		if nativeOutputTargetReason(format, target) != "" {
 			return "unsupported"
 		}
-		switch name {
-		case "print", "println", "u8", "u16", "u32", "u64":
+		if _, ok := generatedDirectPEBuiltinCases[name]; ok {
+			if name == "print" || name == "println" {
+				return "partial"
+			}
 			return "supported"
 		}
 	}

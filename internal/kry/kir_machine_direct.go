@@ -71,14 +71,24 @@ func validateKIRDirectELFSubset(document *KIRDocument) error {
 		if expression.Callee != nil || strings.HasPrefix(expression.CallTarget, "function:") {
 			return fmt.Errorf("%w: direct KIR ELF does not lower direct or indirect function calls", errKIRSubsetUnsupported)
 		}
+		if expression.Kind == "call" {
+			return fmt.Errorf("%w: direct KIR ELF does not lower builtin or function call %q in expression position", errKIRSubsetUnsupported, expression.Name)
+		}
 		if expression.Type == "Float" {
 			return fmt.Errorf("%w: Float values are not yet lowered by the direct KIR ELF backend", errKIRSubsetUnsupported)
+		}
+		switch expression.Type {
+		case "Int", "Bool", "String", "Nil":
+		default:
+			return fmt.Errorf("%w: direct KIR ELF does not lower values of type %q", errKIRSubsetUnsupported, expression.Type)
 		}
 		if expression.Kind == "binary" && expression.Operator == "+" && expression.Left != nil && expression.Left.Type == "String" {
 			return fmt.Errorf("%w: dynamic String concatenation is not yet lowered by the direct KIR ELF backend", errKIRSubsetUnsupported)
 		}
-		if expression.Kind == "call" && expression.Name == "str" {
-			return fmt.Errorf("%w: str conversion is not yet lowered by the direct KIR ELF backend", errKIRSubsetUnsupported)
+		switch expression.Kind {
+		case "int", "bool", "string", "nil", "var", "unary", "binary":
+		default:
+			return fmt.Errorf("%w: direct KIR ELF does not lower expression kind %q", errKIRSubsetUnsupported, expression.Kind)
 		}
 		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
 			if err := validateExpr(child); err != nil {
@@ -109,13 +119,17 @@ func validateKIRDirectELFSubset(document *KIRDocument) error {
 					return err
 				}
 			case "expr":
-				if statement.Expr.Kind == "call" && (statement.Expr.Name == "print" || statement.Expr.Name == "println") {
-					argument := statement.Expr.Args[0]
-					if argument.Type != "Int" && argument.Type != "Bool" && argument.Type != "String" {
-						return fmt.Errorf("%w: native print does not support %s values", errKIRSubsetUnsupported, argument.Type)
-					}
+				if statement.Expr.Kind != "call" || (statement.Expr.Name != "print" && statement.Expr.Name != "println") {
+					return fmt.Errorf("%w: direct KIR ELF supports expression statements only for print/println", errKIRSubsetUnsupported)
 				}
-				if err := validateExpr(statement.Expr); err != nil {
+				if len(statement.Expr.Args) != 1 {
+					return fmt.Errorf("%w: direct KIR ELF print/println requires exactly one argument", errKIRSubsetUnsupported)
+				}
+				argument := statement.Expr.Args[0]
+				if argument.Type != "Int" && argument.Type != "Bool" && argument.Type != "String" {
+					return fmt.Errorf("%w: native print does not support %s values", errKIRSubsetUnsupported, argument.Type)
+				}
+				if err := validateExpr(argument); err != nil {
 					return err
 				}
 			case "if":

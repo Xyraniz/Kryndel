@@ -2,7 +2,6 @@ package kry
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -142,7 +141,7 @@ func TestEngineKIRPreservesPartialOutputAndMainDiagnosticStack(t *testing.T) {
 	}
 }
 
-func TestEngineFallsBackForUnsupportedArrayWithCapturedClosure(t *testing.T) {
+func TestEngineRunsArrayWithCapturedClosureKIRForSourceAndKexe(t *testing.T) {
 	source := `fn main() -> Nil {
     let mut base: Int = 40
     let add = fn(value: Int) -> Int {
@@ -162,20 +161,38 @@ func TestEngineFallsBackForUnsupportedArrayWithCapturedClosure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := executeKIRSubset(document, DefaultLimits(), kirSourceMap(program)); !errors.Is(err, errKIRSubsetUnsupported) {
-		t.Fatalf("captured closure KIR error = %v, want the explicit unsupported-subset sentinel", err)
+	kirResult, err := executeKIRSubset(document, DefaultLimits(), kirSourceMap(program))
+	if err != nil {
+		t.Fatalf("array/captured-closure program did not execute directly from KIR: %v", err)
+	}
+	if string(kirResult.Output) != "43\n" || kirResult.Diagnostic != nil {
+		t.Fatalf("direct KIR result = output %q, diagnostic %#v; want 43 and no diagnostic", kirResult.Output, kirResult.Diagnostic)
 	}
 
-	path := filepath.Join(t.TempDir(), "closure.kry")
-	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "closure.kry")
+	artifactPath := filepath.Join(directory, "closure.kexe")
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, diagnostic := captureEngineRun(t, func() *Diagnostic {
-		_, diagnostic := NewEngine().RunPath(path)
-		return diagnostic
-	})
-	if diagnostic != nil || output != "43\n" {
-		t.Fatalf("AST fallback result = output %q, diagnostic %#v; want 43 and no diagnostic", output, diagnostic)
+	engine := NewEngine()
+	if diagnostic := engine.BuildPath(sourcePath, artifactPath); diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	for _, path := range []string{sourcePath, artifactPath} {
+		t.Run(filepath.Ext(path), func(t *testing.T) {
+			wantOutput, wantDiagnostic := runASTPath(t, engine, path, nil)
+			gotOutput, gotDiagnostic := captureEngineRun(t, func() *Diagnostic {
+				_, diagnostic := engine.RunPath(path)
+				return diagnostic
+			})
+			if gotOutput != wantOutput || !reflect.DeepEqual(gotDiagnostic, wantDiagnostic) {
+				t.Fatalf("Engine KIR result = output %q, diagnostic %#v; AST result = output %q, diagnostic %#v", gotOutput, gotDiagnostic, wantOutput, wantDiagnostic)
+			}
+			if gotOutput != "43\n" || gotDiagnostic != nil {
+				t.Fatalf("unexpected KIR result: output %q, diagnostic %#v", gotOutput, gotDiagnostic)
+			}
+		})
 	}
 }
 

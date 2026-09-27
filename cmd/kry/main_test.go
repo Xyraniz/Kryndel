@@ -431,7 +431,7 @@ func TestBuiltinCapabilitiesCommandWritesJSONMatrix(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("builtin capabilities command returned %d", status)
 	}
-	if !strings.Contains(string(output), `"builtin":"websocket_connect"`) || !strings.Contains(string(output), `"c_aot":"unsupported"`) || !strings.Contains(string(output), `"self_hosted":"partial"`) {
+	if !strings.Contains(string(output), `"builtin":"websocket_connect"`) || !strings.Contains(string(output), `"c_aot":"unsupported"`) || !strings.Contains(string(output), `"pe_direct":"unsupported"`) || !strings.Contains(string(output), `"self_hosted":"partial"`) {
 		t.Fatalf("builtin capability JSON omitted backend states: %s", output[:min(len(output), 1000)])
 	}
 }

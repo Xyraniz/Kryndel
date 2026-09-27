@@ -27,6 +27,10 @@ func main() {
 	// directMachine.emitExpr's builtin switch.
 	directELF = append(directELF, "print", "println")
 	sort.Strings(directELF)
+	directPE, err := stringCases("machine_pe.go", "validateDirectPEExpr")
+	if err != nil {
+		fail(err)
+	}
 	interpreter, err := stringCases("runtime.go", "evalBuiltin")
 	if err != nil {
 		fail(err)
@@ -99,6 +103,9 @@ func main() {
 	fmt.Fprintln(&out, "}")
 	fmt.Fprintln(&out, "var generatedDirectELFBuiltinCases = map[string]struct{}{")
 	writeCases(&out, directELF)
+	fmt.Fprintln(&out, "}")
+	fmt.Fprintln(&out, "var generatedDirectPEBuiltinCases = map[string]struct{}{")
+	writeCases(&out, directPE)
 	fmt.Fprintln(&out, "}")
 	fmt.Fprintln(&out, "var generatedInterpreterBuiltinCases = map[string]struct{}{")
 	writeCases(&out, interpreter)
@@ -175,6 +182,17 @@ func identifierCases(filename, functionName, selector, prefix string) ([]string,
 			matches = tag.Sel.Name == selector
 		case *ast.Ident:
 			matches = tag.Name == selector
+		case *ast.CallExpr:
+			// The C AOT backend consumes KIR, whose string kind tags are
+			// converted back to the language enums before dispatch. Inventory
+			// those same dispatch cases instead of silently generating empty
+			// maps after the AST-to-KIR lowering.
+			callee, ok := tag.Fun.(*ast.Ident)
+			if ok && len(tag.Args) == 1 {
+				arg, argOK := tag.Args[0].(*ast.SelectorExpr)
+				matches = argOK && arg.Sel.Name == selector &&
+					(callee.Name == "kirExprKind" || callee.Name == "kirStmtKind" || callee.Name == "kirPatternKind")
+			}
 		}
 		if !matches {
 			return true
@@ -204,6 +222,44 @@ func identifierCases(filename, functionName, selector, prefix string) ([]string,
 			}
 			return true
 		})
+		// KIR stores operators as source strings rather than TokenKind
+		// constants. Keep the generated backend inventory in the public
+		// TokenKind vocabulary used by the other backend inventories.
+		var operatorErr error
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			sw, ok := node.(*ast.SwitchStmt)
+			if !ok {
+				return true
+			}
+			tag, ok := sw.Tag.(*ast.SelectorExpr)
+			if !ok || tag.Sel.Name != "Operator" {
+				return true
+			}
+			for _, raw := range sw.Body.List {
+				clause := raw.(*ast.CaseClause)
+				for _, expr := range clause.List {
+					literal, ok := expr.(*ast.BasicLit)
+					if !ok || literal.Kind != token.STRING {
+						continue
+					}
+					operator, err := strconv.Unquote(literal.Value)
+					if err != nil {
+						operatorErr = err
+						return false
+					}
+					kind := operatorKind(operator)
+					if kind == "" {
+						operatorErr = fmt.Errorf("unknown KIR operator %q in %s.%s", operator, filename, functionName)
+						return false
+					}
+					seen[kind] = true
+				}
+			}
+			return true
+		})
+		if operatorErr != nil {
+			return nil, operatorErr
+		}
 	}
 	values := make([]string, 0, len(seen))
 	for value := range seen {

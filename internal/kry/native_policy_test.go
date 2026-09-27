@@ -94,6 +94,7 @@ func TestGeneratedBuiltinCapabilitiesMatchBackendDispatch(t *testing.T) {
 	}{
 		{file: "codegen.go", fn: "builtinCall", want: generatedCAOTBuiltinCases},
 		{file: "machine_dynamic.go", fn: "emitExpr", want: generatedDirectELFBuiltinCases},
+		{file: "machine_pe.go", fn: "validateDirectPEExpr", want: generatedDirectPEBuiltinCases},
 	}
 	for _, tc := range cases {
 		t.Run(tc.fn, func(t *testing.T) {
@@ -195,6 +196,9 @@ func TestBuiltinCapabilityMatrixListsEveryBackendAndTarget(t *testing.T) {
 	lookup := map[string]BuiltinCapability{}
 	for _, row := range rows {
 		key := row.Builtin + "/" + row.Target
+		if row.PEDirect == "" {
+			t.Fatalf("builtin capability row omits PE-direct status: %#v", row)
+		}
 		if _, duplicate := lookup[key]; duplicate {
 			t.Fatalf("duplicate builtin capability row %s", key)
 		}
@@ -236,8 +240,21 @@ func TestBuiltinCapabilityMatrixListsEveryBackendAndTarget(t *testing.T) {
 		t.Fatalf("unexpected Windows x64 json_parse capability: %#v", jsonWindows)
 	}
 	websocket := lookup["websocket_connect/linux-x64"]
-	if websocket.Interpreter != "supported" || websocket.CAOT != "unsupported" || websocket.ELFDirect != "unsupported" || websocket.SelfHosted != "unsupported" {
+	if websocket.Interpreter != "supported" || websocket.CAOT != "unsupported" || websocket.ELFDirect != "unsupported" || websocket.PEDirect != "unsupported" || websocket.SelfHosted != "unsupported" {
 		t.Fatalf("unexpected websocket_connect capability: %#v", websocket)
+	}
+	for _, name := range []string{"print", "println"} {
+		if row := lookup[name+"/windows-x64"]; row.PEDirect != "partial" {
+			t.Errorf("%s PE-direct capability = %q, want partial: %#v", name, row.PEDirect, row)
+		}
+		if row := lookup[name+"/linux-x64"]; row.PEDirect != "unsupported" {
+			t.Errorf("%s PE-direct capability = %q on Linux, want unsupported", name, row.PEDirect)
+		}
+	}
+	for _, name := range []string{"u8", "u16", "u32", "u64"} {
+		if row := lookup[name+"/windows-x64"]; row.PEDirect != "supported" {
+			t.Errorf("%s PE-direct capability = %q, want supported: %#v", name, row.PEDirect, row)
+		}
 	}
 }
 

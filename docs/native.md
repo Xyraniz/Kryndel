@@ -99,8 +99,8 @@ The `feature_scope` field summarizes the backend, but this matrix does not yet
 probe every language construct and builtin independently.
 
 Use `kry capabilities --builtins` for a generated row for each registered
-builtin and declared target, with interpreter, C AOT, direct ELF, and current
-self-hosted subset status. JSON consumers can run `kry --json capabilities
+builtin and declared target, with interpreter, C AOT, direct ELF, direct PE,
+and current self-hosted subset status. JSON consumers can run `kry --json capabilities
 --builtins`. Native statuses are derived from generated backend dispatch
 inventories; `partial` marks the documented direct-ELF subset or current
 self-hosted frontend subset.

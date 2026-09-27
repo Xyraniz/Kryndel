@@ -816,7 +816,8 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 		}
 		all := true
 		fall := false
-		for _, a := range s.Arms {
+		for armIndex := range s.Arms {
+			a := &s.Arms[armIndex]
 			as := NewScope(sc, sc.Worker)
 			if a.Pattern.Binding != "" {
 				bt := patternBinding(t, a.Pattern)

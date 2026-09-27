@@ -2,6 +2,7 @@ package kry
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,26 +18,30 @@ import (
 // deterministic, and unsupported constructs are rejected with a clear
 // diagnostic instead of silently degrading.
 type cgen struct {
-	prog    *Program
-	env     *TypeEnv
+	doc     *KIRDocument
+	limits  Limits
 	buf     strings.Builder
 	tmp     int
-	structs []*StructDecl
+	structs []*KIRStruct
 	// structInstances are the concrete runtime types represented by the
 	// generated KValue structs. Generic declarations contribute one entry per
 	// closed type used by a reachable function specialization.
 	structInstances []cStructInstance
-	enums           []*EnumDecl
+	enums           []*KIREnum
 	// structID maps the instantiated type identity to its runtime id.
 	structID map[string]int
 	enumID   map[string]int
 	// fnName maps a resolved function to its generated C symbol.
-	fnName                map[*Function]string
-	functionIndex         map[*Function]int
+	fnName                map[*KIRFunction]string
+	functionIndex         map[*KIRFunction]int
+	functionByTarget      map[string]*KIRFunction
+	functionsByName       map[string][]*KIRFunction
+	builtins              map[string]Builtin
 	functionInstances     []*cFunctionInstance
 	functionInstanceByKey map[string]*cFunctionInstance
-	functionSubstitution  map[string]*Type
-	regularFunctions      []*Function
+	functionSubstitution  map[string]string
+	regularFunctions      []*KIRFunction
+	traitImpls            []*KIRTraitImpl
 	// unsupported records the first construct the backend cannot lower.
 	unsupported string
 	// deferBases tracks the runtime defer-stack depth at each enclosing block.
@@ -48,7 +53,7 @@ type cgen struct {
 	// polyFns lists the top-level fn(String) -> String handlers referenced by
 	// poly_register, in registration order, so the runtime dispatch table can
 	// be emitted as a static array of function pointers.
-	polyFns []*Function
+	polyFns []*KIRFunction
 	// globals holds the names of top-level bindings, emitted as file-scope
 	// static KValue cells so functions can reference them.
 	globals map[string]bool
@@ -64,14 +69,14 @@ type cgen struct {
 
 type cStructInstance struct {
 	name string
-	decl *StructDecl
+	decl *KIRStruct
 }
 
 type cFunctionInstance struct {
-	function      *Function
+	function      *KIRFunction
 	symbol        string
 	key           string
-	substitutions map[string]*Type
+	substitutions map[string]string
 }
 
 // GenerateC lowers a checked program to C source. It returns an error when the
@@ -88,31 +93,63 @@ func GenerateCObfuscated(p *Program, c *Checker) (string, error) {
 }
 
 func generateC(p *Program, c *Checker, obfuscate bool) (string, error) {
-	if p == nil || c == nil {
+	if p == nil || c == nil || c.Env == nil {
 		return "", fmt.Errorf("missing checked program")
 	}
-	if err := validateFunctionValueSupport(p, "C"); err != nil {
-		return "", err
+	limits := c.Env.Lim
+	data, err := EmitKIR(p, c, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
+	if err != nil {
+		return "", fmt.Errorf("emit KIR for C AOT: %w", err)
+	}
+	document, err := DecodeKIR(data, limits)
+	if err != nil {
+		return "", fmt.Errorf("validate KIR for C AOT: %w", err)
+	}
+	return generateCFromValidatedKIR(document, limits, obfuscate)
+}
+
+func generateCFromValidatedKIR(document *KIRDocument, limits Limits, obfuscate bool) (string, error) {
+	if document == nil {
+		return "", fmt.Errorf("missing KIR document")
+	}
+	if kirDocumentUsesFunctionValues(document) {
+		return "", fmt.Errorf("C backend does not support function values or closures; use the interpreter")
 	}
 	g := &cgen{
-		prog:                  p,
-		env:                   c.Env,
+		doc:                   document,
+		limits:                limits,
 		structID:              map[string]int{},
 		enumID:                map[string]int{},
-		fnName:                map[*Function]string{},
-		functionIndex:         map[*Function]int{},
+		fnName:                map[*KIRFunction]string{},
+		functionIndex:         map[*KIRFunction]int{},
+		functionByTarget:      map[string]*KIRFunction{},
+		functionsByName:       map[string][]*KIRFunction{},
+		builtins:              Builtins(),
 		functionInstanceByKey: map[string]*cFunctionInstance{},
 		globals:               map[string]bool{},
+		traitImpls:            document.TraitImpls,
 		obfuscate:             obfuscate,
 	}
-	g.structs = append(g.structs, p.Structs...)
-	g.enums = append(g.enums, p.Enums...)
+	g.structs = append(g.structs, document.Structs...)
+	g.enums = append(g.enums, document.Enums...)
 	for i, e := range g.enums {
 		g.enumID[e.Name] = i
 	}
-	for i, f := range p.Functions {
+	for i, f := range document.Functions {
 		g.functionIndex[f] = i
-		g.fnName[f] = g.symbol(f)
+		g.functionsByName[f.Name] = append(g.functionsByName[f.Name], f)
+	}
+	for _, f := range document.Functions {
+		target := f.Name
+		if len(g.functionsByName[f.Name]) > 1 {
+			target = kirFunctionTargetFromDocument(f)
+		}
+		g.functionByTarget[target] = f
+		name := g.symbol(f)
+		if len(g.functionsByName[f.Name]) > 1 {
+			name += "_" + sanitize(strings.TrimPrefix(target, f.Name+"@"))
+		}
+		g.fnName[f] = name
 	}
 	if err := g.planInstances(); err != nil {
 		return "", err
@@ -133,50 +170,56 @@ func generateC(p *Program, c *Checker, obfuscate bool) (string, error) {
 	return g.buf.String(), nil
 }
 
-func (g *cgen) symbol(f *Function) string {
+func (g *cgen) symbol(f *KIRFunction) string {
 	name := sanitize(f.Name)
 	if f.Trait != "" {
 		name = sanitize(f.Trait) + "_" + name
 	}
-	if f.Receiver != nil {
-		name = sanitize(TypeSpecString(f.Receiver)) + "_" + name
+	if f.Receiver != "" {
+		name = sanitize(f.Receiver) + "_" + name
 	}
 	return "kfn_" + name
 }
 
-func (g *cgen) functionNeedsSpecialization(f *Function) bool {
+func (g *cgen) functionNeedsSpecialization(f *KIRFunction) bool {
 	if f == nil {
 		return false
 	}
 	if len(f.TypeParams) != 0 {
 		return true
 	}
-	if f.Receiver == nil || f.Receiver.Function {
+	if f.Receiver == "" {
 		return false
 	}
-	if declaration := g.structDecl(f.Receiver.Name); declaration != nil {
-		return len(declaration.TypeParams) != 0
+	if receiver, ok := parseKIRTypeExpression(f.Receiver); ok {
+		if declaration := g.structDecl(receiver.Name); declaration != nil {
+			return len(declaration.TypeParams) != 0
+		}
 	}
 	return false
 }
 
-func (g *cgen) functionHasGenericReceiver(f *Function) bool {
-	if f == nil || f.Receiver == nil || f.Receiver.Function {
+func (g *cgen) functionHasGenericReceiver(f *KIRFunction) bool {
+	if f == nil || f.Receiver == "" {
 		return false
 	}
-	declaration := g.structDecl(f.Receiver.Name)
+	receiver, ok := parseKIRTypeExpression(f.Receiver)
+	if !ok {
+		return false
+	}
+	declaration := g.structDecl(receiver.Name)
 	return declaration != nil && len(declaration.TypeParams) != 0
 }
 
 func (g *cgen) planInstances() error {
 	for _, declaration := range g.structs {
 		if len(declaration.TypeParams) == 0 {
-			if err := g.addStructInstance(&Type{Kind: TyStruct, Name: declaration.Name, Struct: declaration}); err != nil {
+			if err := g.addStructInstance(declaration.Name); err != nil {
 				return err
 			}
 		}
 	}
-	for _, function := range g.prog.Functions {
+	for _, function := range g.doc.Functions {
 		if g.functionNeedsSpecialization(function) {
 			continue
 		}
@@ -185,7 +228,7 @@ func (g *cgen) planInstances() error {
 			return err
 		}
 	}
-	if err := g.walkStatementsForInstances(g.prog.Statements, nil); err != nil {
+	if err := g.walkStatementsForInstances(g.doc.Statements, nil); err != nil {
 		return err
 	}
 	for next := 0; next < len(g.functionInstances); next++ {
@@ -200,7 +243,7 @@ func (g *cgen) planInstances() error {
 	return nil
 }
 
-func (g *cgen) walkFunctionForInstances(function *Function, substitutions map[string]*Type) error {
+func (g *cgen) walkFunctionForInstances(function *KIRFunction, substitutions map[string]string) error {
 	if function == nil {
 		return nil
 	}
@@ -212,17 +255,17 @@ func (g *cgen) walkFunctionForInstances(function *Function, substitutions map[st
 	return g.walkStatementsForInstances(function.Body, substitutions)
 }
 
-func (g *cgen) walkStatementsForInstances(statements []*Stmt, substitutions map[string]*Type) error {
+func (g *cgen) walkStatementsForInstances(statements []*KIRStmt, substitutions map[string]string) error {
 	for _, statement := range statements {
 		if statement == nil {
 			continue
 		}
-		for _, expression := range []*Expr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
+		for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
 			if err := g.walkExprForInstances(expression, substitutions); err != nil {
 				return err
 			}
 		}
-		for _, branch := range [][]*Stmt{statement.Then, statement.Else, statement.Body} {
+		for _, branch := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
 			if err := g.walkStatementsForInstances(branch, substitutions); err != nil {
 				return err
 			}
@@ -236,37 +279,40 @@ func (g *cgen) walkStatementsForInstances(statements []*Stmt, substitutions map[
 	return nil
 }
 
-func (g *cgen) walkExprForInstances(expression *Expr, substitutions map[string]*Type) error {
+func (g *cgen) walkExprForInstances(expression *KIRExpr, substitutions map[string]string) error {
 	if expression == nil {
 		return nil
 	}
-	if expression.Kind == ExStruct {
-		instanceType := substituteType(expression.Type, substitutions, 0)
+	if expression.Kind == "struct" {
+		instanceType := substituteKIRType(expression.Type, substitutions)
 		if err := g.addStructInstance(instanceType); err != nil {
 			return err
 		}
 	}
-	if expression.Kind == ExCall && expression.TraitName != "" {
+	if expression.Kind == "call" && expression.TraitName != "" {
 		function, err := g.traitImplementationMethod(expression, substitutions)
 		if err != nil {
 			return err
 		}
 		if g.functionNeedsSpecialization(function) {
-			if _, err := g.functionInstanceForCall(function, expression.Receiver, nil, substitutions, true); err != nil {
+			if _, err := g.functionInstanceForCall(function, expression.Receiver, expression.GenericArguments, substitutions, true); err != nil {
 				return err
 			}
 		}
-	} else if expression.Kind == ExCall && expression.Function != nil && g.functionNeedsSpecialization(expression.Function) {
-		if _, err := g.functionInstanceForCall(expression.Function, expression.Receiver, expression.GenericArguments, substitutions, true); err != nil {
-			return err
+	} else if expression.Kind == "call" && strings.HasPrefix(expression.CallTarget, "function:") {
+		function := g.functionByTarget[strings.TrimPrefix(expression.CallTarget, "function:")]
+		if function != nil && g.functionNeedsSpecialization(function) {
+			if _, err := g.functionInstanceForCall(function, expression.Receiver, expression.GenericArguments, substitutions, true); err != nil {
+				return err
+			}
 		}
 	}
-	for _, child := range []*Expr{expression.Left, expression.Right, expression.Operand, expression.Callee, expression.Base, expression.Receiver} {
+	for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Callee, expression.Base, expression.Receiver} {
 		if err := g.walkExprForInstances(child, substitutions); err != nil {
 			return err
 		}
 	}
-	for _, children := range [][]*Expr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
+	for _, children := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
 		for _, child := range children {
 			if err := g.walkExprForInstances(child, substitutions); err != nil {
 				return err
@@ -276,137 +322,64 @@ func (g *cgen) walkExprForInstances(expression *Expr, substitutions map[string]*
 	return nil
 }
 
-func (g *cgen) traitImplementationMethod(expression *Expr, substitutions map[string]*Type) (*Function, error) {
-	if expression == nil || expression.Receiver == nil || expression.Receiver.Type == nil || expression.TraitName == "" {
+func (g *cgen) traitImplementationMethod(expression *KIRExpr, substitutions map[string]string) (*KIRFunction, error) {
+	if expression == nil || expression.Receiver == nil || expression.Receiver.Type == "" || expression.TraitName == "" {
 		return nil, fmt.Errorf("C AOT cannot resolve an incomplete trait method call")
 	}
-	receiverType := substituteType(expression.Receiver.Type, substitutions, 0)
-	if receiverType == nil || receiverType.Kind != TyStruct || typeContainsGeneric(receiverType, 0) || typeContainsUnknown(receiverType, 0) {
+	receiverType := substituteKIRType(expression.Receiver.Type, substitutions)
+	parsedReceiver, ok := parseKIRTypeExpression(receiverType)
+	if !ok || g.structDecl(parsedReceiver.Name) == nil || typeContainsKIRVariable(receiverType, kirOpenTypeParameters(substitutions)) {
 		return nil, fmt.Errorf("C AOT trait dispatch for %s.%s requires a concrete struct receiver after specialization", expression.TraitName, expression.Name)
 	}
 	if err := g.addStructInstance(receiverType); err != nil {
 		return nil, err
 	}
-	implementation := g.env.TraitImpls[expression.TraitName][receiverType.String()]
-	if implementation == nil {
-		return nil, fmt.Errorf("C AOT has no implementation of trait %q for %s", expression.TraitName, receiverType)
-	}
-	for _, method := range implementation.Methods {
-		if method.Name == expression.Name {
-			return method, nil
+	for _, implementation := range g.traitImpls {
+		if implementation.Trait != expression.TraitName || substituteKIRType(implementation.For, substitutions) != receiverType {
+			continue
+		}
+		for _, method := range implementation.Methods {
+			if method.Name == expression.Name && strings.HasPrefix(method.Target, "function:") {
+				if function := g.functionByTarget[strings.TrimPrefix(method.Target, "function:")]; function != nil {
+					return function, nil
+				}
+				return nil, fmt.Errorf("C AOT trait %q implementation references an unknown function target", expression.TraitName)
+			}
 		}
 	}
 	return nil, fmt.Errorf("C AOT trait %q implementation for %s has no method %q", expression.TraitName, receiverType, expression.Name)
 }
 
-func (g *cgen) addStructInstance(instanceType *Type) error {
-	if instanceType == nil || instanceType.Kind != TyStruct || instanceType.Struct == nil {
+func (g *cgen) addStructInstance(instanceType string) error {
+	parsed, ok := parseKIRTypeExpression(instanceType)
+	if !ok || parsed.Function {
+		return fmt.Errorf("C AOT cannot lower malformed struct type %q", instanceType)
+	}
+	declaration := g.structDecl(parsed.Name)
+	if declaration == nil {
 		return fmt.Errorf("C AOT cannot lower a struct expression without resolved struct type metadata")
 	}
-	if len(instanceType.Params) != len(instanceType.Struct.TypeParams) {
-		return fmt.Errorf("C AOT cannot lower malformed generic struct type %s: expected %d type argument(s), got %d", instanceType, len(instanceType.Struct.TypeParams), len(instanceType.Params))
+	if len(parsed.Params) != len(declaration.TypeParams) {
+		return fmt.Errorf("C AOT cannot lower malformed generic struct type %s: expected %d type argument(s), got %d", instanceType, len(declaration.TypeParams), len(parsed.Params))
 	}
-	if typeContainsGeneric(instanceType, 0) {
+	parameters := make([]string, len(declaration.TypeParams))
+	for i, parameter := range declaration.TypeParams {
+		parameters[i] = parameter.Name
+	}
+	if typeContainsKIRVariable(instanceType, parameters) {
 		return fmt.Errorf("C AOT cannot lower open generic struct type %s without concrete type arguments", instanceType)
 	}
-	if typeContainsUnknown(instanceType, 0) {
-		return fmt.Errorf("C AOT cannot lower struct type %s with unresolved type arguments", instanceType)
-	}
-	name := instanceType.String()
-	key := typeInstanceKey(instanceType)
+	name := TypeSpecString(parsed)
+	key := name
 	if _, exists := g.structID[key]; exists {
 		return nil
 	}
 	g.structID[key] = len(g.structInstances)
-	g.structInstances = append(g.structInstances, cStructInstance{name: name, decl: instanceType.Struct})
+	g.structInstances = append(g.structInstances, cStructInstance{name: name, decl: declaration})
 	return nil
 }
 
-func typeContainsGeneric(typ *Type, depth int) bool {
-	if typ == nil || depth > 128 {
-		return false
-	}
-	if typ.Kind == TyGeneric {
-		return true
-	}
-	for _, child := range typeArguments(typ) {
-		if typeContainsGeneric(child, depth+1) {
-			return true
-		}
-	}
-	return false
-}
-
-func typeContainsUnknown(typ *Type, depth int) bool {
-	if typ == nil || depth > 128 {
-		return true
-	}
-	if typ.Kind == TyUnknown || typ.Kind == TyError {
-		return true
-	}
-	for _, child := range typeArguments(typ) {
-		if typeContainsUnknown(child, depth+1) {
-			return true
-		}
-	}
-	return false
-}
-
-func typeDepth(typ *Type, depth int) int {
-	if typ == nil {
-		return depth
-	}
-	maximum := depth
-	for _, child := range typeArguments(typ) {
-		if childDepth := typeDepth(child, depth+1); childDepth > maximum {
-			maximum = childDepth
-		}
-	}
-	return maximum
-}
-
-func typeInstanceKey(typ *Type) string {
-	seen := make(map[*Type]int)
-	var key func(*Type, int) string
-	key = func(current *Type, depth int) string {
-		if current == nil {
-			return "<nil>"
-		}
-		if depth > 128 {
-			return "<depth-limit>"
-		}
-		if index, ok := seen[current]; ok {
-			return fmt.Sprintf("@%d", index)
-		}
-		seen[current] = len(seen)
-		defer delete(seen, current)
-		base := fmt.Sprintf("%d:%s:%d", current.Kind, current.Name, current.Bits)
-		switch current.Kind {
-		case TyStruct:
-			base = fmt.Sprintf("struct:%p", current.Struct)
-		case TyEnum:
-			base = fmt.Sprintf("enum:%p", current.Enum)
-		}
-		children := typeArguments(current)
-		if len(children) == 0 {
-			return base
-		}
-		var builder strings.Builder
-		builder.WriteString(base)
-		builder.WriteByte('[')
-		for i, child := range children {
-			if i != 0 {
-				builder.WriteByte(',')
-			}
-			builder.WriteString(key(child, depth+1))
-		}
-		builder.WriteByte(']')
-		return builder.String()
-	}
-	return key(typ, 0)
-}
-
-func (g *cgen) functionInstanceForCall(function *Function, receiver *Expr, arguments []*Type, outer map[string]*Type, create bool) (*cFunctionInstance, error) {
+func (g *cgen) functionInstanceForCall(function *KIRFunction, receiver *KIRExpr, arguments []string, outer map[string]string, create bool) (*cFunctionInstance, error) {
 	if function == nil {
 		return nil, fmt.Errorf("C AOT cannot specialize a missing function")
 	}
@@ -414,42 +387,44 @@ func (g *cgen) functionInstanceForCall(function *Function, receiver *Expr, argum
 	if !known {
 		return nil, fmt.Errorf("C AOT cannot specialize function %q outside the checked program", function.Name)
 	}
-	substitutions := make(map[string]*Type, len(function.TypeParams)+2)
+	substitutions := make(map[string]string, len(function.TypeParams)+2)
 	keyParts := make([]string, 0, len(function.TypeParams)+2)
 	if g.functionHasGenericReceiver(function) {
-		if receiver == nil || receiver.Type == nil {
+		if receiver == nil || receiver.Type == "" {
 			return nil, fmt.Errorf("C AOT cannot specialize method %q without a resolved receiver type", function.Name)
 		}
-		receiverType := substituteType(receiver.Type, outer, 0)
-		declaration := g.structDecl(function.Receiver.Name)
-		if receiverType.Kind != TyStruct || receiverType.Struct != declaration || len(receiverType.Params) != len(declaration.TypeParams) {
+		receiverType := substituteKIRType(receiver.Type, outer)
+		parsedReceiver, ok := parseKIRTypeExpression(receiverType)
+		functionReceiver, functionReceiverOK := parseKIRTypeExpression(function.Receiver)
+		declaration := g.structDecl(functionReceiver.Name)
+		if !ok || !functionReceiverOK || declaration == nil || parsedReceiver.Name != declaration.Name || len(parsedReceiver.Params) != len(declaration.TypeParams) {
 			return nil, fmt.Errorf("C AOT cannot specialize method %q for invalid receiver type %s", function.Name, receiverType)
 		}
 		for i, parameter := range declaration.TypeParams {
-			argument := receiverType.Params[i]
-			if typeContainsGeneric(argument, 0) || typeContainsUnknown(argument, 0) {
+			argument := TypeSpecString(parsedReceiver.Params[i])
+			if typeContainsKIRVariable(argument, kirOpenTypeParameters(outer)) {
 				return nil, fmt.Errorf("C AOT cannot specialize method %q with unresolved receiver argument %s", function.Name, argument)
 			}
-			if typeDepth(argument, 1) > g.env.Lim.MaxTypeDepth {
+			if kirTypeDepth(argument) > g.limits.MaxTypeDepth {
 				return nil, fmt.Errorf("C AOT generic method specialization for %q exceeds the configured type-depth limit", function.Name)
 			}
 			substitutions[parameter.Name] = argument
-			keyParts = append(keyParts, "receiver="+typeInstanceKey(argument))
+			keyParts = append(keyParts, "receiver="+argument)
 		}
 	}
 	if len(arguments) != len(function.TypeParams) {
 		return nil, fmt.Errorf("C AOT cannot specialize generic function %q: expected %d checked type argument(s), got %d", function.Name, len(function.TypeParams), len(arguments))
 	}
 	for i, parameter := range function.TypeParams {
-		argument := substituteType(arguments[i], outer, 0)
-		if typeContainsGeneric(argument, 0) || typeContainsUnknown(argument, 0) {
+		argument := substituteKIRType(arguments[i], outer)
+		if typeContainsKIRVariable(argument, kirOpenTypeParameters(outer)) {
 			return nil, fmt.Errorf("C AOT cannot specialize generic function %q with unresolved type argument %s", function.Name, argument)
 		}
-		if typeDepth(argument, 1) > g.env.Lim.MaxTypeDepth {
+		if kirTypeDepth(argument) > g.limits.MaxTypeDepth {
 			return nil, fmt.Errorf("C AOT generic function specialization for %q exceeds the configured type-depth limit", function.Name)
 		}
 		substitutions[parameter.Name] = argument
-		keyParts = append(keyParts, "function="+typeInstanceKey(argument))
+		keyParts = append(keyParts, "function="+argument)
 	}
 	key := fmt.Sprintf("%d|%s", index, strings.Join(keyParts, "|"))
 	if instance := g.functionInstanceByKey[key]; instance != nil {
@@ -461,14 +436,14 @@ func (g *cgen) functionInstanceForCall(function *Function, receiver *Expr, argum
 	if len(g.functionInstances) >= 4096 {
 		return nil, fmt.Errorf("C AOT generic monomorphization exceeded 4096 function instances")
 	}
-	symbol := fmt.Sprintf("%s_g%d", g.symbol(function), len(g.functionInstances))
+	symbol := fmt.Sprintf("%s_g%d", g.fnName[function], len(g.functionInstances))
 	instance := &cFunctionInstance{function: function, symbol: symbol, key: key, substitutions: substitutions}
 	g.functionInstanceByKey[key] = instance
 	g.functionInstances = append(g.functionInstances, instance)
 	return instance, nil
 }
 
-func (g *cgen) functionSymbolForCall(function *Function, receiver *Expr, arguments []*Type) (string, error) {
+func (g *cgen) functionSymbolForCall(function *KIRFunction, receiver *KIRExpr, arguments []string) (string, error) {
 	if !g.functionNeedsSpecialization(function) {
 		if symbol := g.fnName[function]; symbol != "" {
 			return symbol, nil
@@ -510,16 +485,14 @@ func (g *cgen) fail(format string, args ...any) {
 // runtime dispatch table can resolve handler names dynamically (the name may
 // be passed through a wrapper function rather than written as a literal).
 func (g *cgen) collectPolyHandlers() {
-	for _, f := range g.prog.Functions {
+	for _, f := range g.doc.Functions {
 		if g.functionNeedsSpecialization(f) {
 			continue
 		}
-		if f.Receiver != nil || len(f.Params) != 1 {
+		if f.Receiver != "" || len(f.Params) != 1 {
 			continue
 		}
-		pt := mustResolve(g.env, f.Params[0].Type)
-		rt := mustResolve(g.env, f.Return)
-		if pt != nil && rt != nil && pt.Kind == TyString && rt.Kind == TyString {
+		if f.Params[0].Type == "String" && f.Return == "String" {
 			g.polyFns = append(g.polyFns, f)
 		}
 	}
@@ -528,8 +501,8 @@ func (g *cgen) collectPolyHandlers() {
 // collectGlobals records top-level let/const bindings so they can be emitted
 // as file-scope cells and referenced from functions.
 func (g *cgen) collectGlobals() {
-	for _, st := range g.prog.Statements {
-		if st.Kind == StLet || st.Kind == StConst {
+	for _, st := range g.doc.Statements {
+		if st.Kind == "let" || st.Kind == "const" {
 			g.globals[st.Name] = true
 		}
 	}
@@ -551,8 +524,8 @@ func (g *cgen) isGlobal(name string) bool {
 
 // emitGlobals declares file-scope cells for every top-level binding.
 func (g *cgen) emitGlobals() {
-	for _, st := range g.prog.Statements {
-		if st.Kind == StLet || st.Kind == StConst {
+	for _, st := range g.doc.Statements {
+		if st.Kind == "let" || st.Kind == "const" {
 			fmt.Fprintf(&g.buf, "static KValue %s;\n", sanitize(st.Name))
 		}
 	}
@@ -661,7 +634,7 @@ func (g *cgen) emitFunctions() {
 	}
 }
 
-func (g *cgen) emitFunction(f *Function, name string, substitutions map[string]*Type) {
+func (g *cgen) emitFunction(f *KIRFunction, name string, substitutions map[string]string) {
 	fmt.Fprintf(&g.buf, "static KValue %s(void) {\n", name)
 	// Parameters are passed through a global argument frame so that the
 	// generated C stays simple and recursion works without prototypes.
@@ -673,13 +646,13 @@ func (g *cgen) emitFunction(f *Function, name string, substitutions map[string]*
 	previousSubstitution := g.functionSubstitution
 	g.functionSubstitution = substitutions
 	g.locals = append(g.locals, map[string]bool{})
-	if f.Receiver != nil {
+	if f.Receiver != "" {
 		fmt.Fprintf(&g.buf, "  KValue self = k_args[0];\n")
 		g.locals[len(g.locals)-1]["self"] = true
 	}
 	for i, p := range f.Params {
 		off := i
-		if f.Receiver != nil {
+		if f.Receiver != "" {
 			off = i + 1
 		}
 		if p.Default != nil {
@@ -697,16 +670,16 @@ func (g *cgen) emitFunction(f *Function, name string, substitutions map[string]*
 
 func (g *cgen) emitMain() {
 	g.buf.WriteString("int main(void) {\n")
-	fmt.Fprintf(&g.buf, "  k_max_json = %dLL;\n", g.env.Lim.MaxJSONBytes)
-	fmt.Fprintf(&g.buf, "  k_max_out = %dLL;\n", g.env.Lim.MaxOutputBytes)
-	maxMemory := g.env.Lim.MaxMemoryBytes
+	fmt.Fprintf(&g.buf, "  k_max_json = %dLL;\n", g.limits.MaxJSONBytes)
+	fmt.Fprintf(&g.buf, "  k_max_out = %dLL;\n", g.limits.MaxOutputBytes)
+	maxMemory := g.limits.MaxMemoryBytes
 	if maxMemory <= 0 {
 		maxMemory = DefaultLimits().MaxMemoryBytes
 	}
 	fmt.Fprintf(&g.buf, "  k_max_mem = %dLL;\n", maxMemory)
-	fmt.Fprintf(&g.buf, "  k_max_tcp_receive = %dLL;\n", g.env.Lim.MaxSourceBytes)
-	fmt.Fprintf(&g.buf, "  k_max_array_elements = %dLL;\n", g.env.Lim.MaxArrayElements)
-	wallMS := g.env.Lim.MaxWallTimeMS
+	fmt.Fprintf(&g.buf, "  k_max_tcp_receive = %dLL;\n", g.limits.MaxSourceBytes)
+	fmt.Fprintf(&g.buf, "  k_max_array_elements = %dLL;\n", g.limits.MaxArrayElements)
+	wallMS := g.limits.MaxWallTimeMS
 	if wallMS <= 0 {
 		wallMS = DefaultLimits().MaxWallTimeMS
 	}
@@ -722,10 +695,11 @@ func (g *cgen) emitMain() {
 	g.deferBases = nil
 	g.loopBases = nil
 	g.topLevel = true
-	g.block(g.prog.Statements, "  ")
+	g.block(g.doc.Statements, "  ")
 	g.topLevel = false
-	if len(g.prog.Statements) == 0 {
-		if f := g.env.Functions["main"]; f != nil {
+	if len(g.doc.Statements) == 0 {
+		if functions := g.functionsByName["main"]; len(functions) == 1 {
+			f := functions[0]
 			fmt.Fprintf(&g.buf, "  { k_argc = 0; k_args[0] = kv_nil(); KValue _r = %s(); (void)_r; }\n", g.fnName[f])
 		}
 	}
@@ -738,7 +712,7 @@ func (g *cgen) emitMain() {
 
 // block emits a sequence of statements inside a new C scope, running any
 // registered defers when the scope exits.
-func (g *cgen) block(body []*Stmt, indent string) {
+func (g *cgen) block(body []*KIRStmt, indent string) {
 	base := g.next()
 	fmt.Fprintf(&g.buf, "%s{ int %s = k_ndefers;\n", indent, base)
 	g.deferBases = append(g.deferBases, base)
@@ -754,18 +728,18 @@ func (g *cgen) block(body []*Stmt, indent string) {
 
 // nestedBlock emits a block that is not the top-level statement list, so
 // bindings inside it are locals rather than globals.
-func (g *cgen) nestedBlock(body []*Stmt, indent string) {
+func (g *cgen) nestedBlock(body []*KIRStmt, indent string) {
 	wasTop := g.topLevel
 	g.topLevel = false
 	g.block(body, indent)
 	g.topLevel = wasTop
 }
 
-func (g *cgen) stmt(s *Stmt, indent string) {
+func (g *cgen) stmt(s *KIRStmt, indent string) {
 	if s == nil {
 		return
 	}
-	switch s.Kind {
+	switch kirStmtKind(s.Kind) {
 	case StLet, StConst:
 		if g.topLevel {
 			fmt.Fprintf(&g.buf, "%s%s = %s;\n", indent, sanitize(s.Name), g.expr(s.Init))
@@ -776,7 +750,7 @@ func (g *cgen) stmt(s *Stmt, indent string) {
 			}
 		}
 	case StAssign:
-		if s.Target == nil || s.Target.Kind != ExVar {
+		if s.Target == nil || s.Target.Kind != "var" {
 			g.fail("assignment target must be a binding")
 			return
 		}
@@ -832,7 +806,7 @@ func (g *cgen) stmt(s *Stmt, indent string) {
 	case StUnsafe:
 		g.nestedBlock(s.Body, indent)
 	default:
-		g.fail("unsupported statement kind %d", s.Kind)
+		g.fail("unsupported statement kind %q", s.Kind)
 	}
 }
 
@@ -844,7 +818,7 @@ func (g *cgen) emitUnwind(indent string) {
 	fmt.Fprintf(&g.buf, "%swhile (k_ndefers > %s) k_defers[--k_ndefers]();\n", indent, base)
 }
 
-func (g *cgen) emitReturn(s *Stmt, indent string) {
+func (g *cgen) emitReturn(s *KIRStmt, indent string) {
 	fmt.Fprintf(&g.buf, "%swhile (k_ndefers > %s) k_defers[--k_ndefers]();\n", indent, g.fnBase)
 	if s.Return == nil {
 		fmt.Fprintf(&g.buf, "%sreturn kv_nil();\n", indent)
@@ -852,14 +826,14 @@ func (g *cgen) emitReturn(s *Stmt, indent string) {
 	}
 	// `return expr?` where the function returns Option/Result yields the
 	// operand itself: some(x) wrapped is identical to the original Option.
-	if s.Return.Kind == ExPropagate {
+	if s.Return.Kind == "propagate" {
 		fmt.Fprintf(&g.buf, "%sreturn %s;\n", indent, g.expr(s.Return.Operand))
 		return
 	}
 	fmt.Fprintf(&g.buf, "%sreturn %s;\n", indent, g.expr(s.Return))
 }
 
-func (g *cgen) emitDefer(s *Stmt, indent string) {
+func (g *cgen) emitDefer(s *KIRStmt, indent string) {
 	name := "k_defer_" + g.next()
 	fmt.Fprintf(&g.buf, "%svoid %s(void) {\n", indent, name)
 	g.block(s.Body, indent+"  ")
@@ -867,7 +841,7 @@ func (g *cgen) emitDefer(s *Stmt, indent string) {
 	fmt.Fprintf(&g.buf, "%sk_defers[k_ndefers++] = %s;\n", indent, name)
 }
 
-func (g *cgen) emitMatch(s *Stmt, indent string) {
+func (g *cgen) emitMatch(s *KIRStmt, indent string) {
 	scrut := g.next()
 	fmt.Fprintf(&g.buf, "%s{ KValue %s = %s;\n", indent, scrut, g.expr(s.Scrutinee))
 	for i, arm := range s.Arms {
@@ -879,7 +853,7 @@ func (g *cgen) emitMatch(s *Stmt, indent string) {
 		}
 		if arm.Pattern.Binding != "" {
 			inner := "*(%s.u.opt.inner)"
-			if arm.Pattern.Kind == PatResult {
+			if arm.Pattern.Kind == "result" {
 				inner = "*(%s.u.res.inner)"
 			}
 			fmt.Fprintf(&g.buf, "%s    KValue %s = "+inner+";\n", indent, sanitize(arm.Pattern.Binding), scrut)
@@ -891,8 +865,8 @@ func (g *cgen) emitMatch(s *Stmt, indent string) {
 	fmt.Fprintf(&g.buf, "%s}\n", indent)
 }
 
-func (g *cgen) patternCond(p Pattern, scrut string) string {
-	switch p.Kind {
+func (g *cgen) patternCond(p *KIRPattern, scrut string) string {
+	switch kirPatternKind(p.Kind) {
 	case PatWildcard:
 		return "1"
 	case PatNil:
@@ -907,15 +881,15 @@ func (g *cgen) patternCond(p Pattern, scrut string) string {
 		return fmt.Sprintf("(%s.tag == K_INT && %s.u.i == %dLL)", scrut, scrut, p.Int)
 	case PatString:
 		return fmt.Sprintf("(%s.tag == K_STRING && %s.u.s.len == %d && memcmp(%s.u.s.data, %s, %d) == 0)",
-			scrut, scrut, len(p.Str), scrut, cString(p.Str), len(p.Str))
+			scrut, scrut, len(p.String), scrut, cString(p.String), len(p.String))
 	case PatEnum:
-		if p.TypeName != "" {
-			id, ok := g.enumID[p.TypeName]
+		if p.Type != "" {
+			id, ok := g.enumID[p.Type]
 			if !ok {
-				g.fail("unknown enum '%s'", p.TypeName)
+				g.fail("unknown enum '%s'", p.Type)
 				return "0"
 			}
-			v := g.variantIndex(p.TypeName, p.Variant)
+			v := g.variantIndex(p.Type, p.Variant)
 			return fmt.Sprintf("(%s.tag == K_ENUM && %s.u.en.type_id == %d && %s.u.en.variant == %d)", scrut, scrut, id, scrut, v)
 		}
 		return fmt.Sprintf("(%s.tag == K_ENUM && %s.u.en.variant == %d)", scrut, scrut, g.variantIndexAny(p.Variant))
@@ -962,11 +936,11 @@ func (g *cgen) variantIndexAny(variant string) int {
 }
 
 // expr lowers an expression to a C expression of type KValue.
-func (g *cgen) expr(e *Expr) string {
+func (g *cgen) expr(e *KIRExpr) string {
 	if e == nil {
 		return "kv_nil()"
 	}
-	switch e.Kind {
+	switch kirExprKind(e.Kind) {
 	case ExInt:
 		return fmt.Sprintf("kv_int(%dLL)", e.Int)
 	case ExFloat:
@@ -980,9 +954,9 @@ func (g *cgen) expr(e *Expr) string {
 		return "kv_nil()"
 	case ExString:
 		if g.obfuscate {
-			return fmt.Sprintf("k_obf_str((const unsigned char*)%s, %d)", cObfString(e.Str), len(e.Str))
+			return fmt.Sprintf("k_obf_str((const unsigned char*)%s, %d)", cObfString(e.String), len(e.String))
 		}
-		return fmt.Sprintf("kv_strn(%s, %d)", cString(e.Str), len(e.Str))
+		return fmt.Sprintf("kv_strn(%s, %d)", cString(e.String), len(e.String))
 	case ExVar:
 		return sanitize(e.Name)
 	case ExEnum:
@@ -1013,11 +987,11 @@ func (g *cgen) expr(e *Expr) string {
 	case ExCall:
 		return g.call(e)
 	}
-	g.fail("unsupported expression kind %d", e.Kind)
+	g.fail("unsupported expression kind %q", e.Kind)
 	return "kv_nil()"
 }
 
-func (g *cgen) arrayLiteral(items []*Expr) string {
+func (g *cgen) arrayLiteral(items []*KIRExpr) string {
 	if len(items) == 0 {
 		return "kv_arr((KValue*)kalloc(1), 0)"
 	}
@@ -1030,7 +1004,7 @@ func (g *cgen) arrayLiteral(items []*Expr) string {
 	return b.String()
 }
 
-func (g *cgen) setLiteral(items []*Expr) string {
+func (g *cgen) setLiteral(items []*KIRExpr) string {
 	if len(items) == 0 {
 		return "kv_set((KValue*)kalloc(1), 0)"
 	}
@@ -1047,7 +1021,7 @@ func (g *cgen) setLiteral(items []*Expr) string {
 	return b.String()
 }
 
-func (g *cgen) mapLiteral(e *Expr) string {
+func (g *cgen) mapLiteral(e *KIRExpr) string {
 	if len(e.MapKeys) == 0 {
 		return "kv_map((KValue*)kalloc(1), (KValue*)kalloc(1), 0)"
 	}
@@ -1064,19 +1038,20 @@ func (g *cgen) mapLiteral(e *Expr) string {
 	return b.String()
 }
 
-func (g *cgen) structLiteral(e *Expr) string {
+func (g *cgen) structLiteral(e *KIRExpr) string {
 	decl := g.structDecl(e.StructName)
 	if decl == nil {
 		g.fail("unknown struct '%s'", e.StructName)
 		return "kv_nil()"
 	}
-	instanceType := substituteType(e.Type, g.functionSubstitution, 0)
-	if instanceType == nil || instanceType.Kind != TyStruct || instanceType.Struct != decl {
+	instanceType := substituteKIRType(e.Type, g.functionSubstitution)
+	parsedInstance, validType := parseKIRTypeExpression(instanceType)
+	if !validType || parsedInstance.Name != decl.Name {
 		g.fail("C AOT cannot lower struct '%s' without resolved instantiation metadata", e.StructName)
 		return "kv_nil()"
 	}
-	instanceName := instanceType.String()
-	id, ok := g.structID[typeInstanceKey(instanceType)]
+	instanceName := instanceType
+	id, ok := g.structID[instanceName]
 	if !ok {
 		g.fail("C AOT did not plan concrete struct type %s", instanceName)
 		return "kv_nil()"
@@ -1103,7 +1078,7 @@ func (g *cgen) structLiteral(e *Expr) string {
 	return b.String()
 }
 
-func (g *cgen) structDecl(name string) *StructDecl {
+func (g *cgen) structDecl(name string) *KIRStruct {
 	for _, s := range g.structs {
 		if s.Name == name {
 			return s
@@ -1112,61 +1087,63 @@ func (g *cgen) structDecl(name string) *StructDecl {
 	return nil
 }
 
-func (g *cgen) unary(e *Expr) string {
+func (g *cgen) unary(e *KIRExpr) string {
 	op := g.expr(e.Operand)
-	switch e.Op {
-	case BANG:
+	switch e.Operator {
+	case "!":
 		return fmt.Sprintf("k_not(%s)", op)
-	case MINUS:
+	case "-":
 		return fmt.Sprintf("k_neg(%s)", op)
-	case PLUS:
+	case "+":
 		return op
 	}
 	g.fail("unsupported unary operator")
 	return "kv_nil()"
 }
 
-func (g *cgen) binary(e *Expr) string {
+func (g *cgen) binary(e *KIRExpr) string {
 	l := g.expr(e.Left)
 	r := g.expr(e.Right)
-	switch e.Op {
-	case AND:
+	switch e.Operator {
+	case "&&":
 		return fmt.Sprintf("k_and(%s, %s)", l, r)
-	case OR:
+	case "||":
 		return fmt.Sprintf("k_or(%s, %s)", l, r)
-	case EQEQ:
+	case "==":
 		return fmt.Sprintf("k_eq(%s, %s)", l, r)
-	case NEQ:
+	case "!=":
 		return fmt.Sprintf("k_neq(%s, %s)", l, r)
-	case PLUS:
+	case "+":
 		return fmt.Sprintf("k_add(%s, %s)", l, r)
-	case MINUS:
+	case "-":
 		return fmt.Sprintf("k_sub(%s, %s)", l, r)
-	case STAR:
+	case "*":
 		return fmt.Sprintf("k_mul(%s, %s)", l, r)
-	case SLASH:
+	case "/":
 		return fmt.Sprintf("k_div(%s, %s)", l, r)
-	case PERCENT:
+	case "%":
 		return fmt.Sprintf("k_rem(%s, %s)", l, r)
-	case LESS:
+	case "<":
 		return fmt.Sprintf("k_lt(%s, %s)", l, r)
-	case LEQ:
+	case "<=":
 		return fmt.Sprintf("k_le(%s, %s)", l, r)
-	case GREATER:
+	case ">":
 		return fmt.Sprintf("k_gt(%s, %s)", l, r)
-	case GEQ:
+	case ">=":
 		return fmt.Sprintf("k_ge(%s, %s)", l, r)
 	}
 	g.fail("unsupported binary operator")
 	return "kv_nil()"
 }
 
-func (g *cgen) field(e *Expr) string {
+func (g *cgen) field(e *KIRExpr) string {
 	base := g.expr(e.Base)
 	// Resolve the field index from the base expression's static type.
-	var decl *StructDecl
-	if e.Base != nil && e.Base.Type != nil && e.Base.Type.Struct != nil {
-		decl = e.Base.Type.Struct
+	var decl *KIRStruct
+	if e.Base != nil && e.Base.Type != "" {
+		if baseType, ok := parseKIRTypeExpression(e.Base.Type); ok {
+			decl = g.structDecl(baseType.Name)
+		}
 	}
 	if decl == nil {
 		g.fail("field access requires a known struct type")
@@ -1185,31 +1162,39 @@ func (g *cgen) field(e *Expr) string {
 	return fmt.Sprintf("k_field(%s, %d)", base, idx)
 }
 
-func (g *cgen) propagate(e *Expr) string {
+func (g *cgen) propagate(e *KIRExpr) string {
 	operand := g.expr(e.Operand)
 	return fmt.Sprintf("({ KValue _p = %s; if (_p.tag == K_OPTION) { if (!_p.u.opt.present) return _p; _p = *_p.u.opt.inner; } else if (_p.tag == K_RESULT) { if (!_p.u.res.ok) return _p; _p = *_p.u.res.inner; } else kfail(\"'?' requires an Option or Result\"); _p; })", operand)
 }
 
-func (g *cgen) call(e *Expr) string {
+func (g *cgen) call(e *KIRExpr) string {
 	if e.Receiver != nil {
 		return g.methodCall(e)
 	}
-	if b, ok := g.env.Builtins[e.Name]; ok {
-		return g.builtinCall(e, b)
+	if strings.HasPrefix(e.CallTarget, "builtin:") {
+		name := strings.TrimPrefix(e.CallTarget, "builtin:")
+		builtin, ok := g.builtins[name]
+		if !ok || builtin.ID != e.BuiltinID {
+			g.fail("KIR references an unknown or mismatched builtin %q", name)
+			return "kv_nil()"
+		}
+		return g.builtinCall(e, builtin)
 	}
-	f := e.Function
-	if f == nil {
-		f = g.env.Functions[e.Name]
+	if !strings.HasPrefix(e.CallTarget, "function:") {
+		g.fail("C AOT cannot lower indirect or invalid call target %q", e.CallTarget)
+		return "kv_nil()"
 	}
+	target := strings.TrimPrefix(e.CallTarget, "function:")
+	f := g.functionByTarget[target]
 	if f == nil {
-		g.fail("unknown function '%s'", e.Name)
+		g.fail("unknown function target '%s'", target)
 		return "kv_nil()"
 	}
 	return g.functionCall(f, nil, e.Args, e.GenericArguments)
 }
 
-func (g *cgen) methodCall(e *Expr) string {
-	f := e.Function
+func (g *cgen) methodCall(e *KIRExpr) string {
+	var f *KIRFunction
 	if e.TraitName != "" {
 		var err error
 		f, err = g.traitImplementationMethod(e, g.functionSubstitution)
@@ -1217,6 +1202,8 @@ func (g *cgen) methodCall(e *Expr) string {
 			g.fail("%s", err)
 			return "kv_nil()"
 		}
+	} else if strings.HasPrefix(e.CallTarget, "function:") {
+		f = g.functionByTarget[strings.TrimPrefix(e.CallTarget, "function:")]
 	}
 	if f == nil {
 		g.fail("unknown method '%s'", e.Name)
@@ -1225,7 +1212,7 @@ func (g *cgen) methodCall(e *Expr) string {
 	return g.functionCall(f, e.Receiver, e.Args, e.GenericArguments)
 }
 
-func (g *cgen) functionCall(f *Function, receiver *Expr, args []*Expr, genericArguments []*Type) string {
+func (g *cgen) functionCall(f *KIRFunction, receiver *KIRExpr, args []*KIRExpr, genericArguments []string) string {
 	name, err := g.functionSymbolForCall(f, receiver, genericArguments)
 	if err != nil {
 		g.fail("%s", err)
@@ -1248,7 +1235,7 @@ func (g *cgen) functionCall(f *Function, receiver *Expr, args []*Expr, genericAr
 
 // builtinCall lowers a builtin invocation. Unsupported builtins are rejected
 // with a clear diagnostic so the native backend never silently misbehaves.
-func (g *cgen) builtinCall(e *Expr, b Builtin) string {
+func (g *cgen) builtinCall(e *KIRExpr, b Builtin) string {
 	arg := func(i int) string { return g.expr(e.Args[i]) }
 	switch b.Name {
 	case "print":
@@ -1606,14 +1593,14 @@ func (g *cgen) builtinCall(e *Expr, b Builtin) string {
 
 // threadSpawn lowers thread_spawn("worker") to a thread handle wrapping the
 // worker function pointer.
-func (g *cgen) threadSpawn(e *Expr) string {
-	if len(e.Args) != 1 || e.Args[0].Kind != ExString {
+func (g *cgen) threadSpawn(e *KIRExpr) string {
+	if len(e.Args) != 1 || e.Args[0].Kind != "string" {
 		g.fail("thread_spawn requires a literal worker function name")
 		return "kv_nil()"
 	}
-	f := g.env.Functions[e.Args[0].Str]
+	f := g.uniqueFunction(e.Args[0].String)
 	if f == nil {
-		g.fail("thread_spawn references unknown worker '%s'", e.Args[0].Str)
+		g.fail("thread_spawn references unknown or overloaded worker '%s'", e.Args[0].String)
 		return "kv_nil()"
 	}
 	if g.functionNeedsSpecialization(f) {
@@ -1624,14 +1611,14 @@ func (g *cgen) threadSpawn(e *Expr) string {
 }
 
 // taskSpawn lowers task_spawn(group, "worker") to a task-group-owned thread.
-func (g *cgen) taskSpawn(e *Expr) string {
-	if len(e.Args) != 2 || e.Args[1].Kind != ExString {
+func (g *cgen) taskSpawn(e *KIRExpr) string {
+	if len(e.Args) != 2 || e.Args[1].Kind != "string" {
 		g.fail("task_spawn requires a literal worker function name")
 		return "kv_nil()"
 	}
-	f := g.env.Functions[e.Args[1].Str]
+	f := g.uniqueFunction(e.Args[1].String)
 	if f == nil {
-		g.fail("task_spawn references unknown worker '%s'", e.Args[1].Str)
+		g.fail("task_spawn references unknown or overloaded worker '%s'", e.Args[1].String)
 		return "kv_nil()"
 	}
 	if g.functionNeedsSpecialization(f) {
@@ -1643,12 +1630,12 @@ func (g *cgen) taskSpawn(e *Expr) string {
 
 // polyRegister lowers poly_register(slot, handler, priority). The checker has
 // already constrained handler to an unambiguous literal function name.
-func (g *cgen) polyRegister(e *Expr) string {
+func (g *cgen) polyRegister(e *KIRExpr) string {
 	return fmt.Sprintf("k_poly_register(%s, %s, %s)", g.expr(e.Args[0]), g.expr(e.Args[1]), g.expr(e.Args[2]))
 }
 
 // polyReorder lowers poly_reorder(slot, handler, before).
-func (g *cgen) polyReorder(e *Expr) string {
+func (g *cgen) polyReorder(e *KIRExpr) string {
 	return fmt.Sprintf("k_poly_reorder(%s, %s, %s)", g.expr(e.Args[0]), g.expr(e.Args[1]), g.expr(e.Args[2]))
 }
 

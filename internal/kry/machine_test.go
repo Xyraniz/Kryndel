@@ -214,6 +214,7 @@ let values: Array[Int] = [1, 2]
 println(len(values))
 println(values[0])
 `)
+	assertKIRDirectSubsetUnsupported(t, p, c, `does not lower values of type "Array[Int]"`)
 	data, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
 	if err != nil {
 		t.Fatal(err)
@@ -250,6 +251,7 @@ println(result_unwrap(success))
 println(unwrap_or(result_error(failure), "fallback"))
 println(unwrap_or(array_get([7, 8], 4), 99))
 `)
+	assertKIRDirectSubsetUnsupported(t, p, c, `does not lower builtin or function call "none"`)
 	data, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
 	if err != nil {
 		t.Fatal(err)
@@ -267,6 +269,22 @@ println(unwrap_or(array_get([7, 8], 4), 99))
 	}
 	if string(out) != "true\ntrue\n7\n41\ntrue\ntrue\n42\nbad\n99\n" {
 		t.Fatalf("unexpected option/result output %q", out)
+	}
+}
+
+func assertKIRDirectSubsetUnsupported(t *testing.T, program *Program, checker *Checker, wantMessage string) {
+	t.Helper()
+	kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := DecodeKIR(kirBytes, checker.Env.Lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = validateKIRDirectELFSubset(document)
+	if !errors.Is(err, errKIRSubsetUnsupported) || !strings.Contains(err.Error(), wantMessage) {
+		t.Fatalf("direct KIR preflight error = %v, want unsupported sentinel containing %q", err, wantMessage)
 	}
 }
 

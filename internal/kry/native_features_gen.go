@@ -223,6 +223,14 @@ var generatedDirectELFBuiltinCases = map[string]struct{}{
 	"u8_array":         {},
 	"unwrap_or":        {},
 }
+var generatedDirectPEBuiltinCases = map[string]struct{}{
+	"print":   {},
+	"println": {},
+	"u16":     {},
+	"u32":     {},
+	"u64":     {},
+	"u8":      {},
+}
 var generatedInterpreterBuiltinCases = map[string]struct{}{
 	"abs":                                  {},
 	"actor_channel":                        {},

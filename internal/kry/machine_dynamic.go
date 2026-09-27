@@ -6202,6 +6202,11 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			if err := m.emitExpr(e.Args[0]); err != nil {
 				return err
 			}
+			if m.windowsABI {
+				if err := m.emitPEUnsignedConversionCheck(e.Args[0], machineBits(e.Type)); err != nil {
+					return err
+				}
+			}
 			m.emitUIntMask(machineBits(e.Type))
 			return nil
 		default:

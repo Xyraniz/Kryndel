@@ -185,6 +185,32 @@ func directPETypeName(name string, allowNil bool) bool {
 	}
 }
 
+func (m *directMachine) emitPEUnsignedConversionCheck(value *Expr, bits uint8) error {
+	if value == nil || value.Type == nil || (value.Type.Kind != TyInt && value.Type.Kind != TyUInt) || bits == 0 {
+		return fmt.Errorf("direct PE backend cannot validate an incomplete unsigned conversion")
+	}
+	if value.Type.Kind == TyInt {
+		m.code = append(m.code, 0x48, 0x85, 0xc0)                        // test rax, rax
+		if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil { // js
+			return err
+		}
+	}
+	inputBits := uint8(64)
+	if value.Type.Kind == TyUInt {
+		inputBits = machineBits(value.Type)
+	}
+	if bits >= inputBits || bits >= 64 {
+		return nil
+	}
+	mask := ^((uint64(1) << bits) - 1)
+	m.code = append(m.code, 0x48, 0xb9) // mov rcx, imm64
+	var encodedMask [8]byte
+	binary.LittleEndian.PutUint64(encodedMask[:], mask)
+	m.code = append(m.code, encodedMask[:]...)
+	m.code = append(m.code, 0x48, 0x85, 0xc8)       // test rax, rcx
+	return m.emitConditionalJump(0x85, m.trapLabel) // jne
+}
+
 func validateDirectPEStatements(stmts []*Stmt) error {
 	for _, s := range stmts {
 		if s == nil {
@@ -210,10 +236,7 @@ func validateDirectPEStatements(stmts []*Stmt) error {
 				return fmt.Errorf("expression statements must be direct calls")
 			}
 			if s.Expr.Function == nil {
-				if (s.Expr.Name != "print" && s.Expr.Name != "println") || len(s.Expr.Args) != 1 {
-					return fmt.Errorf("only print(value) and println(value) builtins are supported")
-				}
-				if err := validateDirectPEExpr(s.Expr.Args[0], true); err != nil {
+				if err := validateDirectPEExpr(s.Expr, true); err != nil {
 					return err
 				}
 			} else if err := validateDirectPEExpr(s.Expr, false); err != nil {
@@ -327,11 +350,14 @@ func validateDirectPEExpr(e *Expr, allowOutput bool) error {
 				return fmt.Errorf("conversion %s requires an Int or UInt argument", e.Name)
 			}
 			return validateDirectPEExpr(arg, false)
+		case "print", "println":
+			if !allowOutput || len(e.Args) != 1 {
+				return fmt.Errorf("only statement-form print(value) and println(value) are supported")
+			}
+			return validateDirectPEExpr(e.Args[0], false)
+		default:
+			return fmt.Errorf("builtin %q is not supported by the direct PE backend", e.Name)
 		}
-		if !allowOutput || (e.Name != "print" && e.Name != "println") || len(e.Args) != 1 {
-			return fmt.Errorf("only statement-form print(value) and println(value) are supported")
-		}
-		return validateDirectPEExpr(e.Args[0], false)
 	default:
 		return fmt.Errorf("expression kind %s is not supported", expressionKindName(e.Kind))
 	}

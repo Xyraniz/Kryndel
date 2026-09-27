@@ -247,7 +247,127 @@ func sameDiagnosticStack(left, right *Diagnostic) bool {
 	return true
 }
 
-func TestKIRExecutorRejectsUnsupportedNodesAndTypes(t *testing.T) {
+func TestKIRExecutorMatchesRuntimeForCollectionsAndNominalValues(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		wantOutput string
+		wantDiag   string
+	}{
+		{
+			name: "arrays nested indexing and immutable append",
+			source: `let values: Array[Array[Int]] = [[1, 2], [3, 4]]
+let appended: Array[Array[Int]] = array_push(values, [5, 6])
+println(values[1][0])
+println(appended[2][1])
+`,
+			wantOutput: "3\n6\n",
+		},
+		{
+			name: "map and set builtins",
+			source: `let scores: Map[String, Int] = {"answer": 41}
+let changed: Map[String, Int] = map_insert(scores, "answer", 42)
+let flags: Set[String] = |{"ready", "ready", "done"}|
+println(scores["answer"])
+println(changed["answer"])
+println(set_contains(flags, "ready"))
+println(map_get(changed, "missing"))
+`,
+			wantOutput: "41\n42\ntrue\nnone\n",
+		},
+		{
+			name: "struct fields enum values and match",
+			source: `struct Point { x: Int, name: String }
+enum State { Ready, Waiting }
+let point: Point = Point{name: "origin", x: 7}
+let state: State = State::Waiting
+println(point.x)
+println(point.name)
+match state {
+    State::Ready => { println("ready") }
+    State::Waiting => { println("waiting") }
+}
+`,
+			wantOutput: "7\norigin\nwaiting\n",
+		},
+		{
+			name: "option result builtins and match payloads",
+			source: `let present: Option[Int] = some(42)
+let absent: Option[Int] = none()
+let failure: Result[Int, String] = err("bad")
+println(is_some(present))
+println(is_none(absent))
+println(result_error(failure))
+match present { some(value) => { println(value) } none => { println("empty") } }
+match failure { ok(value) => { println(value) } err(problem) => { println(problem) } }
+`,
+			wantOutput: "true\ntrue\nsome(bad)\n42\nbad\n",
+		},
+		{
+			name: "JSON pure builtins",
+			source: `let decoded: Result[Json, String] = json_parse("{\"answer\":42}")
+match decoded {
+    ok(document) => { println(json_stringify(document)) }
+    err(problem) => { println(problem) }
+}
+`,
+			wantOutput: "{\"answer\":42}\n",
+		},
+		{
+			name: "array index diagnostic",
+			source: `let values: Array[Int] = [7]
+print("before")
+println(values[1])
+`,
+			wantOutput: "before",
+			wantDiag:   "array index out of range",
+		},
+		{
+			name: "map lookup diagnostic",
+			source: `let values: Map[String, Int] = {"present": 1}
+println(values["missing"])
+`,
+			wantDiag: "map key not found",
+		},
+		{
+			name: "result unwrap diagnostic",
+			source: `let failure: Result[Int, String] = err("bad")
+println(result_unwrap(failure))
+`,
+			wantDiag: "cannot unwrap error Result: bad",
+		},
+		{
+			name: "result propagation returns the same error",
+			source: `fn inner() -> Result[Int, String] { return err("bad") }
+fn outer() -> Result[Int, String] { return inner()? }
+match outer() { ok(value) => { println(value) } err(problem) => { println(problem) } }
+`,
+			wantOutput: "bad\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, test.source, DefaultLimits())
+			if test.wantDiag == "" {
+				if diagnostic != nil {
+					t.Fatalf("diagnostic = %#v", diagnostic)
+				}
+				if string(result.Output) != test.wantOutput {
+					t.Fatalf("KIR output = %q, want %q", result.Output, test.wantOutput)
+				}
+				return
+			}
+			if diagnostic == nil || diagnostic.Message != test.wantDiag {
+				t.Fatalf("runtime diagnostic = %#v, want %q", diagnostic, test.wantDiag)
+			}
+			if string(result.Output) != test.wantOutput {
+				t.Fatalf("KIR output = %q, want %q", result.Output, test.wantOutput)
+			}
+		})
+	}
+}
+
+func TestKIRExecutorRejectsUnsupportedEffectsAndTypes(t *testing.T) {
 	program, checker := testProgram(t, "let values: Array[Int] = [1]\nprintln(values[0])\n")
 	kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
 	if err != nil {
@@ -257,8 +377,20 @@ func TestKIRExecutorRejectsUnsupportedNodesAndTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := executeKIRSubset(document, DefaultLimits(), kirSourceMap(program)); !errors.Is(err, errKIRSubsetUnsupported) {
-		t.Fatalf("array program error = %v, want explicit unsupported-subset error", err)
+	if _, err := executeKIRSubset(document, DefaultLimits(), kirSourceMap(program)); err != nil {
+		t.Fatalf("array indexing is now an executable KIR capability: %v", err)
+	}
+	program, checker = testProgram(t, "println(fs_exists(\"missing\"))\n")
+	kirBytes, err = EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err = DecodeKIR(kirBytes, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executeKIRSubset(document, DefaultLimits(), kirSourceMap(program)); !errors.Is(err, errKIRSubsetUnsupported) || !strings.Contains(err.Error(), "fs_exists") {
+		t.Fatalf("filesystem builtin error = %v, want a named unsupported-subset rejection", err)
 	}
 }
 

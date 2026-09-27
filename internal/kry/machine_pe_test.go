@@ -132,6 +132,118 @@ println(value == "x")
 	}
 }
 
+func TestDirectPEBuiltinDifferentialConformance(t *testing.T) {
+	successCases := []struct {
+		name   string
+		source string
+	}{
+		{name: "print", source: `print("text")`},
+		{name: "println", source: "println(\"text\")\nprintln(-7)\nprintln(true)\nprintln(false)\nprintln(u8(255))"},
+		{name: "u8", source: "println(u8(0))\nprintln(u8(255))"},
+		{name: "u16", source: "println(u16(0))\nprintln(u16(65535))"},
+		{name: "u32", source: "println(u32(0))\nprintln(u32(4294967295))"},
+		{name: "u64", source: "println(u64(9223372036854775807))\nlet high: UInt64 = u64(9223372036854775807) + u64(1)\nprintln(high)"},
+	}
+	for _, test := range successCases {
+		t.Run("success/"+test.name, func(t *testing.T) {
+			out, diagnostic, nativeOut, nativeErr, status := runDirectPEBuiltinOutcome(t, test.source, DefaultLimits())
+			if diagnostic != nil || status != 0 || nativeOut != out || nativeErr != "" {
+				t.Fatalf("PE outcome differs: interpreter=%q / %#v; PE=%q / %q / %d", out, diagnostic, nativeOut, nativeErr, status)
+			}
+		})
+	}
+
+	errorCases := []struct {
+		name, source, message string
+	}{
+		{name: "u8 negative", source: "let value: UInt8 = u8(-1)", message: "Int is outside unsigned range"},
+		{name: "u8 overflow", source: "let value: UInt8 = u8(256)", message: "value is outside unsigned range"},
+		{name: "u8 narrowed UInt", source: "let value: UInt8 = u8(u16(256))", message: "value is outside unsigned range"},
+		{name: "u16 overflow", source: "let value: UInt16 = u16(65536)", message: "value is outside unsigned range"},
+		{name: "u16 narrowed UInt", source: "let value: UInt16 = u16(u32(65536))", message: "value is outside unsigned range"},
+		{name: "u32 overflow", source: "let value: UInt32 = u32(4294967296)", message: "value is outside unsigned range"},
+		{name: "u32 narrowed UInt", source: "let value: UInt32 = u32(u64(4294967296))", message: "value is outside unsigned range"},
+		{name: "u64 negative", source: "let value: UInt64 = u64(-1)", message: "Int is outside unsigned range"},
+	}
+	for _, test := range errorCases {
+		t.Run("error/"+test.name, func(t *testing.T) {
+			source := "print(\"before:\")\n" + test.source
+			out, diagnostic, nativeOut, nativeErr, status := runDirectPEBuiltinOutcome(t, source, DefaultLimits())
+			if diagnostic == nil || diagnostic.Category != CatRuntime || diagnostic.Message != test.message || diagnostic.Source != "direct-pe-conformance.kry" {
+				t.Fatalf("interpreter diagnostic = %#v, want runtime %q at the conformance source", diagnostic, test.message)
+			}
+			if status != 1 || nativeOut != out || nativeErr != "" {
+				t.Fatalf("PE error outcome differs: interpreter output=%q diagnostic=%#v; PE output=%q stderr=%q status=%d", out, diagnostic, nativeOut, nativeErr, status)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name, source string
+		limit        int64
+	}{
+		{name: "print output limit", source: `print("x")`, limit: 0},
+		{name: "println newline limit", source: `println("x")`, limit: 1},
+	} {
+		t.Run("error/"+test.name, func(t *testing.T) {
+			limits := DefaultLimits()
+			limits.MaxOutputBytes = test.limit
+			out, diagnostic, nativeOut, nativeErr, status := runDirectPEBuiltinOutcome(t, test.source, limits)
+			if diagnostic == nil || diagnostic.Category != CatResource || diagnostic.Message != "output limit exceeded" {
+				t.Fatalf("interpreter output diagnostic = %#v, want resource output limit exceeded", diagnostic)
+			}
+			if status != 1 || nativeOut != out || nativeErr != "" {
+				t.Fatalf("PE output error differs: interpreter output=%q diagnostic=%#v; PE output=%q stderr=%q status=%d", out, diagnostic, nativeOut, nativeErr, status)
+			}
+		})
+	}
+}
+
+func runDirectPEBuiltinOutcome(t *testing.T, source string, limits Limits) (string, *Diagnostic, string, string, int) {
+	t.Helper()
+	program, diagnostic := Parse(&Source{Name: "direct-pe-conformance.kry", Text: source}, limits)
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	checker, diagnostic := Check(program, limits)
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	interpreter, diagnostic := NewRuntime(program, checker, limits, Sandbox{})
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	var interpretedOutput bytes.Buffer
+	interpreter.output = &interpretedOutput
+	interpreterDiagnostic := interpreter.run()
+	image, err := BuildDirectPE(program, checker, NativeTarget{OS: "windows", Arch: "amd64"})
+	if err != nil {
+		t.Fatalf("PE-direct build failed: %v", err)
+	}
+	if _, err := pe.NewFile(bytes.NewReader(image)); err != nil {
+		t.Fatalf("Go PE parser rejected builtin fixture: %v", err)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("PE-direct execution conformance requires Windows amd64")
+	}
+	path := filepath.Join(t.TempDir(), "builtin-conformance.exe")
+	if err := os.WriteFile(path, image, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(path)
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	status := 0
+	if err := command.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("PE-direct execution failed: %v", err)
+		}
+		status = exitErr.ExitCode()
+	}
+	return interpretedOutput.String(), interpreterDiagnostic, stdout.String(), stderr.String(), status
+}
+
 func TestDirectPEUnsignedShiftOutOfRangeExitsWithFailure(t *testing.T) {
 	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
 		t.Skip("generated PE execution requires native windows-amd64")
