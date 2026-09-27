@@ -68,6 +68,46 @@ func buildAndRunLinuxELF(t *testing.T, source string) (string, int, error) {
 	return string(out), -1, err
 }
 
+func buildAndRunNativeAOT(t *testing.T, source string) (string, int, error) {
+	t.Helper()
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		return buildAndRunLinuxELF(t, source)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("C AOT differential test requires linux/amd64 or windows/amd64")
+		return "", 0, nil
+	}
+	if _, err := exec.LookPath("gcc"); err != nil {
+		t.Skipf("Windows C compiler gcc is unavailable: %v", err)
+		return "", 0, nil
+	}
+	program, diagnostic := Parse(&Source{Name: "native-differential.kry", Text: source}, DefaultLimits())
+	if diagnostic != nil {
+		return "", 0, diagnostic
+	}
+	checker, diagnostic := Check(program, DefaultLimits())
+	if diagnostic != nil {
+		return "", 0, diagnostic
+	}
+	binary, err := BuildNative(program, checker, NativeTarget{OS: "windows", Arch: "amd64"}, "exe")
+	if err != nil {
+		return "", 0, err
+	}
+	path := filepath.Join(t.TempDir(), "native-differential.exe")
+	if err := os.WriteFile(path, binary, 0o700); err != nil {
+		return "", 0, err
+	}
+	output, err := exec.Command(path).CombinedOutput()
+	outputText := strings.ReplaceAll(string(output), "\r\n", "\n")
+	if err == nil {
+		return outputText, 0, nil
+	}
+	if exit, ok := err.(*exec.ExitError); ok {
+		return outputText, exit.ExitCode(), nil
+	}
+	return outputText, -1, err
+}
+
 func TestFloatBoundaryPolicy(t *testing.T) {
 	if !isFinite(0) || !isFinite(math.SmallestNonzeroFloat64) {
 		t.Fatal("finite Float boundary was rejected")

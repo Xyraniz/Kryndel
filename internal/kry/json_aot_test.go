@@ -13,14 +13,14 @@ import (
 
 func requireJSONNativeParity(t *testing.T, source string) {
 	t.Helper()
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("C AOT JSON differential tests require linux/amd64")
+	if !((runtime.GOOS == "linux" || runtime.GOOS == "windows") && runtime.GOARCH == "amd64") {
+		t.Skip("C AOT JSON differential tests require linux/amd64 or windows/amd64")
 	}
 	interpreted, diagnostic := runInterpreterCapture(t, source)
 	if diagnostic != nil {
 		t.Fatalf("interpreter failed: %s", diagnostic.Message)
 	}
-	native, status, err := buildAndRunLinuxELF(t, source)
+	native, status, err := buildAndRunNativeAOT(t, source)
 	if err != nil {
 		t.Fatalf("C AOT build failed: %v", err)
 	}

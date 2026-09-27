@@ -2,50 +2,12 @@ package kry
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 )
-
-func buildAndRunFilesystemNative(t *testing.T, source string) (string, int, error) {
-	t.Helper()
-	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
-		return buildAndRunLinuxELF(t, source)
-	}
-	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
-		t.Skip("filesystem AOT differential test requires linux/amd64 or windows/amd64")
-	}
-	if _, err := exec.LookPath("gcc"); err != nil {
-		t.Skipf("Windows C compiler gcc is unavailable: %v", err)
-	}
-	program, diagnostic := Parse(&Source{Name: "filesystem.kry", Text: source}, DefaultLimits())
-	if diagnostic != nil {
-		return "", 0, diagnostic
-	}
-	checker, diagnostic := Check(program, DefaultLimits())
-	if diagnostic != nil {
-		return "", 0, diagnostic
-	}
-	binary, err := BuildNative(program, checker, NativeTarget{OS: "windows", Arch: "amd64"}, "exe")
-	if err != nil {
-		return "", 0, err
-	}
-	path := filepath.Join(t.TempDir(), "filesystem.exe")
-	if err := os.WriteFile(path, binary, 0o700); err != nil {
-		return "", 0, err
-	}
-	output, err := exec.Command(path).CombinedOutput()
-	if err == nil {
-		return strings.ReplaceAll(string(output), "\r\n", "\n"), 0, nil
-	}
-	if exit, ok := err.(*exec.ExitError); ok {
-		return strings.ReplaceAll(string(output), "\r\n", "\n"), exit.ExitCode(), nil
-	}
-	return string(output), -1, err
-}
 
 func TestCAOTFilesystemIOMatchesInterpreter(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
@@ -285,7 +247,7 @@ func TestCAOTFilesystemMoveFileOverwritesDestination(t *testing.T) {
 		t.Fatalf("interpreter failed: %s", diagnostic.Message)
 	}
 	nativePaths := makePaths("native")
-	native, status, err := buildAndRunFilesystemNative(t, program(nativePaths))
+	native, status, err := buildAndRunNativeAOT(t, program(nativePaths))
 	if err != nil {
 		t.Fatalf("C AOT build failed: %v", err)
 	}
@@ -335,7 +297,7 @@ func TestCAOTFilesystemPathHelpersMatchInterpreter(t *testing.T) {
 	if interpreted != want {
 		t.Fatalf("unexpected interpreter paths: got %q, want %q", interpreted, want)
 	}
-	native, status, err := buildAndRunFilesystemNative(t, source)
+	native, status, err := buildAndRunNativeAOT(t, source)
 	if err != nil {
 		t.Fatalf("C AOT build failed: %v", err)
 	}
@@ -373,7 +335,7 @@ func TestCAOTFilesystemTempFileMatchesInterpreter(t *testing.T) {
 		t.Fatalf("interpreter failed: %s", diagnostic.Message)
 	}
 	interpreterPath := parseOutput(interpreted)
-	native, status, err := buildAndRunFilesystemNative(t, source)
+	native, status, err := buildAndRunNativeAOT(t, source)
 	if err != nil {
 		t.Fatalf("C AOT build failed: %v", err)
 	}
@@ -511,7 +473,7 @@ func TestCAOTFilesystemNULPathsMatchInterpreter(t *testing.T) {
 	}
 	nativePaths := makePaths("native")
 	nativeSource := program(nativePaths)
-	native, status, err := buildAndRunFilesystemNative(t, nativeSource)
+	native, status, err := buildAndRunNativeAOT(t, nativeSource)
 	if err != nil {
 		t.Fatalf("C AOT build failed: %v", err)
 	}
