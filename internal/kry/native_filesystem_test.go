@@ -158,6 +158,61 @@ func TestCAOTFilesystemCopyFileMatchesInterpreter(t *testing.T) {
 	}
 }
 
+func TestCAOTFilesystemWritesRejectSymlinks(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("C AOT filesystem differential test requires linux/amd64")
+	}
+	root := t.TempDir()
+	program := func(textPath, bytesPath, targetPath string) string {
+		return "fn main() -> Nil {\n" +
+			"    println(fs_write_text(" + strconv.Quote(textPath) + ", \"changed text\"))\n" +
+			"    println(fs_write_bytes(" + strconv.Quote(bytesPath) + ", string_to_bytes(\"changed bytes\")))\n" +
+			"    println(fs_read_text(" + strconv.Quote(targetPath) + "))\n" +
+			"}\n"
+	}
+	paths := func(name string) [3]string {
+		dir := filepath.Join(root, name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		targetPath := filepath.Join(dir, "target.txt")
+		textLink := filepath.Join(dir, "text-link")
+		bytesLink := filepath.Join(dir, "bytes-link")
+		if err := os.WriteFile(targetPath, []byte("unchanged"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, link := range []string{textLink, bytesLink} {
+			if err := os.Symlink(targetPath, link); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return [3]string{textLink, bytesLink, targetPath}
+	}
+	interpreterPaths := paths("interpreter")
+	interpreted, diagnostic := runInterpreterCapture(t, program(interpreterPaths[0], interpreterPaths[1], interpreterPaths[2]))
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
+	}
+	nativePaths := paths("native")
+	native, status, err := buildAndRunLinuxELF(t, program(nativePaths[0], nativePaths[1], nativePaths[2]))
+	if err != nil {
+		t.Fatalf("C AOT build failed: %v", err)
+	}
+	if status != 0 || native != interpreted {
+		t.Fatalf("filesystem write results differ:\ninterpreter (%d): %q\nC AOT (%d): %q", 0, interpreted, status, native)
+	}
+	for _, paths := range [][3]string{interpreterPaths, nativePaths} {
+		if got, err := os.ReadFile(paths[2]); err != nil || string(got) != "unchanged" {
+			t.Errorf("write through a symlink changed its target: contents=%q err=%v", got, err)
+		}
+		for _, link := range paths[:2] {
+			if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Errorf("write replaced symlink %q: info=%v err=%v", link, info, err)
+			}
+		}
+	}
+}
+
 func TestCAOTFilesystemRemoveDirAllMatchesInterpreter(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("C AOT filesystem differential test requires linux/amd64")
