@@ -9,7 +9,7 @@
   "source_compiler_kir_max_bytes": 134217728,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
-    "stage0-host-kry-linux-amd64": "000ff85778b5d4be27acfccc27d163967104d6322e044e9577ab439cc0856b60",
+    "stage0-host-kry-linux-amd64": "bda1cab3ab151619848af59f0140c4b5b9d61da8b880817412b7d23e5e579f64",
     "source-compiler.kir": "7bdecb493fa4fb668f28298717727c0b655e2059db1b914922fb3b7e80291a2c",
     "stage1-source-kir-compiler.elf": "0868e32cfb1e415b9174ad49c378a748eb80c5be22d3c1ac4592f1dc8d6b3098",
     "source_kir_compiler.kry": "a2c73d952a6a4dbc14cd806822cc37528d46f62e0fcdda93df20aa466b1ceba5",

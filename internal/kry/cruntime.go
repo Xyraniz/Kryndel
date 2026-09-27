@@ -878,6 +878,9 @@ static KValue k_fs_parent_dir(KValue path);
 static int k_fs_path_has_nul(KValue path) {
     return memchr(path.u.s.data,0,path.u.s.len)!=NULL;
 }
+static KValue k_fs_path_nul_result(void) {
+    return kv_res(0,kv_cstr("path contains NUL"));
+}
 static KValue k_fs_path_error(const char *op, KValue path) {
     int code=errno;
     const char *reason=strerror(code);
@@ -891,7 +894,7 @@ static KValue k_fs_path_error(const char *op, KValue path) {
 }
 static KValue k_fs_write_data(KValue path, const char *data, size_t length);
 static KValue k_fs_read_text(KValue path) {
-    if (k_fs_path_has_nul(path)) return kv_res(0,kv_cstr("path contains NUL"));
+    if (k_fs_path_has_nul(path)) return k_fs_path_nul_result();
     char *p=(char*)kalloc(path.u.s.len+1); memcpy(p,path.u.s.data,path.u.s.len); p[path.u.s.len]=0;
     FILE *f=fopen(p,"rb");
     if (!f) return kv_res(0,k_fs_path_error("open",path));
@@ -908,7 +911,7 @@ static KValue k_fs_write_text(KValue path, KValue text) {
     return k_fs_write_data(path,text.u.s.data,text.u.s.len);
 }
 static KValue k_fs_read_bytes(KValue path) {
-    if (k_fs_path_has_nul(path)) return kv_res(0,kv_cstr("path contains NUL"));
+    if (k_fs_path_has_nul(path)) return k_fs_path_nul_result();
     char *p=(char*)kalloc(path.u.s.len+1); memcpy(p,path.u.s.data,path.u.s.len); p[path.u.s.len]=0;
     FILE *f=fopen(p,"rb");
     if (!f) return kv_res(0,k_fs_path_error("open",path));
@@ -1577,7 +1580,7 @@ static int k_fs_close_fd(int fd) {
 #endif
 }
 static KValue k_fs_begin_write(KValue path, char **destination, char **temporary, FILE **output) {
-    if (k_fs_path_has_nul(path)) return kv_res(0,kv_cstr("path contains NUL"));
+    if (k_fs_path_has_nul(path)) return k_fs_path_nul_result();
     *destination=k_cpath(path);
     KValue parent=k_fs_parent_dir(path);
     if (!parent.u.res.ok) return parent;
@@ -1635,6 +1638,7 @@ static int k_fs_dir_entry_compare(const void *left, const void *right) {
     return strcmp(a->u.s.data,b->u.s.data);
 }
 static KValue k_fs_read_dir(KValue path) {
+    if (k_fs_path_has_nul(path)) return k_fs_path_nul_result();
     char *p=k_cpath(path);
     DIR *d=opendir(p);
     if (!d) return kv_res(0, kv_cstr("cannot read directory"));
@@ -1650,11 +1654,13 @@ static KValue k_fs_read_dir(KValue path) {
     return kv_res(1, kv_arr(items,n));
 }
 static KValue k_fs_create_dir(KValue path) {
+    if (k_fs_path_has_nul(path)) return k_fs_path_nul_result();
     char *p=k_cpath(path);
     if (k_mkdir(p)!=0) return kv_res(0, kv_cstr("cannot create directory"));
     return kv_res(1, kv_nil());
 }
 static KValue k_fs_create_dir_all(KValue path) {
+    if (k_fs_path_has_nul(path)) return k_fs_path_nul_result();
     char *p=k_cpath(path);
     char *start=p+1;
 #ifdef _WIN32
@@ -1698,12 +1704,13 @@ static KValue k_fs_parent_dir(KValue path) {
     return created;
 }
 static KValue k_fs_remove_file(KValue path) {
+    if (k_fs_path_has_nul(path)) return k_fs_path_nul_result();
     char *p=k_cpath(path);
     if (remove(p)!=0) return kv_res(0, kv_cstr("cannot remove file"));
     return kv_res(1, kv_nil());
 }
 static KValue k_fs_remove_dir_all(KValue path) {
-    if (k_fs_path_has_nul(path)) return kv_res(0, kv_cstr("path contains NUL"));
+    if (k_fs_path_has_nul(path)) return k_fs_path_nul_result();
     char *p=k_cpath(path);
     struct stat st;
     int is_link=0, is_dir=0;
@@ -1741,7 +1748,7 @@ static KValue k_fs_remove_dir_all(KValue path) {
     return kv_res(1, kv_nil());
 }
 static KValue k_fs_copy_file(KValue src, KValue dst) {
-    if (k_fs_path_has_nul(src)) return kv_res(0,kv_cstr("path contains NUL"));
+    if (k_fs_path_has_nul(src)) return k_fs_path_nul_result();
     char *s=k_cpath(src), *d=k_cpath(dst);
     FILE *in=fopen(s,"rb");
     if (!in) return kv_res(0,k_fs_path_error("open",src));
@@ -1758,26 +1765,31 @@ static KValue k_fs_copy_file(KValue src, KValue dst) {
     return k_fs_finish_write(dst,d,temporary,out,copy_error);
 }
 static KValue k_fs_move_file(KValue src, KValue dst) {
+    if (k_fs_path_has_nul(src) || k_fs_path_has_nul(dst)) return k_fs_path_nul_result();
     char *s=k_cpath(src), *d=k_cpath(dst);
-    if (rename(s,d)!=0) return kv_res(0, kv_cstr("cannot move file"));
+    if (k_fs_replace_file(s,d)!=0) return kv_res(0, kv_cstr("cannot move file"));
     return kv_res(1, kv_nil());
 }
 static KValue k_fs_is_file(KValue path) {
+    if (k_fs_path_has_nul(path)) return kv_bool(0);
     char *p=k_cpath(path); struct stat st;
     if (stat(p,&st)!=0) return kv_bool(0);
-    return kv_bool(S_ISREG(st.st_mode));
+    return kv_bool(!S_ISDIR(st.st_mode));
 }
 static KValue k_fs_is_dir(KValue path) {
+    if (k_fs_path_has_nul(path)) return kv_bool(0);
     char *p=k_cpath(path); struct stat st;
     if (stat(p,&st)!=0) return kv_bool(0);
     return kv_bool(S_ISDIR(st.st_mode));
 }
 static KValue k_fs_file_size(KValue path) {
+    if (k_fs_path_has_nul(path)) return k_fs_path_nul_result();
     char *p=k_cpath(path); struct stat st;
     if (stat(p,&st)!=0) return kv_res(0, kv_cstr("cannot stat file"));
     return kv_res(1, kv_int((long long)st.st_size));
 }
 static KValue k_fs_file_modified_time(KValue path) {
+    if (k_fs_path_has_nul(path)) return k_fs_path_nul_result();
     char *p=k_cpath(path); struct stat st;
     if (stat(p,&st)!=0) return kv_res(0, kv_cstr("cannot stat file"));
     return kv_res(1, kv_int((long long)st.st_mtime));

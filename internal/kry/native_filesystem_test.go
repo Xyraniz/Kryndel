@@ -252,6 +252,56 @@ func TestCAOTFilesystemWritesRejectSymlinks(t *testing.T) {
 	}
 }
 
+func TestCAOTFilesystemMoveFileOverwritesDestination(t *testing.T) {
+	if !((runtime.GOOS == "linux" || runtime.GOOS == "windows") && runtime.GOARCH == "amd64") {
+		t.Skip("filesystem AOT differential test requires linux/amd64 or windows/amd64")
+	}
+	root := t.TempDir()
+	type movePaths struct {
+		source      string
+		destination string
+	}
+	makePaths := func(name string) movePaths {
+		dir := filepath.Join(root, name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		paths := movePaths{source: filepath.Join(dir, "source.txt"), destination: filepath.Join(dir, "destination.txt")}
+		for path, content := range map[string]string{paths.source: "new source", paths.destination: "old destination"} {
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return paths
+	}
+	program := func(paths movePaths) string {
+		return "fn main() -> Nil {\n" +
+			"    println(fs_move_file(" + strconv.Quote(paths.source) + ", " + strconv.Quote(paths.destination) + "))\n" +
+			"}\n"
+	}
+	interpreterPaths := makePaths("interpreter")
+	interpreted, diagnostic := runInterpreterCapture(t, program(interpreterPaths))
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
+	}
+	nativePaths := makePaths("native")
+	native, status, err := buildAndRunFilesystemNative(t, program(nativePaths))
+	if err != nil {
+		t.Fatalf("C AOT build failed: %v", err)
+	}
+	if status != 0 || native != interpreted {
+		t.Fatalf("fs_move_file results differ:\ninterpreter (%d): %q\nC AOT (%d): %q", 0, interpreted, status, native)
+	}
+	for _, paths := range []movePaths{interpreterPaths, nativePaths} {
+		if _, err := os.Stat(paths.source); !os.IsNotExist(err) {
+			t.Errorf("source file %q remains after move: %v", paths.source, err)
+		}
+		if content, err := os.ReadFile(paths.destination); err != nil || string(content) != "new source" {
+			t.Errorf("destination file %q contains %q after move: %v", paths.destination, content, err)
+		}
+	}
+}
+
 func TestCAOTFilesystemPathHelpersMatchInterpreter(t *testing.T) {
 	if !((runtime.GOOS == "linux" || runtime.GOOS == "windows") && runtime.GOARCH == "amd64") {
 		t.Skip("filesystem AOT differential test requires linux/amd64 or windows/amd64")
@@ -408,25 +458,72 @@ func TestCAOTFilesystemRemoveDirAllMatchesInterpreter(t *testing.T) {
 }
 
 func TestCAOTFilesystemNULPathsMatchInterpreter(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("C AOT filesystem differential test requires linux/amd64")
+	if !((runtime.GOOS == "linux" || runtime.GOOS == "windows") && runtime.GOARCH == "amd64") {
+		t.Skip("filesystem AOT differential test requires linux/amd64 or windows/amd64")
 	}
-	source := "fn main() -> Nil {\n" +
-		"    println(fs_read_text(\"bad\\x00path\"))\n" +
-		"    println(fs_read_bytes(\"bad\\x00path\"))\n" +
-		"    println(fs_write_text(\"bad\\x00path\", \"text\"))\n" +
-		"    println(fs_write_bytes(\"bad\\x00path\", string_to_bytes(\"bytes\")))\n" +
-		"}\n"
-	interpreted, diagnostic := runInterpreterCapture(t, source)
+	root := t.TempDir()
+	type paths struct {
+		directory string
+		protected string
+		source    string
+	}
+	makePaths := func(name string) paths {
+		t.Helper()
+		directory := filepath.Join(root, name)
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		protected := filepath.Join(directory, "protected.txt")
+		source := filepath.Join(directory, "source.txt")
+		for path, content := range map[string]string{protected: "protected", source: "source"} {
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return paths{directory: directory, protected: protected, source: source}
+	}
+	program := func(p paths) string {
+		badFile := strconv.Quote(p.protected + "\x00suffix")
+		badDir := strconv.Quote(p.directory + "\x00suffix")
+		return "fn main() -> Nil {\n" +
+			"    println(fs_read_text(" + badFile + "))\n" +
+			"    println(fs_read_bytes(" + badFile + "))\n" +
+			"    println(fs_write_text(" + badFile + ", \"text\"))\n" +
+			"    println(fs_write_bytes(" + badFile + ", string_to_bytes(\"bytes\")))\n" +
+			"    println(fs_read_dir(" + badDir + "))\n" +
+			"    println(fs_create_dir(" + badDir + "))\n" +
+			"    println(fs_create_dir_all(" + badDir + "))\n" +
+			"    println(fs_remove_file(" + badFile + "))\n" +
+			"    println(fs_remove_dir_all(" + badDir + "))\n" +
+			"    println(fs_copy_file(" + strconv.Quote(p.source) + ", " + badFile + "))\n" +
+			"    println(fs_move_file(" + strconv.Quote(p.source) + ", " + badFile + "))\n" +
+			"    println(fs_is_file(" + badFile + "))\n" +
+			"    println(fs_is_dir(" + badDir + "))\n" +
+			"    println(fs_file_size(" + badFile + "))\n" +
+			"    println(fs_file_modified_time(" + badFile + "))\n" +
+			"}\n"
+	}
+	interpreterPaths := makePaths("interpreter")
+	interpreterSource := program(interpreterPaths)
+	interpreted, diagnostic := runInterpreterCapture(t, interpreterSource)
 	if diagnostic != nil {
 		t.Fatalf("interpreter failed: %s", diagnostic.Message)
 	}
-	native, status, err := buildAndRunLinuxELF(t, source)
+	nativePaths := makePaths("native")
+	nativeSource := program(nativePaths)
+	native, status, err := buildAndRunFilesystemNative(t, nativeSource)
 	if err != nil {
 		t.Fatalf("C AOT build failed: %v", err)
 	}
 	if status != 0 || native != interpreted {
 		t.Fatalf("NUL path results differ:\ninterpreter (%d): %q\nC AOT (%d): %q", 0, interpreted, status, native)
+	}
+	for _, paths := range []paths{interpreterPaths, nativePaths} {
+		for path, expected := range map[string]string{paths.protected: "protected", paths.source: "source"} {
+			if content, err := os.ReadFile(path); err != nil || string(content) != expected {
+				t.Errorf("NUL path operation changed %q: contents=%q err=%v", path, content, err)
+			}
+		}
 	}
 }
 
