@@ -6,7 +6,7 @@ The separate `discord-self` package exposes the user-token API under the distinc
 
 ## User-account client (`discord-self`)
 
-Install it alongside the regular client with `kry add discord-self ^1.1.0`; it depends on `discord ^2.3.0`. Import both `discord` and `discord-self` when an application needs both APIs. The modules have separate package paths. `discord-self` exposes `fetch_user`, `fetch_guild`, `fetch_guild_member`, `list_guild_members`, `search_guild_members`, `fetch_channel`, `fetch_message`, `send_files`, message send/edit/delete, DM creation, plus Gateway presence and voice-state updates.
+Install it alongside the regular client with `kry add discord-self ^1.2.0`; it depends on `discord ^2.3.0`. Import both `discord` and `discord-self` when an application needs both APIs. The modules have separate package paths. `discord-self` exposes `fetch_user`, `fetch_guild`, `fetch_guilds(with_counts)`, `fetch_guild_member`, `list_guild_members`, `search_guild_members`, `fetch_channel`, `fetch_message`, `send_files`, message send/edit/delete, DM creation, plus Gateway presence and voice-state updates. `fetch_guilds()` includes approximate counts by default; pass `false` to omit them. `guilds()` remains an alias that omits counts.
 
 Register `discord_self.on_event` before `client.run()`. Its callback receives an object containing the Gateway event `name` and `data`. Inside that callback, the package-level `set_presence_json(...)` and `set_voice_state(...)` functions send opcode 3 and 4 updates through the active session. `leave_voice(guild_id)` sends a null channel ID. `rpc_activity_json(name, activity_type, state, details)` builds a basic activity; pass complete activity objects through `set_presence_json` when richer fields are needed.
 
