@@ -90,6 +90,74 @@ func TestCAOTFilesystemReadDirOrderingMatchesInterpreter(t *testing.T) {
 	}
 }
 
+func TestCAOTFilesystemCopyFileMatchesInterpreter(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("C AOT filesystem differential test requires linux/amd64")
+	}
+	root := t.TempDir()
+	program := func(selfPath, sourcePath, nestedPath, linkPath, targetPath string) string {
+		return "fn main() -> Nil {\n" +
+			"    println(fs_copy_file(" + strconv.Quote(selfPath) + ", " + strconv.Quote(selfPath) + "))\n" +
+			"    println(fs_read_text(" + strconv.Quote(selfPath) + "))\n" +
+			"    println(fs_copy_file(" + strconv.Quote(sourcePath) + ", " + strconv.Quote(nestedPath) + "))\n" +
+			"    println(fs_read_text(" + strconv.Quote(nestedPath) + "))\n" +
+			"    println(fs_copy_file(" + strconv.Quote(sourcePath) + ", " + strconv.Quote(linkPath) + "))\n" +
+			"    println(fs_read_text(" + strconv.Quote(targetPath) + "))\n" +
+			"    println(fs_copy_file(\"bad\\x00source\", \"destination\"))\n" +
+			"    println(fs_copy_file(" + strconv.Quote(sourcePath) + ", \"bad\\x00destination\"))\n" +
+			"}\n"
+	}
+	paths := func(name string) [5]string {
+		dir := filepath.Join(root, name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		selfPath := filepath.Join(dir, "self.txt")
+		sourcePath := filepath.Join(dir, "source.txt")
+		nestedPath := filepath.Join(dir, "new", "nested", "copy.txt")
+		targetPath := filepath.Join(dir, "target.txt")
+		linkPath := filepath.Join(dir, "destination-link")
+		for path, content := range map[string]string{selfPath: "self remains intact", sourcePath: "new source content", targetPath: "target remains intact"} {
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(targetPath, linkPath); err != nil {
+			t.Fatal(err)
+		}
+		return [5]string{selfPath, sourcePath, nestedPath, linkPath, targetPath}
+	}
+	interpreterPaths := paths("interpreter")
+	interpreted, diagnostic := runInterpreterCapture(t, program(interpreterPaths[0], interpreterPaths[1], interpreterPaths[2], interpreterPaths[3], interpreterPaths[4]))
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
+	}
+	nativePaths := paths("native")
+	native, status, err := buildAndRunLinuxELF(t, program(nativePaths[0], nativePaths[1], nativePaths[2], nativePaths[3], nativePaths[4]))
+	if err != nil {
+		t.Fatalf("C AOT build failed: %v", err)
+	}
+	if status != 0 || native != interpreted {
+		t.Fatalf("fs_copy_file results differ:\ninterpreter (%d): %q\nC AOT (%d): %q", 0, interpreted, status, native)
+	}
+	for _, path := range []string{interpreterPaths[0], nativePaths[0]} {
+		if got, err := os.ReadFile(path); err != nil || string(got) != "self remains intact" {
+			t.Errorf("self-copy changed %q: contents=%q err=%v", path, got, err)
+		}
+	}
+	for i, paths := range [][5]string{interpreterPaths, nativePaths} {
+		if got, err := os.ReadFile(paths[2]); err != nil || string(got) != "new source content" {
+			t.Errorf("nested copy %d is incorrect: contents=%q err=%v", i, got, err)
+		}
+		if got, err := os.ReadFile(paths[4]); err != nil || string(got) != "target remains intact" {
+			t.Errorf("symlink target %d was modified: contents=%q err=%v", i, got, err)
+		}
+		if info, err := os.Lstat(paths[3]); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("destination symlink %d was replaced: info=%v err=%v", i, info, err)
+		}
+	}
+}
+
 func TestCAOTFilesystemRemoveDirAllMatchesInterpreter(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("C AOT filesystem differential test requires linux/amd64")

@@ -1538,6 +1538,40 @@ static int k_fs_remove_entry(const char *path, int is_dir) {
     return remove(path);
 }
 #endif
+static char *k_fs_temp_path(const char *destination) {
+    size_t parent_len=0;
+    for (size_t i=0;destination[i];i++) {
+#ifdef _WIN32
+        if (destination[i]=='/' || destination[i]=='\\') parent_len=i+1;
+#else
+        if (destination[i]=='/') parent_len=i+1;
+#endif
+    }
+    size_t prefix_len=parent_len ? 0 : 2;
+    const char *name=".kryndel-copy-XXXXXX";
+    size_t name_len=strlen(name);
+    char *path=(char*)kalloc(parent_len+prefix_len+name_len+1);
+    if (parent_len) memcpy(path,destination,parent_len);
+    else {
+        path[0]='.';
+#ifdef _WIN32
+        path[1]='\\';
+#else
+        path[1]='/';
+#endif
+    }
+    memcpy(path+parent_len+prefix_len,name,name_len+1);
+    return path;
+}
+static int k_fs_replace_file(const char *source, const char *destination) {
+#ifdef _WIN32
+    if (MoveFileExA(source,destination,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)) return 0;
+    k_fs_set_errno(GetLastError());
+    return -1;
+#else
+    return rename(source,destination);
+#endif
+}
 static int k_fs_dir_entry_compare(const void *left, const void *right) {
     const KValue *a=(const KValue*)left, *b=(const KValue*)right;
     return strcmp(a->u.s.data,b->u.s.data);
@@ -1649,12 +1683,70 @@ static KValue k_fs_remove_dir_all(KValue path) {
     return kv_res(1, kv_nil());
 }
 static KValue k_fs_copy_file(KValue src, KValue dst) {
+    if (k_fs_path_has_nul(src) || k_fs_path_has_nul(dst)) return kv_res(0,kv_cstr("path contains NUL"));
     char *s=k_cpath(src), *d=k_cpath(dst);
-    FILE *in=fopen(s,"rb"); if (!in) return kv_res(0, kv_cstr("cannot open source file"));
-    FILE *out=fopen(d,"wb"); if (!out) { fclose(in); return kv_res(0, kv_cstr("cannot open destination file")); }
-    char buf[8192]; size_t got;
-    while ((got=fread(buf,1,sizeof(buf),in))>0) fwrite(buf,1,got,out);
-    fclose(in); fclose(out);
+    FILE *in=fopen(s,"rb");
+    if (!in) return kv_res(0,k_fs_path_error("open",src));
+    KValue parent=k_fs_parent_dir(dst);
+    if (!parent.u.res.ok) { fclose(in); return parent; }
+    struct stat st;
+    int is_link=0, is_dir=0;
+    if (k_fs_lstat(d,&st,&is_link,&is_dir)==0 && is_link) {
+        fclose(in);
+        return kv_res(0,kv_cstr("path denied by sandbox"));
+    }
+    char *temporary=k_fs_temp_path(d);
+#ifdef _WIN32
+    if (_mktemp_s(temporary,strlen(temporary)+1)!=0) {
+        int error=errno ? errno : EIO;
+        fclose(in); errno=error;
+        return kv_res(0,k_fs_path_error("create",dst));
+    }
+    int fd=_open(temporary,_O_CREAT|_O_EXCL|_O_BINARY|_O_WRONLY,_S_IREAD|_S_IWRITE);
+#else
+    int fd=mkstemp(temporary);
+#endif
+    if (fd<0) {
+        int error=errno;
+        fclose(in); errno=error;
+        return kv_res(0,k_fs_path_error("create",dst));
+    }
+#ifdef _WIN32
+    FILE *out=_fdopen(fd,"wb");
+#else
+    FILE *out=fdopen(fd,"wb");
+#endif
+    if (!out) {
+        int error=errno ? errno : EIO;
+        close(fd); remove(temporary); fclose(in); errno=error;
+        return kv_res(0,k_fs_path_error("open",dst));
+    }
+    char buf[8192]; size_t got; int copy_error=0;
+    while ((got=fread(buf,1,sizeof(buf),in))>0) {
+        if (fwrite(buf,1,got,out)!=got) { copy_error=errno ? errno : EIO; break; }
+    }
+    if (!copy_error && ferror(in)) copy_error=errno ? errno : EIO;
+    if (!copy_error && fflush(out)!=0) copy_error=errno ? errno : EIO;
+#ifdef _WIN32
+    if (!copy_error && _commit(_fileno(out))!=0) copy_error=errno ? errno : EIO;
+#else
+    if (!copy_error && fsync(fileno(out))!=0) copy_error=errno ? errno : EIO;
+#endif
+    if (fclose(in)!=0 && !copy_error) copy_error=errno ? errno : EIO;
+    if (fclose(out)!=0 && !copy_error) copy_error=errno ? errno : EIO;
+    if (copy_error) {
+        remove(temporary); errno=copy_error;
+        return kv_res(0,k_fs_path_error("write",dst));
+    }
+    if (k_fs_lstat(d,&st,&is_link,&is_dir)==0 && is_link) {
+        remove(temporary);
+        return kv_res(0,kv_cstr("path denied by sandbox"));
+    }
+    if (k_fs_replace_file(temporary,d)!=0) {
+        int error=errno;
+        remove(temporary); errno=error;
+        return kv_res(0,k_fs_path_error("rename",dst));
+    }
     return kv_res(1, kv_nil());
 }
 static KValue k_fs_move_file(KValue src, KValue dst) {
