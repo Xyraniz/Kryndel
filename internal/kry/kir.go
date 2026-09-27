@@ -523,9 +523,6 @@ func DecodeKIR(data []byte, lim Limits) (*KIRDocument, error) {
 	if lim.MaxArtifactBytes > 0 && len(data) > lim.MaxArtifactBytes {
 		return nil, fmt.Errorf("KIR document exceeds configured input limit")
 	}
-	if lim.MaxJSONBytes > 0 && len(data) > lim.MaxJSONBytes {
-		return nil, fmt.Errorf("KIR document exceeds configured JSON limit")
-	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var d KIRDocument

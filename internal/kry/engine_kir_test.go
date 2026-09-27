@@ -2,6 +2,7 @@ package kry
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -296,5 +297,130 @@ println(5 / zero)
 	}
 	if strings.Count(output, "before") != 1 {
 		t.Fatalf("runtime diagnostic caused an AST retry: duplicate output %q", output)
+	}
+}
+
+func TestEngineRunsGenericKIRForSourceAndKexe(t *testing.T) {
+	directory := t.TempDir()
+	successSource := filepath.Join(directory, "generic-success.kry")
+	successArtifact := filepath.Join(directory, "generic-success.kexe")
+	errorSource := filepath.Join(directory, "generic-error.kry")
+	errorArtifact := filepath.Join(directory, "generic-error.kexe")
+	success := `struct Box[T: Copy] { value: T }
+impl Box[T] {
+    fn get() -> T { return self.value }
+    fn map[U: Copy](callback: fn(T) -> U) -> Box[U] {
+        return Box[U]{value: callback(self.value)}
+    }
+}
+
+fn make_box[T: Copy](value: T) -> Box[T] { return Box[T]{value: value} }
+fn value_or[T: Copy](value: Option[T], fallback: T) -> T {
+    match value {
+        some(item) => { return item }
+        none => { return fallback }
+    }
+}
+
+fn main() -> Nil {
+    let boxed: Box[Int] = make_box(13)
+    println(boxed.get())
+    let mapped: Box[String] = boxed.map(fn(value: Int) -> String { return "value=" + str(value) })
+    println(mapped.value)
+    println(value_or(some(17), 0))
+    return nil
+}
+`
+	failure := `fn identity[T: Copy](value: T) -> T { return value }
+fn force_generic_error[T: Copy](value: T) -> Int {
+    let zero: Int = 0
+    return 9 / zero
+}
+fn main() -> Nil {
+    print("before:")
+    println(force_generic_error(2))
+    return nil
+}
+`
+	for path, source := range map[string]string{successSource: success, errorSource: failure} {
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := NewEngine()
+	for source, artifact := range map[string]string{successSource: successArtifact, errorSource: errorArtifact} {
+		if diagnostic := engine.BuildPath(source, artifact); diagnostic != nil {
+			t.Fatalf("build %s: %s", source, diagnostic.Message)
+		}
+	}
+	for _, scenario := range []struct {
+		name, source, artifact, wantOutput, wantMessage string
+	}{
+		{name: "generic struct and methods", source: successSource, artifact: successArtifact, wantOutput: "13\nvalue=13\n17\n"},
+		{name: "generic runtime error", source: errorSource, artifact: errorArtifact, wantOutput: "before:", wantMessage: "division by zero"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			for _, path := range []string{scenario.source, scenario.artifact} {
+				t.Run(filepath.Ext(path), func(t *testing.T) {
+					wantOutput, wantDiagnostic := runASTPath(t, engine, path, nil)
+					gotOutput, gotDiagnostic := captureEngineRun(t, func() *Diagnostic {
+						_, diagnostic := engine.RunPath(path)
+						return diagnostic
+					})
+					if gotOutput != wantOutput || !reflect.DeepEqual(gotDiagnostic, wantDiagnostic) {
+						t.Fatalf("Engine KIR result = output %q, diagnostic %#v; AST result = output %q, diagnostic %#v", gotOutput, gotDiagnostic, wantOutput, wantDiagnostic)
+					}
+					if gotOutput != scenario.wantOutput {
+						t.Fatalf("output = %q, want %q", gotOutput, scenario.wantOutput)
+					}
+					if scenario.wantMessage == "" && gotDiagnostic != nil {
+						t.Fatalf("diagnostic = %#v, want none", gotDiagnostic)
+					}
+					if scenario.wantMessage != "" && (gotDiagnostic == nil || gotDiagnostic.Message != scenario.wantMessage) {
+						t.Fatalf("diagnostic = %#v, want %q", gotDiagnostic, scenario.wantMessage)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestEngineRunsStaticTraitKIRForSourceAndKexe(t *testing.T) {
+	directory := t.TempDir()
+	tests := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{name: "two concrete receivers", source: traitDispatchFixture, want: "north:one\nsouth:two\nnorth:one\nsouth:two\n"},
+		{name: "generic struct receivers", source: traitGenericInstantiationFixture, want: "int:7\nstring:ok\n"},
+	}
+	engine := NewEngine()
+	for index, test := range tests {
+		sourcePath := filepath.Join(directory, fmt.Sprintf("trait-%d.kry", index))
+		artifactPath := filepath.Join(directory, fmt.Sprintf("trait-%d.kexe", index))
+		if err := os.WriteFile(sourcePath, []byte(test.source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if diagnostic := engine.BuildPath(sourcePath, artifactPath); diagnostic != nil {
+			t.Fatalf("build %s: %s", test.name, diagnostic.Message)
+		}
+		t.Run(test.name, func(t *testing.T) {
+			for _, path := range []string{sourcePath, artifactPath} {
+				t.Run(filepath.Ext(path), func(t *testing.T) {
+					wantOutput, wantDiagnostic := runASTPath(t, engine, path, nil)
+					gotOutput, gotDiagnostic := captureEngineRun(t, func() *Diagnostic {
+						_, diagnostic := engine.RunPath(path)
+						return diagnostic
+					})
+					if gotOutput != wantOutput || !reflect.DeepEqual(gotDiagnostic, wantDiagnostic) {
+						t.Fatalf("Engine trait KIR result = output %q, diagnostic %#v; AST result = output %q, diagnostic %#v", gotOutput, gotDiagnostic, wantOutput, wantDiagnostic)
+					}
+					if gotOutput != test.want || gotDiagnostic != nil {
+						t.Fatalf("unexpected trait KIR result: output %q, diagnostic %#v; want %q", gotOutput, gotDiagnostic, test.want)
+					}
+				})
+			}
+		})
 	}
 }

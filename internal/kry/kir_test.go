@@ -352,10 +352,10 @@ func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 			},
 		},
 		{
-			name: "JSON byte limit",
-			want: "configured JSON limit",
+			name: "artifact byte limit",
+			want: "configured input limit",
 			limits: func(limits *Limits, encoded []byte) {
-				limits.MaxJSONBytes = len(encoded) - 1
+				limits.MaxArtifactBytes = len(encoded) - 1
 			},
 		},
 	}

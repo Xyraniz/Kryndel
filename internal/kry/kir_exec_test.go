@@ -83,6 +83,119 @@ if index == 3 && true {
 	}
 }
 
+func TestKIRExecutorMatchesRuntimeForGenericFunctionValues(t *testing.T) {
+	source := `
+fn identity[T: Copy](value: T) -> T { return value }
+fn relay[U: Copy](value: U) -> U { return identity(value) }
+println(relay(42))
+println(relay("generic"))
+`
+	_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	if want := "42\ngeneric\n"; string(result.Output) != want {
+		t.Fatalf("output = %q, want %q", result.Output, want)
+	}
+}
+
+func TestKIRExecutorMatchesRuntimeForGenericStructsAndMethods(t *testing.T) {
+	source := `
+struct Box[T: Copy] { value: T }
+impl Box[T] {
+    fn get() -> T { return self.value }
+    fn map[U: Copy](callback: fn(T) -> U) -> Box[U] {
+        return Box[U]{value: callback(self.value)}
+    }
+}
+fn make_box[T: Copy](value: T) -> Box[T] { return Box[T]{value: value} }
+fn value_or[T: Copy](value: Option[T], fallback: T) -> T {
+    match value {
+        some(item) => { return item }
+        none => { return fallback }
+    }
+}
+let boxed: Box[Int] = make_box(13)
+println(boxed.get())
+let mapped: Box[String] = boxed.map(fn(value: Int) -> String { return "value=" + str(value) })
+println(mapped.value)
+println(value_or(some(17), 0))
+`
+	_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	if want := "13\nvalue=13\n17\n"; string(result.Output) != want {
+		t.Fatalf("output = %q, want %q", result.Output, want)
+	}
+}
+
+func TestKIRExecutorMatchesRuntimeForStaticTraitDispatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{name: "two concrete receivers through a generic bound", source: traitDispatchFixture, want: "north:one\nsouth:two\nnorth:one\nsouth:two\n"},
+		{name: "generic struct implementations", source: traitGenericInstantiationFixture, want: "int:7\nstring:ok\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, test.source, DefaultLimits())
+			if diagnostic != nil {
+				t.Fatal(diagnostic)
+			}
+			if got := string(result.Output); got != test.want {
+				t.Fatalf("trait dispatch output = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestKIRDecodeUsesArtifactLimitWhileJSONBuiltinUsesPayloadLimit(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxJSONBytes = 2
+	source := `let parsed: Result[Json, String] = json_parse("{}")
+match parsed {
+    ok(value) => { println(json_stringify(value)) }
+    err(problem) => { println(problem) }
+}
+`
+	program, diagnostic := Parse(&Source{Name: "json-payload-limit.kry", Text: source}, limits)
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	checker, diagnostic := Check(program, limits)
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kirBytes) <= limits.MaxJSONBytes {
+		t.Fatalf("fixture KIR size %d must exceed JSON payload limit %d", len(kirBytes), limits.MaxJSONBytes)
+	}
+	document, err := DecodeKIR(kirBytes, limits)
+	if err != nil {
+		t.Fatalf("DecodeKIR applied JSON payload limit to KIR document: %v", err)
+	}
+	result, err := executeKIRSubset(document, limits, kirSourceMap(program))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Diagnostic != nil || string(result.Output) != "{}\n" {
+		t.Fatalf("KIR JSON payload result = output %q, diagnostic %#v", result.Output, result.Diagnostic)
+	}
+
+	tooSmall := limits
+	tooSmall.MaxJSONBytes = 1
+	_, _, rejected, runtimeDiagnostic := compareKIRExecutionWithRuntime(t, source, tooSmall)
+	if runtimeDiagnostic != nil || rejected.Diagnostic != nil || string(rejected.Output) != "JSON input exceeds configured limit\n" {
+		t.Fatalf("over-limit JSON payload result = output %q, diagnostic %#v", rejected.Output, rejected.Diagnostic)
+	}
+}
+
 func TestKIRExecutorMatchesRuntimeForIterationAndDeferredBlocks(t *testing.T) {
 	tests := []struct {
 		name       string
