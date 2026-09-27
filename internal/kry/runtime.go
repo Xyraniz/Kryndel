@@ -839,6 +839,9 @@ type Runtime struct {
 	discordCache      *discordObjectCache
 	discordAPIBaseURL string
 	discordGateway    *discordGatewayState
+	debugger          *Debugger
+	debugFrames       []StackFrame
+	debugAbort        *Diagnostic
 }
 
 type runtimeResource struct {
@@ -986,12 +989,24 @@ func returned(v Value) EvalResult         { return EvalResult{Code: evalReturn, 
 func control(c EvalCode) EvalResult       { return EvalResult{Code: c, Value: nilVal()} }
 func (r *Runtime) takePropagated() *Value { p := r.propagated; r.propagated = nil; return p }
 func (r *Runtime) run() (result *Diagnostic) {
-	defer func() { result = r.cleanup(result); r.Ctx.Cancel() }()
+	defer func() {
+		result = r.cleanup(result)
+		r.Ctx.Cancel()
+		if r.debugAbort != nil {
+			result = nil
+		}
+	}()
 	for _, s := range r.Prog.Statements {
+		if r.debugger != nil && !r.debugStatement(r.Global, s) {
+			return nil
+		}
 		if d := r.Ctx.step(s.Tok.Source, s.Tok.Line, s.Tok.Column); d != nil {
 			return d
 		}
 		x := r.execStmt(r.Global, s)
+		if r.debugAbort != nil && x.Diag == r.debugAbort {
+			return nil
+		}
 		if d := r.Ctx.contextFailure(s.Tok.Source, s.Tok.Line, s.Tok.Column); d != nil {
 			return d
 		}
@@ -1006,6 +1021,9 @@ func (r *Runtime) run() (result *Diagnostic) {
 	// the block-scoped defer semantics used inside functions.
 	for i := len(r.Global.Defers) - 1; i >= 0; i-- {
 		if x := r.execBlock(newRunScope(r.Global), r.Global.Defers[i]); x.Diag != nil {
+			if x.Diag == r.debugAbort {
+				return nil
+			}
 			return x.Diag
 		}
 	}
@@ -1013,6 +1031,9 @@ func (r *Runtime) run() (result *Diagnostic) {
 		if f := r.Funcs["main"]; f != nil {
 			v, d := r.evalCall(r.Global, &Expr{Kind: ExCall, Name: "main", Tok: f.Tok})
 			if d != nil {
+				if d == r.debugAbort {
+					return nil
+				}
 				return d
 			}
 			if d := r.Ctx.contextFailure(f.Tok.Source, f.Tok.Line, f.Tok.Column); d != nil {
@@ -1063,6 +1084,10 @@ func (r *Runtime) cleanup(prior *Diagnostic) *Diagnostic {
 func (r *Runtime) execBlock(sc *RunScope, body []*Stmt) (out EvalResult) {
 	out = normal()
 	for _, s := range body {
+		if r.debugger != nil && !r.debugStatement(sc, s) {
+			out = EvalResult{Code: evalError, Diag: r.debugAbort}
+			break
+		}
 		if d := r.Ctx.step(s.Tok.Source, s.Tok.Line, s.Tok.Column); d != nil {
 			out = EvalResult{Code: evalError, Diag: d}
 			break
@@ -1148,7 +1173,12 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 		}
 		return r.execBlock(newRunScope(sc), s.Else)
 	case StWhile:
+		firstCondition := true
 		for {
+			if !firstCondition && r.debugger != nil && !r.debugStatement(sc, s) {
+				return EvalResult{Code: evalError, Diag: r.debugAbort}
+			}
+			firstCondition = false
 			if d := r.Ctx.step(s.Tok.Source, s.Tok.Line, s.Tok.Column); d != nil {
 				return EvalResult{Code: evalError, Diag: d}
 			}
@@ -1205,10 +1235,13 @@ func (r *Runtime) execStmt(sc *RunScope, s *Stmt) EvalResult {
 		default:
 			return EvalResult{Code: evalError, Diag: r.fail(s.Iter, "for expects Array, Set, String, or Bytes")}
 		}
-		for _, item := range items {
+		for index, item := range items {
 			is := newRunScope(sc)
 			if err := is.define(s.Name, cloneValue(item), false); err != nil {
 				return EvalResult{Code: evalError, Diag: r.fail(s.Iter, "%s", err.Error())}
+			}
+			if index > 0 && r.debugger != nil && !r.debugStatement(is, s) {
+				return EvalResult{Code: evalError, Diag: r.debugAbort}
 			}
 			x := r.execBlock(is, s.Body)
 			if x.Diag != nil || x.Code == evalReturn {
@@ -1845,7 +1878,23 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 }
 
 func (r *Runtime) invokeFunction(e *Expr, f *Function, receiver *Value, args []Value) (Value, *Diagnostic) {
+	debugFrameIndex := -1
+	if r.debugger != nil {
+		debugFrameIndex = len(r.debugFrames)
+		frame := StackFrame{Function: f.Name, Source: "<input>", Line: 1, Column: 1}
+		if e != nil {
+			frame.Line, frame.Column = e.Tok.Line, e.Tok.Column
+			if e.Tok.Source != nil {
+				frame.Source = e.Tok.Source.Name
+			}
+		}
+		r.debugFrames = append(r.debugFrames, frame)
+		defer func() { r.debugFrames = r.debugFrames[:debugFrameIndex] }()
+	}
 	for {
+		if debugFrameIndex >= 0 {
+			r.debugFrames[debugFrameIndex].Function = f.Name
+		}
 		child := newRunScope(r.Global)
 		if receiver != nil {
 			_ = child.define("self", *receiver, false)
@@ -1858,6 +1907,9 @@ func (r *Runtime) invokeFunction(e *Expr, f *Function, receiver *Value, args []V
 		x := r.execBlock(child, f.Body)
 		r.Ctx.Calls--
 		if x.Diag != nil {
+			if x.Diag == r.debugAbort {
+				return nilVal(), x.Diag
+			}
 			frame := StackFrame{Function: f.Name, Source: "<input>", Line: 1, Column: 1}
 			if e != nil {
 				frame.Line, frame.Column = e.Tok.Line, e.Tok.Column

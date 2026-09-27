@@ -175,6 +175,18 @@ func run(args []string) (status int) {
 		}
 		_, d := e.RunPathWithArgs(rest[0], rest[1:])
 		return report(d, jsonMode)
+	case "debug":
+		if jsonMode {
+			return usage("debug is interactive and cannot be combined with --json")
+		}
+		if len(rest) < 1 {
+			return usage("debug expects a source or artifact path")
+		}
+		if err := maybePromptPassphrase(e, rest[0]); err != nil {
+			fmt.Fprintln(os.Stderr, "kry:", err)
+			return 2
+		}
+		return debugCmd(e, rest, os.Stdin, os.Stdout, os.Stderr)
 	case "build":
 		return buildCmd(e, rest, jsonMode)
 	case "emit":
@@ -990,11 +1002,12 @@ func printHelp() {
 	fmt.Println("Kryndel " + version + " — self-contained language toolchain")
 	fmt.Println("usage: kry [global-options] command [arguments]")
 	fmt.Println("       kry [global-options] FILE.kry|FILE.kexe")
-	fmt.Println("commands: help, check, run, build, emit, inspect, capabilities, fmt, lsp, repl, doctor, version")
+	fmt.Println("commands: help, check, run, debug, build, emit, inspect, capabilities, fmt, lsp, repl, doctor, version")
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
 	fmt.Println("build formats: kexe, exe/pe (C AOT by default; --no-external-toolchain selects direct PE for Windows x64); elf (C AOT); elf-direct (Linux subset); pe-direct (Windows x64 subset, supports --gui); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --gui, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
 	fmt.Println("check options: -Werror, -Werror=KRYW002,KRYW004, -Wno=KRYW003")
+	fmt.Println("debug commands: break FILE:LINE, breakpoints, clear ID|all, locals, print NAME, stack, continue, step, next, finish, quit")
 	fmt.Println("global options: --help, --version, --json, --cpuprofile PATH (check/run), --restricted ROOT (deny unconfined host APIs), --max-source BYTES, --max-artifact BYTES, --max-json BYTES, --max-instructions N, --max-wall-ms N (0 disables the wall-time limit)")
 	fmt.Println("sealed artifacts: --passphrase VALUE, --passphrase-file PATH (AES-256-GCM + PBKDF2-SHA256)")
 }

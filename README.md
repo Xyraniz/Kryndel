@@ -31,6 +31,7 @@ The direct file form is useful for desktop integrations. On Windows, the release
 | --- | --- |
 | `kry check FILE` | Parses, resolves, and type-checks a source file or artifact without running user code. |
 | `kry run FILE` | Checks and runs a `.kry` source file or `.kexe` artifact. |
+| `kry debug FILE` | Runs in the interpreter with source breakpoints, stepping, a call stack, and visible variables. |
 | `kry FILE.kry` | Runs a source file directly. This is the form used by file associations and double-click. |
 | `kry build FILE` | Creates a deterministic `KRYNATIVE5` bundle. Native PE and ELF output is available for supported targets. |
 | `kry build FILE --format=exe --target=windows-x64 --no-external-toolchain` | Builds a C-free Windows PE32+ executable for the direct PE subset. |
@@ -44,6 +45,8 @@ The direct file form is useful for desktop integrations. On Windows, the release
 | `kry test` | Runs the project entrypoint, defaulting to `main.kry`. |
 
 Use `kry --help` for global limits, JSON diagnostics, restricted execution, emit options, registry commands, and package commands. `--restricted ROOT` confines Kryndel-managed filesystem access and denies unmediated host capabilities; it is not an operating system sandbox. See [system integration](docs/system.md#system-integration-guide).
+
+See [debugger commands](docs/debugger.md) for interactive breakpoints, stepping, stack, and variable inspection.
 
 Start a project and run its generated entry point:
 

@@ -79,6 +79,25 @@ func (e *Engine) RunPathWithArgs(path string, args []string) (string, *Diagnosti
 	}
 	return "", nil
 }
+
+// DebugPathWithArgs runs a checked source or artifact through the interpreter
+// and pauses at locations selected by debugger.ShouldPause.
+func (e *Engine) DebugPathWithArgs(path string, args []string, debugger Debugger) *Diagnostic {
+	if debugger.ShouldPause == nil || debugger.OnPause == nil {
+		return Diag(CatCLI, nil, 1, 1, "debugger requires pause and resume handlers")
+	}
+	p, c, d := e.CheckPath(path)
+	if d != nil {
+		return d
+	}
+	sandbox := Sandbox{Root: e.RestrictedRoot, Restricted: e.RestrictedRoot != ""}
+	r, d := NewRuntimeWithArgs(p, c, e.Limits, sandbox, args)
+	if d != nil {
+		return d
+	}
+	r.debugger = &debugger
+	return r.run()
+}
 func (e *Engine) BuildPath(path, out string) *Diagnostic {
 	p, _, d := e.CheckPath(path)
 	if d != nil {
