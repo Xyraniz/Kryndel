@@ -206,6 +206,17 @@ fn main() -> Nil {
 }`,
 		},
 		{
+			name: "constrained_generic_arithmetic",
+			source: `fn add[T: Numeric](a: T, b: T) -> T { return a + b }
+fn remainder[T: Integer](a: T, b: T) -> T { return a % b }
+fn main() -> Nil {
+    println(str(add(2, 3)))
+    println(str(add(1.25, 2.5)))
+    println(str(remainder(-7, 3)))
+    return nil
+}`,
+		},
+		{
 			name: "unicode_substring_bytes",
 			source: `fn main() -> Nil {
     let text: String = "aé🙂z"
