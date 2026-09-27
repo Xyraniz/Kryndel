@@ -875,10 +875,27 @@ static KValue k_iter_items(KValue v) {
 }
 
 /* ---- host builtins: filesystem and environment ------------------------- */
+static KValue k_fs_create_dir_all(KValue path);
+static KValue k_fs_parent_dir(KValue path);
+static int k_fs_path_has_nul(KValue path) {
+    return memchr(path.u.s.data,0,path.u.s.len)!=NULL;
+}
+static KValue k_fs_path_error(const char *op, KValue path) {
+    int code=errno;
+    const char *reason=strerror(code);
+    size_t op_len=strlen(op), reason_len=strlen(reason);
+    size_t cap=op_len+path.u.s.len+reason_len+4;
+    char *message=(char*)kalloc(cap);
+    snprintf(message,cap,"%s %.*s: %s",op,(int)path.u.s.len,path.u.s.data,reason);
+    size_t reason_offset=op_len+path.u.s.len+3;
+    if (message[reason_offset]>='A' && message[reason_offset]<='Z') message[reason_offset]=(char)(message[reason_offset]-'A'+'a');
+    return kv_cstr(message);
+}
 static KValue k_fs_read_text(KValue path) {
+    if (k_fs_path_has_nul(path)) return kv_res(0,kv_cstr("path contains NUL"));
     char *p=(char*)kalloc(path.u.s.len+1); memcpy(p,path.u.s.data,path.u.s.len); p[path.u.s.len]=0;
     FILE *f=fopen(p,"rb");
-    if (!f) return kv_res(0,kv_cstr("cannot open file"));
+    if (!f) return kv_res(0,k_fs_path_error("open",path));
     fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
     if (n<0) { fclose(f); return kv_res(0,kv_cstr("cannot read file")); }
     char *buf=(char*)kalloc((size_t)n+1);
@@ -888,16 +905,21 @@ static KValue k_fs_read_text(KValue path) {
     return kv_res(1,kv_strn(buf,got));
 }
 static KValue k_fs_write_text(KValue path, KValue text) {
+    if (k_fs_path_has_nul(path)) return kv_res(0,kv_cstr("path contains NUL"));
+    if (!k_utf8_valid(text.u.s.data,text.u.s.len)) return kv_res(0,kv_cstr("invalid UTF-8"));
     char *p=(char*)kalloc(path.u.s.len+1); memcpy(p,path.u.s.data,path.u.s.len); p[path.u.s.len]=0;
+    KValue parent=k_fs_parent_dir(path);
+    if (parent.tag==K_RESULT && !parent.u.res.ok) return parent;
     FILE *f=fopen(p,"wb");
     if (!f) return kv_res(0,kv_cstr("cannot open file for writing"));
     fwrite(text.u.s.data,1,text.u.s.len,f); fclose(f);
     return kv_res(1,kv_nil());
 }
 static KValue k_fs_read_bytes(KValue path) {
+    if (k_fs_path_has_nul(path)) return kv_res(0,kv_cstr("path contains NUL"));
     char *p=(char*)kalloc(path.u.s.len+1); memcpy(p,path.u.s.data,path.u.s.len); p[path.u.s.len]=0;
     FILE *f=fopen(p,"rb");
-    if (!f) return kv_res(0,kv_cstr("cannot open file"));
+    if (!f) return kv_res(0,k_fs_path_error("open",path));
     fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
     if (n<0) { fclose(f); return kv_res(0,kv_cstr("cannot read file")); }
     char *buf=(char*)kalloc((size_t)n+1);
@@ -905,17 +927,24 @@ static KValue k_fs_read_bytes(KValue path) {
     return kv_res(1,kv_bytesn(buf,got));
 }
 static KValue k_fs_write_bytes(KValue path, KValue data) {
+    if (k_fs_path_has_nul(path)) return kv_res(0,kv_cstr("path contains NUL"));
     char *p=(char*)kalloc(path.u.s.len+1); memcpy(p,path.u.s.data,path.u.s.len); p[path.u.s.len]=0;
+    KValue parent=k_fs_parent_dir(path);
+    if (parent.tag==K_RESULT && !parent.u.res.ok) return parent;
     FILE *f=fopen(p,"wb");
     if (!f) return kv_res(0,kv_cstr("cannot open file for writing"));
     fwrite(data.u.s.data,1,data.u.s.len,f); fclose(f);
     return kv_res(1,kv_nil());
 }
 static KValue k_fs_exists(KValue path) {
+    if (k_fs_path_has_nul(path)) kfail("path contains NUL");
     char *p=(char*)kalloc(path.u.s.len+1); memcpy(p,path.u.s.data,path.u.s.len); p[path.u.s.len]=0;
-    FILE *f=fopen(p,"rb");
-    if (f) { fclose(f); return kv_bool(1); }
-    return kv_bool(0);
+#ifdef _WIN32
+    return kv_bool(GetFileAttributesA(p)!=INVALID_FILE_ATTRIBUTES);
+#else
+    struct stat st;
+    return kv_bool(lstat(p,&st)==0);
+#endif
 }
 static KValue k_env_get(KValue name) {
     char *p=(char*)kalloc(name.u.s.len+1); memcpy(p,name.u.s.data,name.u.s.len); p[name.u.s.len]=0;
@@ -1478,11 +1507,46 @@ static KValue k_fs_create_dir(KValue path) {
 }
 static KValue k_fs_create_dir_all(KValue path) {
     char *p=k_cpath(path);
-    for (char *q=p+1; *q; q++) {
-        if (*q=='/') { *q=0; k_mkdir(p); *q='/'; }
+    char *start=p+1;
+#ifdef _WIN32
+    if (p[0] && p[1]==':' && (p[2]=='/' || p[2]=='\\')) start=p+3;
+#endif
+    for (char *q=start; *q; q++) {
+#ifdef _WIN32
+        if (*q=='/' || *q=='\\') {
+#else
+        if (*q=='/') {
+#endif
+            char sep=*q; *q=0; if (*p) k_mkdir(p); *q=sep;
+        }
     }
-    if (k_mkdir(p)!=0) { struct stat st; if (stat(p,&st)!=0) return kv_res(0, kv_cstr("cannot create directory")); }
+    if (k_mkdir(p)!=0) {
+        int mkdir_errno=errno; struct stat st;
+        if (stat(p,&st)==0) {
+            if (!S_ISDIR(st.st_mode)) { errno=ENOTDIR; return kv_res(0,kv_cstr("cannot create directory")); }
+        } else { errno=mkdir_errno; return kv_res(0,kv_cstr("cannot create directory")); }
+    }
     return kv_res(1, kv_nil());
+}
+static KValue k_fs_parent_dir(KValue path) {
+    char *p=k_cpath(path), *last=NULL;
+    for (char *q=p; *q; q++) {
+#ifdef _WIN32
+        if (*q=='/' || *q=='\\') last=q;
+#else
+        if (*q=='/') last=q;
+#endif
+    }
+    if (!last) return kv_res(1,kv_nil());
+    if (last==p) last++;
+#ifdef _WIN32
+    else if (last==p+2 && p[1]==':') last++;
+#endif
+    size_t parent_len=(size_t)(last-p);
+    KValue parent=kv_strn(p,parent_len);
+    KValue created=k_fs_create_dir_all(parent);
+    if (!created.u.res.ok) return kv_res(0,k_fs_path_error("mkdir",parent));
+    return created;
 }
 static KValue k_fs_remove_file(KValue path) {
     char *p=k_cpath(path);
