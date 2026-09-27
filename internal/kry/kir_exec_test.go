@@ -83,6 +83,176 @@ if index == 3 && true {
 	}
 }
 
+func TestKIRExecutorMatchesRuntimeForIterationAndDeferredBlocks(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		wantOutput string
+		wantDiag   string
+	}{
+		{
+			name: "for over array with continue and break",
+			source: `let mut total: Int = 0
+for item in [1, 2, 3, 4] {
+    if item == 2 { continue }
+    if item == 4 { break }
+    total = total + item
+}
+println(total)
+`,
+			wantOutput: "4\n",
+		},
+		{
+			name: "for over ordered set",
+			source: `let mut total: Int = 0
+for item in |{3, 1, 2}| { total = total * 10 + item }
+println(total)
+`,
+			wantOutput: "312\n",
+		},
+		{
+			name: "for over unicode string code points",
+			source: `for character in "Aé🙂" { print(character) }
+println("")
+`,
+			wantOutput: "Aé🙂\n",
+		},
+		{
+			name: "for over bytes",
+			source: `let data: Bytes = bytes([65, 66])
+for octet in data { print(octet) }
+println("")
+`,
+			wantOutput: "6566\n",
+		},
+		{
+			name: "while with continue and break",
+			source: `let mut item: Int = 0
+let mut total: Int = 0
+while item < 5 {
+    item = item + 1
+    if item == 2 { continue }
+    if item == 4 { break }
+    total = total + item
+}
+println(total)
+`,
+			wantOutput: "4\n",
+		},
+		{
+			name: "defer runs last-in first-out at block exit",
+			source: `defer { println("first") }
+defer { println("second") }
+println("body")
+`,
+			wantOutput: "body\nsecond\nfirst\n",
+		},
+		{
+			name: "defer runs when a function returns",
+			source: `fn work() -> Nil {
+    defer { println("deferred") }
+    println("body")
+    return nil
+}
+work()
+`,
+			wantOutput: "body\ndeferred\n",
+		},
+		{
+			name: "unsafe block executes with a nested scope",
+			source: `let outside: Int = 41
+unsafe {
+    let inside: Int = outside + 1
+    println(inside)
+}
+`,
+			wantOutput: "42\n",
+		},
+		{
+			name: "deferred diagnostic preserves partial output and location",
+			source: `defer { println(1 / 0) }
+println("body")
+`,
+			wantOutput: "body\n",
+			wantDiag:   "division by zero",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, test.source, DefaultLimits())
+			if string(result.Output) != test.wantOutput {
+				t.Fatalf("KIR output = %q, want %q", result.Output, test.wantOutput)
+			}
+			if test.wantDiag == "" {
+				if diagnostic != nil {
+					t.Fatalf("runtime diagnostic = %#v, want none", diagnostic)
+				}
+				return
+			}
+			if diagnostic == nil || diagnostic.Message != test.wantDiag || result.Diagnostic == nil || !sameDiagnosticStack(result.Diagnostic, diagnostic) {
+				t.Fatalf("KIR diagnostic = %#v, AST diagnostic = %#v", result.Diagnostic, diagnostic)
+			}
+		})
+	}
+}
+
+func TestKIRExecutorRunsImportedAndOverloadedFunctions(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "lib"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "lib", "math.kry"), []byte(`pub fn twice(value: Int) -> Int { return value * 2 }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(root, "main.kry")
+	mainSource := `import "lib/math"
+fn choose(value: Int) -> Int { return value }
+fn choose(value: String) -> Int { return 2 }
+println(twice(choose(21)))
+`
+	if err := os.WriteFile(mainPath, []byte(mainSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	program, diagnostic := LoadProgram(mainPath, DefaultLimits(), "")
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	checker, diagnostic := Check(program, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	astRuntime, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	var astOutput bytes.Buffer
+	astRuntime.output = &astOutput
+	astDiagnostic := astRuntime.run()
+
+	kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := DecodeKIR(kirBytes, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Imports) != 1 || len(document.Sources) != 2 {
+		t.Fatalf("KIR import closure metadata = imports %q, sources %q", document.Imports, document.Sources)
+	}
+	kirResult, err := executeKIRSubset(document, DefaultLimits(), kirSourceMap(program))
+	if err != nil {
+		t.Fatalf("executor rejected imported/overloaded function program: %v", err)
+	}
+	if string(kirResult.Output) != astOutput.String() || !sameDiagnosticStack(kirResult.Diagnostic, astDiagnostic) {
+		t.Fatalf("KIR imported result = output %q, diagnostic %#v; AST result = output %q, diagnostic %#v", kirResult.Output, kirResult.Diagnostic, astOutput.String(), astDiagnostic)
+	}
+	if string(kirResult.Output) != "42\n" || kirResult.Diagnostic != nil {
+		t.Fatalf("unexpected imported function result: output %q, diagnostic %#v", kirResult.Output, kirResult.Diagnostic)
+	}
+}
+
 func TestKIRExecutorMatchesRuntimeDiagnostics(t *testing.T) {
 	t.Run("division by zero after prior output", func(t *testing.T) {
 		_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, `
@@ -235,6 +405,9 @@ println(count(20))
 func sameDiagnosticStack(left, right *Diagnostic) bool {
 	if !sameRuntimeDiagnostic(left, right) {
 		return false
+	}
+	if left == nil {
+		return true
 	}
 	if len(left.Stack) != len(right.Stack) {
 		return false

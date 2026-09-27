@@ -196,6 +196,46 @@ func TestEngineRunsArrayWithCapturedClosureKIRForSourceAndKexe(t *testing.T) {
 	}
 }
 
+func TestEngineRunsImportedFunctionsFromKIRForSourceAndKexe(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(directory, "lib"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "lib", "math.kry"), []byte(`pub fn twice(value: Int) -> Int { return value * 2 }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(directory, "main.kry")
+	artifactPath := filepath.Join(directory, "main.kexe")
+	source := `import "lib/math"
+fn choose(value: Int) -> Int { return value }
+fn choose(value: String) -> Int { return 2 }
+println(twice(choose(21)))
+`
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine()
+	if diagnostic := engine.BuildPath(sourcePath, artifactPath); diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	for _, path := range []string{sourcePath, artifactPath} {
+		t.Run(filepath.Ext(path), func(t *testing.T) {
+			wantOutput, wantDiagnostic := runASTPath(t, engine, path, nil)
+			gotOutput, gotDiagnostic := captureEngineRun(t, func() *Diagnostic {
+				_, diagnostic := engine.RunPath(path)
+				return diagnostic
+			})
+			if gotOutput != wantOutput || !reflect.DeepEqual(gotDiagnostic, wantDiagnostic) {
+				t.Fatalf("Engine imported result = output %q, diagnostic %#v; AST result = output %q, diagnostic %#v", gotOutput, gotDiagnostic, wantOutput, wantDiagnostic)
+			}
+			if gotOutput != "42\n" || gotDiagnostic != nil {
+				t.Fatalf("unexpected imported KIR result: output %q, diagnostic %#v", gotOutput, gotDiagnostic)
+			}
+		})
+	}
+}
+
 func TestEngineRunsMutableCaptureKIRForSourceAndKexe(t *testing.T) {
 	directory := t.TempDir()
 	sourcePath := filepath.Join(directory, "mutable-closure.kry")

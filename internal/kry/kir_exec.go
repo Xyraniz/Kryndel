@@ -148,8 +148,8 @@ func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*
 	var diagnostic *Diagnostic
 	if len(document.Statements) != 0 {
 		_, diagnostic = executor.execBlock(scope, document.Statements, true)
-	} else if main := executor.functionNamed("main"); main != nil {
-		call := &KIRExpr{Kind: "call", Name: "main", Source: main.Source, Line: main.Line, Column: main.Column, Type: main.Return, CallTarget: "function:main"}
+	} else if main, target := kirExecEntryFunction(document, functions); main != nil {
+		call := &KIRExpr{Kind: "call", Name: "main", Source: main.Source, Line: main.Line, Column: main.Column, Type: main.Return, CallTarget: "function:" + target}
 		if executor.context.Calls >= limits.MaxCallDepth {
 			diagnostic = executor.fail(CatResource, call.Source, call.Line, call.Column, "call depth limit exceeded")
 		} else {
@@ -194,6 +194,38 @@ func (executor *kirExecutor) functionNamed(name string) *KIRFunction {
 		}
 	}
 	return found
+}
+
+func kirExecEntryFunction(document *KIRDocument, functions map[string]*KIRFunction) (*KIRFunction, string) {
+	if document == nil || len(functions) == 0 {
+		return nil, ""
+	}
+	var moduleMatch *KIRFunction
+	var moduleTarget string
+	for target, function := range functions {
+		if function == nil || function.Name != "main" || function.Module != document.Module {
+			continue
+		}
+		if moduleMatch != nil {
+			return nil, ""
+		}
+		moduleMatch, moduleTarget = function, target
+	}
+	if moduleMatch != nil {
+		return moduleMatch, moduleTarget
+	}
+	var unique *KIRFunction
+	var uniqueTarget string
+	for target, function := range functions {
+		if function == nil || function.Name != "main" {
+			continue
+		}
+		if unique != nil {
+			return nil, ""
+		}
+		unique, uniqueTarget = function, target
+	}
+	return unique, uniqueTarget
 }
 
 func (executor *kirExecutor) invokeKIR(call *KIRExpr, function *KIRFunction, environment *kirExecScope, arguments []Value) (Value, *Diagnostic) {
@@ -250,8 +282,8 @@ func validateKIRExecSubsetWithFunctions(document *KIRDocument, functions map[str
 	if document.Version < 3 || document.Version > KIRVersion {
 		return fmt.Errorf("%w: KIR v3 or newer resolved bindings are required", errKIRSubsetUnsupported)
 	}
-	if len(document.Imports) != 0 || len(document.Traits) != 0 || len(document.TraitImpls) != 0 {
-		return fmt.Errorf("%w: imports, traits, and trait implementations are not yet executable from KIR", errKIRSubsetUnsupported)
+	if len(document.Traits) != 0 || len(document.TraitImpls) != 0 {
+		return fmt.Errorf("%w: traits and trait implementations are not yet executable from KIR", errKIRSubsetUnsupported)
 	}
 	for _, declaration := range document.Structs {
 		if declaration == nil {
@@ -270,7 +302,7 @@ func validateKIRExecSubsetWithFunctions(document *KIRDocument, functions map[str
 		return fmt.Errorf("%w: no executable statements", errKIRSubsetUnsupported)
 	}
 	if len(document.Statements) == 0 {
-		main := functions["main"]
+		main, _ := kirExecEntryFunction(document, functions)
 		if main == nil || main.Name != "main" {
 			return fmt.Errorf("%w: programs without top-level statements require a unique main()", errKIRSubsetUnsupported)
 		}
