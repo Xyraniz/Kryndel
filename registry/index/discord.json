@@ -2,9 +2,9 @@
   "name": "discord",
   "versions": [
     {
-      "version": "2.3.0",
-      "url": "/packages/discord-2.3.0.tar.gz",
-      "sha256": "8af200d4cc53a9cba9d58f31419cf9ccca0899569262ea911ed0854307c9452c"
+      "version": "2.4.0",
+      "url": "/packages/discord-2.4.0.tar.gz",
+      "sha256": "a9829c8b5df20600d2d2ed218451fbcd8791847c921644ccadc42743f7deb6cf"
     }
   ]
 }

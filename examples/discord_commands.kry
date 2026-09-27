@@ -1,0 +1,52 @@
+import "std/env"
+import "packages/discord"
+
+fn ping_command(context_json: String) -> String {
+    return "Pong!"
+}
+
+fn echo_command(context_json: String) -> String {
+    let context: Context = result_unwrap(context_from_json(context_json))
+    return context.argument_text()
+}
+
+fn ban_command(context_json: String) -> String {
+    let context: Context = result_unwrap(context_from_json(context_json))
+    match context.converted_member("target") {
+        ok(target) => { return "I would ban " + target.display_name() + ". This example never calls the API." }
+        err(problem) => { return "I could not resolve that member: " + problem }
+    }
+}
+
+fn main() -> Result[Nil, String] {
+    let token: Result[String, String] = require("DISCORD_TOKEN")
+    match token {
+        err(problem) => { return err(problem) }
+        ok(secret) => {
+            let intents: Array[String] = ["Guilds", "GuildMessages", "MessageContent"]
+            let created: Bot = bot(secret, intents)?
+            let client: Bot = created.with_prefixes(["!"])?
+
+            let ping: String = command_with_aliases(command_spec("ping", "Replies with Pong!")?, ["p"])?
+            client.register_command(ping, "ping_command")?
+
+            let echo: String = command_spec("echo", "Repeats the text after the command.")?
+            client.register_command(echo, "echo_command")?
+
+            let group: String = group_spec("mod", "Moderation examples.", false)?
+            client.register_command(group, "")?
+
+            let ban_checks: String = command_with_check(command_spec("mod.ban", "Shows who a ban would target.")?, has_permissions_check(["ban_members"])?)?
+            let ban: String = command_with_parameter(ban_checks, "target", "member")?
+            client.register_command(ban, "ban_command")?
+
+            let rate_limited: String = command_with_cooldown(command_spec("slow", "Rate-limited example.")?, 2, 5000, "author")?
+            client.register_command(rate_limited, "ping_command")?
+
+            let help: String = help_command_spec("help")?
+            client.register_command(help, "")?
+
+            return client.run()
+        }
+    }
+}

@@ -1,0 +1,234 @@
+// Discord permission bitfields and cache-based permission resolution.
+// Bit values and flag names mirror discord.py's discord.permissions.Permissions.
+
+struct PermissionEntry {
+    name: String,
+    bit: UInt64,
+}
+
+fn permission_table() -> String {
+    let mut table: String = "create_instant_invite=1 kick_members=2 ban_members=4 administrator=8 manage_channels=16"
+    table = table + " manage_guild=32 add_reactions=64 view_audit_log=128 priority_speaker=256 stream=512 view_channel=1024"
+    table = table + " send_messages=2048 send_tts_messages=4096 manage_messages=8192 embed_links=16384 attach_files=32768"
+    table = table + " read_message_history=65536 mention_everyone=131072 use_external_emojis=262144 view_guild_insights=524288"
+    table = table + " connect=1048576 speak=2097152 mute_members=4194304 deaf_members=8388608 move_members=16777216"
+    table = table + " use_vad=33554432 change_nickname=67108864 manage_nicknames=134217728 manage_roles=268435456"
+    table = table + " manage_webhooks=536870912 manage_emojis_and_stickers=1073741824 use_application_commands=2147483648"
+    table = table + " request_to_speak=4294967296 manage_events=8589934592 manage_threads=17179869184"
+    table = table + " create_public_threads=34359738368 create_private_threads=68719476736 use_external_stickers=137438953472"
+    table = table + " send_messages_in_threads=274877906944 use_embedded_activities=549755813888 moderate_members=1099511627776"
+    table = table + " view_creator_monetization_analytics=2199023255552 use_soundboard=4398046511104"
+    table = table + " create_guild_expressions=8796093022208 create_events=17592186044416"
+    table = table + " use_external_sounds=35184372088832 send_voice_messages=70368744177664"
+    table = table + " send_polls=562949953421312 use_external_apps=1125899906842624"
+    return table
+}
+
+fn permission_entries() -> Result[Array[PermissionEntry], String] {
+    let mut entries: Array[PermissionEntry] = []
+    for token in split(permission_table(), " ") {
+        if token != "" {
+            let pair: Array[String] = split(token, "=")
+            if len(pair) != 2 { return err("Discord permission table is malformed") }
+            let magnitude: Result[Int, String] = parse_decimal_int(pair[1])
+            match magnitude {
+                err(problem) => { return err("Discord permission table is malformed: " + problem) }
+                ok(bits) => {
+                    entries = array_push(entries, PermissionEntry{name: pair[0], bit: u64(bits)})
+                }
+            }
+        }
+    }
+    return ok(entries)
+}
+
+fn all_permissions() -> Result[UInt64, String] {
+    let entries: Array[PermissionEntry] = permission_entries()?
+    let mut bits: UInt64 = u64(0)
+    for entry in entries {
+        bits = bits | entry.bit
+    }
+    return ok(bits)
+}
+
+fn permission_bits_or_zero(raw: String) -> Result[UInt64, String] {
+    if raw == "" { return ok(u64(0)) }
+    return permissions_from_string(raw)
+}
+
+pub fn permission_names() -> Array[String] {
+    let entries: Result[Array[PermissionEntry], String] = permission_entries()
+    match entries {
+        err(_) => {
+            let empty: Array[String] = []
+            return empty
+        }
+        ok(found) => {
+            let mut names: Array[String] = []
+            for entry in found {
+                names = array_push(names, entry.name)
+            }
+            return names
+        }
+    }
+}
+
+pub fn permission_bit(name: String) -> Result[UInt64, String] {
+    let entries: Array[PermissionEntry] = permission_entries()?
+    for entry in entries {
+        if entry.name == name { return ok(entry.bit) }
+    }
+    return err("unknown Discord permission: " + name)
+}
+
+pub fn permissions_from_string(value: String) -> Result[UInt64, String] {
+    if len(value) == 0 { return err("permission bitfield must be a decimal string") }
+    for point in codepoints(value) {
+        if point < 48 || point > 57 { return err("permission bitfield must be a decimal string") }
+    }
+    let magnitude: Result[Int, String] = parse_decimal_int(value)
+    match magnitude {
+        err(problem) => { return err("permission bitfield is out of range: " + problem) }
+        ok(bits) => { return ok(u64(bits)) }
+    }
+}
+
+pub fn permissions_include(bits: UInt64, name: String) -> Result[Bool, String] {
+    let bit: UInt64 = permission_bit(name)?
+    return ok((bits & bit) == bit)
+}
+
+pub fn permissions_to_string(bits: UInt64) -> String {
+    return str(bits)
+}
+
+pub fn permissions_list(bits: UInt64) -> Result[Array[String], String] {
+    let entries: Array[PermissionEntry] = permission_entries()?
+    let mut names: Array[String] = []
+    for entry in entries {
+        if (bits & entry.bit) == entry.bit { names = array_push(names, entry.name) }
+    }
+    return ok(names)
+}
+
+fn guild_role_permissions(guild: Json, member: Json) -> Result[UInt64, String] {
+    let role_values: Array[Json] = json_optional_array(guild, "roles")?
+    let mut role_permissions: Map[String, String] = {}
+    for role_value in role_values {
+        if json_kind(role_value) == "object" {
+            match json_optional_string(role_value, "id") {
+                ok(role_id) => {
+                    if valid_snowflake(role_id) {
+                        let raw: String = json_optional_string(role_value, "permissions")?
+                        role_permissions = map_insert(role_permissions, role_id, raw)
+                    }
+                }
+                err(problem) => { return err(problem) }
+            }
+        }
+    }
+    let mut bits: UInt64 = u64(0)
+    match json_optional_string(guild, "id") {
+        ok(guild_id) => {
+            match map_get(role_permissions, guild_id) {
+                some(raw) => { bits = permission_bits_or_zero(raw)? }
+                none => {}
+            }
+        }
+        err(problem) => { return err(problem) }
+    }
+    let member_roles: Array[String] = json_string_list(member, "roles")?
+    for role_id in member_roles {
+        match map_get(role_permissions, role_id) {
+            some(raw) => { bits = bits | permission_bits_or_zero(raw)? }
+            none => {}
+        }
+    }
+    return ok(bits)
+}
+
+pub fn guild_member_permissions(bot: Bot, guild_id: String, member: Json) -> Result[UInt64, String] {
+    if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+    if json_kind(member) != "object" { return err("member payload must be a JSON object") }
+    let guild: Json = bot.cache_get("guild", guild_id)?
+    let bits: UInt64 = guild_role_permissions(guild, member)?
+    if (bits & u64(8)) == u64(8) { return all_permissions() }
+    return ok(bits)
+}
+
+fn overwrite_kind(value: Json) -> Result[Int, String] {
+    let raw: Json = json_object_get(value, "type")?
+    match json_string(raw) {
+        ok(text) => { return parse_decimal_int(text) }
+        err(_) => { return json_int(raw) }
+    }
+}
+
+fn overwrite_bits(value: Json, key: String) -> Result[UInt64, String] {
+    match json_object_get(value, key) {
+        err(_) => { return ok(u64(0)) }
+        ok(found) => {
+            if json_is_null(found) { return ok(u64(0)) }
+            let text: String = json_string(found)?
+            return permission_bits_or_zero(text)
+        }
+    }
+}
+
+fn channel_payload(bot: Bot, channel_id: String) -> Result[Json, String] {
+    match bot.cache_get("channel", channel_id) {
+        ok(found) => { return ok(found) }
+        err(_) => { return bot.cache_get("thread", channel_id) }
+    }
+}
+
+pub fn channel_permissions_for(bot: Bot, guild_id: String, channel_id: String, member: Json) -> Result[UInt64, String] {
+    if !valid_snowflake(guild_id) { return err("guild_id must be a Discord snowflake") }
+    if !valid_snowflake(channel_id) { return err("channel_id must be a Discord snowflake") }
+    let channel: Json = channel_payload(bot, channel_id)?
+    let parsed: Channel = channel_from_json(channel)?
+    if parsed.guild_id != guild_id { return err("channel does not belong to that guild") }
+    let mut bits: UInt64 = guild_member_permissions(bot, guild_id, member)?
+    if (bits & u64(8)) == u64(8) { return ok(bits) }
+    let overwrites: Array[Json] = json_optional_array(channel, "permission_overwrites")?
+    let mut entries: Array[Json] = []
+    for overwrite in overwrites {
+        if json_kind(overwrite) == "object" { entries = array_push(entries, overwrite) }
+    }
+    for entry in entries {
+        let owner_id: String = json_optional_string(entry, "id")?
+        let kind: Int = overwrite_kind(entry)?
+        if kind == 0 && owner_id == guild_id {
+            let denied: UInt64 = overwrite_bits(entry, "deny")?
+            let allowed: UInt64 = overwrite_bits(entry, "allow")?
+            bits = (bits & ~denied) | allowed
+        }
+    }
+    let member_roles: Array[String] = json_string_list(member, "roles")?
+    let mut denied_union: UInt64 = u64(0)
+    let mut allowed_union: UInt64 = u64(0)
+    for entry in entries {
+        let owner_id: String = json_optional_string(entry, "id")?
+        let kind: Int = overwrite_kind(entry)?
+        if kind == 0 && owner_id != guild_id && array_contains(member_roles, owner_id) {
+            denied_union = denied_union | overwrite_bits(entry, "deny")?
+            allowed_union = allowed_union | overwrite_bits(entry, "allow")?
+        }
+    }
+    bits = (bits & ~denied_union) | allowed_union
+    let mut member_id: String = ""
+    match json_object_get(member, "user") {
+        ok(user_value) => { member_id = json_optional_string(user_value, "id")? }
+        err(_) => {}
+    }
+    for entry in entries {
+        let owner_id: String = json_optional_string(entry, "id")?
+        let kind: Int = overwrite_kind(entry)?
+        if kind == 1 && owner_id != "" && owner_id == member_id {
+            let denied: UInt64 = overwrite_bits(entry, "deny")?
+            let allowed: UInt64 = overwrite_bits(entry, "allow")?
+            bits = (bits & ~denied) | allowed
+        }
+    }
+    return ok(bits)
+}

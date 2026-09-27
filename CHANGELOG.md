@@ -1,5 +1,9 @@
 # Changelog
 
+## Discord package 2.4.0
+
+The bot package ports discord.py's `discord.ext.commands` for prefix commands. Declarative command specs add aliases, checks, cooldowns, parameter converters, groups with dot-separated paths, a built-in help command, and an error slot (`discord.on_command_error.<name>` then `discord.on_command_error`) with a visible default reply. Registered commands run through checks, cooldown, argument validation, and conversion before their callback, while unregistered names keep the existing plain callback route. A typed layer adds `Context`, the `User`, `Member`, `Role`, `Channel`, and `Message` models, permission bitfield helpers, and guild/channel permission resolution from the object cache. `examples/discord_commands.kry` demonstrates the framework.
+
 ## discord-self 1.5.0
 
 Bundles twenty-six Discord REST lookups for client location, application discovery, teams, gifts and entitlements, store listings and subscription plans, live build IDs, and price tiers. Results are Kryndel `Json`; snowflake, gift-code, country-code, and batch inputs are validated.

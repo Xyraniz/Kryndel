@@ -9,7 +9,7 @@ import (
 )
 
 func TestDiscordRegistryContainsOnlyCurrentRelease(t *testing.T) {
-	const current = "2.3.0"
+	const current = "2.4.0"
 	indexPath := filepath.Join("..", "..", "registry", "index", "discord.json")
 	indexData, err := os.ReadFile(indexPath)
 	if err != nil {

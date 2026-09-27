@@ -156,7 +156,7 @@ impl Bot {
         if shard_count < 1 || shard_count > 1024 || shard_id < 0 || shard_id >= shard_count {
             return err("shard_id must be within a shard_count from 1 to 1024")
         }
-        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: shard_id, shard_count: shard_count, prefixes: self.prefixes, user_account: self.user_account, event_namespace: self.event_namespace})
+        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: shard_id, shard_count: shard_count, prefixes: self.prefixes, user_account: self.user_account, event_namespace: self.event_namespace, commands: self.commands, cooldowns: self.cooldowns})
     }
 
     pub fn with_prefixes(prefixes: Array[String]) -> Result[Bot, String] {
@@ -167,7 +167,7 @@ impl Bot {
             if array_contains(checked, prefix) { return err("command prefixes must be unique") }
             checked = array_push(checked, prefix)
         }
-        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: self.shard_id, shard_count: self.shard_count, prefixes: checked, user_account: self.user_account, event_namespace: self.event_namespace})
+        return ok(Bot{token: self.token, intents: self.intents, gateway: self.gateway, shard_id: self.shard_id, shard_count: self.shard_count, prefixes: checked, user_account: self.user_account, event_namespace: self.event_namespace, commands: self.commands, cooldowns: self.cooldowns})
     }
 
     pub fn command_prefixes() -> Array[String] {

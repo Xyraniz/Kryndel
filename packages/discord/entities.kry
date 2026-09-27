@@ -1,0 +1,269 @@
+// Typed Discord model objects parsed from Gateway and REST payloads.
+// Field names follow discord.py attributes; parsers validate snowflake IDs
+// and treat optional or explicitly null fields the way discord.py does.
+
+fn json_required_string(value: Json, key: String, label: String) -> Result[String, String] {
+    match json_object_get(value, key) {
+        err(problem) => { return err(label + " is required: " + problem) }
+        ok(found) => {
+            match json_string(found) {
+                err(problem) => { return err(label + " must be a string: " + problem) }
+                ok(text) => { return ok(text) }
+            }
+        }
+    }
+}
+
+fn json_optional_string(value: Json, key: String) -> Result[String, String] {
+    match json_object_get(value, key) {
+        err(_) => { return ok("") }
+        ok(found) => {
+            if json_is_null(found) { return ok("") }
+            match json_string(found) {
+                ok(text) => { return ok(text) }
+                err(problem) => { return err(key + " must be a string or null: " + problem) }
+            }
+        }
+    }
+}
+
+fn json_optional_bool(value: Json, key: String) -> Result[Bool, String] {
+    match json_object_get(value, key) {
+        err(_) => { return ok(false) }
+        ok(found) => {
+            if json_is_null(found) { return ok(false) }
+            match json_bool(found) {
+                ok(flag) => { return ok(flag) }
+                err(problem) => { return err(key + " must be a boolean or null: " + problem) }
+            }
+        }
+    }
+}
+
+fn json_optional_int(value: Json, key: String) -> Result[Int, String] {
+    match json_object_get(value, key) {
+        err(_) => { return ok(0) }
+        ok(found) => {
+            if json_is_null(found) { return ok(0) }
+            match json_int(found) {
+                ok(number) => { return ok(number) }
+                err(problem) => { return err(key + " must be an integer or null: " + problem) }
+            }
+        }
+    }
+}
+
+fn json_optional_array(value: Json, key: String) -> Result[Array[Json], String] {
+    match json_object_get(value, key) {
+        err(_) => {
+            let empty: Array[Json] = []
+            return ok(empty)
+        }
+        ok(found) => {
+            if json_is_null(found) {
+                let empty: Array[Json] = []
+                return ok(empty)
+            }
+            if json_kind(found) != "array" { return err(key + " must be an array") }
+            let count: Int = json_array_len(found)?
+            let mut items: Array[Json] = []
+            let mut index: Int = 0
+            while index < count {
+                items = array_push(items, json_array_get(found, index)?)
+                index = index + 1
+            }
+            return ok(items)
+        }
+    }
+}
+
+fn json_string_list(value: Json, key: String) -> Result[Array[String], String] {
+    let items: Array[Json] = json_optional_array(value, key)?
+    let mut texts: Array[String] = []
+    for item in items {
+        texts = array_push(texts, json_string(item)?)
+    }
+    return ok(texts)
+}
+
+pub struct User {
+    id: String,
+    name: String,
+    global_name: String,
+    discriminator: String,
+    avatar: String,
+    bot: Bool,
+    system: Bool,
+}
+
+pub struct Member {
+    user: User,
+    nick: String,
+    roles: Array[String],
+    joined_at: String,
+    deaf: Bool,
+    mute: Bool,
+}
+
+pub struct Role {
+    id: String,
+    name: String,
+    permissions: String,
+    position: Int,
+    colour: Int,
+    hoist: Bool,
+    mentionable: Bool,
+    managed: Bool,
+}
+
+pub struct Channel {
+    id: String,
+    name: String,
+    channel_type: Int,
+    guild_id: String,
+    parent_id: String,
+    topic: String,
+    nsfw: Bool,
+}
+
+pub struct Message {
+    id: String,
+    channel_id: String,
+    guild_id: String,
+    content: String,
+    timestamp: String,
+    author: User,
+    mention_ids: Array[String],
+    pinned: Bool,
+    message_type: Int,
+    raw: Json,
+}
+
+pub fn user_from_json(value: Json) -> Result[User, String] {
+    if json_kind(value) != "object" { return err("user payload must be a JSON object") }
+    let id: String = json_required_string(value, "id", "user id")?
+    if !valid_snowflake(id) { return err("user id must be a Discord snowflake") }
+    let username: String = json_required_string(value, "username", "user username")?
+    let global_name: String = json_optional_string(value, "global_name")?
+    let discriminator: String = json_optional_string(value, "discriminator")?
+    let avatar: String = json_optional_string(value, "avatar")?
+    let bot_flag: Bool = json_optional_bool(value, "bot")?
+    let system_flag: Bool = json_optional_bool(value, "system")?
+    return ok(User{id: id, name: username, global_name: global_name, discriminator: discriminator, avatar: avatar, bot: bot_flag, system: system_flag})
+}
+
+pub fn member_from_json(value: Json) -> Result[Member, String] {
+    if json_kind(value) != "object" { return err("member payload must be a JSON object") }
+    let user_value: Json = json_object_get(value, "user")?
+    let user: User = user_from_json(user_value)?
+    let nick: String = json_optional_string(value, "nick")?
+    let roles: Array[String] = json_string_list(value, "roles")?
+    for role_id in roles {
+        if !valid_snowflake(role_id) { return err("member roles must be Discord snowflakes") }
+    }
+    let joined_at: String = json_optional_string(value, "joined_at")?
+    let deaf: Bool = json_optional_bool(value, "deaf")?
+    let mute: Bool = json_optional_bool(value, "mute")?
+    return ok(Member{user: user, nick: nick, roles: roles, joined_at: joined_at, deaf: deaf, mute: mute})
+}
+
+pub fn role_from_json(value: Json) -> Result[Role, String] {
+    if json_kind(value) != "object" { return err("role payload must be a JSON object") }
+    let id: String = json_required_string(value, "id", "role id")?
+    if !valid_snowflake(id) { return err("role id must be a Discord snowflake") }
+    let name: String = json_required_string(value, "name", "role name")?
+    let permissions: String = json_optional_string(value, "permissions")?
+    let position: Int = json_optional_int(value, "position")?
+    let colour: Int = json_optional_int(value, "color")?
+    let hoist: Bool = json_optional_bool(value, "hoist")?
+    let mentionable: Bool = json_optional_bool(value, "mentionable")?
+    let managed: Bool = json_optional_bool(value, "managed")?
+    return ok(Role{id: id, name: name, permissions: permissions, position: position, colour: colour, hoist: hoist, mentionable: mentionable, managed: managed})
+}
+
+pub fn channel_from_json(value: Json) -> Result[Channel, String] {
+    if json_kind(value) != "object" { return err("channel payload must be a JSON object") }
+    let id: String = json_required_string(value, "id", "channel id")?
+    if !valid_snowflake(id) { return err("channel id must be a Discord snowflake") }
+    let name: String = json_optional_string(value, "name")?
+    let raw_type: Json = json_object_get(value, "type")?
+    let channel_type: Int = json_int(raw_type)?
+    let guild_id: String = json_optional_string(value, "guild_id")?
+    if guild_id != "" && !valid_snowflake(guild_id) { return err("channel guild_id must be a Discord snowflake") }
+    let parent_id: String = json_optional_string(value, "parent_id")?
+    let topic: String = json_optional_string(value, "topic")?
+    let nsfw: Bool = json_optional_bool(value, "nsfw")?
+    return ok(Channel{id: id, name: name, channel_type: channel_type, guild_id: guild_id, parent_id: parent_id, topic: topic, nsfw: nsfw})
+}
+
+pub fn message_from_json(value: Json) -> Result[Message, String] {
+    if json_kind(value) != "object" { return err("message payload must be a JSON object") }
+    let id: String = json_required_string(value, "id", "message id")?
+    if !valid_snowflake(id) { return err("message id must be a Discord snowflake") }
+    let channel_id: String = json_required_string(value, "channel_id", "message channel_id")?
+    if !valid_snowflake(channel_id) { return err("message channel_id must be a Discord snowflake") }
+    let guild_id: String = json_optional_string(value, "guild_id")?
+    if guild_id != "" && !valid_snowflake(guild_id) { return err("message guild_id must be a Discord snowflake") }
+    let content: String = json_optional_string(value, "content")?
+    let timestamp: String = json_optional_string(value, "timestamp")?
+    let author_value: Json = json_object_get(value, "author")?
+    let author: User = user_from_json(author_value)?
+    let mentions: Array[Json] = json_optional_array(value, "mentions")?
+    let mut mention_ids: Array[String] = []
+    for mention in mentions {
+        let mentioned: User = user_from_json(mention)?
+        mention_ids = array_push(mention_ids, mentioned.id)
+    }
+    let pinned: Bool = json_optional_bool(value, "pinned")?
+    let message_type: Int = json_optional_int(value, "type")?
+    return ok(Message{id: id, channel_id: channel_id, guild_id: guild_id, content: content, timestamp: timestamp, author: author, mention_ids: mention_ids, pinned: pinned, message_type: message_type, raw: value})
+}
+
+impl User {
+    pub fn mention() -> String {
+        return "<@" + self.id + ">"
+    }
+
+    pub fn display_name() -> String {
+        if self.global_name != "" { return self.global_name }
+        return self.name
+    }
+
+    pub fn avatar_url() -> String {
+        if self.avatar == "" { return "" }
+        let mut extension: String = "png"
+        if starts_with(self.avatar, "a_") { extension = "gif" }
+        return "https://cdn.discordapp.com/avatars/" + self.id + "/" + self.avatar + "." + extension
+    }
+}
+
+impl Member {
+    pub fn id() -> String {
+        return self.user.id
+    }
+
+    pub fn mention() -> String {
+        return "<@" + self.user.id + ">"
+    }
+
+    pub fn display_name() -> String {
+        if self.nick != "" { return self.nick }
+        return self.user.display_name()
+    }
+}
+
+impl Role {
+    pub fn mention() -> String {
+        return "<@&" + self.id + ">"
+    }
+
+    pub fn permissions_bits() -> Result[UInt64, String] {
+        return permissions_from_string(self.permissions)
+    }
+}
+
+impl Channel {
+    pub fn mention() -> String {
+        return "<#" + self.id + ">"
+    }
+}

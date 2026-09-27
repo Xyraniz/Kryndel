@@ -48,6 +48,7 @@ fn handle_prefix_error(context_json: String) -> String {
 }
 
 fn main() -> Result[Nil, String] {
+    let test_bot: Bot = result_unwrap(bot("MTIzNDU2Nzg5MA==", []))
     let words: Array[String] = discord_prefix_parse_words("echo \"hello world\" 'two words' “三つ の語”")?
     assert_eq(len(words), 4)
     expect_prefix_word(words, 0, "echo")?
@@ -80,7 +81,7 @@ fn main() -> Result[Nil, String] {
     let malformed: Json = json_parse(malformed_json)?
     let malformed_context: Json = json_parse(discord_prefix_command_context(malformed, ["!"])?)?
     assert_eq(json_string(json_object_get(malformed_context, "parse_error")?)? != "", true)
-    assert_eq(discord_dispatch_prefix_command(malformed, ["!"])?, "argument error")
+    assert_eq(discord_dispatch_prefix_command(test_bot, malformed, ["!"])?, "argument error")
     return ok(nil)
 }
 main()

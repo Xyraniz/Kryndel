@@ -386,7 +386,7 @@ fn discord_prefix_command_context(message: Json, prefixes: Array[String]) -> Res
     return ok("{\"message\":" + json_stringify(message) + ",\"prefix\":" + encoded_prefix + ",\"command\":" + encoded_command + ",\"arguments\":" + arguments_json + ",\"argument_text\":" + encoded_arguments_text + ",\"raw_argument_text\":" + encoded_raw_arguments + ",\"parsed_arguments\":" + parsed_arguments_json + ",\"parse_error\":" + encoded_parse_error + "}")
 }
 
-fn discord_dispatch_prefix_command(message: Json, prefixes: Array[String]) -> Result[String, String] {
+fn discord_dispatch_prefix_command(bot: Bot, message: Json, prefixes: Array[String]) -> Result[String, String] {
     if len(prefixes) == 0 { return ok("") }
     let context: String = discord_prefix_command_context(message, prefixes)?
     if context == "" { return ok("") }
@@ -400,6 +400,16 @@ fn discord_dispatch_prefix_command(message: Json, prefixes: Array[String]) -> Re
             err(problem) => {
                 if problem == "dispatch slot has no registered handlers" { return ok("") }
                 return err("Discord prefix command error handler failed: " + problem)
+            }
+        }
+    }
+    let routed: Result[Option[String], String] = commands_route(bot, context)
+    match routed {
+        err(problem) => { return err(problem) }
+        ok(outcome) => {
+            match outcome {
+                none => {}
+                some(reply) => { return ok(reply) }
             }
         }
     }
@@ -1002,7 +1012,7 @@ fn run_gateway_session(socket: WebSocket, bot: Bot, previous_session_id: String,
                                                     }
                                                 }
                                                 if reply == "" && len(prefixes) > 0 && !bot.user_account {
-                                                    let command_result: Result[String, String] = discord_dispatch_prefix_command(event_data, prefixes)
+                                                    let command_result: Result[String, String] = discord_dispatch_prefix_command(bot, event_data, prefixes)
                                                     match command_result {
                                                         ok(value) => { reply = value }
                                                         err(problem) => { return err(problem) }

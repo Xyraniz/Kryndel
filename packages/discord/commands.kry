@@ -1,0 +1,1125 @@
+// Prefix-command framework adapted from discord.py's discord.ext.commands.
+// Command definitions are declarative JSON specs stored on the Bot, and
+// callbacks keep the runtime's named fn(String) -> String dispatch slots.
+
+struct CommandSpec {
+    name: String,
+    kind: String,
+    help: String,
+    aliases: Array[String],
+    checks: Array[String],
+    cooldown: String,
+    parameters: Array[String],
+    invoke_without_command: Bool,
+}
+
+fn command_path_limit() -> Int {
+    return 8
+}
+
+fn command_registry_limit() -> Int {
+    return 512
+}
+
+fn command_identifier(value: String) -> Bool {
+    if len(value) == 0 || len(value) > 32 { return false }
+    for point in codepoints(value) {
+        let digit: Bool = point >= 48 && point <= 57
+        let upper: Bool = point >= 65 && point <= 90
+        let lower: Bool = point >= 97 && point <= 122
+        let separator: Bool = point == 95 || point == 45
+        if !digit && !upper && !lower && !separator { return false }
+    }
+    return true
+}
+
+fn valid_command_path(value: String) -> Bool {
+    if len(value) == 0 || len(value) > 96 { return false }
+    let segments: Array[String] = split(value, ".")
+    if len(segments) > command_path_limit() { return false }
+    for segment in segments {
+        if !command_identifier(segment) { return false }
+    }
+    return true
+}
+
+fn valid_command_alias(value: String) -> Bool {
+    if contains(value, ".") { return false }
+    return command_identifier(value)
+}
+
+fn command_converter_names() -> Array[String] {
+    return ["string", "int", "float", "bool", "snowflake", "user", "member", "channel", "role", "mentionable"]
+}
+
+fn command_builtin_check_names() -> Array[String] {
+    return ["guild_only", "dm_only", "guild_owner"]
+}
+
+fn converter_name(value: String) -> String {
+    if ends_with(value, "?") {
+        match substring(value, 0, len(value) - 1) {
+            ok(base) => { return base }
+            err(_) => { return value }
+        }
+    }
+    return value
+}
+
+fn converter_is_optional(value: String) -> Bool {
+    return ends_with(value, "?")
+}
+
+fn valid_converter(value: String) -> Bool {
+    if len(value) == 0 || len(value) > 24 { return false }
+    if len(converter_name(value)) != len(value) - 1 && len(converter_name(value)) != len(value) { return false }
+    return array_contains(command_converter_names(), converter_name(value))
+}
+
+fn json_array_of_strings(values: Array[String]) -> Result[String, String] {
+    let mut text: String = "["
+    let mut first: Bool = true
+    for value in values {
+        if !first { text = text + "," }
+        text = text + json_quote(value)?
+        first = false
+    }
+    return ok(text + "]")
+}
+
+fn json_array_of_texts(values: Array[String]) -> String {
+    let mut text: String = "["
+    let mut first: Bool = true
+    for value in values {
+        if !first { text = text + "," }
+        text = text + value
+        first = false
+    }
+    return text + "]"
+}
+
+fn json_object_of_texts(values: Array[String]) -> String {
+    let mut text: String = "{"
+    let mut first: Bool = true
+    for value in values {
+        if !first { text = text + "," }
+        text = text + value
+        first = false
+    }
+    return text + "}"
+}
+
+fn validate_command_check(text: String) -> Result[Nil, String] {
+    let value: Json = json_parse(text)?
+    if json_kind(value) == "object" {
+        let kind: String = json_string(json_object_get(value, "kind")?)?
+        if kind != "has_permissions" { return err("unknown check kind: " + kind) }
+        let permissions: Array[Json] = json_optional_array(value, "permissions")?
+        if len(permissions) == 0 { return err("has_permissions requires at least one permission") }
+        if len(permissions) > 40 { return err("has_permissions accepts at most 40 permissions") }
+        for permission in permissions {
+            let name: String = json_string(permission)?
+            let checked: UInt64 = permission_bit(name)?
+        }
+        return ok(nil)
+    }
+    let name: String = json_string(value)?
+    if !command_identifier(name) { return err("check name must be an identifier: " + name) }
+    return ok(nil)
+}
+
+fn validate_command_cooldown(value: Json) -> Result[Nil, String] {
+    if json_kind(value) != "object" { return err("cooldown must be a JSON object") }
+    let number: Int = json_int(json_object_get(value, "number")?)?
+    let period: Int = json_int(json_object_get(value, "period_ms")?)?
+    let scope: String = json_string(json_object_get(value, "scope")?)?
+    if number < 1 || number > 1000 { return err("cooldown number must be between 1 and 1000") }
+    if period < 1000 || period > 86400000 { return err("cooldown period_ms must be between 1000 and 86400000") }
+    if scope != "author" && scope != "channel" && scope != "guild" && scope != "global" {
+        return err("cooldown scope must be author, channel, guild, or global")
+    }
+    return ok(nil)
+}
+
+fn validate_command_parameters(values: Array[Json]) -> Result[Array[String], String] {
+    if len(values) > 16 { return err("a command may declare at most 16 parameters") }
+    let mut names: Array[String] = []
+    let mut parameters: Array[String] = []
+    for parameter in values {
+        if json_kind(parameter) != "object" { return err("command parameters must be JSON objects") }
+        let name: String = json_string(json_object_get(parameter, "name")?)?
+        if !command_identifier(name) { return err("parameter name must be an identifier: " + name) }
+        if array_contains(names, name) { return err("duplicate parameter name: " + name) }
+        let converter: String = json_string(json_object_get(parameter, "converter")?)?
+        if !valid_converter(converter) {
+            return err("unknown converter '" + converter + "'; expected one of string, int, float, bool, snowflake, user, member, channel, role, mentionable with an optional ? suffix")
+        }
+        names = array_push(names, name)
+        parameters = array_push(parameters, json_stringify(parameter))
+    }
+    return ok(parameters)
+}
+
+fn command_spec_parse(spec_json: String) -> Result[CommandSpec, String] {
+    let value: Json = json_parse(spec_json)?
+    if json_kind(value) != "object" { return err("command spec must be a JSON object") }
+    let name: String = json_string(json_object_get(value, "name")?)?
+    if !valid_command_path(name) { return err("command name must be 1 to 8 dot-separated identifiers: " + name) }
+    let kind: String = json_string(json_object_get(value, "kind")?)?
+    if kind != "command" && kind != "group" && kind != "help" { return err("command kind must be command, group, or help") }
+    if kind == "help" && contains(name, ".") { return err("help commands must be a single identifier") }
+    if kind == "group" && ends_with(name, ".") { return err("group name is malformed") }
+    let help: String = json_optional_string(value, "help")?
+    if discord_text_length(help) > 1000 { return err("command help must be at most 1000 UTF-16 code units") }
+    let mut aliases: Array[String] = []
+    let alias_values: Array[Json] = json_optional_array(value, "aliases")?
+    if len(alias_values) > 16 { return err("a command may declare at most 16 aliases") }
+    for alias_value in alias_values {
+        let alias: String = json_string(alias_value)?
+        if !valid_command_alias(alias) { return err("command alias must be a single identifier: " + alias) }
+        if alias == name || array_contains(aliases, alias) { return err("duplicate command alias: " + alias) }
+        aliases = array_push(aliases, alias)
+    }
+    let mut checks: Array[String] = []
+    let check_values: Array[Json] = json_optional_array(value, "checks")?
+    if len(check_values) > 16 { return err("a command may declare at most 16 checks") }
+    for check_value in check_values {
+        let text: String = json_stringify(check_value)
+        match validate_command_check(text) {
+            ok(_) => {}
+            err(problem) => { return err(problem) }
+        }
+        checks = array_push(checks, text)
+    }
+    let mut cooldown: String = ""
+    match json_object_get(value, "cooldown") {
+        err(_) => {}
+        ok(found) => {
+            if !json_is_null(found) {
+                validate_command_cooldown(found)?
+                cooldown = json_stringify(found)
+            }
+        }
+    }
+    let parameter_values: Array[Json] = json_optional_array(value, "parameters")?
+    let parameters: Array[String] = validate_command_parameters(parameter_values)?
+    let invoke: Bool = json_optional_bool(value, "invoke_without_command")?
+    if invoke && kind != "group" { return err("only group commands may set invoke_without_command") }
+    return ok(CommandSpec{name: name, kind: kind, help: help, aliases: aliases, checks: checks, cooldown: cooldown, parameters: parameters, invoke_without_command: invoke})
+}
+
+fn command_spec_render(spec: CommandSpec) -> Result[String, String] {
+    let mut text: String = "{\"name\":" + json_quote(spec.name)?
+    text = text + ",\"kind\":" + json_quote(spec.kind)?
+    text = text + ",\"help\":" + json_quote(spec.help)?
+    text = text + ",\"aliases\":" + json_array_of_strings(spec.aliases)?
+    text = text + ",\"checks\":" + json_array_of_texts(spec.checks)
+    if spec.cooldown != "" { text = text + ",\"cooldown\":" + spec.cooldown }
+    text = text + ",\"parameters\":" + json_array_of_texts(spec.parameters)
+    text = text + ",\"invoke_without_command\":" + str(spec.invoke_without_command)
+    text = text + "}"
+    let validated: CommandSpec = command_spec_parse(text)?
+    return ok(text)
+}
+
+fn command_spec_copy(spec: CommandSpec, aliases: Array[String], checks: Array[String], cooldown: String, parameters: Array[String]) -> Result[String, String] {
+    return command_spec_render(CommandSpec{name: spec.name, kind: spec.kind, help: spec.help, aliases: aliases, checks: checks, cooldown: cooldown, parameters: parameters, invoke_without_command: spec.invoke_without_command})
+}
+
+pub fn command_spec(name: String, help: String) -> Result[String, String] {
+    return command_spec_render(CommandSpec{name: name, kind: "command", help: help, aliases: [], checks: [], cooldown: "", parameters: [], invoke_without_command: false})
+}
+
+pub fn group_spec(name: String, help: String, invoke_without_command: Bool) -> Result[String, String] {
+    return command_spec_render(CommandSpec{name: name, kind: "group", help: help, aliases: [], checks: [], cooldown: "", parameters: [], invoke_without_command: invoke_without_command})
+}
+
+pub fn help_command_spec(name: String) -> Result[String, String] {
+    return command_spec_render(CommandSpec{name: name, kind: "help", help: "Shows the available commands.", aliases: [], checks: [], cooldown: "", parameters: [], invoke_without_command: false})
+}
+
+pub fn command_with_aliases(spec_json: String, aliases: Array[String]) -> Result[String, String] {
+    let spec: CommandSpec = command_spec_parse(spec_json)?
+    let mut next: Array[String] = spec.aliases
+    for alias in aliases {
+        if alias == spec.name || array_contains(next, alias) { return err("duplicate command alias: " + alias) }
+        if len(next) >= 16 { return err("a command may declare at most 16 aliases") }
+        next = array_push(next, alias)
+    }
+    return command_spec_copy(spec, next, spec.checks, spec.cooldown, spec.parameters)
+}
+
+pub fn command_with_check(spec_json: String, check: String) -> Result[String, String] {
+    let spec: CommandSpec = command_spec_parse(spec_json)?
+    let mut value_text: String = ""
+    if starts_with(trim(check), "{") {
+        value_text = check
+    } else {
+        value_text = json_quote(check)?
+    }
+    match validate_command_check(value_text) {
+        ok(_) => {}
+        err(problem) => { return err(problem) }
+    }
+    let mut next: Array[String] = spec.checks    if len(next) >= 16 { return err("a command may declare at most 16 checks") }
+    let canonical: String = json_stringify(json_parse(value_text)?)
+    if array_contains(next, canonical) { return err("duplicate command check: " + check) }
+    next = array_push(next, canonical)
+    return command_spec_copy(spec, spec.aliases, next, spec.cooldown, spec.parameters)
+}
+
+pub fn command_with_cooldown(spec_json: String, number: Int, period_ms: Int, scope: String) -> Result[String, String] {
+    let spec: CommandSpec = command_spec_parse(spec_json)?
+    let cooldown_text: String = "{\"number\":" + str(number) + ",\"period_ms\":" + str(period_ms) + ",\"scope\":" + json_quote(scope)? + "}"
+    let cooldown_value: Json = json_parse(cooldown_text)?
+    match validate_command_cooldown(cooldown_value) {
+        ok(_) => {}
+        err(problem) => { return err(problem) }
+    }
+    return command_spec_copy(spec, spec.aliases, spec.checks, json_stringify(cooldown_value), spec.parameters)
+}
+
+pub fn command_with_parameter(spec_json: String, name: String, converter: String) -> Result[String, String] {
+    let spec: CommandSpec = command_spec_parse(spec_json)?
+    let mut next: Array[String] = spec.parameters
+    if len(next) >= 16 { return err("a command may declare at most 16 parameters") }
+    let parameter_text: String = "{\"name\":" + json_quote(name)? + ",\"converter\":" + json_quote(converter)? + "}"
+    next = array_push(next, parameter_text)
+    let parameter_values: Array[Json] = json_array_parameter_values(next)?
+    let validated: Array[String] = validate_command_parameters(parameter_values)?
+    return command_spec_copy(spec, spec.aliases, spec.checks, spec.cooldown, validated)
+}
+
+fn json_array_parameter_values(values: Array[String]) -> Result[Array[Json], String] {
+    let mut items: Array[Json] = []
+    for value in values {
+        items = array_push(items, json_parse(value)?)
+    }
+    return ok(items)
+}
+
+pub fn has_permissions_check(permissions: Array[String]) -> Result[String, String] {
+    if len(permissions) == 0 { return err("has_permissions requires at least one permission") }
+    if len(permissions) > 40 { return err("has_permissions accepts at most 40 permissions") }
+    let mut names: Array[String] = []
+    for permission in permissions {
+        let checked: UInt64 = permission_bit(permission)?
+        names = array_push(names, permission)
+    }
+    return ok("{\"kind\":\"has_permissions\",\"permissions\":" + json_array_of_strings(names)? + "}")
+}
+
+fn command_summaries_json(registry: Map[String, String]) -> Result[String, String] {
+    let mut items: Array[String] = []
+    for key in map_keys(registry) {
+        match map_get(registry, key) {
+            none => {}
+            some(spec_json) => {
+                let spec: CommandSpec = command_spec_parse(spec_json)?
+                let mut item: String = "{\"name\":" + json_quote(spec.name)?
+                item = item + ",\"kind\":" + json_quote(spec.kind)?
+                item = item + ",\"help\":" + json_quote(spec.help)?
+                item = item + ",\"aliases\":" + json_array_of_strings(spec.aliases)?
+                item = item + "}"
+                items = array_push(items, item)
+            }
+        }
+    }
+    return ok(json_array_of_texts(items))
+}
+
+fn commands_alias_map(registry: Map[String, String]) -> Result[Map[String, String], String] {
+    let mut aliases: Map[String, String] = {}
+    for key in map_keys(registry) {
+        match map_get(registry, key) {
+            none => {}
+            some(spec_json) => {
+                let spec: CommandSpec = command_spec_parse(spec_json)?
+                for alias in spec.aliases {
+                    aliases = map_insert(aliases, alias, spec.name)
+                }
+            }
+        }
+    }
+    return ok(aliases)
+}
+
+impl Bot {
+
+    // Attaches a callback handler to the named dispatch slot and stores the
+    // validated spec so checks, cooldowns and converters run before it.
+    pub fn register_command(spec_json: String, handler: String) -> Result[Nil, String] {
+        let spec: CommandSpec = command_spec_parse(spec_json)?
+        if spec.kind == "help" {
+            if handler != "" { return err("help commands are handled by the runtime and take no handler") }
+        } else if spec.kind == "group" && !spec.invoke_without_command {
+            if handler != "" { return err("group '" + spec.name + "' never invokes without a subcommand, so it takes no handler") }
+        } else if handler == "" {
+            return err("register_command requires a handler for command " + spec.name)
+        }
+        if handler != "" && !command_identifier(handler) { return err("command handler must be a function name: " + handler) }
+        let registry: Map[String, String] = shared_read(self.commands)
+        if len(map_keys(registry)) >= command_registry_limit() { return err("the command registry holds at most " + str(command_registry_limit()) + " commands") }
+        let mut taken: Array[String] = []
+        for existing_name in map_keys(registry) {
+            taken = array_push(taken, existing_name)
+            match map_get(registry, existing_name) {
+                none => {}
+                some(existing_json) => {
+                    let existing: CommandSpec = command_spec_parse(existing_json)?
+                    for alias in existing.aliases {
+                        taken = array_push(taken, alias)
+                    }
+                }
+            }
+        }
+        if array_contains(taken, spec.name) { return err("command or alias already registered: " + spec.name) }
+        let mut claimed: Array[String] = [spec.name]
+        for alias in spec.aliases {
+            if array_contains(taken, alias) { return err("command or alias already registered: " + alias) }
+            if array_contains(claimed, alias) { return err("duplicate command alias: " + alias) }
+            claimed = array_push(claimed, alias)
+        }
+        let canonical: String = json_stringify(json_parse(spec_json)?)
+        shared_write(self.commands, map_insert(registry, spec.name, canonical))
+        if handler == "" { return ok(nil) }
+        let registered: Result[Nil, String] = poly_register("discord.on_prefix_command." + spec.name, handler, 0)
+        match registered {
+            ok(_) => { return ok(nil) }
+            err(problem) => {
+                shared_write(self.commands, map_remove(registry, spec.name))
+                return err("register_command could not attach handler " + handler + ": " + problem)
+            }
+        }
+    }
+
+    pub fn unregister_command(name: String) -> Result[Nil, String] {
+        let registry: Map[String, String] = shared_read(self.commands)
+        match map_get(registry, name) {
+            none => { return err("command is not registered: " + name) }
+            some(_) => {
+                shared_write(self.commands, map_remove(registry, name))
+                return ok(nil)
+            }
+        }
+    }
+
+    pub fn registered_command(name: String) -> Result[String, String] {
+        let registry: Map[String, String] = shared_read(self.commands)
+        match map_get(registry, name) {
+            some(spec_json) => { return ok(spec_json) }
+            none => { return err("command is not registered: " + name) }
+        }
+    }
+
+    pub fn registered_commands_json() -> String {
+        let registry: Map[String, String] = shared_read(self.commands)
+        match command_summaries_json(registry) {
+            ok(text) => { return text }
+            err(_) => { return "[]" }
+        }
+    }
+}
+
+fn commands_context_member(context: Context) -> Result[Json, String] {
+    let message: Json = json_object_get(context.raw(), "message")?
+    let member: Json = json_object_get(message, "member")?
+    if json_kind(member) != "object" { return err("message has no member payload") }
+    return ok(member)
+}
+
+fn commands_author_id(context: Context) -> String {
+    match context.author() {
+        ok(author) => { return author.id }
+        err(_) => { return "" }
+    }
+}
+
+fn commands_member_payload(bot: Bot, context: Context) -> Result[Json, String] {
+    match commands_context_member(context) {
+        ok(member) => { return ok(member) }
+        err(_) => {
+            let guild_id: String = context.guild_id()
+            let author_id: String = commands_author_id(context)
+            if guild_id == "" || author_id == "" { return err("member data is missing from the message") }
+            return bot.cache_get("member", guild_id + ":" + author_id)
+        }
+    }
+}
+
+fn commands_check_permissions(bot: Bot, check: Json, context: Context) -> Result[String, String] {
+    let guild_id: String = context.guild_id()
+    if guild_id == "" { return ok("This command can only be used in a server.") }
+    let channel_id: String = context.channel_id()
+    if channel_id == "" { return ok("This command needs a server channel.") }
+    let member_result: Result[Json, String] = commands_member_payload(bot, context)
+    match member_result {
+        err(problem) => { return ok("Member data is unavailable: " + problem) }
+        ok(member) => {
+            let permission_result: Result[UInt64, String] = channel_permissions_for(bot, guild_id, channel_id, member)
+            match permission_result {
+                err(problem) => { return ok("Permissions could not be determined: " + problem) }
+                ok(bits) => {
+                    let permissions: Array[Json] = json_optional_array(check, "permissions")?
+                    let mut missing: Array[String] = []
+                    for permission in permissions {
+                        let name: String = json_string(permission)?
+                        let bit: UInt64 = permission_bit(name)?
+                        if (bits & bit) != bit { missing = array_push(missing, name) }
+                    }
+                    if len(missing) == 0 { return ok("") }
+                    return ok("Missing permissions: " + array_join(missing, ", ") + ".")
+                }
+            }
+        }
+    }
+}
+
+fn commands_check_guild_owner(bot: Bot, context: Context) -> Result[String, String] {
+    let guild_id: String = context.guild_id()
+    if guild_id == "" { return ok("This command can only be used in a server.") }
+    let author_id: String = commands_author_id(context)
+    match bot.cache_get("guild", guild_id) {
+        err(_) => { return ok("The server is not cached yet.") }
+        ok(guild) => {
+            let owner_id: String = json_optional_string(guild, "owner_id")?
+            if owner_id != "" && author_id != "" && owner_id == author_id { return ok("") }
+            return ok("Only the server owner can use this command.")
+        }
+    }
+}
+
+fn commands_custom_check(name: String, context_text: String) -> Result[String, String] {
+    let result: Result[String, String] = poly_dispatch("discord.command_check." + name, context_text)
+    match result {
+        ok(reply) => {
+            if reply == "" { return ok("") }
+            return ok(reply)
+        }
+        err(problem) => {
+            if problem == "dispatch slot has no registered handlers" {
+                return ok("Check '" + name + "' has no registered handler.")
+            }
+            return ok("Check '" + name + "' failed: " + problem)
+        }
+    }
+}
+
+fn commands_run_check(bot: Bot, check_text: String, context: Context) -> Result[String, String] {
+    let value: Json = json_parse(check_text)?
+    if json_kind(value) == "object" {
+        let kind: String = json_string(json_object_get(value, "kind")?)?
+        if kind == "has_permissions" { return commands_check_permissions(bot, value, context) }
+        return err("unknown check kind: " + kind)
+    }
+    let name: String = json_string(value)?
+    if name == "guild_only" {
+        if context.guild_id() != "" { return ok("") }
+        return ok("This command can only be used in a server.")
+    }
+    if name == "dm_only" {
+        if context.guild_id() == "" { return ok("") }
+        return ok("This command can only be used in a direct message.")
+    }
+    if name == "guild_owner" { return commands_check_guild_owner(bot, context) }
+    return commands_custom_check(name, json_stringify(context.raw()))
+}
+
+fn commands_scope_id(scope: String, context: Context) -> String {
+    if scope == "global" { return "global" }
+    if scope == "author" {
+        let author_id: String = commands_author_id(context)
+        if author_id != "" { return author_id }
+        return "unknown-author"
+    }
+    if scope == "channel" {
+        let channel_id: String = context.channel_id()
+        if channel_id != "" { return channel_id }
+        return "direct-message"
+    }
+    let guild_id: String = context.guild_id()
+    if guild_id != "" { return guild_id }
+    return "direct-message:" + context.channel_id()
+}
+
+fn commands_prune_cooldowns(states: Map[String, String], now: Int) -> Map[String, String] {
+    let mut kept: Map[String, String] = {}
+    for key in map_keys(states) {
+        match map_get(states, key) {
+            none => {}
+            some(raw) => {
+                let parts: Array[String] = split(raw, ":")
+                let mut reset: Int = 0
+                if len(parts) == 2 {
+                    match parse_decimal_int(parts[1]) {
+                        ok(value) => { reset = value }
+                        err(_) => {}
+                    }
+                }
+                if reset > now { kept = map_insert(kept, key, raw) }
+            }
+        }
+    }
+    return kept
+}
+
+fn commands_consume_cooldown(bot: Bot, path: String, cooldown_text: String, context: Context) -> Result[String, String] {
+    if cooldown_text == "" { return ok("") }
+    let cooldown: Json = json_parse(cooldown_text)?
+    let number: Int = json_int(json_object_get(cooldown, "number")?)?
+    let period: Int = json_int(json_object_get(cooldown, "period_ms")?)?
+    let scope: String = json_string(json_object_get(cooldown, "scope")?)?
+    let key: String = path + "|" + commands_scope_id(scope, context)
+    let now: Int = datetime_unix_ms()
+    let mut states: Map[String, String] = shared_read(bot.cooldowns)
+    if len(map_keys(states)) > 4096 { states = commands_prune_cooldowns(states, now) }
+    let mut uses: Int = 0
+    let mut reset: Int = 0
+    match map_get(states, key) {
+        none => {}
+        some(raw) => {
+            let parts: Array[String] = split(raw, ":")
+            if len(parts) == 2 {
+                match parse_decimal_int(parts[0]) {
+                    ok(value) => { uses = value }
+                    err(_) => { uses = 0 }
+                }
+                match parse_decimal_int(parts[1]) {
+                    ok(value) => { reset = value }
+                    err(_) => { reset = 0 }
+                }
+            }
+        }
+    }
+    if now >= reset { uses = 0 }
+    if uses >= number {
+        let mut retry: Int = reset - now
+        if retry < 0 { retry = 0 }
+        let seconds: Int = (retry + 999) / 1000
+        return ok("You are on cooldown. Try again in " + str(seconds) + "s.")
+    }
+    if uses == 0 { reset = now + period }
+    states = map_insert(states, key, str(uses + 1) + ":" + str(reset))
+    shared_write(bot.cooldowns, states)
+    return ok("")
+}
+
+fn commands_entity_id(raw: String) -> Result[String, String] {
+    if valid_snowflake(raw) { return ok(raw) }
+    if starts_with(raw, "<") && ends_with(raw, ">") && len(raw) >= 3 {
+        let inner: String = substring(raw, 1, len(raw) - 2)?
+        let mut body: String = inner
+        if starts_with(body, "@&") {
+            body = substring(body, 2, len(body) - 2)?
+        } else if starts_with(body, "@!") {
+            body = substring(body, 2, len(body) - 2)?
+        } else if starts_with(body, "@") {
+            body = substring(body, 1, len(body) - 1)?
+        } else if starts_with(body, "#") {
+            body = substring(body, 1, len(body) - 1)?
+        }
+        if valid_snowflake(body) { return ok(body) }
+    }
+    return err("'" + raw + "' is not a valid user, role, or channel reference")
+}
+
+fn commands_cached_entity(bot: Bot, kind: String, id: String) -> Option[Json] {
+    match bot.cache_get(kind, id) {
+        ok(value) => { return some(value) }
+        err(_) => { return none() }
+    }
+}
+
+fn commands_convert_entity(bot: Bot, context: Context, converter: String, raw: String) -> Result[Json, String] {
+    let id: String = commands_entity_id(raw)?
+    let guild_id: String = context.guild_id()
+    if converter == "user" {
+        match commands_cached_entity(bot, "user", id) {
+            some(value) => { return ok(value) }
+            none => {}
+        }
+        match bot.get_user(id) {
+            ok(value) => { return ok(value) }
+            err(problem) => { return err("User '" + raw + "' was not found: " + problem) }
+        }
+    }
+    if converter == "member" {
+        if guild_id == "" { return err("Member arguments require a server.") }
+        match commands_cached_entity(bot, "member", guild_id + ":" + id) {
+            some(value) => { return ok(value) }
+            none => {}
+        }
+        match bot.get_guild_member(guild_id, id) {
+            ok(value) => { return ok(value) }
+            err(problem) => { return err("Member '" + raw + "' was not found: " + problem) }
+        }
+    }
+    if converter == "role" {
+        if guild_id == "" { return err("Role arguments require a server.") }
+        match commands_cached_entity(bot, "role", guild_id + ":" + id) {
+            some(value) => { return ok(value) }
+            none => {}
+        }
+        return err("Role '" + raw + "' is not cached in this server.")
+    }
+    if converter == "channel" {
+        if guild_id != "" {
+            match commands_cached_entity(bot, "channel", id) {
+                some(value) => {
+                    let channel: Channel = channel_from_json(value)?
+                    if channel.guild_id == "" || channel.guild_id == guild_id { return ok(value) }
+                }
+                none => {}
+            }
+            match commands_cached_entity(bot, "thread", id) {
+                some(value) => {
+                    let thread: Channel = channel_from_json(value)?
+                    if thread.guild_id == "" || thread.guild_id == guild_id { return ok(value) }
+                }
+                none => {}
+            }
+        }
+        match bot.get_channel(id) {
+            ok(value) => { return ok(value) }
+            err(problem) => { return err("Channel '" + raw + "' was not found: " + problem) }
+        }
+    }
+    match commands_cached_entity(bot, "user", id) {
+        some(value) => { return ok(value) }
+        none => {}
+    }
+    if guild_id != "" {
+        match commands_cached_entity(bot, "member", guild_id + ":" + id) {
+            some(value) => { return ok(value) }
+            none => {}
+        }
+        match commands_cached_entity(bot, "role", guild_id + ":" + id) {
+            some(value) => { return ok(value) }
+            none => {}
+        }
+    }
+    match commands_cached_entity(bot, "channel", id) {
+        some(value) => { return ok(value) }
+        none => {}
+    }
+    return err("'" + raw + "' does not resolve to a cached user, member, role, or channel")
+}
+
+fn commands_convert_value(bot: Bot, context: Context, converter: String, raw: String) -> Result[Json, String] {
+    let base: String = converter_name(converter)
+    if base == "string" { return json_parse(json_quote(raw)?) }
+    if base == "snowflake" {
+        if !valid_snowflake(raw) { return err("'" + raw + "' is not a Discord snowflake ID") }
+        return json_parse(json_quote(raw)?)
+    }
+    if base == "int" {
+        let parsed: Result[Int, String] = parse_decimal_int(raw)
+        match parsed {
+            err(problem) => { return err("'" + raw + "' is not an integer: " + problem) }
+            ok(value) => { return json_parse(str(value)) }
+        }
+    }
+    if base == "float" {
+        let parsed: Result[Float, String] = parse_decimal_float(raw)
+        match parsed {
+            err(problem) => { return err("'" + raw + "' is not a number: " + problem) }
+            ok(value) => { return json_parse(str(value)) }
+        }
+    }
+    if base == "bool" {
+        let normalized: String = string_to_lower(trim(raw))
+        if normalized == "true" || normalized == "yes" || normalized == "y" || normalized == "t" || normalized == "1" || normalized == "on" {
+            return json_parse("true")
+        }
+        if normalized == "false" || normalized == "no" || normalized == "n" || normalized == "f" || normalized == "0" || normalized == "off" {
+            return json_parse("false")
+        }
+        return err("'" + raw + "' is not a boolean; expected true/false, yes/no, or 1/0")
+    }
+    if base == "user" || base == "member" || base == "role" || base == "channel" || base == "mentionable" {
+        return commands_convert_entity(bot, context, base, raw)
+    }
+    return err("unknown converter: " + base)
+}
+
+fn commands_required_arguments(spec: CommandSpec, remaining: Array[String]) -> Result[String, String] {
+    if len(spec.parameters) == 0 { return ok("") }
+    let mut index: Int = len(remaining)
+    while index < len(spec.parameters) {
+        let parameter: Json = json_parse(spec.parameters[index])?
+        let name: String = json_string(json_object_get(parameter, "name")?)?
+        let converter: String = json_string(json_object_get(parameter, "converter")?)?
+        if !converter_is_optional(converter) {
+            return err("Missing required argument '" + name + "' (expected " + converter_name(converter) + ")")
+        }
+        index = index + 1
+    }
+    return ok("")
+}
+
+fn commands_convert_parameters(bot: Bot, spec: CommandSpec, remaining: Array[String], context: Context) -> Result[String, String] {
+    let mut entries: Array[String] = []
+    let mut index: Int = 0
+    for parameter_text in spec.parameters {
+        let parameter: Json = json_parse(parameter_text)?
+        let name: String = json_string(json_object_get(parameter, "name")?)?
+        let converter: String = json_string(json_object_get(parameter, "converter")?)?
+        let mut raw: String = ""
+        match array_get(remaining, index) {
+            some(value) => { raw = value }
+            none => {}
+        }
+        if raw == "" && !converter_is_optional(converter) {
+            return err("Missing required argument '" + name + "' (expected " + converter_name(converter) + ")")
+        }
+        if raw != "" {
+            let converted: Json = commands_convert_value(bot, context, converter, raw)?
+            entries = array_push(entries, json_quote(name)? + ":" + json_stringify(converted))
+        }
+        index = index + 1
+    }
+    return ok(json_object_of_texts(entries))
+}
+
+fn commands_error_payload(path: String, kind: String, message: String, context: String) -> Result[String, String] {
+    if !ends_with(context, "}") { return err("command context is not a JSON object") }
+    let head: String = substring(context, 0, len(context) - 1)?
+    let mut payload: String = head
+    payload = payload + ",\"error\":" + json_quote(kind)?
+    payload = payload + ",\"error_message\":" + json_quote(message)?
+    payload = payload + ",\"error_command\":" + json_quote(path)?
+    return ok(payload + "}")
+}
+
+// Reports a command failure through the named and generic error slots and
+// falls back to a visible message so a silent failure never hides the cause.
+fn commands_report_error(path: String, kind: String, message: String, context: String) -> Result[Option[String], String] {
+    let payload: String = commands_error_payload(path, kind, message, context)?
+    let mut reply: Option[String] = some(message)
+    let named: Result[String, String] = poly_dispatch("discord.on_command_error." + path, payload)
+    match named {
+        ok(value) => { reply = some(value) }
+        err(problem) => {
+            if problem == "dispatch slot has no registered handlers" {
+                let generic: Result[String, String] = poly_dispatch("discord.on_command_error", payload)
+                match generic {
+                    ok(value) => { reply = some(value) }
+                    err(problem2) => {
+                        if problem2 != "dispatch slot has no registered handlers" {
+                            println("Discord command error handler failed: " + problem2)
+                        }
+                    }
+                }
+            } else {
+                println("Discord command error handler for '" + path + "' failed: " + problem)
+            }
+        }
+    }
+    return ok(reply)
+}
+
+fn commands_enrich_context(context: String, path: String, invoked_as: String, converted: String, summaries: String) -> Result[String, String] {
+    if !ends_with(context, "}") { return err("command context is not a JSON object") }
+    let head: String = substring(context, 0, len(context) - 1)?
+    let mut enriched: String = head
+    enriched = enriched + ",\"resolved_command\":" + json_quote(path)?
+    enriched = enriched + ",\"invoked_as\":" + json_quote(invoked_as)?
+    enriched = enriched + ",\"converted\":" + converted
+    enriched = enriched + ",\"commands\":" + summaries
+    return ok(enriched + "}")
+}
+
+fn commands_check_label(check_text: String) -> String {
+    let value: Result[Json, String] = json_parse(check_text)
+    match value {
+        err(_) => { return check_text }
+        ok(parsed) => {
+            if json_kind(parsed) == "object" {
+                let mut label: String = "has_permissions("
+                match json_optional_array(parsed, "permissions") {
+                    ok(permissions) => {
+                        let mut names: Array[String] = []
+                        for permission in permissions {
+                            match json_string(permission) {
+                                ok(name) => { names = array_push(names, name) }
+                                err(_) => {}
+                            }
+                        }
+                        label = label + array_join(names, ", ")
+                    }
+                    err(_) => {}
+                }
+                return label + ")"
+            }
+            match json_string(parsed) {
+                ok(name) => { return name }
+                err(_) => { return check_text }
+            }
+        }
+    }
+}
+
+fn commands_json_text(value: Json, key: String, fallback: String) -> String {
+    match json_object_get(value, key) {
+        err(_) => { return fallback }
+        ok(found) => {
+            match json_string(found) {
+                ok(text) => { return text }
+                err(_) => { return fallback }
+            }
+        }
+    }
+}
+
+fn commands_json_int(value: Json, key: String, fallback: Int) -> Int {
+    match json_object_get(value, key) {
+        err(_) => { return fallback }
+        ok(found) => {
+            match json_int(found) {
+                ok(number) => { return number }
+                err(_) => { return fallback }
+            }
+        }
+    }
+}
+
+fn commands_usage(prefix: String, spec: CommandSpec) -> String {
+    let mut usage: String = prefix + replace(spec.name, ".", " ")
+    if spec.kind == "group" { usage = usage + " <subcommand>" }
+    if len(spec.parameters) > 0 {
+        for parameter_text in spec.parameters {
+            let parameter: Result[Json, String] = json_parse(parameter_text)
+            match parameter {
+                ok(parsed) => {
+                    let name: String = commands_json_text(parsed, "name", "?")
+                    let converter: String = commands_json_text(parsed, "converter", "string")
+                    if converter_is_optional(converter) { usage = usage + " [" + name + "]" }
+                    else { usage = usage + " <" + name + ">" }
+                }
+                err(_) => {}
+            }
+        }
+    }
+    return usage
+}
+
+fn commands_cooldown_label(cooldown_text: String) -> String {
+    let cooldown: Result[Json, String] = json_parse(cooldown_text)
+    match cooldown {
+        err(_) => { return cooldown_text }
+        ok(parsed) => {
+            let number: Int = commands_json_int(parsed, "number", 0)
+            let period: Int = commands_json_int(parsed, "period_ms", 0)
+            let scope: String = commands_json_text(parsed, "scope", "author")
+            let mut period_label: String = str(period) + "ms"
+            if period % 1000 == 0 { period_label = str(period / 1000) + "s" }
+            return str(number) + " use(s) per " + period_label + " (" + scope + ")"
+        }
+    }
+}
+
+fn commands_help_reply(bot: Bot, spec: CommandSpec, remaining: Array[String], context: Context, context_text: String) -> Result[Option[String], String] {
+    let prefix: String = context.prefix()
+    let registry: Map[String, String] = shared_read(bot.commands)
+    if len(remaining) == 0 {
+        let mut lines: Array[String] = []
+        let mut size: Int = 0
+        let mut truncated: Bool = false
+        for key in map_keys(registry) {
+            match map_get(registry, key) {
+                none => {}
+                some(spec_json) => {
+                    let entry: CommandSpec = command_spec_parse(spec_json)?
+                    let mut line: String = prefix + replace(entry.name, ".", " ") + " - " + entry.help
+                    if len(entry.aliases) > 0 { line = line + " (aliases: " + array_join(entry.aliases, ", ") + ")" }
+                    if size + len(line) > 1700 {
+                        truncated = true
+                    } else {
+                        lines = array_push(lines, line)
+                        size = size + len(line) + 1
+                    }
+                }
+            }
+        }
+        let mut reply: String = "Commands:\n" + array_join(lines, "\n")
+        if truncated { reply = reply + "\n..." }
+        reply = reply + "\nUse " + prefix + "help <command> for details."
+        return ok(some(reply))
+    }
+    let aliases: Map[String, String] = commands_alias_map(registry)?
+    let mut tokens: Array[String] = remaining
+    match map_get(aliases, tokens[0]) {
+        some(canonical) => {
+            match array_set(tokens, 0, canonical) {
+                ok(replaced) => { tokens = replaced }
+                err(_) => {}
+            }
+        }
+        none => {}
+    }
+    let target: String = array_join(tokens, ".")
+    let mut matched: Option[String] = none()
+    match map_get(registry, target) {
+        some(text) => { matched = some(text) }
+        none => {}
+    }
+    if is_none(matched) && len(tokens) > 1 {
+        match map_get(registry, tokens[0]) {
+            some(text) => { matched = some(text) }
+            none => {}
+        }
+    }
+    match matched {
+        none => { return ok(some("No such command: " + target)) }
+        some(spec_json) => {
+            let entry: CommandSpec = command_spec_parse(spec_json)?
+            let mut reply: String = "Command: " + entry.name + "\n"
+            reply = reply + "Help: " + entry.help + "\n"
+            if len(entry.aliases) > 0 { reply = reply + "Aliases: " + array_join(entry.aliases, ", ") + "\n" }
+            reply = reply + "Usage: " + commands_usage(prefix, entry) + "\n"
+            if len(entry.checks) > 0 {
+                let mut labels: Array[String] = []
+                for check_text in entry.checks {
+                    labels = array_push(labels, commands_check_label(check_text))
+                }
+                reply = reply + "Checks: " + array_join(labels, ", ") + "\n"
+            }
+            if entry.cooldown != "" { reply = reply + "Cooldown: " + commands_cooldown_label(entry.cooldown) + "\n" }
+            return ok(some(reply))
+        }
+    }
+}
+
+fn commands_invoke(bot: Bot, spec: CommandSpec, path: String, invoked_as: String, remaining: Array[String], context: Context, context_text: String) -> Result[Option[String], String] {
+    for check_text in spec.checks {
+        let check_result: Result[String, String] = commands_run_check(bot, check_text, context)
+        match check_result {
+            err(problem) => { return commands_report_error(path, "check_failure", problem, context_text) }
+            ok(failure) => {
+                if failure != "" { return commands_report_error(path, "check_failure", failure, context_text) }
+            }
+        }
+    }
+    if spec.cooldown != "" {
+        let cooldown_result: Result[String, String] = commands_consume_cooldown(bot, path, spec.cooldown, context)
+        match cooldown_result {
+            err(problem) => { return commands_report_error(path, "cooldown", problem, context_text) }
+            ok(failure) => {
+                if failure != "" { return commands_report_error(path, "cooldown", failure, context_text) }
+            }
+        }
+    }
+    if len(spec.parameters) > 0 && len(remaining) > len(spec.parameters) {
+        return commands_report_error(path, "too_many_arguments", "'" + path + "' expects at most " + str(len(spec.parameters)) + " argument(s).", context_text)
+    }
+    let required_result: Result[String, String] = commands_required_arguments(spec, remaining)
+    match required_result {
+        err(problem) => { return commands_report_error(path, "missing_argument", problem, context_text) }
+        ok(_) => {}
+    }
+    let converted_result: Result[String, String] = commands_convert_parameters(bot, spec, remaining, context)
+    let mut converted: String = ""
+    match converted_result {
+        ok(text) => { converted = text }
+        err(problem) => { return commands_report_error(path, "bad_argument", problem, context_text) }
+    }
+    let summaries_result: Result[String, String] = command_summaries_json(shared_read(bot.commands))
+    let mut summaries: String = "[]"
+    match summaries_result {
+        ok(text) => { summaries = text }
+        err(_) => { return commands_report_error(path, "command_failure", "The command registry could not be read.", context_text) }
+    }
+    let enriched_result: Result[String, String] = commands_enrich_context(context_text, path, invoked_as, converted, summaries)
+    let mut enriched: String = ""
+    match enriched_result {
+        ok(text) => { enriched = text }
+        err(problem) => { return err("Discord command context could not be enriched: " + problem) }
+    }
+    let dispatch: Result[String, String] = poly_dispatch("discord.on_prefix_command." + path, enriched)
+    match dispatch {
+        ok(reply) => { return ok(some(reply)) }
+        err(problem) => {
+            if problem == "dispatch slot has no registered handlers" {
+                return commands_report_error(path, "command_failure", "Command '" + path + "' has no registered handler.", context_text)
+            }
+            println("Discord command handler for '" + path + "' failed: " + problem)
+            return commands_report_error(path, "command_failure", "Command '" + path + "' failed: " + problem, context_text)
+        }
+    }
+}
+
+fn commands_not_routed() -> Result[Option[String], String] {
+    let outcome: Option[String] = none()
+    return ok(outcome)
+}
+
+// Routes a parsed prefix context through the registered command pipeline.
+// ok(none) means the command is not registered and the legacy named slots
+// should run unchanged.
+fn commands_route(bot: Bot, context_text: String) -> Result[Option[String], String] {
+    if context_text == "" { return commands_not_routed() }
+    let registry: Map[String, String] = shared_read(bot.commands)
+    if len(map_keys(registry)) == 0 { return commands_not_routed() }
+    let context: Context = context_from_json(context_text)?
+    if context.parse_error() != "" { return commands_not_routed() }
+    let first: String = context.command()
+    if first == "" { return commands_not_routed() }
+    let aliases: Map[String, String] = commands_alias_map(registry)?
+    let mut resolved_first: String = first
+    match map_get(aliases, first) {
+        some(canonical) => { resolved_first = canonical }
+        none => {}
+    }
+    let mut tokens: Array[String] = [resolved_first]
+    for argument in context.parsed_arguments() {
+        tokens = array_push(tokens, argument)
+    }
+    let mut limit: Int = len(tokens)
+    if limit > command_path_limit() { limit = command_path_limit() }
+    let mut matched_path: String = ""
+    let mut matched_depth: Int = 0
+    let mut matched_spec: Option[CommandSpec] = none()
+    let mut depth: Int = limit
+    while depth >= 1 && matched_depth == 0 {
+        let mut path: String = tokens[0]
+        let mut index: Int = 1
+        while index < depth {
+            path = path + "." + tokens[index]
+            index = index + 1
+        }
+        match map_get(registry, path) {
+            none => {}
+            some(spec_json) => {
+                matched_path = path
+                matched_depth = depth
+                matched_spec = some(command_spec_parse(spec_json)?)
+            }
+        }
+        depth = depth - 1
+    }
+    if matched_depth == 0 { return commands_not_routed() }
+    let remaining: Array[String] = array_slice(tokens, matched_depth, len(tokens) - matched_depth)
+    let mut spec: CommandSpec = CommandSpec{name: "", kind: "command", help: "", aliases: [], checks: [], cooldown: "", parameters: [], invoke_without_command: false}
+    let mut found_spec: Bool = false
+    match matched_spec {
+        none => { return commands_not_routed() }
+        some(found) => {
+            spec = found
+            found_spec = true
+        }
+    }
+    if !found_spec { return commands_not_routed() }
+    if spec.kind == "help" {
+        return commands_help_reply(bot, spec, remaining, context, context_text)
+    }
+    if spec.kind == "group" {
+        if spec.invoke_without_command {
+            return commands_invoke(bot, spec, matched_path, first, remaining, context, context_text)
+        }
+        if len(remaining) == 0 {
+            return commands_report_error(matched_path, "missing_subcommand", "Command '" + matched_path + "' requires a subcommand.", context_text)
+        }
+        return commands_report_error(matched_path, "command_not_found", "Unknown subcommand '" + remaining[0] + "' for '" + matched_path + "'.", context_text)
+    }
+    return commands_invoke(bot, spec, matched_path, first, remaining, context, context_text)
+}

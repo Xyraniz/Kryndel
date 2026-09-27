@@ -11,6 +11,8 @@ pub struct Bot {
     private prefixes: Array[String],
     private user_account: Bool,
     private event_namespace: String,
+    private commands: Shared[Map[String, String]],
+    private cooldowns: Shared[Map[String, String]],
 }
 
 struct GatewaySessionState {
@@ -32,12 +34,16 @@ pub fn bot(token: String, intents: Array[String]) -> Result[Bot, String] {
         err(problem) => { return err(problem) }
         ok(_) => {}
     }
-    return ok(Bot{token: token, intents: intents, gateway: "https://discord.com/api/v10/gateway/bot", shard_id: 0, shard_count: 1, prefixes: [], user_account: false, event_namespace: "discord"})
+    let empty_commands: Map[String, String] = {}
+    let empty_cooldowns: Map[String, String] = {}
+    return ok(Bot{token: token, intents: intents, gateway: "https://discord.com/api/v10/gateway/bot", shard_id: 0, shard_count: 1, prefixes: [], user_account: false, event_namespace: "discord", commands: shared_new(empty_commands), cooldowns: shared_new(empty_cooldowns)})
 }
 
 pub fn user_account_client(token: String) -> Result[Bot, String] {
     if !valid_token(token) { return err("Discord user token must be non-empty and contain no control characters") }
-    return ok(Bot{token: token, intents: [], gateway: "wss://gateway.discord.gg", shard_id: 0, shard_count: 1, prefixes: [], user_account: true, event_namespace: "discord_self"})
+    let empty_commands: Map[String, String] = {}
+    let empty_cooldowns: Map[String, String] = {}
+    return ok(Bot{token: token, intents: [], gateway: "wss://gateway.discord.gg", shard_id: 0, shard_count: 1, prefixes: [], user_account: true, event_namespace: "discord_self", commands: shared_new(empty_commands), cooldowns: shared_new(empty_cooldowns)})
 }
 
 pub fn webhook(id: String, token: String) -> Result[Webhook, String] {

@@ -1,0 +1,191 @@
+// Typed view over the prefix-command context JSON that Discord callbacks
+// receive, plus accessors for converted command arguments.
+
+pub struct Context {
+    private data: Json,
+}
+
+pub fn context_from_json(context_json: String) -> Result[Context, String] {
+    let parsed: Json = json_parse(context_json)?
+    if json_kind(parsed) != "object" { return err("command context must be a JSON object") }
+    let message_value: Json = json_object_get(parsed, "message")?
+    if json_kind(message_value) != "object" { return err("command context message must be a JSON object") }
+    let command_value: Json = json_object_get(parsed, "command")?
+    let command: String = json_string(command_value)?
+    if command == "" { return err("command context command must not be empty") }
+    return ok(Context{data: parsed})
+}
+
+impl Context {
+    fn text(key: String) -> String {
+        match json_object_get(self.data, key) {
+            err(_) => { return "" }
+            ok(found) => {
+                if json_is_null(found) { return "" }
+                match json_string(found) {
+                    ok(value) => { return value }
+                    err(_) => { return "" }
+                }
+            }
+        }
+    }
+
+    fn list(key: String) -> Array[String] {
+        let mut texts: Array[String] = []
+        match json_object_get(self.data, key) {
+            err(_) => { return texts }
+            ok(found) => {
+                if json_kind(found) != "array" { return texts }
+                match json_array_len(found) {
+                    err(_) => { return texts }
+                    ok(count) => {
+                        let mut index: Int = 0
+                        while index < count {
+                            match json_array_get(found, index) {
+                                err(_) => { return texts }
+                                ok(element) => {
+                                    match json_string(element) {
+                                        ok(text) => { texts = array_push(texts, text) }
+                                        err(_) => { return texts }
+                                    }
+                                }
+                            }
+                            index = index + 1
+                        }
+                        return texts
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn raw() -> Json {
+        return self.data
+    }
+
+    pub fn prefix() -> String {
+        return self.text("prefix")
+    }
+
+    pub fn command() -> String {
+        return self.text("command")
+    }
+
+    pub fn resolved_command() -> String {
+        let resolved: String = self.text("resolved_command")
+        if resolved != "" { return resolved }
+        return self.command()
+    }
+
+    pub fn invoked_as() -> String {
+        let invoked: String = self.text("invoked_as")
+        if invoked != "" { return invoked }
+        return self.command()
+    }
+
+    pub fn arguments() -> Array[String] {
+        return self.list("arguments")
+    }
+
+    pub fn parsed_arguments() -> Array[String] {
+        return self.list("parsed_arguments")
+    }
+
+    pub fn argument_text() -> String {
+        return self.text("argument_text")
+    }
+
+    pub fn raw_argument_text() -> String {
+        return self.text("raw_argument_text")
+    }
+
+    pub fn parse_error() -> String {
+        return self.text("parse_error")
+    }
+
+    pub fn message() -> Result[Message, String] {
+        let value: Json = json_object_get(self.data, "message")?
+        return message_from_json(value)
+    }
+
+    pub fn author() -> Result[User, String] {
+        let message: Message = self.message()?
+        return ok(message.author)
+    }
+
+    pub fn channel_id() -> String {
+        match self.message() {
+            ok(message) => { return message.channel_id }
+            err(_) => { return "" }
+        }
+    }
+
+    pub fn guild_id() -> String {
+        match self.message() {
+            ok(message) => { return message.guild_id }
+            err(_) => { return "" }
+        }
+    }
+
+    pub fn content() -> String {
+        match self.message() {
+            ok(message) => { return message.content }
+            err(_) => { return "" }
+        }
+    }
+
+    pub fn has_converted(name: String) -> Bool {
+        match json_object_get(self.data, "converted") {
+            ok(values) => {
+                match json_object_get(values, name) {
+                    ok(_) => { return true }
+                    err(_) => { return false }
+                }
+            }
+            err(_) => { return false }
+        }
+    }
+
+    pub fn converted(name: String) -> Result[Json, String] {
+        let values: Json = json_object_get(self.data, "converted")?
+        return json_object_get(values, name)
+    }
+
+    pub fn converted_string(name: String) -> Result[String, String] {
+        return json_string(self.converted(name)?)
+    }
+
+    pub fn converted_int(name: String) -> Result[Int, String] {
+        return json_int(self.converted(name)?)
+    }
+
+    pub fn converted_float(name: String) -> Result[Float, String] {
+        return json_float(self.converted(name)?)
+    }
+
+    pub fn converted_bool(name: String) -> Result[Bool, String] {
+        return json_bool(self.converted(name)?)
+    }
+
+    pub fn converted_user(name: String) -> Result[User, String] {
+        return user_from_json(self.converted(name)?)
+    }
+
+    pub fn converted_member(name: String) -> Result[Member, String] {
+        return member_from_json(self.converted(name)?)
+    }
+
+    pub fn converted_role(name: String) -> Result[Role, String] {
+        return role_from_json(self.converted(name)?)
+    }
+
+    pub fn converted_channel(name: String) -> Result[Channel, String] {
+        return channel_from_json(self.converted(name)?)
+    }
+
+    // Registered command summaries (name, kind, help, aliases) so a custom
+    // help callback can render its own layout from the context alone.
+    pub fn commands_json() -> Result[Json, String] {
+        return json_object_get(self.data, "commands")
+    }
+}

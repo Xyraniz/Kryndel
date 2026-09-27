@@ -26,6 +26,7 @@ check: build
 	$(BINARY) check examples/collections.kry
 	$(BINARY) check examples/native_features.kry
 	$(BINARY) check examples/discord_bot.kry
+	$(BINARY) check examples/discord_commands.kry
 	$(BINARY) check examples/runtime_polymorphism.kry
 	$(BINARY) check examples/dispatch_library.kry
 	$(BINARY) check examples/new_builtins.kry

@@ -1,8 +1,12 @@
 // Discord package entry point; implementation is split by subsystem.
 import "models"
 import "validation"
+import "entities"
+import "permissions"
 import "rest"
 import "interactions"
 import "application_commands"
+import "context"
+import "commands"
 import "gateway"
 import "cache"
