@@ -819,6 +819,7 @@ type DispatchEntry struct {
 type Runtime struct {
 	Prog              *Program
 	Checker           *Checker
+	output            io.Writer
 	Funcs             map[string]*Function
 	Args              []string
 	Global            *RunScope
@@ -926,18 +927,42 @@ func (r *Runtime) fail(e *Expr, format string, args ...any) *Diagnostic {
 	}
 	return Diag(CatRuntime, e.Tok.Source, e.Tok.Line, e.Tok.Column, "%s", msg)
 }
-func (r *Runtime) printValue(v Value, newline bool) *Diagnostic {
+func (r *Runtime) printValue(e *Expr, v Value, newline bool) *Diagnostic {
 	s := display(v)
-	if r.Ctx.Output+int64(len(s))+1 > r.Lim.MaxOutputBytes {
-		return Diag(CatResource, r.Prog.Source, 1, 1, "output limit exceeded")
-	}
-	r.Ctx.Output += int64(len(s))
+	outputBytes := int64(len(s))
 	if newline {
-		fmt.Println(s)
-	} else {
-		fmt.Print(s)
+		outputBytes++
 	}
+	if outputBytes > r.Lim.MaxOutputBytes-r.Ctx.Output {
+		return r.outputDiagnostic(e, CatResource, "output limit exceeded")
+	}
+	output := r.output
+	if output == nil {
+		output = os.Stdout
+	}
+	n, err := io.WriteString(output, s)
+	if err != nil || n != len(s) {
+		return r.outputFailure(e)
+	}
+	if newline {
+		n, err = io.WriteString(output, "\n")
+		if err != nil || n != 1 {
+			return r.outputFailure(e)
+		}
+	}
+	r.Ctx.Output += outputBytes
 	return nil
+}
+
+func (r *Runtime) outputFailure(e *Expr) *Diagnostic {
+	return r.outputDiagnostic(e, CatIO, "stream failure")
+}
+
+func (r *Runtime) outputDiagnostic(e *Expr, category Category, message string) *Diagnostic {
+	if e == nil {
+		return Diag(category, r.Prog.Source, 1, 1, "%s", message)
+	}
+	return Diag(category, e.Tok.Source, e.Tok.Line, e.Tok.Column, "%s", message)
 }
 
 type EvalCode int
@@ -1913,9 +1938,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return resVal(true, value), nil
 	case "print":
-		return nilVal(), r.printValue(a[0], false)
+		return nilVal(), r.printValue(e, a[0], false)
 	case "println":
-		return nilVal(), r.printValue(a[0], true)
+		return nilVal(), r.printValue(e, a[0], true)
 	case "len":
 		switch a[0].Kind {
 		case VString:
@@ -4350,7 +4375,7 @@ func (r *Runtime) RunForREPL() *Diagnostic {
 				return d
 			}
 			if v.Kind != VNil {
-				if d := r.printValue(v, true); d != nil {
+				if d := r.printValue(nil, v, true); d != nil {
 					return d
 				}
 			}

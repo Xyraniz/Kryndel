@@ -319,6 +319,7 @@ func (g *cgen) emitFunction(f *Function) {
 func (g *cgen) emitMain() {
 	g.buf.WriteString("int main(void) {\n")
 	fmt.Fprintf(&g.buf, "  k_max_json = %dLL;\n", g.env.Lim.MaxJSONBytes)
+	fmt.Fprintf(&g.buf, "  k_max_out = %dLL;\n", g.env.Lim.MaxOutputBytes)
 	g.buf.WriteString("  k_structs = k_structs_data;\n")
 	g.buf.WriteString("  k_enums = k_enums_data;\n")
 	g.buf.WriteString("  k_poly_names = k_poly_names_data;\n")
