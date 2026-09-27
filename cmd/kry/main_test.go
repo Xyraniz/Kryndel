@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"debug/pe"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -296,6 +297,62 @@ func TestCheckWarningRulesCanBeSelectedIndividually(t *testing.T) {
 	if status, output := capture([]string{"check", "-Wno=KRYW999", path}); status != 2 || !strings.Contains(output, "unknown warning code") {
 		t.Fatalf("unknown warning code should be a usage error, got status %d and %q", status, output)
 	}
+}
+
+func TestCPUProfileOptionForRunAndCheck(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "profile.kry")
+	var source strings.Builder
+	for i := 0; i < 6000; i++ {
+		fmt.Fprintf(&source, "fn profile_%d(value: Int) -> Int { return value + %d }\n", i, i)
+	}
+	source.WriteString(`fn main() -> Nil {
+    let mut index: Int = 0
+    while index < 10000 {
+        index = index + 1
+    }
+    return nil
+}
+`)
+	if err := os.WriteFile(sourcePath, []byte(source.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	assertReadableProfile := func(path string) {
+		t.Helper()
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("CPU profile was not closed and written: %v", err)
+		}
+		if info.Size() == 0 {
+			t.Fatal("CPU profile is empty")
+		}
+		output, err := exec.Command("go", "tool", "pprof", "-top", path).CombinedOutput()
+		if err != nil {
+			t.Fatalf("go tool pprof rejected CPU profile: %v; output: %s", err, output)
+		}
+		if !strings.Contains(string(output), "Type: cpu") {
+			t.Fatalf("go tool pprof output does not identify a CPU profile: %s", output)
+		}
+	}
+
+	for _, command := range []string{"check", "run"} {
+		profilePath := filepath.Join(dir, command+".pprof")
+		if status := run([]string{"--cpuprofile", profilePath, command, sourcePath}); status != 0 {
+			t.Fatalf("%s with CPU profile returned status %d", command, status)
+		}
+		assertReadableProfile(profilePath)
+	}
+
+	failingPath := filepath.Join(dir, "failing.kry")
+	if err := os.WriteFile(failingPath, []byte(source.String()+"fn invalid() -> Int { return \"wrong\" }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failureProfile := filepath.Join(dir, "failure.pprof")
+	if status := run([]string{"--cpuprofile", failureProfile, "check", failingPath}); status != 1 {
+		t.Fatalf("failing check with CPU profile returned status %d, want 1", status)
+	}
+	assertReadableProfile(failureProfile)
 }
 
 func TestEmitAcceptsExplicitKIRTarget(t *testing.T) {

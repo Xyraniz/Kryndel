@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -18,9 +19,10 @@ import (
 const version = kry.CompilerVersion
 
 func main() { os.Exit(run(os.Args[1:])) }
-func run(args []string) int {
+func run(args []string) (status int) {
 	e := kry.NewEngine()
 	jsonMode := false
+	cpuProfilePath := ""
 	i := 0
 	for i < len(args) && strings.HasPrefix(args[i], "--") {
 		switch args[i] {
@@ -33,6 +35,12 @@ func run(args []string) int {
 		case "--json":
 			jsonMode = true
 			i++
+		case "--cpuprofile":
+			if i+1 >= len(args) || args[i+1] == "" {
+				return usage("--cpuprofile requires a path")
+			}
+			cpuProfilePath = args[i+1]
+			i += 2
 		case "--restricted":
 			if i+1 >= len(args) {
 				return usage("--restricted requires ROOT")
@@ -98,6 +106,30 @@ func run(args []string) int {
 	}
 	cmd := args[i]
 	rest := args[i+1:]
+	if cpuProfilePath != "" {
+		if cmd != "run" && cmd != "check" && !isProgramPath(cmd) {
+			return usage("--cpuprofile is only supported with run or check")
+		}
+		profile, err := os.Create(cpuProfilePath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "kry: cannot create CPU profile:", err)
+			return 1
+		}
+		if err := pprof.StartCPUProfile(profile); err != nil {
+			_ = profile.Close()
+			fmt.Fprintln(os.Stderr, "kry: cannot start CPU profile:", err)
+			return 1
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			if err := profile.Close(); err != nil {
+				fmt.Fprintln(os.Stderr, "kry: cannot close CPU profile:", err)
+				if status == 0 {
+					status = 1
+				}
+			}
+		}()
+	}
 	// A source/artifact path is itself a valid command. This is intentional:
 	// desktop file associations invoke `kry path/to/file.kry`, just like a
 	// Python association invokes `python path/to/file.py`.
@@ -963,6 +995,6 @@ func printHelp() {
 	fmt.Println("build formats: kexe, exe/pe (C AOT by default; --no-external-toolchain selects direct PE for Windows x64); elf (C AOT); elf-direct (Linux subset); pe-direct (Windows x64 subset, supports --gui); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --gui, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
 	fmt.Println("check options: -Werror, -Werror=KRYW002,KRYW004, -Wno=KRYW003")
-	fmt.Println("global options: --help, --version, --json, --restricted ROOT (deny unconfined host APIs), --max-source BYTES, --max-artifact BYTES, --max-json BYTES, --max-instructions N, --max-wall-ms N (0 disables the wall-time limit)")
+	fmt.Println("global options: --help, --version, --json, --cpuprofile PATH (check/run), --restricted ROOT (deny unconfined host APIs), --max-source BYTES, --max-artifact BYTES, --max-json BYTES, --max-instructions N, --max-wall-ms N (0 disables the wall-time limit)")
 	fmt.Println("sealed artifacts: --passphrase VALUE, --passphrase-file PATH (AES-256-GCM + PBKDF2-SHA256)")
 }
