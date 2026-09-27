@@ -66,6 +66,7 @@ const (
 	VFFISymbol
 	VFFIBuffer
 	VTailCall
+	VFunction
 )
 
 type regexHandle struct{ re *regexp.Regexp }
@@ -184,7 +185,13 @@ type Value struct {
 	FFILib     *ffiLibraryHandle
 	FFISym     *ffiSymbolHandle
 	FFIBuf     *ffiBufferHandle
+	Callable   *FunctionValue
 	Tail       *TailCall
+}
+
+type FunctionValue struct {
+	Function    *Function
+	Environment *RunScope
 }
 
 type MapEntry struct{ Key, Value Value }
@@ -473,6 +480,11 @@ func display(v Value) string {
 		return "<FFIBuffer>"
 	case VTailCall:
 		return "<tail-call>"
+	case VFunction:
+		if v.Callable != nil && v.Callable.Function != nil {
+			return "<function " + v.Callable.Function.Name + ">"
+		}
+		return "<function>"
 	case VMap:
 		var b strings.Builder
 		b.WriteString("{")
@@ -656,6 +668,8 @@ func equalValue(a, b Value) bool {
 		return a.FFIBuf == b.FFIBuf
 	case VTailCall:
 		return a.Tail == b.Tail
+	case VFunction:
+		return a.Callable == b.Callable
 	case VSet:
 		if len(a.Set) != len(b.Set) {
 
@@ -799,9 +813,10 @@ type TaskGroup struct {
 }
 
 type TailCall struct {
-	Function *Function
-	Receiver *Value
-	Args     []Value
+	Function    *Function
+	Environment *RunScope
+	Receiver    *Value
+	Args        []Value
 }
 
 type Thread struct {
@@ -1352,9 +1367,23 @@ func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 	case ExVar:
 		b, ok := sc.get(e.Name)
 		if !ok {
+			if e.Function != nil {
+				if d := r.Ctx.account(48, e.Tok.Source, e.Tok.Line, e.Tok.Column); d != nil {
+					return nilVal(), d
+				}
+				return Value{Kind: VFunction, Callable: &FunctionValue{Function: e.Function, Environment: r.Global}}, nil
+			}
 			return nilVal(), r.fail(e, "unknown name '%s'", e.Name)
 		}
 		return b.Value, nil
+	case ExLambda:
+		if e.Lambda == nil {
+			return nilVal(), r.fail(e, "malformed closure expression")
+		}
+		if d := r.Ctx.account(64+int64(len(e.Captures))*24, e.Tok.Source, e.Tok.Line, e.Tok.Column); d != nil {
+			return nilVal(), d
+		}
+		return Value{Kind: VFunction, Callable: &FunctionValue{Function: e.Lambda, Environment: sc}}, nil
 	case ExEnum:
 		t := r.Checker.Env.Types[e.EnumType]
 		return Value{Kind: VEnum, Enum: t.Enum, Variant: e.EnumVariant}, nil
@@ -1790,7 +1819,18 @@ func remI(a, b int64) (int64, bool) {
 }
 
 func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
-	if e.Receiver == nil {
+	var callable *FunctionValue
+	if e.Receiver == nil && e.Callee != nil && (e.Callee.Kind != ExVar || func() bool { _, ok := sc.get(e.Callee.Name); return ok }()) {
+		value, d := r.evalExpr(sc, e.Callee)
+		if d != nil {
+			return nilVal(), d
+		}
+		if value.Kind != VFunction || value.Callable == nil || value.Callable.Function == nil {
+			return nilVal(), r.fail(e.Callee, "value is not callable")
+		}
+		callable = value.Callable
+	}
+	if e.Receiver == nil && callable == nil {
 		if b, ok := r.Checker.Env.Builtins[e.Name]; ok {
 			if !r.Sandbox.allowsBuiltin(b) {
 				return nilVal(), r.fail(e, "builtin %q is unavailable with --restricted", b.Name)
@@ -1808,6 +1848,7 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 	}
 	var receiver *Value
 	var f *Function
+	functionEnv := r.Global
 	if e.Receiver != nil {
 		v, d := r.evalExpr(sc, e.Receiver)
 		if d != nil {
@@ -1826,6 +1867,9 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 				f = r.Funcs[methodKey(e.Receiver.Type, e.Name)]
 			}
 		}
+	} else if callable != nil {
+		f = callable.Function
+		functionEnv = callable.Environment
 	} else {
 		f = e.Function
 		if f == nil {
@@ -1852,7 +1896,7 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 	}
 	// Defaults execute after explicit arguments in a scope containing the
 	// receiver and parameters whose values are already known.
-	defaultScope := newRunScope(r.Global)
+	defaultScope := newRunScope(functionEnv)
 	if receiver != nil {
 		_ = defaultScope.define("self", *receiver, false)
 	}
@@ -1872,12 +1916,12 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		_ = defaultScope.define(f.Params[i].Name, v, false)
 	}
 	if e.Tail {
-		return Value{Kind: VTailCall, Tail: &TailCall{Function: f, Receiver: receiver, Args: args}}, nil
+		return Value{Kind: VTailCall, Tail: &TailCall{Function: f, Environment: functionEnv, Receiver: receiver, Args: args}}, nil
 	}
-	return r.invokeFunction(e, f, receiver, args)
+	return r.invokeFunction(e, f, functionEnv, receiver, args)
 }
 
-func (r *Runtime) invokeFunction(e *Expr, f *Function, receiver *Value, args []Value) (Value, *Diagnostic) {
+func (r *Runtime) invokeFunction(e *Expr, f *Function, functionEnv *RunScope, receiver *Value, args []Value) (Value, *Diagnostic) {
 	debugFrameIndex := -1
 	if r.debugger != nil {
 		debugFrameIndex = len(r.debugFrames)
@@ -1895,7 +1939,7 @@ func (r *Runtime) invokeFunction(e *Expr, f *Function, receiver *Value, args []V
 		if debugFrameIndex >= 0 {
 			r.debugFrames[debugFrameIndex].Function = f.Name
 		}
-		child := newRunScope(r.Global)
+		child := newRunScope(functionEnv)
 		if receiver != nil {
 			_ = child.define("self", *receiver, false)
 		}
@@ -1922,6 +1966,7 @@ func (r *Runtime) invokeFunction(e *Expr, f *Function, receiver *Value, args []V
 		}
 		if x.Code == evalReturn && x.Value.Kind == VTailCall && x.Value.Tail != nil {
 			f = x.Value.Tail.Function
+			functionEnv = x.Value.Tail.Environment
 			receiver = x.Value.Tail.Receiver
 			args = x.Value.Tail.Args
 			continue
@@ -1984,7 +2029,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal("dispatch slot has no registered handlers")), nil
 		}
 		f := r.Funcs[entries[0].Handler]
-		value, d := r.invokeFunction(e, f, nil, []Value{a[1]})
+		value, d := r.invokeFunction(e, f, r.Global, nil, []Value{a[1]})
 		if d != nil {
 			return resVal(false, stringVal(d.Message)), nil
 		}

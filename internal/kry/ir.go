@@ -75,6 +75,13 @@ func CompileIR(p *Program, lim Limits) (*ValidatedIR, *Diagnostic) {
 			ex(x, d+1)
 		}
 		ex(e.Receiver, d+1)
+		ex(e.Callee, d+1)
+		if e.Lambda != nil {
+			add(OpFunction, e.Lambda.Tok, d+1)
+			for _, statement := range e.Lambda.Body {
+				st(statement, d+2)
+			}
+		}
 	}
 	st = func(s *Stmt, d int) {
 		if ir == nil || s == nil {

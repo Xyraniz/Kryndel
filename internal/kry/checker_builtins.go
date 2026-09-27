@@ -143,6 +143,9 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		if !compatible(t, u) {
 			return bad("assert_eq arguments must have the same type")
 		}
+		if containsFunctionType(t) {
+			return bad("assert_eq does not support values containing functions")
+		}
 		return TNil, nil
 	case "abs":
 		t, d := arg(0, nil)
@@ -466,6 +469,9 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		if !compatible(t.A, u) {
 			return bad("array_contains needle type mismatch")
 		}
+		if containsFunctionType(t.A) {
+			return bad("array_contains does not support elements containing functions")
+		}
 		return TBool, nil
 	case "array_slice":
 		t, d := arg(0, nil)
@@ -567,6 +573,9 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		if !compatible(t.A, v) {
 			return bad("set_contains value type mismatch")
 		}
+		if containsFunctionType(t.A) {
+			return bad("set_contains does not support elements containing functions")
+		}
 		return TBool, nil
 	case "set_insert":
 		t, d := arg(0, nil)
@@ -582,6 +591,9 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		}
 		if !compatible(t.A, v) {
 			return bad("set_insert value type mismatch")
+		}
+		if containsFunctionType(t.A) {
+			return bad("set_insert does not support elements containing functions")
 		}
 		return t, nil
 	case "set_len":
@@ -1792,6 +1804,9 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		if _, d := arg(1, t.A); d != nil {
 			return TError, d
 		}
+		if containsFunctionType(t.A) {
+			return bad("array_index_of does not support elements containing functions")
+		}
 		return Opt(TInt), nil
 	case "array_sum":
 		t, d := arg(0, nil)
@@ -1866,6 +1881,9 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		}
 		if _, d := arg(1, t.A); d != nil {
 			return TError, d
+		}
+		if containsFunctionType(t.A) {
+			return bad("set_remove does not support elements containing functions")
 		}
 		return t, nil
 	case "set_to_array":

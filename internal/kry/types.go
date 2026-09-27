@@ -1,6 +1,9 @@
 package kry
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type TypeKind int
 
@@ -39,6 +42,7 @@ const (
 	TyFFILibrary
 	TyFFISymbol
 	TyFFIBuffer
+	TyFunction
 )
 
 type Type struct {
@@ -48,6 +52,8 @@ type Type struct {
 	A, B   *Type
 	Struct *StructDecl
 	Enum   *EnumDecl
+	Params []*Type
+	Return *Type
 }
 
 var (
@@ -98,6 +104,9 @@ func MapOf(k, v *Type) *Type   { return &Type{Kind: TyMap, Name: "Map", A: k, B:
 func SetOf(t *Type) *Type      { return &Type{Kind: TySet, Name: "Set", A: t} }
 func ActorOf(t *Type) *Type    { return &Type{Kind: TyActor, Name: "Actor", A: t} }
 func SharedOf(t *Type) *Type   { return &Type{Kind: TyShared, Name: "Shared", A: t} }
+func FunctionType(params []*Type, result *Type) *Type {
+	return &Type{Kind: TyFunction, Params: append([]*Type(nil), params...), Return: result}
+}
 
 var TTaskGroup = &Type{Kind: TyTaskGroup, Name: "TaskGroup"}
 
@@ -147,6 +156,12 @@ func (t *Type) String() string {
 		return "FFISymbol"
 	case TyFFIBuffer:
 		return "FFIBuffer"
+	case TyFunction:
+		params := make([]string, len(t.Params))
+		for i, param := range t.Params {
+			params[i] = param.String()
+		}
+		return "fn(" + strings.Join(params, ", ") + ") -> " + t.Return.String()
 	case TyJSON:
 		return "Json"
 	case TyWebSocket:
@@ -195,6 +210,16 @@ func typeEqual(a, b *Type) bool {
 			return eq(x.A, y.A, d+1)
 		case TyResult, TyMap:
 			return eq(x.A, y.A, d+1) && eq(x.B, y.B, d+1)
+		case TyFunction:
+			if len(x.Params) != len(y.Params) || !eq(x.Return, y.Return, d+1) {
+				return false
+			}
+			for i := range x.Params {
+				if !eq(x.Params[i], y.Params[i], d+1) {
+					return false
+				}
+			}
+			return true
 
 		default:
 			return true
@@ -211,10 +236,49 @@ func typeKnown(t *Type) bool {
 		return typeKnown(t.A)
 	case TyResult, TyMap:
 		return typeKnown(t.A) && typeKnown(t.B)
+	case TyFunction:
+		if !typeKnown(t.Return) {
+			return false
+		}
+		for _, param := range t.Params {
+			if !typeKnown(param) {
+				return false
+			}
+		}
+		return true
 
 	}
 	return true
 }
+
+func containsFunctionType(root *Type) bool {
+	seen := map[*Type]bool{}
+	var visit func(*Type, int) bool
+	visit = func(t *Type, depth int) bool {
+		if t == nil || depth > 128 || seen[t] {
+			return false
+		}
+		seen[t] = true
+		if t.Kind == TyFunction {
+			return true
+		}
+		for _, child := range typeArguments(t) {
+			if visit(child, depth+1) {
+				return true
+			}
+		}
+		if t.Kind == TyStruct && t.Struct != nil {
+			for _, field := range t.Struct.Fields {
+				if visit(field.Type, depth+1) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return visit(root, 0)
+}
+
 func numeric(t *Type) bool {
 	if t == nil {
 		return false
@@ -282,6 +346,8 @@ func TypeCopyable(root *Type) bool {
 			ok = visit(t.A, d+1)
 		case TyResult, TyMap:
 			ok = visit(t.A, d+1) && visit(t.B, d+1)
+		case TyFunction:
+			ok = false
 
 		case TyStruct:
 			ok = true
@@ -327,6 +393,8 @@ func TypeConstSafe(root *Type) bool {
 			return visit(t.A, depth+1)
 		case TyResult, TyMap:
 			return visit(t.A, depth+1) && visit(t.B, depth+1)
+		case TyFunction:
+			return false
 		case TyStruct:
 			if t.Struct == nil {
 				return false
@@ -348,6 +416,13 @@ func TypeSpecString(s *TypeSpec) string {
 	if s == nil {
 		return "Nil"
 	}
+	if s.Function {
+		params := make([]string, len(s.Params))
+		for i, p := range s.Params {
+			params[i] = TypeSpecString(p)
+		}
+		return "fn(" + strings.Join(params, ", ") + ") -> " + TypeSpecString(s.Return)
+	}
 	if len(s.Params) == 0 {
 		return s.Name
 	}
@@ -366,6 +441,21 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 	}
 	if s == nil {
 		return TNil, nil
+	}
+	if s.Function {
+		params := make([]*Type, len(s.Params))
+		for i, param := range s.Params {
+			resolved, d := resolveSpec(env, param, depth+1)
+			if d != nil {
+				return TError, d
+			}
+			params[i] = resolved
+		}
+		result, d := resolveSpec(env, s.Return, depth+1)
+		if d != nil {
+			return TError, d
+		}
+		return FunctionType(params, result), nil
 	}
 	name := s.Name
 	if len(s.Params) == 0 {
@@ -608,6 +698,16 @@ func ensurePublicType(t *Type, local string, depth int) bool {
 		return true
 	case TyResult, TyMap:
 		return ensurePublicType(t.A, local, depth+1) && ensurePublicType(t.B, local, depth+1)
+	case TyFunction:
+		if !ensurePublicType(t.Return, local, depth+1) {
+			return false
+		}
+		for _, param := range t.Params {
+			if !ensurePublicType(param, local, depth+1) {
+				return false
+			}
+		}
+		return true
 
 	}
 	return true
@@ -633,6 +733,13 @@ func inaccessibleTypeName(t *Type, visibilityScope string, depth int) string {
 			return name
 		}
 		return inaccessibleTypeName(t.B, visibilityScope, depth+1)
+	case TyFunction:
+		for _, param := range t.Params {
+			if name := inaccessibleTypeName(param, visibilityScope, depth+1); name != "" {
+				return name
+			}
+		}
+		return inaccessibleTypeName(t.Return, visibilityScope, depth+1)
 	}
 	return ""
 }

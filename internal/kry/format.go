@@ -45,6 +45,13 @@ func (f *Formatter) typeSpec(s *TypeSpec) string {
 	if s == nil {
 		return "Nil"
 	}
+	if s.Function {
+		params := make([]string, len(s.Params))
+		for i, param := range s.Params {
+			params[i] = f.typeSpec(param)
+		}
+		return "fn(" + strings.Join(params, ", ") + ") -> " + f.typeSpec(s.Return)
+	}
 	if len(s.Params) == 0 {
 		return s.Name
 	}
@@ -358,9 +365,13 @@ func (f *Formatter) expr(e *Expr) string {
 	case ExCall:
 		x := ""
 		if e.Receiver != nil {
-			x = f.expr(e.Receiver) + "."
+			x = f.expr(e.Receiver) + "." + e.Name
+		} else if e.Callee != nil {
+			x = f.expr(e.Callee)
+		} else {
+			x = e.Name
 		}
-		x += e.Name + "("
+		x += "("
 		for i, a := range e.Args {
 			if i > 0 {
 				x += ", "
@@ -368,6 +379,23 @@ func (f *Formatter) expr(e *Expr) string {
 			x += f.expr(a)
 		}
 		return x + ")"
+	case ExLambda:
+		if e.Lambda == nil {
+			return "fn() -> Nil {}"
+		}
+		params := make([]string, len(e.Lambda.Params))
+		for i, param := range e.Lambda.Params {
+			params[i] = param.Name + ": " + f.typeSpec(param.Type)
+		}
+		body := &Formatter{indent: f.indent + 1}
+		for _, statement := range e.Lambda.Body {
+			body.stmt(statement)
+		}
+		bodyText := strings.TrimRight(body.b.String(), "\n")
+		if bodyText == "" {
+			return "fn(" + strings.Join(params, ", ") + ") -> " + f.typeSpec(e.Lambda.Return) + " {}"
+		}
+		return "fn(" + strings.Join(params, ", ") + ") -> " + f.typeSpec(e.Lambda.Return) + " {\n" + bodyText + "\n" + strings.Repeat("    ", f.indent) + "}"
 	case ExIndex:
 		return f.expr(e.Base) + "[" + f.expr(e.Left) + "]"
 	case ExField:

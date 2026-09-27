@@ -15,6 +15,7 @@ type Binding struct {
 type Scope struct {
 	Parent          *Scope
 	Values          map[string]Binding
+	Lambda          *Function
 	Worker          bool
 	Unsafe          bool
 	Module          string
@@ -30,7 +31,11 @@ func NewScope(parent *Scope, worker bool) *Scope {
 		visibilityScope = parent.VisibilityScope
 		unsafe = parent.Unsafe
 	}
-	return &Scope{Parent: parent, Values: map[string]Binding{}, Worker: worker, Unsafe: unsafe, Module: m, VisibilityScope: visibilityScope}
+	lambda := (*Function)(nil)
+	if parent != nil {
+		lambda = parent.Lambda
+	}
+	return &Scope{Parent: parent, Values: map[string]Binding{}, Worker: worker, Unsafe: unsafe, Module: m, VisibilityScope: visibilityScope, Lambda: lambda}
 }
 func (s *Scope) lookup(n string) (Binding, bool) {
 	for q := s; q != nil; q = q.Parent {
@@ -40,6 +45,15 @@ func (s *Scope) lookup(n string) (Binding, bool) {
 	}
 	return Binding{}, false
 }
+func (s *Scope) lookupOwner(n string) (Binding, *Scope, bool) {
+	for q := s; q != nil; q = q.Parent {
+		if b, ok := q.Values[n]; ok {
+			return b, q, true
+		}
+	}
+	return Binding{}, nil, false
+}
+func (s *Scope) has(n string) bool   { _, _, ok := s.lookupOwner(n); return ok }
 func (s *Scope) local(n string) bool { _, ok := s.Values[n]; return ok }
 
 type Flow struct{ MustReturn, MayFallthrough, MayBreak, MayContinue, Reachable, HasError bool }
@@ -56,6 +70,7 @@ type Checker struct {
 	funcs           map[string]bool
 	currentReturn   *Type
 	currentFunction *Function
+	currentLambda   *Expr
 	typeParams      map[string]*Type
 }
 
@@ -240,6 +255,12 @@ func (c *Checker) walkExpr(e *Expr) {
 		c.walkExpr(x)
 	}
 	c.walkExpr(e.Receiver)
+	c.walkExpr(e.Callee)
+	if e.Lambda != nil {
+		for _, statement := range e.Lambda.Body {
+			c.walkStmt(statement)
+		}
+	}
 }
 func calledFunctions(body []*Stmt) []string {
 	var out []string
@@ -269,6 +290,12 @@ func calledFunctions(body []*Stmt) []string {
 			ex(x)
 		}
 		ex(e.Receiver)
+		ex(e.Callee)
+		if e.Lambda != nil {
+			for _, statement := range e.Lambda.Body {
+				st(statement)
+			}
+		}
 	}
 	st = func(s *Stmt) {
 		if s == nil {
@@ -336,8 +363,8 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 		if name := inaccessibleTypeName(rt, f.VisibilityScope, 0); name != "" {
 			return Diag(CatType, f.Receiver.Tok.Source, f.Receiver.Tok.Line, f.Receiver.Tok.Column, "type '%s' is private", name)
 		}
-		sc.Values["self"] = Binding{Type: rt, Mutable: false}
-		defaultScope.Values["self"] = Binding{Type: rt, Mutable: false}
+		sc.Values["self"] = Binding{Type: rt, Token: f.Tok, Mutable: false}
+		defaultScope.Values["self"] = Binding{Type: rt, Token: f.Tok, Mutable: false}
 	}
 	for _, p := range f.Params {
 		t, d := resolveSpec(c.Env, p.Type, 0)
@@ -390,6 +417,137 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 		return Diag(CatType, f.Tok.Source, f.Tok.Line, f.Tok.Column, "function must return %s; '%s' may finish without returning", rt, f.Name)
 	}
 	return nil
+}
+
+func (c *Checker) checkLambda(outer *Scope, expression *Expr, expected *Type) (*Type, *Diagnostic) {
+	f := expression.Lambda
+	if f == nil {
+		return TError, Diag(CatType, expression.Tok.Source, expression.Tok.Line, expression.Tok.Column, "malformed closure expression")
+	}
+	if expected != nil && expected.Kind != TyFunction {
+		return TError, Diag(CatType, expression.Tok.Source, expression.Tok.Line, expression.Tok.Column, "closure has function type, not %s", expected)
+	}
+	paramTypes := make([]*Type, len(f.Params))
+	for i, parameter := range f.Params {
+		resolved, d := resolveSpec(c.Env, parameter.Type, 0)
+		if d != nil {
+			return TError, d
+		}
+		paramTypes[i] = resolved
+	}
+	resultType, d := resolveSpec(c.Env, f.Return, 0)
+	if d != nil {
+		return TError, d
+	}
+	functionType := FunctionType(paramTypes, resultType)
+	if expected != nil && !compatible(expected, functionType) {
+		return TError, Diag(CatType, expression.Tok.Source, expression.Tok.Line, expression.Tok.Column, "closure expected %s, found %s", expected, functionType)
+	}
+	scope := NewScope(outer, outer.Worker)
+	scope.Lambda = f
+	scope.Module = outer.Module
+	scope.VisibilityScope = outer.VisibilityScope
+	for i, parameter := range f.Params {
+		if scope.local(parameter.Name) {
+			return TError, Diag(CatType, parameter.Tok.Source, parameter.Tok.Line, parameter.Tok.Column, "closure parameter '%s' is duplicated", parameter.Name)
+		}
+		scope.Values[parameter.Name] = Binding{Type: paramTypes[i], Token: parameter.Tok}
+	}
+	previousReturn, previousFunction, previousLambda := c.currentReturn, c.currentFunction, c.currentLambda
+	c.currentReturn, c.currentFunction, c.currentLambda = resultType, f, expression
+	flow := c.checkBlock(scope, f.Body, resultType, 0, true)
+	c.currentReturn, c.currentFunction, c.currentLambda = previousReturn, previousFunction, previousLambda
+	if flow.HasError {
+		return TError, c.Err
+	}
+	if resultType.Kind != TyNil && !flow.MustReturn {
+		return TError, Diag(CatType, f.Tok.Source, f.Tok.Line, f.Tok.Column, "closure must return %s on every path", resultType)
+	}
+	// A returned nested closure can outlive this closure's invocation. Propagate
+	// any captures that originate outside the enclosing lambda so KIR records
+	// the complete environment needed to construct the inner closure later.
+	if previousLambda != nil {
+		for _, capture := range expression.Captures {
+			_, owner, ok := outer.lookupOwner(capture.Name)
+			if ok && owner.Lambda != previousLambda.Lambda {
+				addCapture(previousLambda, capture)
+			}
+		}
+	}
+	return functionType, nil
+}
+
+func addCapture(expression *Expr, capture Capture) {
+	key := captureIdentity(capture.Token, capture.Name)
+	for _, existing := range expression.Captures {
+		if captureIdentity(existing.Token, existing.Name) == key {
+			return
+		}
+	}
+	expression.Captures = append(expression.Captures, capture)
+}
+
+func captureIdentity(token Token, name string) string {
+	source := ""
+	start := 0
+	if token.Source != nil {
+		source = token.Source.Name
+		start = token.Start
+	}
+	return fmt.Sprintf("%s:%d:%s", source, start, name)
+}
+
+func (c *Checker) matchFunctionValueType(function *Function, expected *Type) (*Type, bool) {
+	if expected != nil && (expected.Kind != TyFunction || len(expected.Params) != len(function.Params)) {
+		return nil, false
+	}
+	previous := c.Env.TypeParams
+	c.Env.TypeParams = map[string]*Type{}
+	defer func() { c.Env.TypeParams = previous }()
+	constraints := make(map[string]string, len(function.TypeParams))
+	inferred := make(map[string]bool, len(function.TypeParams))
+	for _, parameter := range function.TypeParams {
+		if _, duplicate := c.Env.TypeParams[parameter.Name]; duplicate {
+			return nil, false
+		}
+		c.Env.TypeParams[parameter.Name] = Generic(parameter.Name, parameter.Constraint)
+		constraints[parameter.Name] = parameter.Constraint
+	}
+	if expected == nil && len(function.TypeParams) > 0 {
+		return nil, false
+	}
+	if expected != nil {
+		for i, parameter := range function.Params {
+			if !unifyGenericSpec(c.Env, parameter.Type, expected.Params[i], 0, constraints, inferred) {
+				return nil, false
+			}
+		}
+		if !unifyGenericSpec(c.Env, function.Return, expected.Return, 0, constraints, inferred) {
+			return nil, false
+		}
+	}
+	for _, parameter := range function.TypeParams {
+		if !inferred[parameter.Name] {
+			return nil, false
+		}
+	}
+	params := make([]*Type, len(function.Params))
+	for i, parameter := range function.Params {
+		resolved, d := resolveSpec(c.Env, parameter.Type, 0)
+		if d != nil {
+			return nil, false
+		}
+		params[i] = resolved
+	}
+	result, d := resolveSpec(c.Env, function.Return, 0)
+	if d != nil {
+		return nil, false
+	}
+	functionType := FunctionType(params, result)
+	if expected != nil && !compatible(expected, functionType) {
+		return nil, false
+	}
+	return functionType, true
 }
 func (c *Checker) checkStatements(sc *Scope, body []*Stmt, rt *Type, loop int, inFn bool) *Diagnostic {
 	fl := c.checkBlock(sc, body, rt, loop, inFn)
@@ -641,6 +799,7 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 					c.Err = Diag(CatType, a.Pattern.Tok.Source, a.Pattern.Tok.Line, a.Pattern.Tok.Column, "invalid pattern binding")
 					return Flow{HasError: true}
 				}
+				a.Pattern.BindingType = bt
 				as.Values[a.Pattern.Binding] = Binding{Type: bt, Token: a.Pattern.BindingTok}
 			}
 			af := c.checkBlock(as, a.Body, rt, loop, inFn)
@@ -750,12 +909,46 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	case ExString:
 		t = TString
 	case ExVar:
-		b, ok := sc.lookup(e.Name)
+		b, owner, ok := sc.lookupOwner(e.Name)
 		if !ok {
-			if _, ok := c.Env.Functions[e.Name]; ok {
-				t = TUnknown
-			} else {
+			candidates := c.Env.Overloads[e.Name]
+			if len(candidates) == 0 && c.Env.Functions[e.Name] != nil {
+				candidates = []*Function{c.Env.Functions[e.Name]}
+			}
+			visible := make([]*Function, 0, len(candidates))
+			for _, candidate := range candidates {
+				if candidate.Public || candidate.VisibilityScope == sc.VisibilityScope {
+					visible = append(visible, candidate)
+				}
+			}
+			if len(visible) == 0 {
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown variable '%s'", e.Name)
+			} else {
+				var matched *Function
+				var matchedType *Type
+				for _, candidate := range visible {
+					functionType, ok := c.matchFunctionValueType(candidate, expected)
+					if !ok {
+						continue
+					}
+					if matched != nil {
+						d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "ambiguous function value '%s'; add a function type annotation", e.Name)
+						break
+					}
+					matched, matchedType = candidate, functionType
+				}
+				if d == nil && matched == nil {
+					if expected != nil && expected.Kind != TyFunction {
+						d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "function '%s' is a value of function type, not %s", e.Name, expected)
+					} else {
+						d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "function '%s' has no overload matching the expected function type", e.Name)
+					}
+				}
+				if d == nil {
+					e.Function = matched
+					e.Definition = matched.NameToken
+					t = matchedType
+				}
 			}
 		} else {
 			e.Definition = b.Token
@@ -763,6 +956,11 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "global binding '%s' is not available in a worker-safe function", e.Name)
 			}
 			t = b.Type
+			if sc.Lambda != nil && owner.Lambda != sc.Lambda {
+				if c.currentLambda != nil {
+					addCapture(c.currentLambda, Capture{Name: e.Name, Type: b.Type, Mutable: b.Mutable, Token: b.Token})
+				}
+			}
 		}
 	case ExEnum:
 		et := c.Env.Types[e.EnumType]
@@ -853,6 +1051,10 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			break
 		}
 		if e.Op == EQEQ || e.Op == NEQ {
+			if containsFunctionType(lt) || containsFunctionType(rt) {
+				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "function values do not support equality")
+				break
+			}
 			if !compatible(lt, rt) {
 				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "equality operands must have the same type")
 			}
@@ -967,7 +1169,11 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			}
 		}
 		if d == nil {
-			t = SetOf(et)
+			if containsFunctionType(et) {
+				d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "set elements cannot contain function values because sets use equality")
+			} else {
+				t = SetOf(et)
+			}
 		}
 	case ExArray:
 		if len(e.Items) == 0 {
@@ -1125,6 +1331,8 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		}
 	case ExCall:
 		t, d = c.checkCall(sc, e, expected)
+	case ExLambda:
+		t, d = c.checkLambda(sc, e, expected)
 
 	}
 	if d == nil && t == nil {
@@ -1137,6 +1345,28 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	return t, d
 }
 func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnostic) {
+	if e.Callee != nil && (e.Callee.Kind != ExVar || sc.has(e.Callee.Name)) {
+		calleeType, d := c.checkExpr(sc, e.Callee, nil)
+		if d != nil {
+			return TError, d
+		}
+		if calleeType.Kind != TyFunction {
+			return TError, Diag(CatType, e.Callee.Tok.Source, e.Callee.Tok.Line, e.Callee.Tok.Column, "value of type %s is not callable", calleeType)
+		}
+		if len(e.Args) != len(calleeType.Params) {
+			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "function value expects %d argument(s), got %d", len(calleeType.Params), len(e.Args))
+		}
+		for i, argument := range e.Args {
+			got, d := c.checkExpr(sc, argument, calleeType.Params[i])
+			if d != nil {
+				return TError, d
+			}
+			if !compatible(calleeType.Params[i], got) {
+				return TError, Diag(CatType, argument.Tok.Source, argument.Tok.Line, argument.Tok.Column, "function value argument %d expected %s, found %s", i+1, calleeType.Params[i], got)
+			}
+		}
+		return calleeType.Return, nil
+	}
 	if e.Receiver != nil {
 		rt, d := c.checkExpr(sc, e.Receiver, nil)
 		if d != nil {
@@ -1262,6 +1492,9 @@ func functionReturnContainsGeneric(spec *TypeSpec, params []TypeParam) bool {
 	if spec == nil {
 		return false
 	}
+	if spec.Function && functionReturnContainsGeneric(spec.Return, params) {
+		return true
+	}
 	for _, param := range params {
 		if len(spec.Params) == 0 && spec.Name == param.Name {
 			return true
@@ -1278,6 +1511,17 @@ func functionReturnContainsGeneric(spec *TypeSpec, params []TypeParam) bool {
 func unifyGenericSpec(env *TypeEnv, spec *TypeSpec, actual *Type, depth int, constraints map[string]string, inferred map[string]bool) bool {
 	if spec == nil || actual == nil || depth > env.Lim.MaxTypeDepth {
 		return false
+	}
+	if spec.Function {
+		if actual.Kind != TyFunction || len(spec.Params) != len(actual.Params) {
+			return false
+		}
+		for i, child := range spec.Params {
+			if !unifyGenericSpec(env, child, actual.Params[i], depth+1, constraints, inferred) {
+				return false
+			}
+		}
+		return unifyGenericSpec(env, spec.Return, actual.Return, depth+1, constraints, inferred)
 	}
 	if len(spec.Params) == 0 {
 		if generic := env.TypeParams[spec.Name]; generic != nil {
@@ -1322,6 +1566,9 @@ func typeArguments(t *Type) []*Type {
 		return []*Type{t.A}
 	case TyResult, TyMap:
 		return []*Type{t.A, t.B}
+	case TyFunction:
+		args := append([]*Type(nil), t.Params...)
+		return append(args, t.Return)
 	default:
 		return nil
 	}

@@ -31,6 +31,9 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 	if p == nil || c == nil || c.Env == nil {
 		return nil, fmt.Errorf("missing checked program")
 	}
+	if err := validateFunctionValueSupport(p, "pe-direct"); err != nil {
+		return nil, err
+	}
 	kir, err := EmitKIR(p, c, target)
 	if err != nil {
 		return nil, err

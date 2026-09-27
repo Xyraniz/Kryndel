@@ -16,10 +16,18 @@ Kryndel checks every program before evaluation. A declaration with an initialize
 | `Result[T, E]` | `ok(value)` or `err(value)`, with the annotation resolving the counterpart type. |
 | `Channel[T]` | Synchronized FIFO channel carrying `T`, with capacity 64 by default or a configured positive capacity. |
 | `Thread[T]` | OS-backed worker handle with result type `T`. |
+| `fn(T1, T2) -> R` | Typed function value. Lambdas close over lexical bindings; function values are not `Copy`, const-safe, or comparable. |
 | Struct and enum | Nominal declarations with checked fields or finite variants. |
 
 Numeric conversion is explicit. `float(3)` produces a `Float`, `int(3.5)` truncates toward zero only when the result is representable, and `u8/u16/u32/u64` perform checked conversions from `Int` or another `UInt`. String conversions require a complete decimal input; `int("12xyz")` is rejected. There are no implicit `Int`/`Float` or unsigned-width conversions and no implicit condition conversions. `thread_send` requires a recursively Copy type: primitives, strings, bytes, enums, arrays, options, results, and structs whose every field is Copy-safe. Channels and thread handles do not satisfy Copy.
 
 Bare `Array` is retained as a compatibility form for existing examples. Its initializer must still be homogeneous, and new code should use `Array[T]`. `array_push` checks the element type and returns a new collection. Collection values are not mutable through indexing or field assignment.
+
+Function types can appear in parameters, returns, local bindings, and supported
+generic substitutions. Lambda parameters require explicit types and cannot have
+default values. A closure keeps referenced bindings alive after their declaring
+scope exits; mutable captures share the original binding. Function values do
+not satisfy `Copy`, so channel and actor sends reject them, including when nested
+inside a composite value.
 
 The checker is effect-free. It never evaluates expressions, calls builtins, writes user output, starts threads, or mutates files. `run` and `build` invoke it before runtime evaluation or artifact creation. Thread worker names are resolved and must refer to zero-argument functions; worker-safe restrictions propagate through every reachable helper and expose only explicit parameters and global channel capabilities.

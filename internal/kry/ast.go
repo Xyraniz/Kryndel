@@ -1,9 +1,11 @@
 package kry
 
 type TypeSpec struct {
-	Name   string
-	Params []*TypeSpec
-	Tok    Token
+	Name     string
+	Params   []*TypeSpec
+	Return   *TypeSpec
+	Function bool
+	Tok      Token
 }
 
 type TypeParam struct {
@@ -31,6 +33,7 @@ const (
 	ExMap
 	ExSet
 	ExPropagate
+	ExLambda
 )
 
 type Expr struct {
@@ -45,6 +48,7 @@ type Expr struct {
 	Name                  string
 	Op                    TokenKind
 	Left, Right, Operand  *Expr
+	Callee                *Expr
 	Args                  []*Expr
 	Items                 []*Expr
 	Base                  *Expr
@@ -63,6 +67,8 @@ type Expr struct {
 	// checked lexical environment, including when the reference is unresolved.
 	Scope      *Scope
 	Function   *Function
+	Lambda     *Function
+	Captures   []Capture
 	ConstValue *Value
 	Tail       bool
 }
@@ -122,6 +128,7 @@ type Pattern struct {
 	Kind                       PatternKind
 	Tok                        Token
 	BindingTok                 Token
+	BindingType                *Type
 	Bool                       bool
 	Int                        int64
 	Str                        string
@@ -156,6 +163,13 @@ type Function struct {
 	Tok             Token
 	Module          string
 	VisibilityScope string
+}
+
+type Capture struct {
+	Name    string
+	Type    *Type
+	Mutable bool
+	Token   Token
 }
 type FieldDecl struct {
 	Name   string

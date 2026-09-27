@@ -30,6 +30,7 @@ binding or branch body. Expressions evaluate left to right:
 - A method receiver evaluates before its explicit arguments. Omitted trailing
   function arguments use their declared defaults after all explicit arguments
   have evaluated.
+- An indirect call evaluates its callee before its explicit arguments.
 - Indexing evaluates the collection before the index.
 
 An evaluation error stops the current expression and propagates to the enclosing
@@ -48,17 +49,41 @@ function calls do not leak their local bindings after they exit.
 
 Values are passed by value. Strings, bytes, arrays, maps, sets, options, results,
 structs, and enums are immutable after construction; operations that appear to
-update collections return new values. Mutable sharing occurs only through
+update collections return new values. A closure retains the lexical bindings it
+uses. Capturing a `let` binding preserves its immutable value; capturing a
+`let mut` binding shares that binding, so later assignments are visible to every
+closure that captured it. A captured binding remains alive while a closure that
+uses it remains reachable. Mutable sharing outside closures occurs only through
 explicit handle APIs such as `Shared[T]`, channels, actors, and runtime resource
 handles. Handle types are excluded from the structural `Copy` constraint.
 
 ## Functions, calls, and control flow
 
-Functions are statically resolved declarations, not values in this dialect.
-There are no function types or closures. Parameters have explicit types;
-generic type parameters use the declared `Copy`, `Integer`, `Numeric`, or `Comparable`
-constraints. Overloads are selected from the complete argument type tuple. Zero
-matches and multiple equally specific matches are type errors.
+Function declarations are statically resolved, and a function can also be used
+as a value. A function type is written `fn(T1, T2) -> R`; for example,
+`fn(Int, String) -> Bool`. A lambda uses the same signature and a block body:
+`fn(value: Int) -> Int { return value + 1 }`. Lambda parameters require explicit
+types and cannot declare default values. An omitted lambda return type means
+`Nil`.
+
+Functions can be passed as arguments, returned, stored in bindings, and called
+through any expression with a function type. Function references to overloaded
+declarations require an expected function type that selects exactly one
+overload. A generic function reference also needs enough expected type
+information to resolve every generic parameter. Calls through a function value
+require every declared argument; default arguments are not part of a function
+type. Functions and closures are not comparable and cannot be `const` or satisfy
+the structural `Copy` constraint, so they cannot cross thread or actor message
+boundaries.
+
+The interpreter supports function values and closures. Current C AOT, direct ELF,
+and direct PE backends reject a program that uses function types, function
+references, or lambdas with a backend-specific diagnostic before emission.
+
+Parameters have explicit types; generic type parameters use the declared `Copy`,
+`Integer`, `Numeric`, or `Comparable` constraints. Overloads are selected from
+the complete argument type tuple. Zero matches and multiple equally specific
+matches are type errors.
 
 Method calls use the receiver's checked type and the same overload rules for
 their explicit arguments. A private method is visible only within its declaring
@@ -86,13 +111,14 @@ bodies. `Numeric` accepts `Integer` types and `Float`, and enables `+`, `-`,
 `*`, `/`, and ordered comparisons. Generic unary negation remains unavailable
 because a `Numeric` or `Integer` parameter may be an unsigned type. Concrete
 `Float` remainder is rejected by the checker.
-Function values and higher-order generic parameters are unsupported because
-functions are declarations rather than values. Generic struct declarations,
+Generic parameters may infer a function type when a function accepts or returns
+one, subject to their declared constraints. Generic struct declarations,
 type-associated items, and monomorphization controls are also not implemented.
 
 Explicit call arguments evaluate left to right. Omitted trailing defaults are
-evaluated in declaration order in the function's lexical environment, with
-`self` and earlier parameters available. Caller-local names are not captured.
+evaluated in declaration order in the callee's lexical environment,
+with `self` and earlier parameters available. A named function does not see its
+caller's local bindings; a closure sees only the lexical bindings it captured.
 `return` exits the current function. `break` and `continue` affect the innermost
 loop. `match` evaluates its scrutinee once, then selects the first matching arm; the checker rejects
 non-exhaustive alternatives for enums, `Option`, and `Result`, as well as
@@ -135,7 +161,8 @@ string requires the entire string to be a finite decimal number.
 Equality is type-exact and structural for arrays, maps, sets, options, results,
 and structs. Float equality follows finite IEEE equality, including equality of
 the two signed zeroes. String equality compares UTF-8 contents without
-normalization. Handle equality compares handle identity. Map and set equality
+normalization. Handle equality compares handle identity. Function values and
+composite values containing functions cannot be compared. Map and set equality
 also compares iteration order.
 
 ## Collections and keys
@@ -235,7 +262,7 @@ the compiler must not reinterpret them as the current dialect. Each published
 language version must retain source, stdout, exit-status, and diagnostic fixtures
 under `tests/compat/<version>/`.
 
-The current compiler supports language version 1.0.0. New manifests, KIR v2,
+The current compiler supports language version 1.0.0. New manifests, KIR v3,
 and KRYNATIVE5 artifacts record it explicitly. For compatibility, manifests
 without the field, KIR v1 documents, and KRYNATIVE3/KRYNATIVE4 artifacts are
 interpreted as 1.0.0. Unknown or malformed versions are rejected instead of

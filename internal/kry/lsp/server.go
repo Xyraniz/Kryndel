@@ -456,12 +456,7 @@ func (s *Server) definition(uri string, pos Position) (any, error) {
 		return nil, nil
 	}
 	selected.Source.Name = doc.Path
-	var found *kry.Expr
-	walkProgram(prog, func(e *kry.Expr) {
-		if exprMatchesToken(e, selected) {
-			found = e
-		}
-	})
+	found := expressionForToken(prog, selected)
 	if found == nil {
 		return nil, nil
 	}
@@ -936,12 +931,7 @@ func (s *Server) hover(uri string, pos Position) (any, error) {
 		return nil, nil
 	}
 	selected.Source.Name = doc.Path
-	var found *kry.Expr
-	walkProgram(prog, func(e *kry.Expr) {
-		if exprMatchesToken(e, selected) {
-			found = e
-		}
-	})
+	found := expressionForToken(prog, selected)
 	if found == nil {
 		return nil, nil
 	}
@@ -1272,6 +1262,25 @@ func exprMatchesToken(e *kry.Expr, selected kry.Token) bool {
 	return false
 }
 
+func expressionForToken(program *kry.Program, selected kry.Token) *kry.Expr {
+	var firstMatch, resolvedMatch *kry.Expr
+	walkProgram(program, func(expression *kry.Expr) {
+		if !exprMatchesToken(expression, selected) {
+			return
+		}
+		if firstMatch == nil {
+			firstMatch = expression
+		}
+		if resolvedMatch == nil && (expression.Definition.Source != nil || expression.VariantDefinition.Source != nil) {
+			resolvedMatch = expression
+		}
+	})
+	if resolvedMatch != nil {
+		return resolvedMatch
+	}
+	return firstMatch
+}
+
 func walkProgram(p *kry.Program, visit func(*kry.Expr)) {
 	if p == nil {
 		return
@@ -1318,7 +1327,7 @@ func walkExpr(e *kry.Expr, visit func(*kry.Expr)) {
 		return
 	}
 	visit(e)
-	for _, child := range []*kry.Expr{e.Left, e.Right, e.Operand, e.Base, e.Receiver} {
+	for _, child := range []*kry.Expr{e.Left, e.Right, e.Operand, e.Base, e.Receiver, e.Callee} {
 		walkExpr(child, visit)
 	}
 	for _, child := range e.Args {
@@ -1332,6 +1341,14 @@ func walkExpr(e *kry.Expr, visit func(*kry.Expr)) {
 	}
 	for _, child := range e.Values {
 		walkExpr(child, visit)
+	}
+	if e.Lambda != nil {
+		for _, parameter := range e.Lambda.Params {
+			walkExpr(parameter.Default, visit)
+		}
+		for _, statement := range e.Lambda.Body {
+			walkStmt(statement, visit)
+		}
 	}
 }
 

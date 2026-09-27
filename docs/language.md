@@ -51,6 +51,7 @@ Supported statements are `let`, `let mut`, expression statements, assignment, `f
 | `Thread[T]` | `thread_spawn("worker")` | OS-backed worker handle whose result type is `T`. |
 | `Struct` | `Point{ x: 1, y: 2 }` | Named fields checked against a declaration. |
 | `Enum` | `Color::Red` | Tagged variant checked against a declaration. |
+| `fn(T1, T2) -> R` | `fn(Int, String) -> Bool` | Function value; closures are not `Copy`, const-safe, or comparable. |
 
 Numeric operators require matching numeric types. `Int + Float` and mixed-width unsigned arithmetic are rejected; use an explicit conversion such as `u32(integer)` when a width change is intended. `+` also concatenates two strings, two arrays with compatible element types, or two byte sequences. `UInt` arithmetic wraps modulo its declared width, while `Int` arithmetic remains checked. `&`, `|`, and `^` require matching `UInt` widths; `<<` and `>>` require an `Int` count in `0..width-1`; `~` preserves the unsigned width. Equality requires the same type. There is no implicit truthiness: `if 1`, `if "text"`, and `while [1]` are type errors. `bool(value)` is the explicit conversion when a program needs a convenient predicate.
 
@@ -74,7 +75,35 @@ fn repeat(value: String, count: Int) -> String {
 }
 ```
 
-The checker reports unknown functions, wrong arity, wrong argument types, unresolved return types, and return mismatches before evaluating the program. Functions do not close over mutable runtime state and are called by value.
+The checker reports unknown functions, wrong arity, wrong argument types, unresolved return types, and return mismatches before evaluating the program. Functions have explicit parameter and return types, and the same signatures can be used for function values:
+
+```kryndel
+fn apply(callback: fn(Int) -> Int, value: Int) -> Int {
+    return callback(value)
+}
+
+fn make_counter(start: Int) -> fn(Int) -> Int {
+    let mut count: Int = start
+    return fn(step: Int) -> Int {
+        count = count + step
+        return count
+    }
+}
+
+let counter: fn(Int) -> Int = make_counter(10)
+println(apply(counter, 3)) // 13
+println(counter(2))       // 15
+```
+
+Closures retain the exact lexical bindings they use after the creating function
+returns. Immutable captures stay fixed; all closures that capture the same
+`let mut` binding observe and update the same binding. Shadowing still follows
+ordinary lexical scope. Lambda parameters need explicit types, cannot have
+defaults, and calls through a function value must provide every parameter.
+When assigning an overloaded function name to a variable, annotate the expected
+function type so the checker can select one overload. Functions and closures
+cannot be compared, used as const values, or sent across threads because they
+are not `Copy`.
 
 Functions may be overloaded by parameter signature. Calls are resolved statically and an ambiguous or unmatched call is rejected before execution. Generic functions use readable type parameters with constraints:
 

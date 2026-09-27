@@ -29,15 +29,16 @@ const (
 )
 
 type debugCLI struct {
-	scanner     *bufio.Scanner
-	out         io.Writer
-	err         io.Writer
-	breakpoints map[int]debugBreakpoint
-	nextID      int
-	started     bool
-	mode        debugMode
-	anchorDepth int
-	quit        bool
+	scanner      *bufio.Scanner
+	out          io.Writer
+	err          io.Writer
+	breakpoints  map[int]debugBreakpoint
+	nextID       int
+	started      bool
+	mode         debugMode
+	anchorDepth  int
+	nextTailCall bool
+	quit         bool
 }
 
 func debugCmd(engine *kry.Engine, args []string, input io.Reader, output, errorOutput io.Writer) int {
@@ -66,7 +67,12 @@ func (d *debugCLI) shouldPause(location kry.DebugLocation) bool {
 	case debugStep:
 		return true
 	case debugNext:
-		if location.Depth <= d.anchorDepth {
+		if d.nextTailCall {
+			if location.Depth < d.anchorDepth {
+				d.nextTailCall = false
+				return true
+			}
+		} else if location.Depth <= d.anchorDepth {
 			return true
 		}
 	case debugFinish:
@@ -125,14 +131,17 @@ func (d *debugCLI) pause(state kry.DebugState) bool {
 			}
 		case "continue", "c":
 			d.mode = debugContinue
+			d.nextTailCall = false
 			return true
 		case "step", "s":
 			d.mode = debugStep
 			d.anchorDepth = state.Depth
+			d.nextTailCall = false
 			return true
 		case "next", "n":
 			d.mode = debugNext
 			d.anchorDepth = state.Depth
+			d.nextTailCall = state.TailCall
 			return true
 		case "finish", "return":
 			if state.Depth == 0 {
@@ -141,6 +150,7 @@ func (d *debugCLI) pause(state kry.DebugState) bool {
 			}
 			d.mode = debugFinish
 			d.anchorDepth = state.Depth
+			d.nextTailCall = false
 			return true
 		case "quit", "q":
 			d.quit = true

@@ -79,7 +79,7 @@ let answer: UInt8 = add(u8(1)) << 1
 	if !bytes.Equal(a, b) {
 		t.Fatal("KIR emission is not deterministic")
 	}
-	if !strings.Contains(string(a), `"format": "kry-ir"`) || !strings.Contains(string(a), `"version": 2`) || !strings.Contains(string(a), `"language_version": "1.0.0"`) {
+	if !strings.Contains(string(a), `"format": "kry-ir"`) || !strings.Contains(string(a), `"version": 3`) || !strings.Contains(string(a), `"language_version": "1.0.0"`) {
 		t.Fatalf("KIR header missing from %s", a[:minInt(len(a), 160)])
 	}
 	d, err := DecodeKIR(a, DefaultLimits())
@@ -103,7 +103,7 @@ func TestKIRRejectsWrongVersionAndTrailingData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrong := bytes.Replace(data, []byte(`"version": 2`), []byte(`"version": 99`), 1)
+	wrong := bytes.Replace(data, []byte(`"version": 3`), []byte(`"version": 99`), 1)
 	if _, err = DecodeKIR(wrong, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "version") {
 		t.Fatalf("expected version rejection, got %v", err)
 	}
@@ -113,19 +113,57 @@ func TestKIRRejectsWrongVersionAndTrailingData(t *testing.T) {
 }
 
 func TestKIRV1DefaultsLanguageVersion(t *testing.T) {
-	p, c := testProgram(t, "let x: Int = 1\n")
-	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy := bytes.Replace(data, []byte(`"version": 2`), []byte(`"version": 1`), 1)
-	legacy = bytes.Replace(legacy, []byte("  \"language_version\": \"1.0.0\",\n"), nil, 1)
+	legacy := []byte(`{"format":"kry-ir","version":1,"module":"","source":"legacy.kry","target":{"os":"linux","arch":"amd64","gui":false},"imports":[],"sources":[],"structs":[],"enums":[],"functions":[],"statements":[]}`)
 	doc, err := DecodeKIR(legacy, DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if doc.Version != 1 || doc.LanguageVersion != LanguageVersion {
 		t.Fatalf("legacy KIR compatibility mismatch: version=%d language=%q", doc.Version, doc.LanguageVersion)
+	}
+}
+
+func TestKIRV2RemainsReadable(t *testing.T) {
+	p, c := testProgram(t, "fn twice(value: Int) -> Int { return value * 2 }\nlet result: Int = twice(4)\n")
+	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy any
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	var stripV3Fields func(any)
+	stripV3Fields = func(value any) {
+		switch node := value.(type) {
+		case map[string]any:
+			for _, key := range []string{"binding", "resolved_binding", "callee", "lambda", "captures"} {
+				delete(node, key)
+			}
+			for _, child := range node {
+				stripV3Fields(child)
+			}
+		case []any:
+			for _, child := range node {
+				stripV3Fields(child)
+			}
+		}
+	}
+	stripV3Fields(legacy)
+	legacy.(map[string]any)["version"] = float64(2)
+	v2, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := DecodeKIR(v2, DefaultLimits())
+	if err != nil {
+		t.Fatalf("KIR v2 compatibility failed: %v", err)
+	}
+	if document.Version != 2 {
+		t.Fatalf("decoded version = %d, want 2", document.Version)
+	}
+	if len(document.Functions) != 1 || document.Functions[0].Name != "twice" || len(document.Statements) != 1 || document.Statements[0].Name != "result" || document.Statements[0].Init.CallTarget != "function:twice" {
+		t.Fatalf("legacy KIR v2 function, variable, or call was not preserved: %#v", document)
 	}
 }
 

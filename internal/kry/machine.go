@@ -29,6 +29,9 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 	if p == nil || c == nil {
 		return nil, fmt.Errorf("missing checked program")
 	}
+	if err := validateFunctionValueSupport(p, "elf-direct"); err != nil {
+		return nil, err
+	}
 	if err := validateNativeFeatureSupport(p, c, "elf-direct", target); err != nil {
 		return nil, err
 	}

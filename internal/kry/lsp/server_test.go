@@ -483,6 +483,54 @@ func TestFileURIPathRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLSPNavigatesCapturedClosureBindings(t *testing.T) {
+	text := "fn make() -> fn() -> Int {\n    let captured: Int = 1\n    return fn() -> Int { return captured }\n}\n"
+	path := filepath.Join(t.TempDir(), "closure.kry")
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	uri := uriFromPath(path)
+	server := NewServer()
+	if err := server.open(context.Background(), uri, text, 1); err != nil {
+		t.Fatal(err)
+	}
+	position := positionAt(text, strings.LastIndex(text, "captured"))
+
+	definition, err := server.definition(uri, position)
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, ok := definition.(map[string]any)
+	if !ok || location["uri"] != uri {
+		t.Fatalf("captured binding definition = %#v, want location in %s", definition, uri)
+	}
+	rng, ok := location["range"].(Range)
+	if !ok || rng.Start.Line != 1 || rng.Start.Character != 8 {
+		t.Fatalf("captured binding range = %#v, want declaration at line 1, character 8", location["range"])
+	}
+
+	hover, err := server.hover(uri, position)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hoverResult, ok := hover.(map[string]any)
+	if !ok {
+		t.Fatalf("captured binding hover = %#v", hover)
+	}
+	contents, ok := hoverResult["contents"].(map[string]any)
+	if !ok || !strings.Contains(contents["value"].(string), "captured: Int") {
+		t.Fatalf("captured binding hover contents = %#v", hoverResult["contents"])
+	}
+
+	references, err := server.references(uri, position, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locations, ok := references.([]any); !ok || len(locations) != 2 {
+		t.Fatalf("captured binding references = %#v, want declaration and use", references)
+	}
+}
+
 func callLSP(t *testing.T, ctx context.Context, client jsonrpc2.Conn, method string, params, result any) {
 	t.Helper()
 	if _, err := client.Call(ctx, method, params, result); err != nil {

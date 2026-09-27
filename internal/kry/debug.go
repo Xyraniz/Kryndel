@@ -19,6 +19,7 @@ type DebugLocation struct {
 	Column   int
 	Function string
 	Depth    int
+	TailCall bool
 }
 
 type DebugState struct {
@@ -49,7 +50,11 @@ func (r *Runtime) debugStatement(scope *RunScope, statement *Stmt) bool {
 	if count := len(r.debugFrames); count > 0 {
 		function = r.debugFrames[count-1].Function
 	}
-	location := DebugLocation{Source: source, Line: statement.Tok.Line, Column: statement.Tok.Column, Function: function, Depth: r.Ctx.Calls}
+	location := DebugLocation{
+		Source: source, Line: statement.Tok.Line, Column: statement.Tok.Column,
+		Function: function, Depth: r.Ctx.Calls,
+		TailCall: statement.Return != nil && statement.Return.Tail,
+	}
 	if !r.debugger.ShouldPause(location) {
 		return true
 	}

@@ -91,3 +91,65 @@ func TestDebuggerRechecksLoopBreakpointsWithCurrentBindings(t *testing.T) {
 		t.Fatalf("loop pause did not expose the current mutable binding:\n%s", commands.String())
 	}
 }
+
+func TestDebuggerNextStepsOverTailRecursiveCall(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tail-next.kry")
+	source := `fn countdown(value: Int) -> Int {
+    if value > 0 {
+        return countdown(value - 1)
+    }
+    return 0
+}
+fn main() -> Nil {
+    let result = countdown(2)
+    println(result)
+}
+`
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var commands, diagnostics bytes.Buffer
+	status := debugCmd(kry.NewEngine(), []string{path}, strings.NewReader("break 3\ncontinue\nclear 1\nnext\nlocals\nquit\n"), &commands, &diagnostics)
+	if status != 0 {
+		t.Fatalf("debug command returned %d; diagnostics: %s", status, diagnostics.String())
+	}
+	if got := strings.Count(commands.String(), "Paused at "+path+":3:"); got != 1 {
+		t.Fatalf("next paused inside a subsequent tail-recursive call %d times, want one initial breakpoint:\n%s", got, commands.String())
+	}
+	for _, want := range []string{"Paused at " + path + ":9:", "result = 0", "Program stopped by debugger."} {
+		if !strings.Contains(commands.String(), want) {
+			t.Errorf("debugger output does not contain %q:\n%s", want, commands.String())
+		}
+	}
+}
+
+func TestDebuggerNextStepsOverOrdinaryCall(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ordinary-next.kry")
+	source := `fn increment(value: Int) -> Int {
+    let result = value + 1
+    return result
+}
+fn main() -> Nil {
+    let answer = increment(2)
+    println(answer)
+}
+`
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var commands, diagnostics bytes.Buffer
+	status := debugCmd(kry.NewEngine(), []string{path}, strings.NewReader("next\nlocals\nquit\n"), &commands, &diagnostics)
+	if status != 0 {
+		t.Fatalf("debug command returned %d; diagnostics: %s", status, diagnostics.String())
+	}
+	for _, want := range []string{"Paused at " + path + ":7:", "answer = 3", "Program stopped by debugger."} {
+		if !strings.Contains(commands.String(), want) {
+			t.Errorf("debugger output does not contain %q:\n%s", want, commands.String())
+		}
+	}
+	if strings.Contains(commands.String(), "Paused at "+path+":2:") {
+		t.Fatalf("next entered the ordinary called function instead of stepping over it:\n%s", commands.String())
+	}
+}

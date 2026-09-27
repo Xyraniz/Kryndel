@@ -70,6 +70,9 @@ func generateC(p *Program, c *Checker, obfuscate bool) (string, error) {
 	if p == nil || c == nil {
 		return "", fmt.Errorf("missing checked program")
 	}
+	if err := validateFunctionValueSupport(p, "C"); err != nil {
+		return "", err
+	}
 	g := &cgen{
 		prog:      p,
 		env:       c.Env,

@@ -86,6 +86,12 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if function == nil || function.Name == "" || function.Return == "" {
 			return fmt.Errorf("function declaration is incomplete")
 		}
+		if len(function.Captures) != 0 {
+			return fmt.Errorf("top-level function declarations cannot have closure captures")
+		}
+		if document.Version < 3 && len(function.Captures) != 0 {
+			return fmt.Errorf("function captures require KIR version 3")
+		}
 		functionCounts[function.Name]++
 		if err := checkKIRCount("function parameters", len(function.Params), limits.MaxArrayElements); err != nil {
 			return err
@@ -103,6 +109,12 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		for _, parameter := range function.Params {
 			if parameter == nil || parameter.Name == "" || parameter.Type == "" {
 				return fmt.Errorf("function %q has an incomplete parameter", function.Name)
+			}
+			if document.Version < 3 && parameter.Binding != nil {
+				return fmt.Errorf("resolved parameter bindings require KIR version 3")
+			}
+			if document.Version >= 3 && (!validKIRBinding(parameter.Binding) || parameter.Binding.Name != parameter.Name || parameter.Binding.Type != parameter.Type || parameter.Binding.Mutable) {
+				return fmt.Errorf("function %q has an invalid resolved parameter binding", function.Name)
 			}
 		}
 		if err := checkKIRCount("function body statements", len(function.Body), limits.MaxArrayElements); err != nil {
@@ -189,6 +201,17 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if len(expression.Type) > limits.MaxSourceBytes && limits.MaxSourceBytes > 0 {
 			return fmt.Errorf("expression type exceeds configured string limit")
 		}
+		if document.Version < 3 && (expression.Binding != nil || expression.Callee != nil || expression.Lambda != nil) {
+			return fmt.Errorf("function values and resolved expression bindings require KIR version 3")
+		}
+		if expression.Kind != "var" && expression.Binding != nil {
+			return fmt.Errorf("non-variable expression has a resolved binding")
+		}
+		if strings.HasPrefix(expression.Type, "fn(") {
+			if _, _, ok := parseKIRFunctionType(expression.Type); !ok {
+				return fmt.Errorf("expression has malformed function type %q", expression.Type)
+			}
+		}
 		require := func(child *KIRExpr, field string) error {
 			if child == nil {
 				return fmt.Errorf("%s expression is missing %s", expression.Kind, field)
@@ -200,6 +223,23 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		case "var":
 			if expression.Name == "" {
 				return fmt.Errorf("variable expression has no name")
+			}
+			if expression.CallTarget != "" {
+				if expression.Binding != nil {
+					return fmt.Errorf("function reference cannot also name a local binding")
+				}
+				if document.Version < 3 || !validKIRCallTarget(expression.CallTarget) || !strings.HasPrefix(expression.Type, "fn(") {
+					return fmt.Errorf("function value has an invalid target or function type")
+				}
+				prefix, target, _ := strings.Cut(expression.CallTarget, ":")
+				resolvedName, ok := functionTargets[target]
+				if prefix != "function" || !ok || resolvedName != expression.Name {
+					return fmt.Errorf("function value references undeclared function or unresolved overload %q", target)
+				}
+			} else if document.Version >= 3 {
+				if !validKIRBinding(expression.Binding) || expression.Binding.Name != expression.Name || expression.Binding.Type != expression.Type {
+					return fmt.Errorf("variable %q has an invalid resolved binding", expression.Name)
+				}
 			}
 		case "unary":
 			if !isKIRUnaryOperator(expression.Operator) {
@@ -219,29 +259,107 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				return err
 			}
 		case "call":
-			if expression.Name == "" || !validKIRCallTarget(expression.CallTarget) {
-				return fmt.Errorf("call expression has an invalid name or target")
-			}
-			prefix, name, _ := strings.Cut(expression.CallTarget, ":")
-			if prefix == "builtin" {
-				if name != expression.Name {
-					return fmt.Errorf("call expression name does not match its target")
+			if expression.Callee != nil {
+				if document.Version < 3 || expression.Name != "" || expression.CallTarget != "" || expression.BuiltinID != "" {
+					return fmt.Errorf("indirect call has an invalid name or target")
 				}
-				builtin, ok := Builtins()[name]
+				params, result, ok := parseKIRFunctionType(expression.Callee.Type)
 				if !ok {
-					return fmt.Errorf("call references unknown builtin %q", name)
+					return fmt.Errorf("indirect call callee does not have a function type")
 				}
-				if expression.BuiltinID != "" && expression.BuiltinID != builtin.ID {
-					return fmt.Errorf("call to builtin %q has a mismatched builtin id", name)
+				if len(params) != len(expression.Args) {
+					return fmt.Errorf("indirect call has %d arguments for a %d-parameter function", len(expression.Args), len(params))
+				}
+				if expression.Type != result {
+					return fmt.Errorf("indirect call result type does not match its function type")
+				}
+				for i, arg := range expression.Args {
+					if arg == nil || arg.Type != params[i] {
+						return fmt.Errorf("indirect call argument %d has a mismatched type", i+1)
+					}
 				}
 			} else {
-				resolvedName, ok := functionTargets[name]
-				if !ok {
-					return fmt.Errorf("call references undeclared function or unresolved overload %q", name)
+				if expression.Name == "" || !validKIRCallTarget(expression.CallTarget) {
+					return fmt.Errorf("call expression has an invalid name or target")
 				}
-				if resolvedName != expression.Name {
-					return fmt.Errorf("call expression name does not match its target")
+				prefix, name, _ := strings.Cut(expression.CallTarget, ":")
+				if prefix == "builtin" {
+					if name != expression.Name {
+						return fmt.Errorf("call expression name does not match its target")
+					}
+					builtin, ok := Builtins()[name]
+					if !ok {
+						return fmt.Errorf("call references unknown builtin %q", name)
+					}
+					if expression.BuiltinID != "" && expression.BuiltinID != builtin.ID {
+						return fmt.Errorf("call to builtin %q has a mismatched builtin id", name)
+					}
+				} else {
+					resolvedName, ok := functionTargets[name]
+					if !ok {
+						return fmt.Errorf("call references undeclared function or unresolved overload %q", name)
+					}
+					if resolvedName != expression.Name {
+						return fmt.Errorf("call expression name does not match its target")
+					}
 				}
+			}
+		case "lambda":
+			if document.Version < 3 || expression.Lambda == nil || expression.Callee != nil {
+				return fmt.Errorf("lambda expression is missing its versioned function body")
+			}
+			lambda := expression.Lambda
+			if lambda.Name == "" || lambda.Return == "" || len(lambda.TypeParams) != 0 || lambda.Receiver != "" || lambda.Public || lambda.Worker {
+				return fmt.Errorf("lambda function metadata is invalid")
+			}
+			if err := checkKIRCount("lambda parameters", len(lambda.Params), limits.MaxArrayElements); err != nil {
+				return err
+			}
+			parts := make([]string, len(lambda.Params))
+			parameterNames := map[string]bool{}
+			for i, parameter := range lambda.Params {
+				if parameter == nil || parameter.Name == "" || parameter.Type == "" || parameter.Default != nil || parameterNames[parameter.Name] {
+					return fmt.Errorf("lambda has an invalid or duplicate parameter")
+				}
+				if !validKIRBinding(parameter.Binding) || parameter.Binding.Name != parameter.Name || parameter.Binding.Type != parameter.Type || parameter.Binding.Mutable {
+					return fmt.Errorf("lambda has an invalid resolved parameter binding")
+				}
+				parameterNames[parameter.Name] = true
+				parts[i] = parameter.Type
+			}
+			if expression.Type != "fn("+strings.Join(parts, ", ")+") -> "+lambda.Return {
+				return fmt.Errorf("lambda expression type does not match its signature")
+			}
+			if _, _, ok := parseKIRFunctionType(expression.Type); !ok {
+				return fmt.Errorf("lambda has a malformed function type")
+			}
+			if err := checkKIRCount("lambda captures", len(lambda.Captures), limits.MaxArrayElements); err != nil {
+				return err
+			}
+			captures := map[string]bool{}
+			for _, capture := range lambda.Captures {
+				if err := addNode("capture", depth+1); err != nil {
+					return err
+				}
+				if capture == nil || !validKIRBinding(capture.Binding) {
+					return fmt.Errorf("lambda has an incomplete capture")
+				}
+				identity := kirBindingIdentity(capture.Binding)
+				if captures[identity] {
+					return fmt.Errorf("lambda has a duplicate capture %q", capture.Binding.Name)
+				}
+				captures[identity] = true
+			}
+			if err := checkKIRCount("lambda body statements", len(lambda.Body), limits.MaxArrayElements); err != nil {
+				return err
+			}
+			for _, statement := range lambda.Body {
+				if err := validateStmt(statement, depth+1); err != nil {
+					return fmt.Errorf("lambda body: %w", err)
+				}
+			}
+			if err := validateKIRLambdaCaptures(lambda); err != nil {
+				return err
 			}
 		case "array", "set":
 		case "index":
@@ -296,7 +414,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if err := checkKIRCount("struct expression fields", len(expression.Fields), limits.MaxArrayElements); err != nil {
 			return err
 		}
-		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver} {
+		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
 			if err := validateExpr(child, depth+1); err != nil {
 				return err
 			}
@@ -326,6 +444,16 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if err := addNode("pattern", depth); err != nil {
 			return err
 		}
+		if document.Version < 3 && pattern.ResolvedBinding != nil {
+			return fmt.Errorf("resolved pattern bindings require KIR version 3")
+		}
+		if pattern.Binding == "" {
+			if pattern.ResolvedBinding != nil {
+				return fmt.Errorf("pattern without a binding has resolved binding metadata")
+			}
+		} else if document.Version >= 3 && (!validKIRBinding(pattern.ResolvedBinding) || pattern.ResolvedBinding.Name != pattern.Binding || pattern.ResolvedBinding.Mutable) {
+			return fmt.Errorf("pattern has an invalid resolved binding")
+		}
 		switch pattern.Kind {
 		case "wildcard", "nil", "bool", "int", "string", "option", "result":
 		case "enum":
@@ -345,6 +473,12 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if err := addNode("statement", depth); err != nil {
 			return err
 		}
+		if document.Version < 3 && statement.Binding != nil {
+			return fmt.Errorf("resolved statement bindings require KIR version 3")
+		}
+		if statement.Binding != nil && statement.Kind != "let" && statement.Kind != "const" && statement.Kind != "for" {
+			return fmt.Errorf("%s statement cannot have a resolved declaration binding", statement.Kind)
+		}
 		requireExpr := func(expression *KIRExpr, field string) error {
 			if expression == nil {
 				return fmt.Errorf("%s statement is missing %s", statement.Kind, field)
@@ -358,6 +492,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			}
 			if err := requireExpr(statement.Init, "initializer"); err != nil {
 				return err
+			}
+			if document.Version >= 3 && (!validKIRBinding(statement.Binding) || statement.Binding.Name != statement.Name || statement.Binding.Mutable != statement.Mutable) {
+				return fmt.Errorf("%s statement has an invalid resolved binding", statement.Kind)
 			}
 		case "expr":
 			if err := requireExpr(statement.Expr, "expression"); err != nil {
@@ -384,6 +521,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if err := requireExpr(statement.Iter, "iterator"); err != nil {
 				return err
 			}
+			if document.Version >= 3 && (!validKIRBinding(statement.Binding) || statement.Binding.Name != statement.Name || statement.Binding.Type == "") {
+				return fmt.Errorf("for statement has an invalid resolved binding")
+			}
 		case "return", "break", "continue", "defer", "unsafe":
 		case "match":
 			if err := requireExpr(statement.Scrutinee, "scrutinee"); err != nil {
@@ -399,6 +539,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if err := validateExpr(expression, depth+1); err != nil {
 				return err
 			}
+		}
+		if document.Version >= 3 && (statement.Kind == "let" || statement.Kind == "const") && statement.Binding.Type != statement.Init.Type {
+			return fmt.Errorf("%s statement binding type does not match its initializer", statement.Kind)
 		}
 		for _, list := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
 			if err := checkKIRCount("statement block", len(list), limits.MaxArrayElements); err != nil {
@@ -500,4 +643,199 @@ func containsKIRString(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func parseKIRFunctionType(raw string) ([]string, string, bool) {
+	if !strings.HasPrefix(raw, "fn(") {
+		return nil, "", false
+	}
+	var params []string
+	start, parentheses, brackets := 3, 1, 0
+	end := -1
+	for i := 3; i < len(raw); i++ {
+		switch raw[i] {
+		case '[':
+			brackets++
+		case ']':
+			brackets--
+			if brackets < 0 {
+				return nil, "", false
+			}
+		case '(':
+			parentheses++
+		case ')':
+			parentheses--
+			if parentheses < 0 {
+				return nil, "", false
+			}
+			if parentheses == 0 {
+				end = i
+				rawParam := strings.TrimSpace(raw[start:i])
+				if rawParam != "" {
+					params = append(params, rawParam)
+				}
+				break
+			}
+		case ',':
+			if parentheses == 1 && brackets == 0 {
+				rawParam := strings.TrimSpace(raw[start:i])
+				if rawParam == "" {
+					return nil, "", false
+				}
+				params = append(params, rawParam)
+				start = i + 1
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 || brackets != 0 || parentheses != 0 {
+		return nil, "", false
+	}
+	remainder := strings.TrimSpace(raw[end+1:])
+	if !strings.HasPrefix(remainder, "->") {
+		return nil, "", false
+	}
+	result := strings.TrimSpace(strings.TrimPrefix(remainder, "->"))
+	if result == "" {
+		return nil, "", false
+	}
+	return params, result, true
+}
+
+func validKIRBinding(binding *KIRBinding) bool {
+	return binding != nil && binding.Name != "" && binding.Type != "" && binding.Source != "" && binding.Line >= 1 && binding.Column >= 1
+}
+
+func kirBindingIdentity(binding *KIRBinding) string {
+	if binding == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d:%d:%s", binding.Source, binding.Line, binding.Column, binding.Name)
+}
+
+func validateKIRLambdaCaptures(function *KIRFunction) error {
+	locals := map[string]*KIRBinding{}
+	uses := map[string]*KIRBinding{}
+	captures := map[string]*KIRBinding{}
+	for _, parameter := range function.Params {
+		locals[kirBindingIdentity(parameter.Binding)] = parameter.Binding
+	}
+	for _, capture := range function.Captures {
+		captures[kirBindingIdentity(capture.Binding)] = capture.Binding
+	}
+	addUse := func(binding *KIRBinding) error {
+		if !validKIRBinding(binding) {
+			return fmt.Errorf("lambda contains an unresolved variable binding")
+		}
+		identity := kirBindingIdentity(binding)
+		if previous := uses[identity]; previous != nil && (previous.Type != binding.Type || previous.Mutable != binding.Mutable) {
+			return fmt.Errorf("lambda references a binding with inconsistent type or mutability")
+		}
+		uses[identity] = binding
+		return nil
+	}
+	var walkExpr func(*KIRExpr) error
+	var walkStmt func(*KIRStmt) error
+	walkExpr = func(expression *KIRExpr) error {
+		if expression == nil {
+			return nil
+		}
+		if expression.Kind == "lambda" {
+			if expression.Lambda == nil {
+				return fmt.Errorf("nested lambda has no function body")
+			}
+			for _, capture := range expression.Lambda.Captures {
+				if capture == nil {
+					return fmt.Errorf("nested lambda has an incomplete capture")
+				}
+				if err := addUse(capture.Binding); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if expression.Kind == "var" && expression.Binding != nil {
+			if err := addUse(expression.Binding); err != nil {
+				return err
+			}
+		}
+		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
+			if err := walkExpr(child); err != nil {
+				return err
+			}
+		}
+		for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
+			for _, child := range list {
+				if err := walkExpr(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	walkStmt = func(statement *KIRStmt) error {
+		if statement == nil {
+			return nil
+		}
+		if statement.Binding != nil {
+			locals[kirBindingIdentity(statement.Binding)] = statement.Binding
+		}
+		for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
+			if err := walkExpr(expression); err != nil {
+				return err
+			}
+		}
+		for _, list := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
+			for _, child := range list {
+				if err := walkStmt(child); err != nil {
+					return err
+				}
+			}
+		}
+		for _, arm := range statement.Arms {
+			if arm == nil {
+				continue
+			}
+			if arm.Pattern != nil && arm.Pattern.ResolvedBinding != nil {
+				locals[kirBindingIdentity(arm.Pattern.ResolvedBinding)] = arm.Pattern.ResolvedBinding
+			}
+			for _, child := range arm.Body {
+				if err := walkStmt(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for _, statement := range function.Body {
+		if err := walkStmt(statement); err != nil {
+			return err
+		}
+	}
+	for identity, binding := range uses {
+		if local := locals[identity]; local != nil {
+			if local.Type != binding.Type || local.Mutable != binding.Mutable {
+				return fmt.Errorf("lambda local binding %q has inconsistent type or mutability", binding.Name)
+			}
+			continue
+		}
+		capture := captures[identity]
+		if capture == nil {
+			return fmt.Errorf("lambda is missing capture %q", binding.Name)
+		}
+		if capture.Type != binding.Type || capture.Mutable != binding.Mutable {
+			return fmt.Errorf("lambda capture %q does not match its resolved binding", binding.Name)
+		}
+	}
+	for identity, capture := range captures {
+		if locals[identity] != nil {
+			return fmt.Errorf("lambda capture %q is local to its own body", capture.Name)
+		}
+		if uses[identity] == nil {
+			return fmt.Errorf("lambda has unused capture %q", capture.Name)
+		}
+	}
+	return nil
 }

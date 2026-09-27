@@ -139,6 +139,23 @@ func (p *Parser) end() {
 	}
 }
 func (p *Parser) typeSpec() *TypeSpec {
+	if p.match(FN) {
+		t := p.prev()
+		s := &TypeSpec{Function: true, Tok: t}
+		p.expect(LPAREN, "expected '(' after 'fn' in function type")
+		if !p.check(RPAREN) {
+			for {
+				s.Params = append(s.Params, p.typeSpec())
+				if !p.match(COMMA) {
+					break
+				}
+			}
+		}
+		p.expect(RPAREN, "expected ')' after function type parameters")
+		p.expect(ARROW, "function types require a return type after '->'")
+		s.Return = p.typeSpec()
+		return s
+	}
 	t := p.expect(ID, "expected a type name")
 	s := &TypeSpec{Name: t.Text(), Tok: t}
 	if p.match(LBRACKET) {
@@ -501,10 +518,8 @@ func (p *Parser) unary() *Expr {
 	e := p.primary()
 	for p.Err == nil {
 		if p.match(LPAREN) {
-			if e.Kind != ExVar {
-				p.fail(p.prev(), "only named functions can be called")
-			}
 			c := p.node(p.prev(), ExCall)
+			c.Callee = e
 			if e.Kind == ExVar {
 				c.Name = e.Name
 				c.NameToken = e.Tok
@@ -561,6 +576,8 @@ func (p *Parser) unary() *Expr {
 func (p *Parser) primary() *Expr {
 	t := p.peek()
 	switch {
+	case p.check(FN):
+		return p.lambda()
 	case p.match(INT):
 		e := p.node(t, ExInt)
 		v, err := strconv.ParseInt(t.Text(), 10, 64)
@@ -672,4 +689,34 @@ func (p *Parser) primary() *Expr {
 	}
 	p.fail(t, "expected an expression")
 	return p.node(t, ExNil)
+}
+
+func (p *Parser) lambda() *Expr {
+	t := p.expect(FN, "expected 'fn'")
+	f := &Function{Name: "<closure>", Tok: t, Return: &TypeSpec{Name: "Nil", Tok: t}, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
+	p.expect(LPAREN, "expected '(' after 'fn' in closure")
+	if !p.check(RPAREN) {
+		for {
+			pt := p.expect(ID, "expected a closure parameter name")
+			p.expect(COLON, "closure parameters require an explicit type")
+			param := Param{Name: pt.Text(), Type: p.typeSpec(), Tok: pt}
+			if p.match(EQUAL) {
+				p.fail(p.prev(), "closure parameters cannot have default values")
+				_ = p.expression()
+			}
+			f.Params = append(f.Params, param)
+			if !p.match(COMMA) {
+				break
+			}
+		}
+	}
+	p.expect(RPAREN, "expected ')' after closure parameters")
+	if p.match(ARROW) {
+		f.Return = p.typeSpec()
+	}
+	f.Body = p.block()
+	f.EndToken = p.prev()
+	e := p.node(t, ExLambda)
+	e.Lambda = f
+	return e
 }

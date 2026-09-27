@@ -189,6 +189,9 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 	if err != nil {
 		return nil, err
 	}
+	if err := validateFunctionValueSupport(p, backend.Name); err != nil {
+		return nil, err
+	}
 	if noExternalToolchain && backend.RequiresExternalToolchain {
 		return nil, fmt.Errorf("--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use --format=elf-direct or --format=pe-direct for a supported C-free backend", format, backend.Name)
 	}

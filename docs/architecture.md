@@ -21,7 +21,7 @@ UTF-8 source
 | Parser | Expressions, bindings, functions, modules, data declarations, blocks, and patterns. | Native AST. |
 | Type checker | Type inference, annotations, complete-argument multiple dispatch, constrained generics, privacy, operators, mutability, returns, conditions, exhaustiveness, and constant folding. | Native type model and source locations. |
 | Module resolver | Relative source lookup, public exports, cycle detection, and traversal rejection. | Explicit filesystem paths only. |
-| Runtime | Interprets the checked AST and folded primitive values; provides scopes, calls, tail-call trampolines, recursion, collections, UTF-8, options, results, control flow, channels, synchronized `Shared[T]` cells, actor mailboxes, structured `TaskGroup` workers, safepoints, and budgets. | Go standard library, `internal/platform` for camera/display capture, and modules listed in `go.mod` for host integrations. |
+| Runtime | Interprets the checked AST and folded primitive values; provides lexical scopes, first-class function values and closures, mutable capture cells, indirect calls, tail-call trampolines, recursion, collections, UTF-8, options, results, control flow, channels, synchronized `Shared[T]` cells, actor mailboxes, structured `TaskGroup` workers, safepoints, and budgets. | Go standard library, `internal/platform` for camera/display capture, and modules listed in `go.mod` for host integrations. |
 | Platform integrations | Bounded camera frame capture and display enumeration/screenshot encoding behind byte-oriented APIs. | Target-specific camera implementations, screenshot/webcam libraries, or FFmpeg on Windows camera capture. |
 | Artifact reader/writer | Versioned KRYNATIVE5 metadata, package visibility scopes, deterministic source bundle, SHA-256 hashes, atomic writes, and strict replay validation; reads KRYNATIVE4 and legacy KRYNATIVE3. | Go binary/file APIs. |
 | CLI and language server | `check`, `run`, `build`, `fmt`, `lsp`, `repl`, `doctor`, `version`, and help. | Explicit command-line and filesystem inputs; LSP messages over standard input/output. |
@@ -44,14 +44,16 @@ Lexical scopes are represented by parent-linked environments. A declaration is l
 
 ## Artifact format
 
-`build` accepts a source file, validates it, and writes a deterministic KRYNATIVE5 bundle with a fixed magic, format/compiler/language/target metadata, exact payload length, an ordered `<root>` plus imported source entries, package visibility scopes, and a SHA-256 hash for every source. The writer uses a temporary file, flush/sync, and atomic rename. The reader rejects incompatible metadata, truncated or oversized fields, duplicate or unsafe paths, invalid hashes, trailing bytes, and any embedded source that fails the ordinary lexer, parser, module, or checker pipeline. Building the same source twice produces identical bytes. KRYNATIVE4 and KRYNATIVE3 artifacts remain readable; KRYNATIVE3 is interpreted as language version 1.0.0. `emit --format=kry-ir` exposes the checked program through deterministic KIR v2 JSON; the decoder also accepts KIR v1 as language version 1.0.0. For `--format=elf --target=linux-x64`, the native path still emits the explicitly documented C-backed AOT subset; the direct machine-code replacement is not claimed until bootstrap parity tests exist.
+`build` accepts a source file, validates it, and writes a deterministic KRYNATIVE5 bundle with a fixed magic, format/compiler/language/target metadata, exact payload length, an ordered `<root>` plus imported source entries, package visibility scopes, and a SHA-256 hash for every source. The writer uses a temporary file, flush/sync, and atomic rename. The reader rejects incompatible metadata, truncated or oversized fields, duplicate or unsafe paths, invalid hashes, trailing bytes, and any embedded source that fails the ordinary lexer, parser, module, or checker pipeline. Building the same source twice produces identical bytes. KRYNATIVE4 and KRYNATIVE3 artifacts remain readable; KRYNATIVE3 is interpreted as language version 1.0.0. `emit --format=kry-ir` exposes the checked program through deterministic KIR v3 JSON; the decoder accepts KIR v1 and v2 for legacy programs without v3 function-value metadata. For `--format=elf --target=linux-x64`, the native path still emits the explicitly documented C-backed AOT subset; the direct machine-code replacement is not claimed until bootstrap parity tests exist.
 
 ## Intermediate representation status
 
 The checker currently stores resolved expression types and call targets on AST
 nodes. The interpreter and C generator execute or lower that checked AST. The
 direct ELF backend now lowers its constant-output subset from decoded KIR, but
-its dynamic path still consumes the AST plus checker state. KIR v2 remains a
+its dynamic path still consumes the AST plus checker state. KIR v3 records
+typed function values, indirect calls, closure bodies, and resolved lexical
+binding identities, but remains a
 typed serialization rather than the single internal representation shared by
 execution and code generation. The `ValidatedIR` in `internal/kry/ir.go`
 currently records a bounded traversal and is not an executable lowering.
@@ -62,5 +64,5 @@ The planned compiler boundary is `source -> AST -> typed HIR -> validated
 MIR/KIR -> interpreter or target backend`. Resolution and overload selection
 must be recorded in that typed representation. Backend feature checks must run
 against the selected target before any output bytes are emitted. This remains
-work in progress; KIR v2's current limits are listed in the
+work in progress; KIR v3's current limits are listed in the
 [KIR reference](kry-ir.md).

@@ -215,3 +215,98 @@ func validateNativeFeatureSupport(p *Program, c *Checker, format string, target 
 	}
 	return nil
 }
+
+func validateFunctionValueSupport(p *Program, format string) error {
+	if p == nil {
+		return fmt.Errorf("missing program")
+	}
+	if usesFunctionType(p) {
+		return fmt.Errorf("%s backend does not support function values or closures; use the interpreter", format)
+	}
+	return nil
+}
+
+func usesFunctionType(program *Program) bool {
+	var typeUsesFunction func(*TypeSpec) bool
+	typeUsesFunction = func(spec *TypeSpec) bool {
+		if spec == nil {
+			return false
+		}
+		if spec.Function || typeUsesFunction(spec.Return) {
+			return true
+		}
+		for _, child := range spec.Params {
+			if typeUsesFunction(child) {
+				return true
+			}
+		}
+		return false
+	}
+	var usesExpr func(*Expr) bool
+	var usesStmts func([]*Stmt) bool
+	usesExpr = func(expression *Expr) bool {
+		if expression == nil {
+			return false
+		}
+		if expression.Kind == ExLambda || expression.Type != nil && expression.Type.Kind == TyFunction || expression.Kind == ExVar && expression.Function != nil || expression.Kind == ExCall && expression.Callee != nil && expression.Callee.Type != nil && expression.Callee.Type.Kind == TyFunction {
+			return true
+		}
+		for _, child := range []*Expr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
+			if usesExpr(child) {
+				return true
+			}
+		}
+		for _, list := range [][]*Expr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
+			for _, child := range list {
+				if usesExpr(child) {
+					return true
+				}
+			}
+		}
+		return expression.Lambda != nil && usesStmts(expression.Lambda.Body)
+	}
+	usesStmts = func(statements []*Stmt) bool {
+		for _, statement := range statements {
+			if statement == nil {
+				continue
+			}
+			for _, expression := range []*Expr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
+				if usesExpr(expression) {
+					return true
+				}
+			}
+			for _, block := range [][]*Stmt{statement.Then, statement.Else, statement.Body} {
+				if usesStmts(block) {
+					return true
+				}
+			}
+			for _, arm := range statement.Arms {
+				if usesStmts(arm.Body) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, structure := range program.Structs {
+		for _, field := range structure.Fields {
+			if typeUsesFunction(field.Spec) {
+				return true
+			}
+		}
+	}
+	for _, function := range program.Functions {
+		if typeUsesFunction(function.Return) || typeUsesFunction(function.Receiver) {
+			return true
+		}
+		for _, parameter := range function.Params {
+			if typeUsesFunction(parameter.Type) || usesExpr(parameter.Default) {
+				return true
+			}
+		}
+		if usesStmts(function.Body) {
+			return true
+		}
+	}
+	return usesStmts(program.Statements)
+}
