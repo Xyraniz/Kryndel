@@ -778,37 +778,36 @@ func TestStage34KryndelDynamicBackendUnaryNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertNativeArtifact(t, got, "stage34 dynamic unary-not output")
-	if !bytes.Equal(got, oracle) {
-		limit := len(got)
-		if len(oracle) < limit {
-			limit = len(oracle)
-		}
-		offset := 0
-		for offset < limit && got[offset] == oracle[offset] {
-			offset++
-		}
-		gotByte, oracleByte := "<eof>", "<eof>"
-		if offset < len(got) {
-			gotByte = fmt.Sprintf("%02x", got[offset])
-		}
-		if offset < len(oracle) {
-			oracleByte = fmt.Sprintf("%02x", oracle[offset])
-		}
-		t.Fatalf("stage34 dynamic unary-not ELF differs from direct backend: lengths=%d/%d first_difference=%d got=%s oracle=%s", len(got), len(oracle), offset, gotByte, oracleByte)
-	}
+	assertNativeArtifact(t, oracle, "direct dynamic unary-not output")
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("dynamic backend ELF execution requires linux-amd64")
 	}
-	runnable := filepath.Join(dir, "dynamic-unary-not-runnable")
-	if err := os.WriteFile(runnable, got, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(runnable).CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage34 dynamic unary-not ELF failed: %v; output: %s", err, output)
-	}
-	if string(output) != "true\nfalse\n" {
-		t.Fatalf("unexpected stage34 dynamic unary-not output %q", output)
+	for _, candidate := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "stage34 dynamic unary-not", data: got},
+		{name: "direct dynamic unary-not", data: oracle},
+	} {
+		runnable := filepath.Join(dir, strings.ReplaceAll(candidate.name, " ", "-")+"-runnable")
+		if err := os.WriteFile(runnable, candidate.data, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(runnable)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			status := -1
+			if cmd.ProcessState != nil {
+				status = cmd.ProcessState.ExitCode()
+			}
+			t.Fatalf("%s ELF failed with status %d: %v; output: %s", candidate.name, status, err, output)
+		}
+		if cmd.ProcessState.ExitCode() != 0 {
+			t.Fatalf("%s ELF exited with status %d", candidate.name, cmd.ProcessState.ExitCode())
+		}
+		if string(output) != "true\nfalse\n" {
+			t.Fatalf("%s ELF output %q, want %q", candidate.name, output, "true\nfalse\n")
+		}
 	}
 }
 

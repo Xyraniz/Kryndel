@@ -2,8 +2,11 @@ package kry
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
+
+var errDirectOutputLimit = errors.New("direct ELF output exceeds configured output limit")
 
 const (
 	elfBase       uint64 = 0x400000
@@ -43,8 +46,8 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 		return emitELF64WriteExit(output), nil
 	}
 	stmts, stmtErr := directDynamicStatements(p)
-	if stmtErr == nil && (directHasDynamicControl(stmts) || directHasArrayFeatures(stmts) || directHasStructuredFeatures(stmts) || directHasUserFunctions(p)) {
-		return buildDirectDynamicELF(p)
+	if stmtErr == nil && (errors.Is(err, errDirectOutputLimit) || directHasDynamicControl(stmts) || directHasArrayFeatures(stmts) || directHasStructuredFeatures(stmts) || directHasUserFunctions(p)) {
+		return buildDirectDynamicELF(p, c)
 	}
 	return nil, err
 }
@@ -92,7 +95,7 @@ func directStaticOutput(p *Program, c *Checker) ([]byte, error) {
 			return nil, fmt.Errorf("direct ELF backend does not support statement kind %s", stmtName(s.Kind))
 		}
 		if int64(len(output)) > c.Env.Lim.MaxOutputBytes {
-			return nil, fmt.Errorf("direct ELF output exceeds configured output limit")
+			return nil, errDirectOutputLimit
 		}
 	}
 	return output, nil
@@ -183,46 +186,20 @@ func directStaticValue(e *Expr, env map[string]Value) (Value, bool) {
 }
 
 func emitELF64WriteExit(data []byte) []byte {
-	code := []byte{
-		0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax, SYS_write
-		0xbf, 0x01, 0x00, 0x00, 0x00, // mov edi, stdout
-		0x48, 0x8d, 0x35, 0, 0, 0, 0, // lea rsi, [rip + data]
-		0xba, 0, 0, 0, 0, // mov edx, len(data)
-		0x0f, 0x05, // syscall
-		0xb8, 0x3c, 0x00, 0x00, 0x00, // mov eax, SYS_exit
-		0x31, 0xff, // xor edi, edi
-		0x0f, 0x05, // syscall
+	// Keep the static byte-stable source path small, but use the same reliable
+	// write loop as dynamic ELF output so short writes and syscall errors fail.
+	machine := newDirectMachine()
+	if len(data) > 0 {
+		_ = machine.emitWriteRaw(string(data))
 	}
-	dataOffset := elfCodeOffset + len(code)
-	nextRIP := elfCodeOffset + 17
-	binary.LittleEndian.PutUint32(code[13:17], uint32(dataOffset-nextRIP))
-	binary.LittleEndian.PutUint32(code[18:22], uint32(len(data)))
-	fileSize := dataOffset + len(data)
-	out := make([]byte, fileSize)
-	copy(out[elfCodeOffset:], code)
-	copy(out[dataOffset:], data)
-	copy(out[0:4], []byte{0x7f, 'E', 'L', 'F'})
-	out[4] = 2                                      // ELFCLASS64
-	out[5] = 1                                      // ELFDATA2LSB
-	out[6] = 1                                      // EV_CURRENT
-	binary.LittleEndian.PutUint16(out[16:18], 2)    // ET_EXEC
-	binary.LittleEndian.PutUint16(out[18:20], 0x3e) // EM_X86_64
-	binary.LittleEndian.PutUint32(out[20:24], 1)    // EV_CURRENT
-	binary.LittleEndian.PutUint64(out[24:32], elfBase+elfCodeOffset)
-	binary.LittleEndian.PutUint64(out[32:40], elfHeaderLen)
-	binary.LittleEndian.PutUint64(out[40:48], 0) // no section table
-	binary.LittleEndian.PutUint32(out[48:52], 0)
-	binary.LittleEndian.PutUint16(out[52:54], elfHeaderLen)
-	binary.LittleEndian.PutUint16(out[54:56], elfProgramLen)
-	binary.LittleEndian.PutUint16(out[56:58], 1)
-	ph := elfHeaderLen
-	binary.LittleEndian.PutUint32(out[ph:ph+4], 1) // PT_LOAD
-	binary.LittleEndian.PutUint32(out[ph+4:ph+8], 5)
-	binary.LittleEndian.PutUint64(out[ph+8:ph+16], 0)
-	binary.LittleEndian.PutUint64(out[ph+16:ph+24], elfBase)
-	binary.LittleEndian.PutUint64(out[ph+24:ph+32], elfBase)
-	binary.LittleEndian.PutUint64(out[ph+32:ph+40], uint64(fileSize))
-	binary.LittleEndian.PutUint64(out[ph+40:ph+48], uint64(fileSize))
-	binary.LittleEndian.PutUint64(out[ph+48:ph+56], 0x1000)
-	return out
+	_ = machine.bind(machine.endLabel)
+	_ = machine.emitExit(0)
+	_ = machine.bind(machine.trapLabel)
+	_ = machine.emitExit(1)
+	for _, ref := range machine.dataRefs {
+		dataAddress := elfCodeOffset + len(machine.code) + ref.dataOffset
+		nextInstruction := elfCodeOffset + ref.instructionEnd
+		binary.LittleEndian.PutUint32(machine.code[ref.displacement:ref.displacement+4], uint32(int32(dataAddress-nextInstruction)))
+	}
+	return emitELF64CodeData(machine.code, machine.data)
 }

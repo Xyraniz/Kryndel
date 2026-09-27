@@ -85,6 +85,8 @@ type directMachine struct {
 	currentFunction     string
 	windowsABI          bool
 	windowsStackDepth   int
+	outputLimit         int64
+	outputLimitSet      bool
 	peImportRefs        []peImportRef
 	peFunctions         []peFunctionRange
 }
@@ -295,23 +297,135 @@ func (m *directMachine) emitStringAddress(text string) {
 }
 
 func (m *directMachine) emitStringWrite() error {
-	// rax points to {u64 length, u8 bytes[length]}.
+	return m.emitStringOutput(false)
+}
+
+func (m *directMachine) emitStringOutput(newline bool) error {
+	// RAX points to {u64 length, u8 bytes[length]}. Preflight the complete
+	// print/println operation before writing either the bytes or its newline.
+	m.code = append(m.code, 0x49, 0x89, 0xc1) // mov r9, rax
 	if m.windowsABI {
 		// WriteFile accepts a DWORD length. Reject wider strings instead of
 		// silently truncating their length during the ABI conversion.
-		m.code = append(m.code, 0x83, 0x78, 0x04, 0x00) // cmp dword [rax+4], 0
+		m.code = append(m.code, 0x41, 0x83, 0x79, 0x04, 0x00) // cmp dword [r9+4], 0
 		if err := m.emitConditionalJump(0x85, m.trapLabel); err != nil {
 			return err
 		}
-		m.code = append(m.code, 0x48, 0x89, 0xc2)       // mov rdx, rax
-		m.code = append(m.code, 0x8b, 0x00)             // mov eax, [rax]
-		m.code = append(m.code, 0x41, 0x89, 0xc0)       // mov r8d, eax
-		m.code = append(m.code, 0x48, 0x83, 0xc2, 0x08) // lea rdx, [rdx+8]
-		return m.emitPEWriteRDXR8()
 	}
-	m.code = append(m.code, 0x48, 0x8b, 0x10) // mov rdx, [rax]
-	m.code = append(m.code, 0x48, 0x8d, 0x70, 0x08)
-	m.code = append(m.code, 0xb8, 0x01, 0, 0, 0, 0xbf, 0x01, 0, 0, 0, 0x0f, 0x05)
+	m.code = append(m.code, 0x4d, 0x8b, 0x01) // mov r8, [r9]
+	if newline {
+		m.code = append(m.code, 0x49, 0xff, 0xc0) // inc r8
+	}
+	if err := m.emitOutputBudgetAddR8(); err != nil {
+		return err
+	}
+	if m.windowsABI {
+		m.code = append(m.code, 0x41, 0x8b, 0x01)       // mov eax, [r9]
+		m.code = append(m.code, 0x41, 0x89, 0xc0)       // mov r8d, eax
+		m.code = append(m.code, 0x4c, 0x89, 0xca)       // mov rdx, r9
+		m.code = append(m.code, 0x48, 0x83, 0xc2, 0x08) // lea rdx, [rdx+8]
+		if err := m.emitPEWriteRDXR8(); err != nil {
+			return err
+		}
+	} else {
+		m.code = append(m.code, 0x49, 0x8b, 0x11)       // mov rdx, [r9]
+		m.code = append(m.code, 0x49, 0x8d, 0x71, 0x08) // lea rsi, [r9+8]
+		if err := m.emitELFWriteRSIRDX(); err != nil {
+			return err
+		}
+	}
+	if newline {
+		return m.emitWriteRaw("\n")
+	}
+	return nil
+}
+
+// emitOutputCounterInit reserves an aligned qword in the entry frame and puts
+// its address in R15, a callee-saved register shared with generated functions.
+func (m *directMachine) emitOutputCounterInit(offset int32) {
+	displacement := -offset
+	m.code = append(m.code, 0x48, 0xc7, 0x85)
+	var disp [4]byte
+	binary.LittleEndian.PutUint32(disp[:], uint32(displacement))
+	m.code = append(m.code, disp[:]...)
+	m.code = append(m.code, 0, 0, 0, 0) // mov qword [rbp+disp32], 0
+	m.code = append(m.code, 0x4c, 0x8d, 0xbd)
+	m.code = append(m.code, disp[:]...) // lea r15, [rbp+disp32]
+}
+
+// emitOutputBudgetAddR8 charges a whole logical output operation, including
+// println's newline, before any bytes are sent. It preserves R8 and the
+// output pointer registers used by both native ABIs.
+func (m *directMachine) emitOutputBudgetAddR8() error {
+	if !m.outputLimitSet {
+		return nil
+	}
+	if m.outputLimit < 0 {
+		return m.emitJump(m.trapLabel)
+	}
+	m.code = append(m.code,
+		0x49, 0x8b, 0x07, // mov rax, [r15]
+		0x4c, 0x01, 0xc0, // add rax, r8
+	)
+	if err := m.emitConditionalJump(0x82, m.trapLabel); err != nil { // jc: qword addition overflowed
+		return err
+	}
+	m.code = append(m.code, 0x48, 0xb9)
+	var limit [8]byte
+	binary.LittleEndian.PutUint64(limit[:], uint64(m.outputLimit))
+	m.code = append(m.code, limit[:]...)                             // mov rcx, configured output limit
+	m.code = append(m.code, 0x48, 0x39, 0xc8)                        // cmp rax, rcx
+	if err := m.emitConditionalJump(0x87, m.trapLabel); err != nil { // ja: cumulative bytes exceed the limit
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0x07) // mov [r15], rax
+	return nil
+}
+
+// emitELFWriteRSIRDX emits Linux write(1, RSI, RDX), retrying EINTR, handling
+// short writes, and trapping on zero progress or any other syscall error.
+func (m *directMachine) emitELFWriteRSIRDX() error {
+	empty := m.newLabel()
+	loop := m.newLabel()
+	done := m.newLabel()
+	m.code = append(m.code, 0x48, 0x85, 0xd2) // test rdx, rdx
+	if err := m.emitConditionalJump(0x84, empty); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0xf1) // mov r9, rsi
+	m.code = append(m.code, 0x49, 0x89, 0xd2) // mov r10, rdx
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0xb8, 0x01, 0, 0, 0, // mov eax, SYS_write
+		0xbf, 0x01, 0, 0, 0, // mov edi, STDOUT_FILENO
+		0x4c, 0x89, 0xce, // mov rsi, r9
+		0x4c, 0x89, 0xd2, // mov rdx, r10
+		0x0f, 0x05, // syscall
+		0x48, 0x83, 0xf8, 0xfc, // cmp rax, -EINTR
+	)
+	if err := m.emitConditionalJump(0x84, loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x85, 0xc0)                        // test rax, rax
+	if err := m.emitConditionalJump(0x8e, m.trapLabel); err != nil { // jle: zero progress or negative errno
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x01, 0xc1)                 // add r9, rax
+	m.code = append(m.code, 0x49, 0x29, 0xc2)                 // sub r10, rax
+	if err := m.emitConditionalJump(0x85, loop); err != nil { // jnz while bytes remain
+		return err
+	}
+	if err := m.emitJump(done); err != nil {
+		return err
+	}
+	if err := m.bind(empty); err != nil {
+		return err
+	}
+	if err := m.bind(done); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -373,6 +487,10 @@ func (m *directMachine) emitPEWriteRDXR8() error {
 	}
 	m.code = append(m.code, 0x8b, 0x44, 0x24, 0x3c, 0x85, 0xc0) // bytesWritten; reject zero progress
 	if err := m.emitConditionalJump(0x84, failed); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x3b, 0x44, 0x24, 0x38) // reject bytesWritten > remaining
+	if err := m.emitConditionalJump(0x87, failed); err != nil {
 		return err
 	}
 	m.code = append(m.code, 0x48, 0x01, 0x44, 0x24, 0x30) // buffer += bytesWritten
@@ -4477,6 +4595,20 @@ func (m *directMachine) emitFSWriteBytesRuntime() error {
 }
 
 func (m *directMachine) emitWrite(text string) error {
+	if m.windowsABI && uint64(len(text)) > uint64(^uint32(0)) {
+		return fmt.Errorf("direct PE output exceeds WriteFile's DWORD length")
+	}
+	m.code = append(m.code, 0x41, 0xb8) // mov r8d, byte length
+	var length [4]byte
+	binary.LittleEndian.PutUint32(length[:], uint32(len(text)))
+	m.code = append(m.code, length[:]...)
+	if err := m.emitOutputBudgetAddR8(); err != nil {
+		return err
+	}
+	return m.emitWriteRaw(text)
+}
+
+func (m *directMachine) emitWriteRaw(text string) error {
 	offset := m.addData(text)
 	if m.windowsABI {
 		start := len(m.code)
@@ -4486,16 +4618,13 @@ func (m *directMachine) emitWrite(text string) error {
 		binary.LittleEndian.PutUint32(m.code[len(m.code)-4:], uint32(len(text)))
 		return m.emitPEWriteRDXR8()
 	}
-	// mov eax, SYS_write; mov edi, STDOUT_FILENO
-	m.code = append(m.code, 0xb8, 0x01, 0, 0, 0, 0xbf, 0x01, 0, 0, 0)
-	// lea rsi, [rip + disp32]
+	// lea rsi, [rip + text]; mov edx, byte length
 	start := len(m.code)
 	m.code = append(m.code, 0x48, 0x8d, 0x35, 0, 0, 0, 0)
-	// mov edx, length; syscall
-	m.code = append(m.code, 0xba, 0, 0, 0, 0, 0x0f, 0x05)
-	binary.LittleEndian.PutUint32(m.code[start+8:start+12], uint32(len(text)))
+	m.code = append(m.code, 0xba, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(m.code[len(m.code)-4:], uint32(len(text)))
 	m.dataRefs = append(m.dataRefs, machineDataRef{displacement: start + 3, instructionEnd: start + 7, dataOffset: offset})
-	return nil
+	return m.emitELFWriteRSIRDX()
 }
 
 func (m *directMachine) emitExit(status byte) error {
@@ -4579,7 +4708,7 @@ func (m *directMachine) emitUIntMask(bits uint8) {
 	m.code = append(m.code, mask[:]...)
 }
 
-func (m *directMachine) emitInteger(unsigned bool) error {
+func (m *directMachine) emitInteger(unsigned, newline bool) error {
 	// The buffer grows down from rbp-(nextSlot+1), leaving 63 bytes for the
 	// longest signed decimal Int plus its sign. R8 is the moving end pointer;
 	// R9 is the divisor and R10b records a negative signed input.
@@ -4653,13 +4782,40 @@ func (m *directMachine) emitInteger(unsigned bool) error {
 		m.code = append(m.code, 0x4c, 0x8d, 0x85)
 		m.code = append(m.code, buffer[:]...)
 		m.code = append(m.code, 0x49, 0x29, 0xd0) // sub r8, rdx
-		return m.emitPEWriteRDXR8()
+		if newline {
+			m.code = append(m.code, 0x49, 0xff, 0xc0) // inc r8
+		}
+		if err := m.emitOutputBudgetAddR8(); err != nil {
+			return err
+		}
+		if newline {
+			m.code = append(m.code, 0x49, 0xff, 0xc8) // dec r8 to restore the string length
+		}
+		if err := m.emitPEWriteRDXR8(); err != nil {
+			return err
+		}
+		if newline {
+			return m.emitWriteRaw("\n")
+		}
+		return nil
 	}
-	// write(1, r8, bufferEnd-r8)
-	m.code = append(m.code, 0xb8, 0x01, 0, 0, 0, 0xbf, 0x01, 0, 0, 0)
+	// Pass the first digit and its byte count to the reliable syscall loop.
 	m.code = append(m.code, 0x4c, 0x89, 0xc6, 0x48, 0x8d, 0x95)
 	m.code = append(m.code, buffer[:]...)
-	m.code = append(m.code, 0x48, 0x29, 0xf2, 0x0f, 0x05)
+	m.code = append(m.code, 0x48, 0x29, 0xf2) // sub rdx, rsi -> length
+	m.code = append(m.code, 0x49, 0x89, 0xd0) // mov r8, rdx
+	if newline {
+		m.code = append(m.code, 0x49, 0xff, 0xc0) // inc r8
+	}
+	if err := m.emitOutputBudgetAddR8(); err != nil {
+		return err
+	}
+	if err := m.emitELFWriteRSIRDX(); err != nil {
+		return err
+	}
+	if newline {
+		return m.emitWriteRaw("\n")
+	}
 	return nil
 }
 
@@ -4673,8 +4829,24 @@ func (m *directMachine) emitBooleanOutput(e *Expr, newline bool) error {
 	if err := m.emitConditionalJump(0x84, falseLabel); err != nil {
 		return err
 	}
-	if err := m.emitWrite("true"); err != nil {
+	trueLength := uint32(4)
+	if newline {
+		trueLength++
+	}
+	m.code = append(m.code, 0x41, 0xb8)
+	var trueLengthBytes [4]byte
+	binary.LittleEndian.PutUint32(trueLengthBytes[:], trueLength)
+	m.code = append(m.code, trueLengthBytes[:]...)
+	if err := m.emitOutputBudgetAddR8(); err != nil {
 		return err
+	}
+	if err := m.emitWriteRaw("true"); err != nil {
+		return err
+	}
+	if newline {
+		if err := m.emitWriteRaw("\n"); err != nil {
+			return err
+		}
 	}
 	if err := m.emitJump(joinLabel); err != nil {
 		return err
@@ -4682,16 +4854,27 @@ func (m *directMachine) emitBooleanOutput(e *Expr, newline bool) error {
 	if err := m.bind(falseLabel); err != nil {
 		return err
 	}
-	if err := m.emitWrite("false"); err != nil {
+	falseLength := uint32(5)
+	if newline {
+		falseLength++
+	}
+	m.code = append(m.code, 0x41, 0xb8)
+	var falseLengthBytes [4]byte
+	binary.LittleEndian.PutUint32(falseLengthBytes[:], falseLength)
+	m.code = append(m.code, falseLengthBytes[:]...)
+	if err := m.emitOutputBudgetAddR8(); err != nil {
 		return err
 	}
-	if err := m.bind(joinLabel); err != nil {
+	if err := m.emitWriteRaw("false"); err != nil {
 		return err
 	}
 	if newline {
-		if err := m.emitWrite("\n"); err != nil {
+		if err := m.emitWriteRaw("\n"); err != nil {
 			return err
 		}
+	}
+	if err := m.bind(joinLabel); err != nil {
+		return err
 	}
 	return nil
 }
@@ -6118,15 +6301,7 @@ func (m *directMachine) emitStaticOutput(e *Expr, name string) error {
 			if err := m.emitExpr(e.Args[0]); err != nil {
 				return err
 			}
-			if err := m.emitStringWrite(); err != nil {
-				return err
-			}
-			if name == "println" {
-				if err := m.emitWrite("\n"); err != nil {
-					return err
-				}
-			}
-			return nil
+			return m.emitStringOutput(name == "println")
 		}
 		if e.Args[0].Type == nil || (e.Args[0].Type.Kind != TyInt && e.Args[0].Type.Kind != TyUInt) {
 			if e.Args[0].Type != nil && e.Args[0].Type.Kind == TyBool {
@@ -6137,13 +6312,8 @@ func (m *directMachine) emitStaticOutput(e *Expr, name string) error {
 		if err := m.emitExpr(e.Args[0]); err != nil {
 			return err
 		}
-		if err := m.emitInteger(e.Args[0].Type.Kind == TyUInt); err != nil {
+		if err := m.emitInteger(e.Args[0].Type.Kind == TyUInt, name == "println"); err != nil {
 			return err
-		}
-		if name == "println" {
-			if err := m.emitWrite("\n"); err != nil {
-				return err
-			}
 		}
 		return nil
 	}
@@ -6397,6 +6567,11 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 		binary.LittleEndian.PutUint32(size[:], uint32(frame))
 		m.code = append(m.code, size[:]...)
 	}
+	if m.outputLimitSet {
+		// The first 24 bytes after the language locals remain available to
+		// integer formatting; keep the process-wide output count at +32.
+		m.emitOutputCounterInit(m.nextSlot + 32)
+	}
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
@@ -6603,12 +6778,14 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 	return emitELF64CodeData(m.code, m.data), nil
 }
 
-func buildDirectDynamicELF(p *Program) ([]byte, error) {
+func buildDirectDynamicELF(p *Program, c *Checker) ([]byte, error) {
 	stmts, err := directDynamicStatements(p)
 	if err != nil {
 		return nil, err
 	}
 	machine := newDirectMachine()
+	machine.outputLimit = c.Env.Lim.MaxOutputBytes
+	machine.outputLimitSet = true
 	if err := machine.prepareFunctions(p); err != nil {
 		return nil, err
 	}

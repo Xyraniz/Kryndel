@@ -72,7 +72,7 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 	}
 	output, staticErr := directStaticOutput(&copyProgram, c)
 	if staticErr == nil {
-		return buildDirectStaticPE(output, target.GUI)
+		return buildDirectStaticPE(output, target.GUI, c.Env.Lim.MaxOutputBytes)
 	}
 	stmts, err := validateDirectPEProgram(&copyProgram)
 	if err != nil {
@@ -80,6 +80,8 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 	}
 	machine := newDirectMachine()
 	machine.windowsABI = true
+	machine.outputLimit = c.Env.Lim.MaxOutputBytes
+	machine.outputLimitSet = true
 	if err := machine.prepareFunctions(&copyProgram); err != nil {
 		return nil, fmt.Errorf("direct PE function setup: %w", err)
 	}
@@ -337,16 +339,19 @@ func pePut16(data []byte, at int, value uint16) { binary.LittleEndian.PutUint16(
 func pePut32(data []byte, at int, value uint32) { binary.LittleEndian.PutUint32(data[at:], value) }
 func pePut64(data []byte, at int, value uint64) { binary.LittleEndian.PutUint64(data[at:], value) }
 
-func buildDirectStaticPE(output []byte, gui bool) ([]byte, error) {
+func buildDirectStaticPE(output []byte, gui bool, outputLimit int64) ([]byte, error) {
 	if uint64(len(output)) > math.MaxUint32 {
 		return nil, fmt.Errorf("direct PE output exceeds WriteFile's DWORD length")
 	}
 	machine := newDirectMachine()
 	machine.windowsABI = true
+	machine.outputLimit = outputLimit
+	machine.outputLimitSet = true
 	// The entry frame gives the shared WriteFile loop aligned scratch space and
 	// a standard Win64 unwindable prolog.
 	machine.code = append(machine.code, 0x55, 0x48, 0x89, 0xe5)
 	machine.code = append(machine.code, 0x48, 0x81, 0xec, 0x40, 0, 0, 0)
+	machine.emitOutputCounterInit(8)
 	if err := machine.emitWrite(string(output)); err != nil {
 		return nil, err
 	}
