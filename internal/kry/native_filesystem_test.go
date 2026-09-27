@@ -66,6 +66,30 @@ func TestCAOTFilesystemIOMatchesInterpreter(t *testing.T) {
 	}
 }
 
+func TestCAOTFilesystemReadDirOrderingMatchesInterpreter(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("C AOT filesystem differential test requires linux/amd64")
+	}
+	root := t.TempDir()
+	for _, name := range []string{"zeta", "éclair", "alpha", "Beta"} {
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := "fn main() -> Nil { println(fs_read_dir(" + strconv.Quote(root) + ")) }\n"
+	interpreted, diagnostic := runInterpreterCapture(t, source)
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
+	}
+	native, status, err := buildAndRunLinuxELF(t, source)
+	if err != nil {
+		t.Fatalf("C AOT build failed: %v", err)
+	}
+	if status != 0 || native != interpreted {
+		t.Fatalf("directory listings differ:\ninterpreter (%d): %q\nC AOT (%d): %q", 0, interpreted, status, native)
+	}
+}
+
 func TestCAOTFilesystemNULPathsMatchInterpreter(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("C AOT filesystem differential test requires linux/amd64")

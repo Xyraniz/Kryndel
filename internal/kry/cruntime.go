@@ -1486,6 +1486,10 @@ static KValue k_json_is_null(KValue value) { return kv_bool(k_json_unwrap(value)
 static char *k_cpath(KValue path) {
     char *p=(char*)kalloc(path.u.s.len+1); memcpy(p,path.u.s.data,path.u.s.len); p[path.u.s.len]=0; return p;
 }
+static int k_fs_dir_entry_compare(const void *left, const void *right) {
+    const KValue *a=(const KValue*)left, *b=(const KValue*)right;
+    return strcmp(a->u.s.data,b->u.s.data);
+}
 static KValue k_fs_read_dir(KValue path) {
     char *p=k_cpath(path);
     DIR *d=opendir(p);
@@ -1498,6 +1502,7 @@ static KValue k_fs_read_dir(KValue path) {
         items[n++]=kv_cstr(e->d_name);
     }
     closedir(d);
+    qsort(items,n,sizeof(*items),k_fs_dir_entry_compare);
     return kv_res(1, kv_arr(items,n));
 }
 static KValue k_fs_create_dir(KValue path) {
