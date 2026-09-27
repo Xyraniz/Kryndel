@@ -10,7 +10,11 @@ type Parser struct {
 	Lim    Limits
 	Nodes  int
 	Err    *Diagnostic
+	exprs  [][]Expr
+	stmts  [][]Stmt
 }
+
+const parserNodeChunkSize = 16
 
 func Parse(src *Source, lim Limits) (*Program, *Diagnostic) {
 	ts, d := Lex(src, lim)
@@ -109,14 +113,26 @@ func (p *Parser) node(t Token, k ExprKind) *Expr {
 	if p.Nodes > p.Lim.MaxASTNodes && p.Err == nil {
 		p.fail(t, "AST node limit exceeded (%d)", p.Lim.MaxASTNodes)
 	}
-	return &Expr{Kind: k, Tok: t}
+	if len(p.exprs) == 0 || len(p.exprs[len(p.exprs)-1]) == cap(p.exprs[len(p.exprs)-1]) {
+		p.exprs = append(p.exprs, make([]Expr, 0, parserNodeChunkSize))
+	}
+	block := p.exprs[len(p.exprs)-1]
+	block = append(block, Expr{Kind: k, Tok: t})
+	p.exprs[len(p.exprs)-1] = block
+	return &block[len(block)-1]
 }
 func (p *Parser) stmtNode(t Token, k StmtKind) *Stmt {
 	p.Nodes++
 	if p.Nodes > p.Lim.MaxASTNodes && p.Err == nil {
 		p.fail(t, "AST node limit exceeded (%d)", p.Lim.MaxASTNodes)
 	}
-	return &Stmt{Kind: k, Tok: t}
+	if len(p.stmts) == 0 || len(p.stmts[len(p.stmts)-1]) == cap(p.stmts[len(p.stmts)-1]) {
+		p.stmts = append(p.stmts, make([]Stmt, 0, parserNodeChunkSize))
+	}
+	block := p.stmts[len(p.stmts)-1]
+	block = append(block, Stmt{Kind: k, Tok: t})
+	p.stmts[len(p.stmts)-1] = block
+	return &block[len(block)-1]
 }
 func (p *Parser) end() {
 	for p.match(SEMICOLON) {
@@ -312,7 +328,9 @@ func (p *Parser) statement() *Stmt {
 		s.Value = p.expression()
 		return s
 	}
-	return &Stmt{Kind: StExpr, Tok: t, Expr: first}
+	s := p.stmtNode(t, StExpr)
+	s.Expr = first
+	return s
 }
 
 func (p *Parser) constStmt() *Stmt {
