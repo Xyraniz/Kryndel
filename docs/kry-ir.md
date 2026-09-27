@@ -25,10 +25,17 @@ lowerer targets Linux amd64, accepts at most 20,000 KIR nodes, and reserves at
 most 1 MiB for language-local stack slots; ordinary decoder and artifact limits
 also apply.
 
-The separate Go KIR executor runs the Engine's bounded scalar slice and serves
+The separate Go KIR executor runs the Engine's bounded typed slice and serves
 as a semantic oracle for the differential tests and the native subset
-validator; it does not precompute the native executable's output. `DecodeKIR` checks the wire structure and
-resource bounds, while subset validation additionally checks scalar types and
+validator; it does not precompute the native executable's output. It executes
+the supported filesystem and dotenv builtins, plus SQLite, through the shared
+runtime builtin evaluator. The Engine passes the same sandbox and limits used
+by the AST interpreter; filesystem calls remain confined to the restricted
+root, SQLite remains unavailable there, and open SQLite handles are closed at
+execution end with the same leak diagnostic as the interpreter. KIR admits
+these host operations by builtin name, so an unknown builtin cannot inherit
+support from its effect category alone. `DecodeKIR` checks the wire structure
+and resource bounds, while subset validation additionally checks types and
 resolved lexical bindings. Neither replaces the source checker or proves
 semantics for arbitrary KIR. The self-hosted KIR backend accepts a narrower
 language subset and rejects unsupported constructs.

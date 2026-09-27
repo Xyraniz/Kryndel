@@ -119,6 +119,9 @@ main()
 	if (Sandbox{Restricted: true}).allowsBuiltin(Builtin{Effects: "unreviewed-host-effect"}) {
 		t.Fatal("restricted mode allowed an unreviewed effect category")
 	}
+	if (Sandbox{Restricted: true}).allowsBuiltin(Builtin{Name: "unreviewed_fs", Effects: "filesystem"}) {
+		t.Fatal("restricted mode allowed an unreviewed builtin from the filesystem effect category")
+	}
 }
 
 func TestRestrictedProcessRunHelper(t *testing.T) {

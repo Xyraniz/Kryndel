@@ -18,12 +18,26 @@ func (s Sandbox) allowsBuiltin(b Builtin) bool {
 		return true
 	}
 	switch b.Effects {
-	case "pure", "diagnostic", "io", "collections", "json", "crypto", "random", "thread", "concurrency", "actor", "shared", "async", "dispatch", "filesystem", "fs":
+	case "pure", "diagnostic", "io", "collections", "json", "crypto", "random", "thread", "concurrency", "actor", "shared", "async", "dispatch":
 		return true
+	case "filesystem", "fs":
+		return isSandboxAwareFilesystemBuiltin(b.Name)
 	case "time":
 		return b.Name == "datetime_format" || b.Name == "datetime_parse"
 	default:
 		// New effect categories remain denied until explicitly reviewed.
+		return false
+	}
+}
+
+func isSandboxAwareFilesystemBuiltin(name string) bool {
+	switch name {
+	case "fs_read_text", "fs_write_text", "fs_read_bytes", "fs_write_bytes", "fs_exists",
+		"fs_read_dir", "fs_create_dir", "fs_create_dir_all", "fs_remove_file", "fs_remove_dir_all",
+		"fs_copy_file", "fs_move_file", "fs_is_file", "fs_is_dir", "fs_file_size", "fs_file_modified_time",
+		"fs_join_path", "fs_absolute_path", "fs_temp_dir", "fs_temp_file", "dotenv_load":
+		return true
+	default:
 		return false
 	}
 }

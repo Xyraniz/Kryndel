@@ -121,7 +121,7 @@ func (e *Engine) RunPathWithArgs(path string, args []string) (string, *Diagnosti
 		}
 	}
 	sources := kirSourceMap(p)
-	result, err := executeKIRSubset(document, e.Limits, sources)
+	result, err := executeKIRSubset(document, e.Limits, sources, Sandbox{Root: e.RestrictedRoot, Restricted: e.RestrictedRoot != ""})
 	if errors.Is(err, errKIRSubsetUnsupported) {
 		return useInterpreter()
 	}

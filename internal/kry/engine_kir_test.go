@@ -56,6 +56,30 @@ func runASTPath(t *testing.T, engine *Engine, path string, args []string) (strin
 	return output.String(), diagnostic
 }
 
+func runEngineKIRDocument(t *testing.T, engine *Engine, path string) kirExecResult {
+	t.Helper()
+	program, checker, document, diagnostic := engine.checkPathWithKIR(path)
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	if document == nil {
+		kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
+		if err != nil {
+			t.Fatal(err)
+		}
+		document, err = DecodeKIR(kirBytes, engine.Limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	sandbox := Sandbox{Root: engine.RestrictedRoot, Restricted: engine.RestrictedRoot != ""}
+	result, err := executeKIRSubset(document, engine.Limits, kirSourceMap(program), sandbox)
+	if err != nil {
+		t.Fatalf("Engine KIR document did not execute directly: %v", err)
+	}
+	return result
+}
+
 func TestEngineRunsKIRForSourceAndKexe(t *testing.T) {
 	directory := t.TempDir()
 	sourcePath := filepath.Join(directory, "main.kry")
@@ -482,6 +506,212 @@ func TestEngineRunsStaticTraitKIRForSourceAndKexe(t *testing.T) {
 						t.Fatalf("unexpected trait KIR result: output %q, diagnostic %#v; want %q", gotOutput, gotDiagnostic, test.want)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestEngineRunsFilesystemKIRInsideRestrictedRootForSourceAndKexe(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "sandbox")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(root, "filesystem.kry")
+	artifactPath := filepath.Join(root, "filesystem.kexe")
+	source := `fn main() -> Nil {
+    let written: Result[Nil, String] = fs_write_text("inside.txt", "confined")
+    println(str(written))
+    println(str(fs_read_text("inside.txt")))
+    println(str(fs_write_text("../escape.txt", "blocked")))
+    println(fs_exists("inside.txt"))
+    return nil
+}
+main()
+`
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine()
+	if diagnostic := engine.BuildPath(sourcePath, artifactPath); diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	engine.RestrictedRoot = root
+	wantOutput := "ok(nil)\nok(confined)\nerr(path denied by sandbox)\ntrue\n"
+	for _, path := range []string{sourcePath, artifactPath} {
+		t.Run(filepath.Ext(path), func(t *testing.T) {
+			result := runEngineKIRDocument(t, engine, path)
+			if result.Diagnostic != nil || string(result.Output) != wantOutput {
+				t.Fatalf("direct KIR filesystem result = output %q, diagnostic %#v", result.Output, result.Diagnostic)
+			}
+			if err := os.Remove(filepath.Join(root, "inside.txt")); err != nil {
+				t.Fatal(err)
+			}
+
+			want, wantDiagnostic := runASTPath(t, engine, path, nil)
+			if want != wantOutput || wantDiagnostic != nil {
+				t.Fatalf("restricted interpreter result = output %q, diagnostic %#v", want, wantDiagnostic)
+			}
+			if err := os.Remove(filepath.Join(root, "inside.txt")); err != nil {
+				t.Fatal(err)
+			}
+			got, gotDiagnostic := captureEngineRun(t, func() *Diagnostic {
+				_, diagnostic := engine.RunPath(path)
+				return diagnostic
+			})
+			if got != want || !reflect.DeepEqual(gotDiagnostic, wantDiagnostic) {
+				t.Fatalf("Engine result = output %q, diagnostic %#v; interpreter result = output %q, diagnostic %#v", got, gotDiagnostic, want, wantDiagnostic)
+			}
+			if _, err := os.Stat(filepath.Join(parent, "escape.txt")); !os.IsNotExist(err) {
+				t.Fatalf("restricted KIR created a file outside its root: %v", err)
+			}
+		})
+	}
+}
+
+func TestEngineRunsSQLiteKIRForSourceAndKexe(t *testing.T) {
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "sqlite.kry")
+	artifactPath := filepath.Join(directory, "sqlite.kexe")
+	source := `fn main() -> Nil {
+    let opened: Result[SQLite, String] = sqlite_open(":memory:")
+    match opened {
+        ok(database) => {
+            let created: Result[Int, String] = sqlite_exec(database, "CREATE TABLE users (id INTEGER, name TEXT)")
+            let inserted: Result[Int, String] = sqlite_exec(database, "INSERT INTO users VALUES (1, 'Ada'), (2, 'Grace')")
+            println(is_ok(created))
+            println(is_ok(inserted))
+            println(str(sqlite_query(database, "SELECT id, name FROM users ORDER BY id")))
+            sqlite_close(database)
+        }
+        err(problem) => { println(problem) }
+    }
+    return nil
+}
+main()
+`
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine()
+	if diagnostic := engine.BuildPath(sourcePath, artifactPath); diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	wantOutput := "true\ntrue\nok([[1, Ada], [2, Grace]])\n"
+	for _, path := range []string{sourcePath, artifactPath} {
+		t.Run(filepath.Ext(path), func(t *testing.T) {
+			result := runEngineKIRDocument(t, engine, path)
+			if result.Diagnostic != nil || string(result.Output) != wantOutput {
+				t.Fatalf("direct KIR SQLite result = output %q, diagnostic %#v", result.Output, result.Diagnostic)
+			}
+			want, wantDiagnostic := runASTPath(t, engine, path, nil)
+			got, gotDiagnostic := captureEngineRun(t, func() *Diagnostic {
+				_, diagnostic := engine.RunPath(path)
+				return diagnostic
+			})
+			if got != want || !reflect.DeepEqual(gotDiagnostic, wantDiagnostic) || got != wantOutput || gotDiagnostic != nil {
+				t.Fatalf("Engine SQLite result = output %q, diagnostic %#v; interpreter result = output %q, diagnostic %#v", got, gotDiagnostic, want, wantDiagnostic)
+			}
+		})
+	}
+}
+
+func TestEngineClosesLeakedSQLiteKIRHandlesForSourceAndKexe(t *testing.T) {
+	directory := t.TempDir()
+	databasePath := filepath.Join(directory, "leaked.db")
+	sourcePath := filepath.Join(directory, "leaked.kry")
+	artifactPath := filepath.Join(directory, "leaked.kexe")
+	source := fmt.Sprintf(`fn main() -> Nil {
+    match sqlite_open(%q) {
+        ok(database) => {
+            match sqlite_exec(database, "BEGIN EXCLUSIVE") {
+                ok(_) => { println("transaction started") }
+                err(problem) => { println(problem) }
+            }
+        }
+        err(problem) => { println(problem) }
+    }
+    return nil
+}
+main()
+`, databasePath)
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine()
+	if diagnostic := engine.BuildPath(sourcePath, artifactPath); diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	wantOutput := "transaction started\n"
+	for _, path := range []string{sourcePath, artifactPath} {
+		t.Run(filepath.Ext(path), func(t *testing.T) {
+			result := runEngineKIRDocument(t, engine, path)
+			if result.Diagnostic == nil || result.Diagnostic.Category != CatResource || !strings.Contains(result.Diagnostic.Message, "SQLite") || !strings.Contains(result.Diagnostic.Message, "not closed") || string(result.Output) != wantOutput {
+				t.Fatalf("direct KIR leak result = output %q, diagnostic %#v", result.Output, result.Diagnostic)
+			}
+			if err := os.Remove(databasePath); err != nil {
+				t.Fatalf("direct KIR cleanup did not close the SQLite file: %v", err)
+			}
+
+			want, wantDiagnostic := runASTPath(t, engine, path, nil)
+			if want != wantOutput || wantDiagnostic == nil || wantDiagnostic.Category != CatResource || !strings.Contains(wantDiagnostic.Message, "SQLite") {
+				t.Fatalf("interpreter leak result = output %q, diagnostic %#v", want, wantDiagnostic)
+			}
+			if err := os.Remove(databasePath); err != nil {
+				t.Fatalf("interpreter cleanup did not close the SQLite file: %v", err)
+			}
+			got, gotDiagnostic := captureEngineRun(t, func() *Diagnostic {
+				_, diagnostic := engine.RunPath(path)
+				return diagnostic
+			})
+			if got != want || !sameRuntimeDiagnostic(gotDiagnostic, wantDiagnostic) {
+				t.Fatalf("Engine leak result = output %q, diagnostic %#v; interpreter result = output %q, diagnostic %#v", got, gotDiagnostic, want, wantDiagnostic)
+			}
+			if err := os.Remove(databasePath); err != nil {
+				t.Fatalf("Engine cleanup did not close the SQLite file: %v", err)
+			}
+		})
+	}
+}
+
+func TestEngineRestrictedSQLiteKIRDeniesBeforeEvaluatingArgumentsForSourceAndKexe(t *testing.T) {
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "restricted.kry")
+	artifactPath := filepath.Join(directory, "restricted.kexe")
+	source := `fn mark_argument() -> String {
+    let marker: Result[Nil, String] = fs_write_text("argument-evaluated", "yes")
+    return "database.sqlite"
+}
+fn main() -> Nil {
+    let opened: Result[SQLite, String] = sqlite_open(mark_argument())
+    return nil
+}
+main()
+`
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine()
+	if diagnostic := engine.BuildPath(sourcePath, artifactPath); diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	engine.RestrictedRoot = directory
+	for _, path := range []string{sourcePath, artifactPath} {
+		t.Run(filepath.Ext(path), func(t *testing.T) {
+			result := runEngineKIRDocument(t, engine, path)
+			if result.Diagnostic == nil || result.Diagnostic.Category != CatRuntime || !strings.Contains(result.Diagnostic.Message, `sqlite_open" is unavailable with --restricted`) {
+				t.Fatalf("direct restricted KIR diagnostic = %#v", result.Diagnostic)
+			}
+			want, wantDiagnostic := runASTPath(t, engine, path, nil)
+			got, gotDiagnostic := captureEngineRun(t, func() *Diagnostic {
+				_, diagnostic := engine.RunPath(path)
+				return diagnostic
+			})
+			if got != want || !sameRuntimeDiagnostic(gotDiagnostic, wantDiagnostic) {
+				t.Fatalf("restricted Engine result = output %q, diagnostic %#v; interpreter result = output %q, diagnostic %#v", got, gotDiagnostic, want, wantDiagnostic)
+			}
+			if _, err := os.Stat(filepath.Join(directory, "argument-evaluated")); !os.IsNotExist(err) {
+				t.Fatalf("restricted SQLite evaluated a denied argument: %v", err)
 			}
 		})
 	}

@@ -14,6 +14,10 @@ import (
 )
 
 func compareKIRExecutionWithRuntime(t *testing.T, source string, limits Limits) (*Program, *Checker, kirExecResult, *Diagnostic) {
+	return compareKIRExecutionWithRuntimeAndSandbox(t, source, limits, Sandbox{})
+}
+
+func compareKIRExecutionWithRuntimeAndSandbox(t *testing.T, source string, limits Limits, sandbox Sandbox) (*Program, *Checker, kirExecResult, *Diagnostic) {
 	t.Helper()
 	program, diagnostic := Parse(&Source{Name: "kir-exec.kry", Text: source}, limits)
 	if diagnostic != nil {
@@ -24,7 +28,7 @@ func compareKIRExecutionWithRuntime(t *testing.T, source string, limits Limits) 
 		t.Fatal(diagnostic)
 	}
 	var astOutput bytes.Buffer
-	astRuntime, diagnostic := NewRuntime(program, checker, limits, Sandbox{})
+	astRuntime, diagnostic := NewRuntime(program, checker, limits, sandbox)
 	if diagnostic != nil {
 		t.Fatal(diagnostic)
 	}
@@ -39,7 +43,7 @@ func compareKIRExecutionWithRuntime(t *testing.T, source string, limits Limits) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	kirResult, err := executeKIRSubset(document, limits, kirSourceMap(program))
+	kirResult, err := executeKIRSubset(document, limits, kirSourceMap(program), sandbox)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -743,8 +747,230 @@ func TestKIRExecutorRejectsUnsupportedEffectsAndTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := executeKIRSubset(document, DefaultLimits(), kirSourceMap(program)); !errors.Is(err, errKIRSubsetUnsupported) || !strings.Contains(err.Error(), "fs_exists") {
-		t.Fatalf("filesystem builtin error = %v, want a named unsupported-subset rejection", err)
+	result, err := executeKIRSubset(document, DefaultLimits(), kirSourceMap(program))
+	if err != nil {
+		t.Fatalf("filesystem builtin fell outside the KIR executor: %v", err)
+	}
+	if result.Diagnostic != nil || string(result.Output) != "false\n" {
+		t.Fatalf("filesystem builtin result = output %q, diagnostic %#v; want false and no diagnostic", result.Output, result.Diagnostic)
+	}
+	for _, builtin := range []Builtin{
+		{Name: "unreviewed_fs", Effects: "filesystem"},
+		{Name: "unreviewed_database", Effects: "database"},
+	} {
+		if kirExecBuiltinSupported(builtin) {
+			t.Errorf("KIR executor accepted unreviewed builtin %q by effect category", builtin.Name)
+		}
+	}
+}
+
+func TestKIRExecutorMatchesRuntimeForFilesystemBuiltins(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	file := filepath.Join(nested, "input.txt")
+	copyPath := filepath.Join(root, "copied.txt")
+	movedPath := filepath.Join(root, "moved.txt")
+	singleDir := filepath.Join(root, "single")
+	binaryPath := filepath.Join(root, "payload.bin")
+	dotenvPath := filepath.Join(root, ".env")
+	if err := os.WriteFile(dotenvPath, []byte("FIRST=one\nSECOND=two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := fmt.Sprintf(`fn main() -> Nil {
+    let nested: Result[Nil, String] = fs_create_dir_all(%q)
+    println(is_ok(nested))
+    let single: Result[Nil, String] = fs_create_dir(%q)
+    println(is_ok(single))
+    let write_text: Result[Nil, String] = fs_write_text(%q, "hello")
+    println(is_ok(write_text))
+    println(str(fs_read_text(%q)))
+    let write_bytes: Result[Nil, String] = fs_write_bytes(%q, bytes([65, 66]))
+    println(is_ok(write_bytes))
+    println(is_ok(fs_read_bytes(%q)))
+    println(fs_exists(%q))
+    println(fs_is_file(%q))
+    println(fs_is_dir(%q))
+    println(is_ok(fs_file_size(%q)))
+    println(is_ok(fs_file_modified_time(%q)))
+    println(str(fs_read_dir(%q)))
+    println(is_ok(fs_copy_file(%q, %q)))
+    println(is_ok(fs_move_file(%q, %q)))
+    println(fs_exists(%q))
+    println(is_ok(fs_absolute_path(%q)))
+    println(fs_join_path(%q, ["nested", "joined.txt"]))
+    println(str(dotenv_load(%q)))
+    println(fs_temp_dir())
+    match fs_temp_file("kry-kir-exec") {
+        ok(path) => { println(is_ok(fs_remove_file(path))) }
+        err(problem) => { println(false) }
+    }
+    println(is_ok(fs_remove_file(%q)))
+    println(is_ok(fs_remove_file(%q)))
+    println(is_ok(fs_remove_file(%q)))
+    println(is_ok(fs_remove_dir_all(%q)))
+    println(is_ok(fs_remove_dir_all(%q)))
+    return nil
+}
+`, nested, singleDir, file, file, binaryPath, binaryPath, file, file, singleDir, file, file, nested, file, copyPath, copyPath, movedPath, movedPath, file, root, dotenvPath, movedPath, file, binaryPath, nested, singleDir)
+	_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, DefaultLimits())
+	if diagnostic != nil || result.Diagnostic != nil {
+		t.Fatalf("filesystem KIR diagnostic = %#v, runtime diagnostic = %#v", result.Diagnostic, diagnostic)
+	}
+	want := fmt.Sprintf("true\ntrue\ntrue\nok(hello)\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nok([input.txt])\ntrue\ntrue\ntrue\ntrue\n%s\nok({FIRST: one, SECOND: two})\n%s\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n", filepath.Join(root, "nested", "joined.txt"), os.TempDir())
+	if string(result.Output) != want {
+		t.Fatalf("filesystem KIR output = %q, want %q", result.Output, want)
+	}
+	if _, err := os.Stat(nested); !os.IsNotExist(err) {
+		t.Fatalf("KIR filesystem cleanup left nested directory: %v", err)
+	}
+	if _, err := os.Stat(singleDir); !os.IsNotExist(err) {
+		t.Fatalf("KIR filesystem cleanup left single directory: %v", err)
+	}
+}
+
+func TestKIRExecutorMatchesRuntimeForSQLiteAndResourceCleanup(t *testing.T) {
+	t.Run("database operations", func(t *testing.T) {
+		source := `fn main() -> Nil {
+    let opened: Result[SQLite, String] = sqlite_open(":memory:")
+    match opened {
+        ok(database) => {
+            let created: Result[Int, String] = sqlite_exec(database, "CREATE TABLE users (id INTEGER, name TEXT)")
+            let inserted: Result[Int, String] = sqlite_exec(database, "INSERT INTO users VALUES (1, 'Ada'), (2, 'Grace')")
+            println(is_ok(created))
+            println(is_ok(inserted))
+            println(str(sqlite_query(database, "SELECT id, name FROM users ORDER BY id")))
+            sqlite_close(database)
+        }
+        err(problem) => { println(problem) }
+    }
+    return nil
+}
+main()
+`
+		_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, DefaultLimits())
+		if diagnostic != nil || result.Diagnostic != nil || string(result.Output) != "true\ntrue\nok([[1, Ada], [2, Grace]])\n" {
+			t.Fatalf("SQLite KIR result = output %q, diagnostic %#v; runtime diagnostic %#v", result.Output, result.Diagnostic, diagnostic)
+		}
+	})
+
+	t.Run("row limit", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.MaxArrayElements = 2
+		source := `fn main() -> Nil {
+    match sqlite_open(":memory:") {
+        ok(database) => {
+            println(str(sqlite_query(database, "SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3")))
+            sqlite_close(database)
+        }
+        err(problem) => { println(problem) }
+    }
+    return nil
+}
+main()
+`
+		_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, limits)
+		if diagnostic != nil || result.Diagnostic != nil || string(result.Output) != "err(SQLite result exceeds configured row limit)\n" {
+			t.Fatalf("SQLite row-limit result = output %q, diagnostic %#v; runtime diagnostic %#v", result.Output, result.Diagnostic, diagnostic)
+		}
+	})
+
+	t.Run("leaked handle is reported and closed", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "leaked.db")
+		source := fmt.Sprintf(`fn main() -> Nil {
+    match sqlite_open(%q) {
+        ok(database) => {
+            match sqlite_exec(database, "BEGIN EXCLUSIVE") {
+                ok(_) => { println("transaction started") }
+                err(problem) => { println(problem) }
+            }
+        }
+        err(problem) => { println(problem) }
+    }
+    return nil
+}
+main()
+`, databasePath)
+		_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, DefaultLimits())
+		if diagnostic == nil || diagnostic.Category != CatResource || !strings.Contains(diagnostic.Message, "SQLite") || !strings.Contains(diagnostic.Message, "not closed") {
+			t.Fatalf("runtime leak diagnostic = %#v", diagnostic)
+		}
+		if !sameRuntimeDiagnostic(result.Diagnostic, diagnostic) || string(result.Output) != "transaction started\n" {
+			t.Fatalf("KIR leak result = output %q, diagnostic %#v; runtime output %q, diagnostic %#v", result.Output, result.Diagnostic, "transaction started\n", diagnostic)
+		}
+		if err := os.Remove(databasePath); err != nil {
+			t.Fatalf("KIR cleanup left its SQLite file open: %v", err)
+		}
+	})
+
+	t.Run("double close error", func(t *testing.T) {
+		source := `fn main() -> Nil {
+    match sqlite_open(":memory:") {
+        ok(database) => { sqlite_close(database); sqlite_close(database) }
+        err(problem) => { println(problem) }
+    }
+    return nil
+}
+main()
+`
+		_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, DefaultLimits())
+		if diagnostic == nil || diagnostic.Category != CatRuntime || !strings.Contains(diagnostic.Message, "already closed") || !sameRuntimeDiagnostic(result.Diagnostic, diagnostic) {
+			t.Fatalf("SQLite double-close diagnostics differ: KIR %#v, runtime %#v", result.Diagnostic, diagnostic)
+		}
+	})
+}
+
+func TestKIRExecutorUsesSandboxForFilesystemAndSQLitePermissions(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "sandbox")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := Sandbox{Root: root, Restricted: true}
+	escapePath := filepath.Join(parent, "escape.txt")
+	source := `println(fs_write_text("inside.txt", "kept inside"))
+println(fs_read_text("inside.txt"))
+println(fs_read_text("../escape.txt"))
+println(fs_write_text("../escape.txt", "must not escape"))
+println(fs_absolute_path("../escape.txt"))
+println(fs_temp_dir())
+println(fs_is_dir("tmp"))
+match fs_temp_file("restricted-kir") {
+    ok(path) => {
+        println(starts_with(path, "tmp/"))
+        println(fs_is_file(path))
+        println(is_ok(fs_remove_file(path)))
+    }
+    err(problem) => { println(problem) }
+}
+println(is_ok(fs_remove_dir_all("tmp")))
+`
+	_, _, result, diagnostic := compareKIRExecutionWithRuntimeAndSandbox(t, source, DefaultLimits(), sandbox)
+	if diagnostic != nil || result.Diagnostic != nil {
+		t.Fatalf("restricted filesystem KIR diagnostic = %#v, runtime diagnostic = %#v", result.Diagnostic, diagnostic)
+	}
+	if want := "ok(nil)\nok(kept inside)\nerr(path denied by sandbox)\nerr(path denied by sandbox)\nerr(path denied by sandbox)\ntmp\ntrue\ntrue\ntrue\ntrue\ntrue\n"; string(result.Output) != want {
+		t.Fatalf("restricted filesystem output = %q, want %q", result.Output, want)
+	}
+	if _, err := os.Stat(escapePath); !os.IsNotExist(err) {
+		t.Fatalf("restricted KIR filesystem write escaped its root: %v", err)
+	}
+
+	deniedSource := `fn mark_argument() -> String {
+    let marker: Result[Nil, String] = fs_write_text("argument-evaluated", "yes")
+    return "database.sqlite"
+}
+fn main() -> Nil {
+    let opened: Result[SQLite, String] = sqlite_open(mark_argument())
+    return nil
+}
+main()
+`
+	_, _, denied, runtimeDiagnostic := compareKIRExecutionWithRuntimeAndSandbox(t, deniedSource, DefaultLimits(), sandbox)
+	if runtimeDiagnostic == nil || runtimeDiagnostic.Category != CatRuntime || !strings.Contains(runtimeDiagnostic.Message, `sqlite_open" is unavailable with --restricted`) || !sameRuntimeDiagnostic(denied.Diagnostic, runtimeDiagnostic) {
+		t.Fatalf("restricted SQLite diagnostics differ: KIR %#v, runtime %#v", denied.Diagnostic, runtimeDiagnostic)
+	}
+	if _, err := os.Stat(filepath.Join(root, "argument-evaluated")); !os.IsNotExist(err) {
+		t.Fatalf("restricted KIR SQLite evaluated denied builtin arguments: %v", err)
 	}
 }
 

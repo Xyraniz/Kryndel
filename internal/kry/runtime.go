@@ -3781,20 +3781,57 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return stringVal(filepath.Join(append([]string{base}, partStrs...)...)), nil
 	case "fs_absolute_path":
-		abs, err := filepath.Abs(a[0].S)
+		sandbox := r.Sandbox
+		if sandbox.Restricted {
+			root, err := filepath.Abs(sandbox.Root)
+			if err != nil {
+				return resVal(false, stringVal(err.Error())), nil
+			}
+			sandbox.Root = root
+		}
+		abs, err := sandbox.Resolve(a[0].S, false)
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, stringVal(abs)), nil
 	case "fs_temp_dir":
+		if r.Sandbox.Restricted {
+			if err := r.Sandbox.MkdirAll("tmp", 0o700); err != nil {
+				return nilVal(), r.fail(e, "%s", err.Error())
+			}
+			return stringVal("tmp"), nil
+		}
 		return stringVal(os.TempDir()), nil
 	case "fs_temp_file":
-		f, err := os.CreateTemp("", a[0].S+"-*")
+		directory := ""
+		if r.Sandbox.Restricted {
+			if err := r.Sandbox.MkdirAll("tmp", 0o700); err != nil {
+				return resVal(false, stringVal(err.Error())), nil
+			}
+			var err error
+			directory, err = r.Sandbox.Resolve("tmp", true)
+			if err != nil {
+				return resVal(false, stringVal(err.Error())), nil
+			}
+		}
+		f, err := os.CreateTemp(directory, a[0].S+"-*")
 		if err != nil {
 			return resVal(false, stringVal(err.Error())), nil
 		}
-		f.Close()
-		return resVal(true, stringVal(f.Name())), nil
+		name := f.Name()
+		if err := f.Close(); err != nil {
+			_ = os.Remove(name)
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		if r.Sandbox.Restricted {
+			relative, err := filepath.Rel(r.Sandbox.Root, name)
+			if err != nil {
+				_ = os.Remove(name)
+				return resVal(false, stringVal(err.Error())), nil
+			}
+			name = filepath.ToSlash(relative)
+		}
+		return resVal(true, stringVal(name)), nil
 	case "async_sleep_ms":
 		time.Sleep(time.Duration(a[0].I) * time.Millisecond)
 		return nilVal(), nil

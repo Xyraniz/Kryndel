@@ -116,12 +116,15 @@ type kirExecutor struct {
 	typeArgs    []map[string]string
 }
 
-// executeKIRSubset runs the scalar executable KIR slice directly. Callers
+// executeKIRSubset runs the bounded executable KIR slice directly. Callers
 // must pass a decoded document; this function repeats structural validation
 // because it is also the boundary used by native code generation.
-func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*Source) (kirExecResult, error) {
+func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*Source, sandbox ...Sandbox) (kirExecResult, error) {
 	if document == nil {
 		return kirExecResult{}, fmt.Errorf("invalid KIR executable: missing document")
+	}
+	if len(sandbox) > 1 {
+		return kirExecResult{}, fmt.Errorf("invalid KIR executable: multiple sandboxes supplied")
 	}
 	if document.Format != KIRFormat || document.Version < 3 || document.Version > KIRVersion {
 		return kirExecResult{}, fmt.Errorf("invalid KIR executable: unsupported format or version")
@@ -132,6 +135,10 @@ func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*
 	functions := kirExecFunctions(document)
 	if err := validateKIRExecSubset(document); err != nil {
 		return kirExecResult{}, err
+	}
+	var executionSandbox Sandbox
+	if len(sandbox) == 1 {
+		executionSandbox = sandbox[0]
 	}
 
 	var ctx context.Context
@@ -156,7 +163,7 @@ func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*
 	if err := executor.initializeKIRTypes(document); err != nil {
 		return kirExecResult{}, err
 	}
-	executor.initializeKIRBuiltins(document)
+	executor.initializeKIRBuiltins(document, executionSandbox)
 	scope := newKIRExecScope(nil)
 	executor.global = scope
 	var diagnostic *Diagnostic
@@ -173,6 +180,7 @@ func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*
 			}
 		}
 	}
+	diagnostic = executor.builtins.cleanup(diagnostic)
 	return kirExecResult{Output: append([]byte(nil), executor.output...), Diagnostic: diagnostic}, nil
 }
 
@@ -948,6 +956,13 @@ func kirExecPropagationMatches(expression *KIRExpr, returnType string) bool {
 }
 
 func kirExecBuiltinSupported(builtin Builtin) bool {
+	if isSandboxAwareFilesystemBuiltin(builtin.Name) {
+		return true
+	}
+	switch builtin.Name {
+	case "sqlite_open", "sqlite_exec", "sqlite_query", "sqlite_close":
+		return true
+	}
 	switch builtin.Effects {
 	case "pure", "diagnostic", "collections", "json", "crypto":
 		return true
@@ -1439,7 +1454,7 @@ func kirExecType(typ string) bool {
 	if kirExecScalarType(typ) {
 		return true
 	}
-	if typ == "Bytes" || typ == "Json" {
+	if typ == "Bytes" || typ == "Json" || typ == "SQLite" {
 		return true
 	}
 	if parameters, result, ok := parseKIRFunctionType(typ); ok {
@@ -1824,6 +1839,8 @@ func (executor *kirExecutor) resolveKIRTypeWithTypeParameters(encoded string, ty
 		return TBytes, true
 	case "Json":
 		return TJSON, true
+	case "SQLite":
+		return &Type{Kind: TySQLite, Name: "SQLite"}, true
 	}
 	if parameters, result, ok := parseKIRFunctionType(encoded); ok {
 		params := make([]*Type, len(parameters))
@@ -1881,11 +1898,11 @@ func (writer kirExecOutputWriter) Write(output []byte) (int, error) {
 	return len(output), nil
 }
 
-func (executor *kirExecutor) initializeKIRBuiltins(document *KIRDocument) {
+func (executor *kirExecutor) initializeKIRBuiltins(document *KIRDocument, sandbox Sandbox) {
 	program := &Program{}
 	env := &TypeEnv{Types: executor.types, Functions: map[string]*Function{}, Overloads: map[string][]*Function{}, Traits: map[string]*TraitDecl{}, TraitImpls: map[string]map[string]*TraitImplDecl{}, Builtins: Builtins(), TypeParams: map[string]*Type{}, Lim: executor.limits}
 	checker := &Checker{Prog: program, Env: env, Lim: executor.limits}
-	runtime := &Runtime{Prog: program, Checker: checker, Funcs: map[string]*Function{}, Global: newRunScope(nil), Lim: executor.limits, Ctx: executor.context, Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(), discordCache: newDiscordObjectCache(10_000, 30*time.Minute), discordAPIBaseURL: discordAPIBase, discordGateway: newDiscordGatewayState()}
+	runtime := &Runtime{Prog: program, Checker: checker, Funcs: map[string]*Function{}, Global: newRunScope(nil), Lim: executor.limits, Sandbox: sandbox, Ctx: executor.context, Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(), discordCache: newDiscordObjectCache(10_000, 30*time.Minute), discordAPIBaseURL: discordAPIBase, discordGateway: newDiscordGatewayState()}
 	if source := document.Source; source != "" {
 		runtime.Prog.Source = executor.source(source)
 	}
@@ -2618,6 +2635,16 @@ func (executor *kirExecutor) evalKIRCall(scope *kirExecScope, expression *KIRExp
 		if expression.Receiver != nil {
 			return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "KIR builtin call unexpectedly has a receiver")
 		}
+		if executor.builtins == nil {
+			return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "KIR builtin %q passed validation without an executable implementation", expression.Name)
+		}
+		metadata, exists := Builtins()[expression.Name]
+		if !exists || !kirExecBuiltinSupported(metadata) {
+			return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "KIR builtin %q passed validation without an executable implementation", expression.Name)
+		}
+		if !executor.builtins.Sandbox.allowsBuiltin(metadata) {
+			return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "builtin %q is unavailable with --restricted", expression.Name)
+		}
 		arguments := make([]Value, len(expression.Args))
 		for i, argument := range expression.Args {
 			arguments[i], diagnostic = executor.evalExpr(scope, argument)
@@ -2642,10 +2669,6 @@ func (executor *kirExecutor) evalKIRCall(scope *kirExecScope, expression *KIRExp
 			executor.output = append(executor.output, text...)
 			executor.context.Output = int64(len(executor.output))
 			return nilVal(), nil
-		}
-		metadata, exists := Builtins()[expression.Name]
-		if !exists || !kirExecBuiltinSupported(metadata) || executor.builtins == nil {
-			return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "KIR builtin %q passed validation without an executable implementation", expression.Name)
 		}
 		call := &Expr{Kind: ExCall, Name: expression.Name, Tok: Token{Source: executor.source(expression.Source), Line: expression.Line, Column: expression.Column}}
 		return executor.builtins.evalBuiltin(call, metadata, arguments)
@@ -2737,6 +2760,9 @@ func (executor *kirExecutor) valueMatchesType(value Value, typ string) bool {
 	}
 	if typ == "Json" {
 		return value.Kind == VJSON
+	}
+	if typ == "SQLite" {
+		return value.Kind == VSQLite && value.SQLite != nil
 	}
 	if parameters, result, ok := parseKIRFunctionType(typ); ok {
 		_, _ = parameters, result
