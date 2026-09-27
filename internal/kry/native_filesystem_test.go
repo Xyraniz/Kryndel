@@ -2,11 +2,50 @@ package kry
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 )
+
+func buildAndRunFilesystemNative(t *testing.T, source string) (string, int, error) {
+	t.Helper()
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		return buildAndRunLinuxELF(t, source)
+	}
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("filesystem AOT differential test requires linux/amd64 or windows/amd64")
+	}
+	if _, err := exec.LookPath("gcc"); err != nil {
+		t.Skipf("Windows C compiler gcc is unavailable: %v", err)
+	}
+	program, diagnostic := Parse(&Source{Name: "filesystem.kry", Text: source}, DefaultLimits())
+	if diagnostic != nil {
+		return "", 0, diagnostic
+	}
+	checker, diagnostic := Check(program, DefaultLimits())
+	if diagnostic != nil {
+		return "", 0, diagnostic
+	}
+	binary, err := BuildNative(program, checker, NativeTarget{OS: "windows", Arch: "amd64"}, "exe")
+	if err != nil {
+		return "", 0, err
+	}
+	path := filepath.Join(t.TempDir(), "filesystem.exe")
+	if err := os.WriteFile(path, binary, 0o700); err != nil {
+		return "", 0, err
+	}
+	output, err := exec.Command(path).CombinedOutput()
+	if err == nil {
+		return strings.ReplaceAll(string(output), "\r\n", "\n"), 0, nil
+	}
+	if exit, ok := err.(*exec.ExitError); ok {
+		return strings.ReplaceAll(string(output), "\r\n", "\n"), exit.ExitCode(), nil
+	}
+	return string(output), -1, err
+}
 
 func TestCAOTFilesystemIOMatchesInterpreter(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
@@ -209,6 +248,100 @@ func TestCAOTFilesystemWritesRejectSymlinks(t *testing.T) {
 			if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
 				t.Errorf("write replaced symlink %q: info=%v err=%v", link, info, err)
 			}
+		}
+	}
+}
+
+func TestCAOTFilesystemPathHelpersMatchInterpreter(t *testing.T) {
+	if !((runtime.GOOS == "linux" || runtime.GOOS == "windows") && runtime.GOARCH == "amd64") {
+		t.Skip("filesystem AOT differential test requires linux/amd64 or windows/amd64")
+	}
+	root := t.TempDir()
+	link := filepath.Join(root, "target-link")
+	if runtime.GOOS == "linux" {
+		target := filepath.Join(root, "target.txt")
+		if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	joined := filepath.Join(root, "file", "leaf")
+	absolute := filepath.Join(root, "normalized")
+	source := "fn main() -> Nil {\n" +
+		"    println(fs_join_path(" + strconv.Quote(root) + ", [\"nested//\", \"..\", \"file\", \".\", \"leaf\"]))\n"
+	want := joined + "\n"
+	if runtime.GOOS == "linux" {
+		source += "    println(fs_absolute_path(" + strconv.Quote(link) + "))\n"
+		want += "ok(" + link + ")\n"
+	}
+	source += "    println(fs_absolute_path(" + strconv.Quote(root+"/missing/../normalized") + "))\n}\n"
+	want += "ok(" + absolute + ")\n"
+	interpreted, diagnostic := runInterpreterCapture(t, source)
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
+	}
+	if interpreted != want {
+		t.Fatalf("unexpected interpreter paths: got %q, want %q", interpreted, want)
+	}
+	native, status, err := buildAndRunFilesystemNative(t, source)
+	if err != nil {
+		t.Fatalf("C AOT build failed: %v", err)
+	}
+	if status != 0 || native != interpreted {
+		t.Fatalf("filesystem path helpers differ:\ninterpreter (%d): %q\nC AOT (%d): %q", 0, interpreted, status, native)
+	}
+}
+
+func TestCAOTFilesystemTempFileMatchesInterpreter(t *testing.T) {
+	if !((runtime.GOOS == "linux" || runtime.GOOS == "windows") && runtime.GOARCH == "amd64") {
+		t.Skip("filesystem AOT differential test requires linux/amd64 or windows/amd64")
+	}
+	root := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("TMP", root)
+		t.Setenv("TEMP", root)
+	} else {
+		t.Setenv("TMPDIR", root)
+	}
+	tempDir := os.TempDir()
+	source := "fn main() -> Nil {\n" +
+		"    println(fs_temp_dir())\n" +
+		"    println(fs_temp_file(\"kryndel-native\"))\n" +
+		"}\n"
+	parseOutput := func(output string) string {
+		t.Helper()
+		lines := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+		if len(lines) != 2 || lines[0] != tempDir || !strings.HasPrefix(lines[1], "ok(") || !strings.HasSuffix(lines[1], ")") {
+			t.Fatalf("unexpected temporary file output: %q", output)
+		}
+		return strings.TrimSuffix(strings.TrimPrefix(lines[1], "ok("), ")")
+	}
+	interpreted, diagnostic := runInterpreterCapture(t, source)
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
+	}
+	interpreterPath := parseOutput(interpreted)
+	native, status, err := buildAndRunFilesystemNative(t, source)
+	if err != nil {
+		t.Fatalf("C AOT build failed: %v", err)
+	}
+	if status != 0 {
+		t.Fatalf("C AOT exited with status %d: %q", status, native)
+	}
+	nativePath := parseOutput(native)
+	for _, path := range []string{interpreterPath, nativePath} {
+		if filepath.Dir(path) != tempDir || !strings.HasPrefix(filepath.Base(path), "kryndel-native-") {
+			t.Errorf("temporary file path %q is outside the requested directory or prefix", path)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Errorf("temporary file %q was not created: %v", path, err)
+			continue
+		}
+		if info.Size() != 0 || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
+			t.Errorf("temporary file %q has size %d and mode %o, want empty mode 600", path, info.Size(), info.Mode().Perm())
 		}
 	}
 }

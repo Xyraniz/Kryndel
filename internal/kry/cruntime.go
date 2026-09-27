@@ -34,13 +34,11 @@ const cRuntimePrelude = `
 #include <windows.h>
 #define k_mkdir(p) _mkdir(p)
 #define k_rmdir(p) _rmdir(p)
-static char *k_realpath(const char *p, char *buf) { return _fullpath(buf, p, 4096); }
 static void k_sleep_ms(long long m) { Sleep((DWORD)m); }
 #else
 #include <sys/wait.h>
 #define k_mkdir(p) mkdir((p), 0755)
 #define k_rmdir(p) rmdir(p)
-static char *k_realpath(const char *p, char *buf) { return realpath(p, buf); }
 static void k_sleep_ms(long long m) { struct timespec ts; ts.tv_sec=m/1000; ts.tv_nsec=(m%1000)*1000000LL; nanosleep(&ts,NULL); }
 #endif
 
@@ -1550,6 +1548,18 @@ static char *k_fs_temp_path(const char *destination) {
     memcpy(path+parent_len+prefix_len,name,name_len+1);
     return path;
 }
+static int k_fs_open_temp(char *path, size_t path_size) {
+#ifdef _WIN32
+    if (_mktemp_s(path,path_size)!=0) {
+        if (!errno) errno=EIO;
+        return -1;
+    }
+    return _open(path,_O_CREAT|_O_EXCL|_O_BINARY|_O_WRONLY,_S_IREAD|_S_IWRITE);
+#else
+    (void)path_size;
+    return mkstemp(path);
+#endif
+}
 static int k_fs_replace_file(const char *source, const char *destination) {
 #ifdef _WIN32
     if (MoveFileExA(source,destination,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)) return 0;
@@ -1559,11 +1569,11 @@ static int k_fs_replace_file(const char *source, const char *destination) {
     return rename(source,destination);
 #endif
 }
-static void k_fs_close_fd(int fd) {
+static int k_fs_close_fd(int fd) {
 #ifdef _WIN32
-    _close(fd);
+    return _close(fd);
 #else
-    close(fd);
+    return close(fd);
 #endif
 }
 static KValue k_fs_begin_write(KValue path, char **destination, char **temporary, FILE **output) {
@@ -1572,16 +1582,7 @@ static KValue k_fs_begin_write(KValue path, char **destination, char **temporary
     KValue parent=k_fs_parent_dir(path);
     if (!parent.u.res.ok) return parent;
     *temporary=k_fs_temp_path(*destination);
-#ifdef _WIN32
-    if (_mktemp_s(*temporary,strlen(*temporary)+1)!=0) {
-        int error=errno ? errno : EIO;
-        errno=error;
-        return kv_res(0,k_fs_path_error("create",path));
-    }
-    int fd=_open(*temporary,_O_CREAT|_O_EXCL|_O_BINARY|_O_WRONLY,_S_IREAD|_S_IWRITE);
-#else
-    int fd=mkstemp(*temporary);
-#endif
+    int fd=k_fs_open_temp(*temporary,strlen(*temporary)+1);
     if (fd<0) return kv_res(0,k_fs_path_error("create",path));
 #ifdef _WIN32
     *output=_fdopen(fd,"wb");
@@ -1781,47 +1782,169 @@ static KValue k_fs_file_modified_time(KValue path) {
     if (stat(p,&st)!=0) return kv_res(0, kv_cstr("cannot stat file"));
     return kv_res(1, kv_int((long long)st.st_mtime));
 }
+static int k_path_is_separator(char c) {
+#ifdef _WIN32
+    return c=='/' || c=='\\';
+#else
+    return c=='/';
+#endif
+}
+static char k_path_native_separator(void) {
+#ifdef _WIN32
+    return '\\';
+#else
+    return '/';
+#endif
+}
+static int k_path_is_absolute(const char *path, size_t length) {
+#ifdef _WIN32
+    if (length>=3 && path[1]==':' && k_path_is_separator(path[2])) return 1;
+    return length>0 && k_path_is_separator(path[0]);
+#else
+    return length>0 && path[0]=='/';
+#endif
+}
+static KValue k_path_clean_bytes(const char *path, size_t length) {
+    char *clean=(char*)kalloc(length+4);
+    size_t read=0, written=0, volume=0, root=0;
+    int absolute=0;
+#ifdef _WIN32
+    if (length>=2 && path[1]==':') {
+        clean[written++]=path[0]; clean[written++]=':';
+        volume=written; root=written; read=2;
+        if (read<length && k_path_is_separator(path[read])) {
+            clean[written++]=k_path_native_separator(); root=written; absolute=1;
+            while (read<length && k_path_is_separator(path[read])) read++;
+        }
+    } else if (length>=2 && k_path_is_separator(path[0]) && k_path_is_separator(path[1])) {
+        size_t server, server_end, share, share_end;
+        read=2;
+        while (read<length && k_path_is_separator(path[read])) read++;
+        server=read;
+        while (read<length && !k_path_is_separator(path[read])) read++;
+        server_end=read;
+        while (read<length && k_path_is_separator(path[read])) read++;
+        share=read;
+        while (read<length && !k_path_is_separator(path[read])) read++;
+        share_end=read;
+        if (server_end>server && share_end>share) {
+            clean[written++]=k_path_native_separator();
+            clean[written++]=k_path_native_separator();
+            memcpy(clean+written,path+server,server_end-server); written+=server_end-server;
+            clean[written++]=k_path_native_separator();
+            memcpy(clean+written,path+share,share_end-share); written+=share_end-share;
+            volume=written; root=written; absolute=1;
+            while (read<length && k_path_is_separator(path[read])) read++;
+        } else {
+            read=0;
+            clean[written++]=k_path_native_separator(); root=written; absolute=1;
+            while (read<length && k_path_is_separator(path[read])) read++;
+        }
+    } else if (length>0 && k_path_is_separator(path[0])) {
+        clean[written++]=k_path_native_separator(); root=written; absolute=1;
+        while (read<length && k_path_is_separator(path[read])) read++;
+    }
+#else
+    if (length>0 && path[0]=='/') {
+        clean[written++]='/'; root=written; absolute=1;
+        while (read<length && path[read]=='/') read++;
+    }
+#endif
+    while (read<length) {
+        size_t start, part_length;
+        while (read<length && k_path_is_separator(path[read])) read++;
+        if (read>=length) break;
+        start=read;
+        while (read<length && !k_path_is_separator(path[read])) read++;
+        part_length=read-start;
+        if (part_length==1 && path[start]=='.') continue;
+        if (part_length==2 && path[start]=='.' && path[start+1]=='.') {
+            if (written>root) {
+                size_t part_start=written;
+                while (part_start>root && !k_path_is_separator(clean[part_start-1])) part_start--;
+                size_t previous_length=written-part_start;
+                int previous_parent=previous_length==2 && clean[part_start]=='.' && clean[part_start+1]=='.';
+                if (!previous_parent) {
+                    written=part_start;
+                    if (written>root && k_path_is_separator(clean[written-1])) written--;
+                    continue;
+                }
+            }
+            if (absolute) continue;
+        }
+        if (written>0 && !k_path_is_separator(clean[written-1]) && !(volume>0 && written==volume && !absolute))
+            clean[written++]=k_path_native_separator();
+        memcpy(clean+written,path+start,part_length);
+        written+=part_length;
+    }
+#ifdef _WIN32
+    if (written==volume && volume>0 && !absolute) clean[written++]='.';
+#endif
+    if (written==0) clean[written++]='.';
+    return kv_strn(clean,written);
+}
 static KValue k_fs_join_path(KValue base, KValue parts) {
     KBuf b; kb_init(&b);
     kb_putn(&b, base.u.s.data, base.u.s.len);
     for (size_t i=0;i<parts.u.a.len;i++) {
         KValue p=parts.u.a.items[i];
-        if (b.len>0 && b.buf[b.len-1]!='/') kb_putc(&b,'/');
+        if (b.len>0 && !k_path_is_separator(b.buf[b.len-1])) kb_putc(&b,k_path_native_separator());
         kb_putn(&b, p.u.s.data, p.u.s.len);
     }
-    return kv_strn(b.buf,b.len);
+    if (b.len==0) return kv_strn("",0);
+    return k_path_clean_bytes(b.buf,b.len);
 }
 static KValue k_fs_absolute_path(KValue path) {
-    char *p=k_cpath(path);
-    char buf[4096];
-    if (k_realpath(p,buf)) return kv_res(1, kv_cstr(buf));
-    if (p[0]=='/') return kv_res(1, kv_cstr(p));
-    char cwd[4096];
-    if (!getcwd(cwd,sizeof(cwd))) return kv_res(0, kv_cstr("cannot resolve path"));
-    KBuf b; kb_init(&b); kb_puts(&b,cwd); kb_putc(&b,'/'); kb_puts(&b,p);
-    return kv_res(1, kv_strn(b.buf,b.len));
+#ifdef _WIN32
+    if (!k_fs_path_has_nul(path)) {
+        char *p=k_cpath(path);
+        char buf[4096];
+        if (_fullpath(buf,p,sizeof(buf))) return kv_res(1,kv_cstr(buf));
+        return kv_res(0,kv_cstr("cannot resolve path"));
+    }
+#endif
+    KBuf b; kb_init(&b);
+    if (k_path_is_absolute(path.u.s.data,path.u.s.len)) {
+        kb_putn(&b,path.u.s.data,path.u.s.len);
+    } else {
+        char cwd[4096];
+        if (!getcwd(cwd,sizeof(cwd))) return kv_res(0,kv_cstr("cannot resolve path"));
+        kb_puts(&b,cwd);
+        if (b.len>0 && !k_path_is_separator(b.buf[b.len-1])) kb_putc(&b,k_path_native_separator());
+        kb_putn(&b,path.u.s.data,path.u.s.len);
+    }
+    return kv_res(1,k_path_clean_bytes(b.buf,b.len));
 }
 static KValue k_fs_temp_dir(KValue unused) {
     (void)unused;
+#ifdef _WIN32
+    char path[4096];
+    DWORD length=GetTempPathA((DWORD)sizeof(path),path);
+    if (!length || length>=sizeof(path)) return kv_cstr(".");
+    size_t used=(size_t)length;
+    while (used>1 && k_path_is_separator(path[used-1]) && !(used==3 && path[1]==':')) used--;
+    return kv_strn(path,used);
+#else
     const char *t=getenv("TMPDIR"); if (!t||!*t) t="/tmp";
     return kv_cstr(t);
+#endif
 }
 static KValue k_fs_temp_file(KValue prefix) {
-    char *p=k_cpath(prefix);
-    const char *t=getenv("TMPDIR"); if (!t||!*t) t="/tmp";
-    char tmpl[4096];
-    snprintf(tmpl,sizeof(tmpl),"%s/%s-XXXXXX",t,p);
-#ifdef _WIN32
-    if (_mktemp_s(tmpl, sizeof(tmpl)) != 0) return kv_res(0, kv_cstr("cannot create temp file"));
-    FILE *tf = fopen(tmpl, "wb");
-    if (!tf) return kv_res(0, kv_cstr("cannot create temp file"));
-    fclose(tf);
-#else
-    int fd=mkstemp(tmpl);
-    if (fd<0) return kv_res(0, kv_cstr("cannot create temp file"));
-    close(fd);
-#endif
-    return kv_res(1, kv_cstr(tmpl));
+	if (k_fs_path_has_nul(prefix)) return kv_res(0,kv_cstr("cannot create temp file"));
+	KValue directory=k_fs_temp_dir(kv_nil());
+	KBuf path; kb_init(&path);
+	kb_putn(&path,directory.u.s.data,directory.u.s.len);
+	if (path.len>0 && !k_path_is_separator(path.buf[path.len-1])) kb_putc(&path,k_path_native_separator());
+	kb_putn(&path,prefix.u.s.data,prefix.u.s.len);
+	kb_puts(&path,"-XXXXXX");
+	int fd=k_fs_open_temp(path.buf,path.cap);
+	if (fd<0) return kv_res(0,kv_cstr("cannot create temp file"));
+	if (k_fs_close_fd(fd)!=0) {
+		int error=errno ? errno : EIO;
+		remove(path.buf); errno=error;
+		return kv_res(0,kv_cstr("cannot create temp file"));
+	}
+	return kv_res(1,kv_strn(path.buf,path.len));
 }
 
 /* ---- process and timing ------------------------------------------------ */
