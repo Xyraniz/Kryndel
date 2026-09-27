@@ -13,13 +13,17 @@ const (
 	peSectionAlignment = uint32(0x1000)
 	peTextRVA          = uint32(0x1000)
 	peHeaderSize       = uint32(0x400)
+	peSubsystemOffset  = 0x80 + 4 + 20 + 68
+	peSubsystemConsole = uint16(3)
+	peSubsystemGUI     = uint16(2)
 )
 
-// BuildDirectPE emits a Windows x64 console executable without invoking a
+// BuildDirectPE emits a Windows x64 executable without invoking a
 // compiler, assembler, or linker. Its intentionally narrow language slice
 // supports scalar and String values, up to four register arguments, basic
 // control flow, and print/println. Unsupported constructs fail before an
-// executable is produced. The output calls the Windows x64 kernel32 ABI.
+// executable is produced. The output calls the Windows x64 kernel32 ABI; GUI
+// targets select the Windows subsystem in the PE header.
 func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	if err := validateNativeOutputTarget("pe-direct", target); err != nil {
 		return nil, err
@@ -68,7 +72,7 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 	}
 	output, staticErr := directStaticOutput(&copyProgram, c)
 	if staticErr == nil {
-		return buildDirectStaticPE(output)
+		return buildDirectStaticPE(output, target.GUI)
 	}
 	stmts, err := validateDirectPEProgram(&copyProgram)
 	if err != nil {
@@ -79,7 +83,14 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 	if err := machine.prepareFunctions(&copyProgram); err != nil {
 		return nil, fmt.Errorf("direct PE function setup: %w", err)
 	}
-	return machine.build(stmts)
+	data, err := machine.build(stmts)
+	if err != nil {
+		return nil, err
+	}
+	if target.GUI {
+		pePut16(data, peSubsystemOffset, peSubsystemGUI)
+	}
+	return data, nil
 }
 
 // validateDirectPEProgram prevents Linux syscalls or non-Win64 calling
@@ -125,8 +136,8 @@ func validateDirectPEProgram(p *Program) ([]*Stmt, error) {
 		if f.Name == "main" {
 			continue
 		}
-		if len(f.Params) > 4 {
-			return nil, fmt.Errorf("function '%s' has %d parameters; Win64 direct PE currently supports at most four", f.Name, len(f.Params))
+		if len(f.Params) > directPEWindowsMaxArgs {
+			return nil, fmt.Errorf("function '%s' has %d parameters; Win64 direct PE currently supports at most %d", f.Name, len(f.Params), directPEWindowsMaxArgs)
 		}
 		if !directPETypeName(typeSpecString(f.Return), true) {
 			return nil, fmt.Errorf("function '%s' has unsupported return type %s", f.Name, typeSpecString(f.Return))
@@ -277,8 +288,8 @@ func validateDirectPEExpr(e *Expr, allowOutput bool) error {
 			return fmt.Errorf("receiver calls are not supported")
 		}
 		if e.Function != nil {
-			if len(e.Args) != len(e.Function.Params) || len(e.Args) > 4 {
-				return fmt.Errorf("function '%s' must be called with all arguments and at most four parameters", e.Function.Name)
+			if len(e.Args) != len(e.Function.Params) || len(e.Args) > directPEWindowsMaxArgs {
+				return fmt.Errorf("function '%s' must be called with all arguments and at most %d parameters", e.Function.Name, directPEWindowsMaxArgs)
 			}
 			for _, arg := range e.Args {
 				if err := validateDirectPEExpr(arg, false); err != nil {
@@ -326,7 +337,7 @@ func pePut16(data []byte, at int, value uint16) { binary.LittleEndian.PutUint16(
 func pePut32(data []byte, at int, value uint32) { binary.LittleEndian.PutUint32(data[at:], value) }
 func pePut64(data []byte, at int, value uint64) { binary.LittleEndian.PutUint64(data[at:], value) }
 
-func buildDirectStaticPE(output []byte) ([]byte, error) {
+func buildDirectStaticPE(output []byte, gui bool) ([]byte, error) {
 	if uint64(len(output)) > math.MaxUint32 {
 		return nil, fmt.Errorf("direct PE output exceeds WriteFile's DWORD length")
 	}
@@ -355,7 +366,14 @@ func buildDirectStaticPE(output []byte) ([]byte, error) {
 	if err := machine.emitExit(1); err != nil {
 		return nil, err
 	}
-	return buildDirectDynamicPE(machine.code, machine.data, machine.dataRefs, machine.peImportRefs, machine.peFunctions)
+	image, err := buildDirectDynamicPE(machine.code, machine.data, machine.dataRefs, machine.peImportRefs, machine.peFunctions)
+	if err != nil {
+		return nil, err
+	}
+	if gui {
+		pePut16(image, peSubsystemOffset, peSubsystemGUI)
+	}
+	return image, nil
 }
 
 // The .idata section contains one import descriptor, a null descriptor,
@@ -496,7 +514,7 @@ func buildDirectDynamicPE(code, rdata []byte, dataRefs []machineDataRef, importR
 	pePut16(image, opt+48, 6)
 	pePut32(image, opt+56, uint32(imageSize64))
 	pePut32(image, opt+60, peHeaderSize)
-	pePut16(image, opt+68, 3)
+	pePut16(image, opt+68, peSubsystemConsole)
 	pePut16(image, opt+70, 0x100)
 	pePut64(image, opt+72, 0x100000)
 	pePut64(image, opt+80, 0x1000)

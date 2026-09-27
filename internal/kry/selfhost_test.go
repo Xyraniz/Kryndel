@@ -995,6 +995,13 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	enumMatchFixtureText := strings.ReplaceAll(string(enumMatchFixtureSource), "\r\n", "\n")
 	verifyBootstrapHash(t, lock, verifiedHashes, "enum-match-fixture.kry", []byte(enumMatchFixtureText))
+	ffiFixturePath := filepath.Join(selfhost, "fixtures", "windows_ffi_propagation_stage39.kry")
+	ffiFixtureSource, err := os.ReadFile(ffiFixturePath)
+	if err != nil {
+		t.Fatalf("read Stage 39 Windows FFI fixture: %v", err)
+	}
+	ffiFixtureText := strings.ReplaceAll(string(ffiFixtureSource), "\r\n", "\n")
+	verifyBootstrapHash(t, lock, verifiedHashes, "windows-ffi-propagation-fixture.kry", []byte(ffiFixtureText))
 	t.Log("stage36 compiling the checked-in compiler module graph through its import resolver")
 	secondCompiler := filepath.Join(dir, "second-source-kir-compiler")
 	secondCompilerOutput, err := exec.Command(generatedCompiler, compilerPath, secondCompiler).CombinedOutput()
@@ -1079,10 +1086,26 @@ fn mode_name(mode: Mode) -> String {
 		t.Fatal(err)
 	}
 	windowsPEPath := filepath.Join(dir, "windows-program.exe")
-	windowsPEOutput, err := exec.Command(secondCompiler, windowsSource, windowsPEPath, "windows-amd64").CombinedOutput()
+	// The generated compiler serializes PE directly. Give it a PATH containing
+	// no executables so it cannot resolve Go, C, an assembler, or a linker by name.
+	emptyToolPath := filepath.Join(dir, "empty-tool-path")
+	if err := os.Mkdir(emptyToolPath, 0o700); err != nil {
+		t.Fatalf("create empty tool PATH: %v", err)
+	}
+	compileEnv := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "PATH=") {
+			compileEnv = append(compileEnv, entry)
+		}
+	}
+	compileEnv = append(compileEnv, "PATH="+emptyToolPath)
+	compilePE := exec.Command(secondCompiler, windowsSource, windowsPEPath, "windows-amd64")
+	compilePE.Env = compileEnv
+	windowsPEOutput, err := compilePE.CombinedOutput()
 	if err != nil {
 		t.Fatalf("stage36 second-level compiler failed to emit Windows PE: %v; output: %s", err, windowsPEOutput)
 	}
+	t.Log("stage36 Stage 2 compiler emitted PE with PATH pointing to an empty directory")
 	windowsPEBytes, err := os.ReadFile(windowsPEPath)
 	if err != nil {
 		t.Fatalf("stage36 second-level compiler did not write Windows PE: %v", err)

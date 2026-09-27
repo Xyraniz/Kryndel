@@ -1,0 +1,23 @@
+fn process_id(symbol: FFISymbol) -> Result[Int, String] {
+    let probe: Int = ffi_call(symbol, "u()", [])?
+    return ffi_call(symbol, "u()", [])
+}
+
+fn missing_symbol(library: FFILibrary) -> Result[Int, String] {
+    let symbol: FFISymbol = ffi_symbol(library, "KryndelDefinitelyMissingSymbol")?
+    return ffi_call(symbol, "u()", [])
+}
+
+fn main() -> Nil {
+    ffi_thread_pin()
+    let library: FFILibrary = result_unwrap(ffi_library_open("kernel32.dll"))
+    let symbol: FFISymbol = result_unwrap(ffi_symbol(library, "GetCurrentProcessId"))
+    let success: Result[Int, String] = process_id(symbol)
+    println(is_ok(success))
+    println(result_unwrap(success) > 0)
+
+    let failure: Result[Int, String] = missing_symbol(library)
+    println(is_err(failure))
+    ffi_library_close(library)
+    ffi_thread_unpin()
+}

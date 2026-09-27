@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+const directPEWindowsMaxArgs = 8
+
 // directMachine is the second direct-ELF slice. It lowers checked Int/Bool
 // state, assignments, comparisons, if/while control flow, scalar functions,
 // and static or dynamic integer output to x86-64 instructions. It intentionally
@@ -4766,7 +4768,7 @@ func machineTypeFromSpec(p *Program, spec *TypeSpec) (*Type, bool) {
 func (m *directMachine) emitMoveArg(index int) error {
 	maxArgs := 6
 	if m.windowsABI {
-		maxArgs = 4
+		maxArgs = directPEWindowsMaxArgs
 	}
 	if index < 0 || index >= maxArgs {
 		return fmt.Errorf("direct ELF backend supports at most six scalar arguments")
@@ -4797,12 +4799,20 @@ func (m *directMachine) emitMoveArg(index int) error {
 func (m *directMachine) emitStoreArg(index int, slot machineSlot) error {
 	maxArgs := 6
 	if m.windowsABI {
-		maxArgs = 4
+		maxArgs = directPEWindowsMaxArgs
 	}
 	if index < 0 || index >= maxArgs {
-		return fmt.Errorf("direct ELF backend supports at most six scalar arguments")
+		return fmt.Errorf("direct backend supports at most %d scalar arguments", maxArgs)
 	}
 	if m.windowsABI {
+		if index >= 4 {
+			// The caller's 32-byte home area follows the return address. After
+			// push rbp; mov rbp,rsp, argument five is at [rbp+48].
+			offset := 48 + (index-4)*8
+			m.code = append(m.code, 0x48, 0x8b, 0x45, byte(offset)) // mov rax,[rbp+offset]
+			m.emitStoreSlot(slot)
+			return nil
+		}
 		registerLoads := [4][]byte{
 			{0x48, 0x89, 0xc8}, // mov rax, rcx
 			{0x48, 0x89, 0xd0}, // mov rax, rdx
@@ -4837,7 +4847,7 @@ func (m *directMachine) emitFunctionCall(e *Expr) error {
 	}
 	maxArgs := 6
 	if m.windowsABI {
-		maxArgs = 4
+		maxArgs = directPEWindowsMaxArgs
 	}
 	if len(e.Args) > maxArgs {
 		return fmt.Errorf("direct ELF backend function '%s' has too many arguments", e.Function.Name)
@@ -4856,18 +4866,45 @@ func (m *directMachine) emitFunctionCall(e *Expr) error {
 			}
 			m.code = append(m.code, 0x48, 0x89, 0x44, 0x24, byte(index*8)) // [rsp+slot] = rax
 		}
+		stackArgumentCount := len(e.Args) - 4
+		if stackArgumentCount < 0 {
+			stackArgumentCount = 0
+		}
+		outgoingBytes := 32 + stackArgumentCount*8
+		if remainder := (m.windowsStackDepth + outgoingBytes) % 16; remainder != 0 {
+			outgoingBytes += 16 - remainder
+		}
+		if outgoingBytes > 0 {
+			m.code = append(m.code, 0x48, 0x83, 0xec, byte(outgoingBytes))
+		}
+		// Stack arguments start immediately after Win64's 32-byte home area.
+		// The remaining aligned bytes are padding at the end of the outgoing area.
+		for index := 4; index < len(e.Args); index++ {
+			sourceOffset := outgoingBytes + index*8
+			destinationOffset := 32 + (index-4)*8
+			m.code = append(m.code, 0x48, 0x8b, 0x44, 0x24, byte(sourceOffset))      // mov rax,[rsp+source]
+			m.code = append(m.code, 0x48, 0x89, 0x44, 0x24, byte(destinationOffset)) // mov [rsp+destination],rax
+		}
 		registerLoads := [4][]byte{
 			{0x48, 0x8b, 0x4c, 0x24}, // rcx = [rsp+slot]
 			{0x48, 0x8b, 0x54, 0x24}, // rdx = [rsp+slot]
 			{0x4c, 0x8b, 0x44, 0x24}, // r8 = [rsp+slot]
 			{0x4c, 0x8b, 0x4c, 0x24}, // r9 = [rsp+slot]
 		}
-		for index := range e.Args {
+		for index := 0; index < len(e.Args) && index < 4; index++ {
 			m.code = append(m.code, registerLoads[index]...)
-			m.code = append(m.code, byte(index*8))
+			m.code = append(m.code, byte(outgoingBytes+index*8))
 		}
-		if err := m.emitCall(functionKey(e.Function)); err != nil {
+		label, ok := m.functionLabels[functionKey(e.Function)]
+		if !ok {
+			return fmt.Errorf("direct ELF backend has no function '%s'", e.Function.Name)
+		}
+		m.code = append(m.code, 0xe8)
+		if err := m.emitLabelDisplacement(label); err != nil {
 			return err
+		}
+		if outgoingBytes > 0 {
+			m.code = append(m.code, 0x48, 0x83, 0xc4, byte(outgoingBytes))
 		}
 		if spillBytes > 0 {
 			m.code = append(m.code, 0x48, 0x83, 0xc4, byte(spillBytes))
@@ -6152,7 +6189,11 @@ func (m *directMachine) prepareFunctions(p *Program) error {
 		if _, exists := m.functionLabels[key]; exists {
 			return fmt.Errorf("direct ELF backend has duplicate function '%s'", f.Name)
 		}
-		if len(f.Params) > 6 {
+		maxArgs := 6
+		if m.windowsABI {
+			maxArgs = directPEWindowsMaxArgs
+		}
+		if len(f.Params) > maxArgs {
 			return fmt.Errorf("direct ELF backend function '%s' has too many parameters", f.Name)
 		}
 		returnTypeName := typeSpecString(f.Return)

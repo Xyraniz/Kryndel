@@ -5,21 +5,22 @@
   "stage1_seed_path": "selfhost/bootstrap/linux-amd64/source-kir-compiler-stage1.elf",
   "host_go": "go1.27.1",
   "stage0_build": "CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry",
-  "source_compiler_kir_bytes": 77731228,
+  "source_compiler_kir_bytes": 84600345,
   "source_compiler_kir_max_bytes": 134217728,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
-    "stage0-host-kry-linux-amd64": "7f3ff301db0371cd4dc81f656f82b4095a4a130fb2236ca0bfbc77784133897c",
-    "source-compiler.kir": "c8789c12e5ece0639828bef054870582d404784f9fc9fa80a7c3807320d235de",
-    "stage1-source-kir-compiler.elf": "2fd0d1dfbd8b19635062c3d5d836990649c8071a87b86214234d2c0f80b2ad50",
-    "source_kir_compiler.kry": "473d9cd2bcbc9d08eb31775ab94fd7e5878f70552380afe94cf9efda5b774ed2",
-    "dynamic_backend.kry": "f21e493c9050ed08a3b498ea5706bc900408b103de582ea8c76c4ca7f7448faa",
+    "stage0-host-kry-linux-amd64": "64baefc726cd63942d67027492ee2aa96874ada12f062808c01c7d4d90981e7f",
+    "source-compiler.kir": "db11638f8b597b7e44af7228d046dc334b6cbb74120aa03d1a8d146dda67abd5",
+    "stage1-source-kir-compiler.elf": "0868e32cfb1e415b9174ad49c378a748eb80c5be22d3c1ac4592f1dc8d6b3098",
+    "source_kir_compiler.kry": "a2c73d952a6a4dbc14cd806822cc37528d46f62e0fcdda93df20aa466b1ceba5",
+    "dynamic_backend.kry": "806daccca8440f58f314e6fe9377d10a12a05b6fb817979c79e9d1d0adf2849f",
     "elf_backend.kry": "0348e0230050815a2d5c5d37ead0e3216f831e65f6ce00ddd49c98067a5eaf57",
     "kir_backend.kry": "3a1be5137d9d8fa08f86e310adde81c83a3269ad156b89258f2a02fe1e37331a",
-    "pe_backend.kry": "9e70ecede3ffa80ccddb954a45c1022f8e05db659d1b51d0c30abff2d8ea428b",
+    "pe_backend.kry": "bd2cb230320f4c8a46f96b2daacf7ec177d054cdfb4901a16e7a18fcf4b37703",
     "bootstrap-fixture.kry": "eb24d52f08ffb85bba3946c15273abd8f2c85a2b3b2b91018e91800533206c0d",
-    "stage2-source-kir-compiler.elf": "e090c10619c57d17e47cff993021e27ea69f6be39a57c39e879c8dc181d30a5d",
-    "stage3-source-kir-compiler.elf": "e090c10619c57d17e47cff993021e27ea69f6be39a57c39e879c8dc181d30a5d",
-    "enum-match-fixture.kry": "5716d11439c1e1ba98d848c09a3e94d938acd48f217e784fe01e6859e92734f6"
+    "stage2-source-kir-compiler.elf": "4adc1c09ae3ae6ba62a08fc2fadf4564c2dfe114bf049faf01a06f96f80e75fd",
+    "stage3-source-kir-compiler.elf": "4adc1c09ae3ae6ba62a08fc2fadf4564c2dfe114bf049faf01a06f96f80e75fd",
+    "enum-match-fixture.kry": "5716d11439c1e1ba98d848c09a3e94d938acd48f217e784fe01e6859e92734f6",
+    "windows-ffi-propagation-fixture.kry": "6b8b020f4c02b3c05751c4551c3c7cb3cf56b5fa5f4994c44cc4ed52c58935dd"
   }
 }

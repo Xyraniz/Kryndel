@@ -6,7 +6,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 )
@@ -255,5 +257,120 @@ fn main() -> Nil {
 	}
 	if len(emptySymbols) != 0 {
 		t.Fatalf("no-import PE reported symbols %v", emptySymbols)
+	}
+}
+func TestSelfhostPEBackendEmitsGUIAndConsoleSubsystems(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := os.ReadFile(filepath.Join(root, "..", "..", "selfhost", "pe_backend.kry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pe_backend.kry"), backend, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code := []byte{0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec, 16, 0, 0, 0, 0x31, 0xc9, 0xff, 0x15, 0, 0, 0, 0, 0x48, 0x81, 0xc4, 16, 0, 0, 0, 0x5d, 0xc3}
+	codeValues := make([]string, len(code))
+	for index, value := range code {
+		codeValues[index] = fmt.Sprintf("u8(%d)", value)
+	}
+	source := fmt.Sprintf(`
+import "pe_backend"
+
+fn main() -> Nil {
+    let code: Array[UInt8] = [%s]
+    let ranges: Array[Array[Int]] = [[0, %d, 16]]
+    let imports: Array[Array[String]] = [["KERNEL32.dll", "ExitProcess"]]
+    let patches: Array[Array[Int]] = [[15, 19, 0]]
+    let gui: Result[Bytes, String] = emit_pe32plus_gui_with_imports_and_data_patches(code, [], imports, [], patches, ranges)
+    let console: Result[Bytes, String] = emit_pe32plus_with_imports_and_data_patches(code, [], imports, [], patches, ranges)
+    let arguments: Array[String] = process_args()
+    let gui_write: Result[Nil, String] = fs_write_bytes(arguments[0], result_unwrap(gui))
+    let gui_written: Nil = result_unwrap(gui_write)
+    let console_write: Result[Nil, String] = fs_write_bytes(arguments[1], result_unwrap(console))
+    let console_written: Nil = result_unwrap(console_write)
+}
+`, strings.Join(codeValues, ", "), len(code))
+	mainPath := filepath.Join(dir, "main.kry")
+	if err := os.WriteFile(mainPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	program, diagnostic := LoadProgram(mainPath, DefaultLimits(), "")
+	if diagnostic != nil {
+		t.Fatalf("load test program at %d:%d: %s", diagnostic.Line, diagnostic.Column, diagnostic.Message)
+	}
+	checker, diagnostic := Check(program, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("check test program at %d:%d: %s", diagnostic.Line, diagnostic.Column, diagnostic.Message)
+	}
+	guiPath := filepath.Join(dir, "gui.exe")
+	consolePath := filepath.Join(dir, "console.exe")
+	runtime, diagnostic := NewRuntimeWithArgs(program, checker, DefaultLimits(), Sandbox{}, []string{guiPath, consolePath})
+	if diagnostic != nil {
+		t.Fatalf("create runtime: %s", diagnostic.Message)
+	}
+	if diagnostic := runtime.run(); diagnostic != nil {
+		t.Fatalf("run subsystem fixture: %s", diagnostic.Message)
+	}
+
+	for _, fixture := range []struct {
+		name      string
+		path      string
+		subsystem uint16
+	}{
+		{name: "GUI", path: guiPath, subsystem: pe.IMAGE_SUBSYSTEM_WINDOWS_GUI},
+		{name: "console", path: consolePath, subsystem: pe.IMAGE_SUBSYSTEM_WINDOWS_CUI},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			image, err := os.ReadFile(fixture.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file, err := pe.NewFile(bytes.NewReader(image))
+			if err != nil {
+				t.Fatalf("parse generated PE: %v", err)
+			}
+			optional, ok := file.OptionalHeader.(*pe.OptionalHeader64)
+			if !ok {
+				t.Fatalf("optional header has type %T, want PE32+", file.OptionalHeader)
+			}
+			if optional.Subsystem != fixture.subsystem {
+				t.Fatalf("PE subsystem is %d, want %d", optional.Subsystem, fixture.subsystem)
+			}
+			if optional.AddressOfEntryPoint != 0x1000 {
+				t.Fatalf("entrypoint RVA is %#x, want .text start at 0x1000", optional.AddressOfEntryPoint)
+			}
+			text := file.Section(".text")
+			if text == nil || optional.AddressOfEntryPoint < text.VirtualAddress || optional.AddressOfEntryPoint >= text.VirtualAddress+text.VirtualSize {
+				t.Fatalf("entrypoint RVA %#x does not resolve inside .text", optional.AddressOfEntryPoint)
+			}
+			textData, err := text.Data()
+			if err != nil {
+				t.Fatalf("read .text: %v", err)
+			}
+			entryOffset := int(optional.AddressOfEntryPoint - text.VirtualAddress)
+			if len(textData) < entryOffset+len(code) {
+				t.Fatalf("entrypoint code exceeds .text bytes: % x", textData[entryOffset:])
+			}
+			entryCode := textData[entryOffset : entryOffset+len(code)]
+			if !bytes.Equal(entryCode[:15], code[:15]) || !bytes.Equal(entryCode[19:], code[19:]) {
+				t.Fatalf("entrypoint bytes do not match the valid fixture code: % x", textData[entryOffset:])
+			}
+			const executableCode = pe.IMAGE_SCN_CNT_CODE | pe.IMAGE_SCN_MEM_EXECUTE
+			if text.Characteristics&executableCode != executableCode {
+				t.Fatalf(".text characteristics %#x lack executable code flags %#x", text.Characteristics, executableCode)
+			}
+		})
+	}
+	if goruntime.GOOS == "windows" && goruntime.GOARCH == "amd64" {
+		for _, path := range []string{guiPath, consolePath} {
+			if output, err := exec.Command(path).CombinedOutput(); err != nil {
+				t.Fatalf("run generated image %s: %v; output: %s", filepath.Base(path), err, output)
+			}
+		}
 	}
 }

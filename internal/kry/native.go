@@ -245,6 +245,13 @@ func validateNativeOutputTarget(format string, target NativeTarget) error {
 }
 
 func nativeOutputTargetReason(format string, target NativeTarget) string {
+	if target.GUI && format != "pe-direct" {
+		backend, err := DescribeNativeBackend(format)
+		if err != nil {
+			return fmt.Sprintf("%s backend does not support Windows GUI subsystem targets", format)
+		}
+		return fmt.Sprintf("%s backend does not support Windows GUI subsystem targets; use --format=pe-direct", backend.Name)
+	}
 	switch format {
 	case "exe", "pe":
 		if target.OS != "windows" {
@@ -265,8 +272,8 @@ func nativeOutputTargetReason(format string, target NativeTarget) string {
 			return "direct ELF backend currently supports only linux-amd64"
 		}
 	case "pe-direct":
-		if target.OS != "windows" || target.Arch != "amd64" || target.GUI {
-			return "direct PE backend currently supports only windows-amd64 console targets"
+		if target.OS != "windows" || target.Arch != "amd64" {
+			return "direct PE backend currently supports only windows-amd64 targets"
 		}
 	}
 	return ""

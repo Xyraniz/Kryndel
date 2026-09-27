@@ -186,6 +186,52 @@ fn main() -> Nil {
 	}
 }
 
+func TestGUIFlagRoutesToDirectPEAndMarksWindowsSubsystem(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "gui.kry")
+	output := filepath.Join(dir, "gui.exe")
+	if err := os.WriteFile(source, []byte("println(42)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := run([]string{"build", source, "--format=exe", "--target=windows-x64", "--no-external-toolchain", "--gui", "-o", output}); status != 0 {
+		t.Fatalf("C-free GUI PE build returned status %d", status)
+	}
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := pe.NewFile(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("CLI output is not a PE executable: %v", err)
+	}
+	defer image.Close()
+	opt, ok := image.OptionalHeader.(*pe.OptionalHeader64)
+	if !ok || opt.Subsystem != 2 {
+		t.Fatalf("CLI GUI PE subsystem = %#v, want Windows GUI (2)", image.OptionalHeader)
+	}
+}
+
+func TestGUIFlagRejectsCBackendBeforeReadingSource(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.kry")
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = writeEnd
+	status := run([]string{"build", missing, "--format=exe", "--target=windows-x64", "--gui"})
+	_ = writeEnd.Close()
+	os.Stderr = oldStderr
+	message, err := io.ReadAll(readEnd)
+	_ = readEnd.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != 2 || !strings.Contains(string(message), "--gui is not supported by the C AOT backend") || strings.Contains(string(message), "cannot read") {
+		t.Fatalf("GUI/C AOT rejection was not clear or happened after source IO: status=%d output=%q", status, message)
+	}
+}
+
 func TestProgramPathRequiresKnownExtension(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "program.txt")

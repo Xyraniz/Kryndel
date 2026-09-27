@@ -88,6 +88,33 @@ func TestDirectPEWindowsExecutable(t *testing.T) {
 	}
 }
 
+func TestDirectPEGUITargetUsesWindowsSubsystem(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source string
+	}{
+		{name: "static", source: `println("GUI static")`},
+		{name: "dynamic", source: "let mut value: Int = 41\nvalue = value + 1\nprintln(value)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, c := testProgram(t, tc.source)
+			data, err := BuildDirectPE(p, c, NativeTarget{OS: "windows", Arch: "amd64", GUI: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			image, err := pe.NewFile(bytes.NewReader(data))
+			if err != nil {
+				t.Fatalf("Go PE parser rejected GUI image: %v", err)
+			}
+			defer image.Close()
+			opt, ok := image.OptionalHeader.(*pe.OptionalHeader64)
+			if !ok || opt.Subsystem != 2 {
+				t.Fatalf("GUI PE subsystem = %#v, want Windows GUI (2)", image.OptionalHeader)
+			}
+		})
+	}
+}
+
 func TestDirectPERejectsUnsupportedProgramsAndTargets(t *testing.T) {
 	p, c := testProgram(t, "println([1, 2, 3])\n")
 	if _, err := BuildDirectPE(p, c, NativeTarget{OS: "windows", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), "direct PE dynamic subset") {

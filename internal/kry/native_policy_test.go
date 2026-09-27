@@ -240,7 +240,7 @@ func TestLanguageCapabilityMatrixCoversGeneratedItemsAndTargets(t *testing.T) {
 		selfHosted   string
 	}{
 		{key: "expression/ExFloat/linux-x64", caot: "supported", direct: "unsupported", selfHosted: "unsupported"},
-		{key: "statement/StMatch/linux-x64", caot: "supported", direct: "unsupported", selfHosted: "unsupported"},
+		{key: "statement/StMatch/linux-x64", caot: "supported", direct: "unsupported", selfHosted: "partial"},
 		{key: "pattern/PatResult/linux-x64", caot: "supported", direct: "unsupported", selfHosted: "unsupported"},
 		{key: "unary_operator/MINUS/linux-x64", caot: "supported", direct: "partial", selfHosted: "partial"},
 		{key: "binary_operator/SHL/linux-x64", caot: "unsupported", direct: "partial", selfHosted: "partial"},
@@ -346,5 +346,13 @@ func TestNativeTargetIsRejectedBeforeFeatureLowering(t *testing.T) {
 	_, err := BuildNative(p, c, NativeTarget{OS: "windows", Arch: "amd64"}, "elf")
 	if err == nil || !strings.Contains(err.Error(), "ELF output requires a Linux target") {
 		t.Fatalf("expected target validation before C feature lowering, got %v", err)
+	}
+}
+
+func TestGUIIsRejectedByBackendsWithoutWindowsSubsystemSupport(t *testing.T) {
+	p, c := testProgram(t, "println(1)\n")
+	_, err := BuildNative(p, c, NativeTarget{OS: "windows", Arch: "amd64", GUI: true}, "exe")
+	if err == nil || !strings.Contains(err.Error(), "C AOT backend does not support Windows GUI subsystem targets") {
+		t.Fatalf("expected clear C AOT GUI rejection, got %v", err)
 	}
 }

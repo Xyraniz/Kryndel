@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "usage: scripts/build-selfhost-pe.sh SOURCE.kry [OUTPUT.exe]" >&2
+usage() {
+  echo "usage: scripts/build-selfhost-pe.sh SOURCE.kry [OUTPUT.exe] [--gui]" >&2
   exit 2
+}
+
+if [[ $# -lt 1 || $# -gt 3 ]]; then usage; fi
+
+source="$1"
+output=""
+target="windows-amd64"
+if [[ $# -ge 2 ]]; then
+  if [[ "$2" == "--gui" ]]; then
+    if [[ $# -ne 2 ]]; then usage; fi
+    target="windows-amd64-gui"
+  else
+    output="$2"
+  fi
+fi
+if [[ $# -eq 3 ]]; then
+  if [[ "$3" != "--gui" ]]; then usage; fi
+  target="windows-amd64-gui"
 fi
 
 if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
@@ -14,9 +32,6 @@ fi
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 compiler="$repo_root/selfhost/bootstrap/linux-amd64/source-kir-compiler-stage1.elf"
 lock="$repo_root/selfhost/bootstrap.lock.json"
-source="$1"
-output="${2:-}"
-
 if [[ ! -f "$source" ]]; then
   echo "Kryndel source file not found: $source" >&2
   exit 2
@@ -39,7 +54,7 @@ if [[ -z "$expected_hash" || "$actual_hash" != "$expected_hash" ]]; then
   exit 1
 fi
 
-"$compiler" "$source" "$output" windows-amd64
+"$compiler" "$source" "$output" "$target"
 if [[ ! -s "$output" ]]; then
   echo "self-hosted compiler did not write a Windows executable: $output" >&2
   exit 1

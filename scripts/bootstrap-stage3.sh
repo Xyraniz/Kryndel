@@ -43,6 +43,7 @@ verify_hash elf_backend.kry selfhost/elf_backend.kry
 verify_hash pe_backend.kry selfhost/pe_backend.kry
 verify_hash bootstrap-fixture.kry selfhost/fixtures/bootstrap_hello_stage27.kry
 verify_hash enum-match-fixture.kry selfhost/fixtures/source_enum_match_stage38.kry
+verify_hash windows-ffi-propagation-fixture.kry selfhost/fixtures/windows_ffi_propagation_stage39.kry
 
 tmp="$(mktemp -d /tmp/kryndel-bootstrap.XXXXXX)"
 trap 'rm -rf "$tmp"' EXIT
@@ -144,6 +145,19 @@ KRY
   mkdir -p "$(dirname "$windows_pe_output")"
   cp "$windows_pe" "$windows_pe_output"
   printf '[bootstrap] Stage 2 Windows amd64 PE written to %s\n' "$windows_pe_output"
+fi
+
+ffi_pe_output="${KRY_STAGE39_FFI_PE_OUTPUT:-}"
+if [[ -n "$ffi_pe_output" ]]; then
+  empty_tool_path="$tmp/empty-tool-path"
+  mkdir -p "$empty_tool_path"
+  ffi_pe="$tmp/windows-ffi-propagation.exe"
+  PATH="$empty_tool_path" "$stage2" \
+    "$repo_root/selfhost/fixtures/windows_ffi_propagation_stage39.kry" \
+    "$ffi_pe" windows-amd64
+  mkdir -p "$(dirname "$ffi_pe_output")"
+  cp "$ffi_pe" "$ffi_pe_output"
+  printf '[bootstrap] Stage 2 C-free FFI PE written with empty PATH to %s\n' "$ffi_pe_output"
 fi
 
 stage3="$tmp/stage3-source-kir-compiler"

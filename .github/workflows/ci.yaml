@@ -45,11 +45,13 @@ jobs:
           KRY_STAGE36_WINDOWS_PE_OUTPUT: ${{ runner.temp }}/stage36-selfhost.exe
           KRY_STAGE38_SELFHOST_PE_OUTPUT: ${{ runner.temp }}/stage38-selfhost.exe
           KRY_FIBONACCI_SELFHOST_PE_OUTPUT: ${{ runner.temp }}/fibonacci-selfhost.exe
+          KRY_STAGE39_FFI_PE_OUTPUT: ${{ runner.temp }}/stage39-ffi-selfhost.exe
         run: bash scripts/bootstrap-stage3.sh
         timeout-minutes: 30
       - name: Verify Stage 0 reproduces the checked-in seed
         env:
           KRY_REQUIRE_LOCKED_BOOTSTRAP: '1'
+          KRY_STAGE36_WINDOWS_PE_OUTPUT: ${{ runner.temp }}/stage36-selfhost.exe
         run: go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v
         timeout-minutes: 30
       - name: Upload self-hosted Windows executables
@@ -60,6 +62,7 @@ jobs:
             ${{ runner.temp }}/stage36-selfhost.exe
             ${{ runner.temp }}/stage38-selfhost.exe
             ${{ runner.temp }}/fibonacci-selfhost.exe
+            ${{ runner.temp }}/stage39-ffi-selfhost.exe
           if-no-files-found: error
 
   windows:
@@ -73,22 +76,21 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.27.x'
-      - name: Run tests on Windows
-        env:
-          CGO_ENABLED: '0'
-        run: go test ./...
-        timeout-minutes: 30
       - name: Download self-hosted Windows executables
         uses: actions/download-artifact@v4
         with:
           name: selfhost-windows-amd64
           path: stage36-pe
-      - name: Execute Stage 1, Stage 2 and self-hosted Fibonacci Windows executables
+      - name: Run tests on Windows
+        env:
+          CGO_ENABLED: '0'
+          KRY_STAGE36_WINDOWS_PE_INPUT: ${{ github.workspace }}/stage36-pe/stage36-selfhost.exe
+          KRY_STAGE39_FFI_PE_INPUT: ${{ github.workspace }}/stage36-pe/stage39-ffi-selfhost.exe
+        run: go test ./...
+        timeout-minutes: 30
+      - name: Execute Stage 1 and self-hosted Fibonacci Windows executables
         shell: pwsh
         run: |
-          $output = & .\stage36-pe\stage36-selfhost.exe
-          if ($LASTEXITCODE -ne 0) { throw "Stage 2 PE exited with $LASTEXITCODE" }
-          if (($output -join "`n") -ne "Mode::Ready`n42") { throw "Unexpected Stage 2 PE output: $output" }
           $output = & .\stage36-pe\stage38-selfhost.exe
           if ($LASTEXITCODE -ne 0) { throw "Stage 1 PE exited with $LASTEXITCODE" }
           if (($output -join "`n") -ne "red`nyellow`ngreen`nwildcard") { throw "Unexpected Stage 1 PE output: $output" }
