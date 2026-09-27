@@ -653,6 +653,74 @@ match outer() { ok(value) => { println(value) } err(problem) => { println(proble
 	}
 }
 
+func TestKIRExecutorMatchesRuntimeForUnsignedValuesAndConcatenation(t *testing.T) {
+	source := `fn add[T: Numeric](left: T, right: T) -> T { return left + right }
+fn remainder[T: Integer](left: T, right: T) -> T { return left % right }
+println(u8(255) + u8(1))
+println(u8(0) - u8(1))
+println(u8(16) * u8(16))
+println(u16(7) / u16(2))
+println(u32(10) % u32(4))
+println(~u8(0))
+println(u8(8) | u8(1))
+println(u8(15) & u8(6))
+println(u8(8) ^ u8(1))
+println(u8(1) << 7)
+println(u8(255) >> 1)
+println(u16(1) << 15)
+println(u32(1) << 31)
+println(u64(1) << 63)
+println(u64(0) - u64(1))
+println(u16(u8(255)))
+println(add(u8(255), u8(2)))
+println(remainder(u16(13), u16(5)))
+println(u8_array(bytes_from_u8([u8(1), u8(255)])))
+let max_json: UInt64 = result_unwrap(json_uint(result_unwrap(json_parse("18446744073709551615"))))
+println(max_json)
+println(u8(2) < u8(3))
+let values: Array[UInt8] = [u8(1), u8(2)] + [u8(3)]
+println(values)
+let text: String = bytes_to_string(string_to_bytes("a") + string_to_bytes("b"))
+println(text)
+`
+	_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("runtime diagnostic = %#v", diagnostic)
+	}
+	want := "0\n255\n0\n3\n2\n255\n9\n6\n9\n128\n127\n32768\n2147483648\n9223372036854775808\n18446744073709551615\n255\n1\n3\n[1, 255]\n18446744073709551615\ntrue\n[1, 2, 3]\nab\n"
+	if got := string(result.Output); got != want {
+		t.Fatalf("KIR output = %q, want %q", got, want)
+	}
+}
+
+func TestKIRExecutorMatchesRuntimeForUnsignedAndArrayLimitDiagnostics(t *testing.T) {
+	tests := []struct {
+		name     string
+		source   string
+		wantDiag string
+		limits   Limits
+	}{
+		{name: "unsigned conversion below zero", source: "println(u8(-1))\n", wantDiag: "Int is outside unsigned range", limits: DefaultLimits()},
+		{name: "unsigned conversion above width", source: "println(u8(256))\n", wantDiag: "value is outside unsigned range", limits: DefaultLimits()},
+		{name: "unsigned division by zero", source: "println(u8(1) / u8(0))\n", wantDiag: "division by zero", limits: DefaultLimits()},
+		{name: "unsigned remainder by zero", source: "println(u8(1) % u8(0))\n", wantDiag: "remainder by zero", limits: DefaultLimits()},
+		{name: "unsigned shift at width", source: "println(u8(1) << 8)\n", wantDiag: "shift count must be between 0 and UInt width minus one", limits: DefaultLimits()},
+		{name: "unsigned negative shift", source: "println(u8(1) >> -1)\n", wantDiag: "shift count must be between 0 and UInt width minus one", limits: DefaultLimits()},
+		{name: "array concatenation limit", source: "let left: Array[Int] = [1, 2]\nlet right: Array[Int] = [3, 4]\nprintln(left + right)\n", wantDiag: "array size limit exceeded", limits: func() Limits { limits := DefaultLimits(); limits.MaxArrayElements = 3; return limits }()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, test.source, test.limits)
+			if diagnostic == nil || diagnostic.Message != test.wantDiag {
+				t.Fatalf("runtime diagnostic = %#v, want %q", diagnostic, test.wantDiag)
+			}
+			if !sameRuntimeDiagnostic(result.Diagnostic, diagnostic) {
+				t.Fatalf("KIR diagnostic = %#v, runtime diagnostic = %#v", result.Diagnostic, diagnostic)
+			}
+		})
+	}
+}
+
 func TestKIRExecutorRejectsUnsupportedEffectsAndTypes(t *testing.T) {
 	program, checker := testProgram(t, "let values: Array[Int] = [1]\nprintln(values[0])\n")
 	kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})

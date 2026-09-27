@@ -1016,11 +1016,18 @@ func validateKIRExecExpr(expression *KIRExpr, scope *kirExecScope, allowOutput b
 			}
 		case "+", "-":
 			numeric := expression.Operand.Type == "Int" || expression.Operand.Type == "Float"
+			if _, unsigned := kirExecUIntBits(expression.Operand.Type); unsigned && expression.Operator == "+" {
+				numeric = true
+			}
 			if constraint, generic := scope.typeParameter(expression.Operand.Type); generic && expression.Operator == "+" {
 				numeric = kirExecConstraintImplies(constraint, "Numeric")
 			}
 			if !numeric || expression.Type != expression.Operand.Type {
 				return fmt.Errorf("%w: unary %s on %s", errKIRSubsetUnsupported, expression.Operator, expression.Operand.Type)
+			}
+		case "~":
+			if _, unsigned := kirExecUIntBits(expression.Operand.Type); !unsigned || expression.Type != expression.Operand.Type {
+				return fmt.Errorf("%w: unary ~ on %s", errKIRSubsetUnsupported, expression.Operand.Type)
 			}
 		default:
 			return fmt.Errorf("%w: unary operator %q", errKIRSubsetUnsupported, expression.Operator)
@@ -1049,21 +1056,37 @@ func validateKIRExecExpr(expression *KIRExpr, scope *kirExecScope, allowOutput b
 				return fmt.Errorf("%w: function values are not comparable", errKIRSubsetUnsupported)
 			}
 		case "<", "<=", ">", ">=":
-			ordered := left == "Int" || left == "Float"
+			_, unsigned := kirExecUIntBits(left)
+			ordered := left == "Int" || left == "Float" || unsigned
 			if constraint, generic := scope.typeParameter(left); generic {
 				ordered = kirExecConstraintImplies(constraint, "Numeric")
 			}
 			if !ordered || right != left || expression.Type != "Bool" {
 				return fmt.Errorf("%w: ordered comparison of %s and %s", errKIRSubsetUnsupported, left, right)
 			}
+		case "|", "&", "^":
+			if _, unsigned := kirExecUIntBits(left); !unsigned || right != left || expression.Type != left {
+				return fmt.Errorf("%w: bitwise operator %s on %s and %s", errKIRSubsetUnsupported, expression.Operator, left, right)
+			}
+		case "<<", ">>":
+			if _, unsigned := kirExecUIntBits(left); !unsigned || right != "Int" || expression.Type != left {
+				return fmt.Errorf("%w: shift operator %s on %s and %s", errKIRSubsetUnsupported, expression.Operator, left, right)
+			}
 		case "+":
 			if left == "String" && right == "String" && expression.Type == "String" {
 				break
 			}
+			if left == "Bytes" && right == "Bytes" && expression.Type == "Bytes" {
+				break
+			}
+			if name, _, ok := parseKIRContainerType(left); ok && name == "Array" && right == left && expression.Type == left {
+				break
+			}
 			fallthrough
 		case "-", "*", "/", "%":
-			numeric := left == "Int" || left == "Float"
-			integer := left == "Int"
+			_, unsigned := kirExecUIntBits(left)
+			numeric := left == "Int" || left == "Float" || unsigned
+			integer := left == "Int" || unsigned
 			if constraint, generic := scope.typeParameter(left); generic {
 				if expression.Operator == "%" {
 					integer = kirExecConstraintImplies(constraint, "Integer")
@@ -1392,7 +1415,23 @@ func kirExecScalarType(typ string) bool {
 	case "Int", "Float", "Bool", "String", "Nil":
 		return true
 	default:
-		return false
+		_, unsigned := kirExecUIntBits(typ)
+		return unsigned
+	}
+}
+
+func kirExecUIntBits(typ string) (uint8, bool) {
+	switch typ {
+	case "UInt8":
+		return 8, true
+	case "UInt16":
+		return 16, true
+	case "UInt32":
+		return 32, true
+	case "UInt64":
+		return 64, true
+	default:
+		return 0, false
 	}
 }
 
@@ -1648,16 +1687,20 @@ func kirExecTypeSatisfiesConstraint(encoded, constraint string, scope *kirExecSc
 	case "", "Any":
 		return kirExecTypeInScope(encoded, scope, document)
 	case "Numeric":
-		return encoded == "Int" || encoded == "Float"
+		_, unsigned := kirExecUIntBits(encoded)
+		return encoded == "Int" || encoded == "Float" || unsigned
 	case "Integer":
-		return encoded == "Int"
+		_, unsigned := kirExecUIntBits(encoded)
+		return encoded == "Int" || unsigned
 	case "Comparable":
-		if encoded == "Int" || encoded == "Float" || encoded == "Bool" || encoded == "String" || encoded == "Nil" || encoded == "Bytes" {
+		_, unsigned := kirExecUIntBits(encoded)
+		if encoded == "Int" || unsigned || encoded == "Float" || encoded == "Bool" || encoded == "String" || encoded == "Nil" || encoded == "Bytes" {
 			return true
 		}
 		return findKIREnum(document, encoded) != nil
 	case "Copy":
-		if encoded == "Int" || encoded == "Float" || encoded == "Bool" || encoded == "String" || encoded == "Nil" || encoded == "Bytes" || encoded == "Json" || findKIREnum(document, encoded) != nil {
+		_, unsigned := kirExecUIntBits(encoded)
+		if encoded == "Int" || unsigned || encoded == "Float" || encoded == "Bool" || encoded == "String" || encoded == "Nil" || encoded == "Bytes" || encoded == "Json" || findKIREnum(document, encoded) != nil {
 			return true
 		}
 		if _, _, ok := parseKIRFunctionType(encoded); ok {
@@ -1763,6 +1806,14 @@ func (executor *kirExecutor) resolveKIRTypeWithTypeParameters(encoded string, ty
 		return TNil, true
 	case "Int":
 		return TInt, true
+	case "UInt8":
+		return TUInt8, true
+	case "UInt16":
+		return TUInt16, true
+	case "UInt32":
+		return TUInt32, true
+	case "UInt64":
+		return TUInt64, true
 	case "Float":
 		return TFloat, true
 	case "Bool":
@@ -2212,6 +2263,9 @@ func (executor *kirExecutor) evalExpr(scope *kirExecScope, expression *KIRExpr) 
 				return nilVal(), diagnostic
 			}
 		}
+		if expression.Operator == "+" && left.Kind == VArray && right.Kind == VArray && arrayLength(left) > executor.limits.MaxArrayElements-arrayLength(right) {
+			return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "array size limit exceeded")
+		}
 		var ok bool
 		value, ok = executor.evalKIRBinary(expression, left, right)
 		if !ok {
@@ -2220,6 +2274,20 @@ func (executor *kirExecutor) evalExpr(scope *kirExecScope, expression *KIRExpr) 
 					return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "remainder by zero")
 				}
 				return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "division by zero")
+			}
+			if left.Kind == VUInt && right.Kind == VUInt {
+				if left.UBits != right.UBits {
+					return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "bitwise and unsigned arithmetic operands must have matching UInt widths")
+				}
+				if (expression.Operator == "/" || expression.Operator == "%") && right.U == 0 {
+					if expression.Operator == "%" {
+						return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "remainder by zero")
+					}
+					return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "division by zero")
+				}
+			}
+			if left.Kind == VUInt && right.Kind == VInt && (expression.Operator == "<<" || expression.Operator == ">>") && (right.I < 0 || uint64(right.I) >= uint64(left.UBits)) {
+				return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "shift count must be between 0 and UInt width minus one")
 			}
 			if left.Kind == VInt && right.Kind == VInt {
 				return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "checked integer arithmetic overflow")
@@ -2751,7 +2819,7 @@ func evalKIRUnary(operator string, value Value) (Value, bool) {
 			return boolVal(!value.Bool), true
 		}
 	case "+":
-		if value.Kind == VInt || value.Kind == VFloat {
+		if value.Kind == VInt || value.Kind == VUInt || value.Kind == VFloat {
 			return value, true
 		}
 	case "-":
@@ -2765,6 +2833,10 @@ func evalKIRUnary(operator string, value Value) (Value, bool) {
 			if isFinite(negated) {
 				return floatVal(negated), true
 			}
+		}
+	case "~":
+		if value.Kind == VUInt {
+			return uintVal(value.UBits, ^value.U), true
 		}
 	}
 	return nilVal(), false
@@ -2780,6 +2852,70 @@ func (executor *kirExecutor) evalKIRBinary(expression *KIRExpr, left, right Valu
 	}
 	if left.Kind == VString && right.Kind == VString && operator == "+" {
 		return stringVal(left.S + right.S), true
+	}
+	if left.Kind == VBytes && right.Kind == VBytes && operator == "+" {
+		return bytesVal(append(append([]byte{}, left.Bytes...), right.Bytes...)), true
+	}
+	if left.Kind == VArray && right.Kind == VArray && operator == "+" {
+		leftValues, rightValues := arrayValues(left), arrayValues(right)
+		if len(leftValues) > executor.limits.MaxArrayElements-len(rightValues) {
+			return nilVal(), false
+		}
+		return arrVal(append(append([]Value{}, leftValues...), rightValues...)), true
+	}
+	if left.Kind == VUInt && right.Kind == VUInt {
+		if left.UBits != right.UBits {
+			return nilVal(), false
+		}
+		bits := left.UBits
+		switch operator {
+		case "|":
+			return uintVal(bits, left.U|right.U), true
+		case "&":
+			return uintVal(bits, left.U&right.U), true
+		case "^":
+			return uintVal(bits, left.U^right.U), true
+		case "<":
+			return boolVal(left.U < right.U), true
+		case "<=":
+			return boolVal(left.U <= right.U), true
+		case ">":
+			return boolVal(left.U > right.U), true
+		case ">=":
+			return boolVal(left.U >= right.U), true
+		}
+		var result uint64
+		switch operator {
+		case "+":
+			result = left.U + right.U
+		case "-":
+			result = left.U - right.U
+		case "*":
+			result = left.U * right.U
+		case "/":
+			if right.U == 0 {
+				return nilVal(), false
+			}
+			result = left.U / right.U
+		case "%":
+			if right.U == 0 {
+				return nilVal(), false
+			}
+			result = left.U % right.U
+		default:
+			return nilVal(), false
+		}
+		return uintVal(bits, result), true
+	}
+	if left.Kind == VUInt && right.Kind == VInt {
+		if operator != "<<" && operator != ">>" || right.I < 0 || uint64(right.I) >= uint64(left.UBits) {
+			return nilVal(), false
+		}
+		shift := uint(right.I)
+		if operator == "<<" {
+			return uintVal(left.UBits, left.U<<shift), true
+		}
+		return uintVal(left.UBits, left.U>>shift), true
 	}
 	if left.Kind == VInt && right.Kind == VInt {
 		var result int64
@@ -2855,7 +2991,8 @@ func kirValueMatchesScalarType(value Value, typ string) bool {
 	case "Nil":
 		return value.Kind == VNil
 	default:
-		return false
+		bits, unsigned := kirExecUIntBits(typ)
+		return unsigned && value.Kind == VUInt && value.UBits == bits
 	}
 }
 

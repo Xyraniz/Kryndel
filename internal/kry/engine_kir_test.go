@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -99,6 +100,67 @@ func TestEngineRunsKIRForSourceAndKexe(t *testing.T) {
 			}
 			if gotDiagnostic != nil || gotOutput != "hello from KIR\n" {
 				t.Fatalf("unexpected KIR run result: output %q, diagnostic %#v", gotOutput, gotDiagnostic)
+			}
+		})
+	}
+}
+
+func TestEngineRunsUnsignedAndConcatenationKIRForSourceAndKexe(t *testing.T) {
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "unsigned.kry")
+	artifactPath := filepath.Join(directory, "unsigned.kexe")
+	source := `fn main() -> Nil {
+    println(u8(255) + u8(1))
+    println(~u16(0))
+    println(u16(1) << 15)
+    println(u64(1) << 63)
+    println(u64(0) - u64(1))
+    let values: Array[UInt8] = [u8(1), u8(2)] + [u8(3)]
+    println(values)
+    let text: String = bytes_to_string(string_to_bytes("a") + string_to_bytes("b"))
+    println(text)
+    return nil
+}
+`
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine()
+	if diagnostic := engine.BuildPath(sourcePath, artifactPath); diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	for _, path := range []string{sourcePath, artifactPath} {
+		t.Run(filepath.Ext(path), func(t *testing.T) {
+			program, checker, document, diagnostic := engine.checkPathWithKIR(path)
+			if diagnostic != nil {
+				t.Fatal(diagnostic.Message)
+			}
+			if document == nil {
+				kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
+				if err != nil {
+					t.Fatal(err)
+				}
+				document, err = DecodeKIR(kirBytes, engine.Limits)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := executeKIRSubset(document, engine.Limits, kirSourceMap(program)); err != nil {
+				t.Fatalf("source/artifact KIR fell outside the executable subset: %v", err)
+			}
+			wantOutput, wantDiagnostic := runASTPath(t, engine, path, nil)
+			gotOutput, gotDiagnostic := captureEngineRun(t, func() *Diagnostic {
+				_, diagnostic := engine.RunPath(path)
+				return diagnostic
+			})
+			if !reflect.DeepEqual(gotDiagnostic, wantDiagnostic) || gotOutput != wantOutput {
+				t.Fatalf("Engine result = output %q, diagnostic %#v; AST result = output %q, diagnostic %#v", gotOutput, gotDiagnostic, wantOutput, wantDiagnostic)
+			}
+			if gotDiagnostic != nil {
+				t.Fatalf("unexpected KIR run diagnostic: %#v", gotDiagnostic)
+			}
+			if want := "0\n65535\n32768\n9223372036854775808\n18446744073709551615\n[1, 2, 3]\nab\n"; gotOutput != want {
+				t.Fatalf("Engine output = %q, want %q", gotOutput, want)
 			}
 		})
 	}
