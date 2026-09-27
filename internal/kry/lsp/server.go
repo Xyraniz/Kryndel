@@ -388,16 +388,22 @@ func (s *Server) publishDiagnostic(ctx context.Context, uri string, doc document
 		fileURI = uriFromPath(d.Source)
 	}
 	text := doc.Text
-	if d.Source != doc.Path {
+	var sourceVersion any
+	if d.Source != "" && d.Source != "<input>" && d.Source != doc.Path {
+		text = ""
+		foundOpenSource := false
 		s.mu.RLock()
 		for _, open := range s.docs {
 			if open.Path == d.Source {
 				text = open.Text
+				fileURI = open.URI
+				sourceVersion = open.Version
+				foundOpenSource = true
 				break
 			}
 		}
 		s.mu.RUnlock()
-		if text == doc.Text {
+		if !foundOpenSource {
 			if source, err := os.ReadFile(d.Source); err == nil {
 				text = string(source)
 			}
@@ -424,6 +430,8 @@ func (s *Server) publishDiagnostic(ctx context.Context, uri string, doc document
 	}
 	if fileURI == uri {
 		params["version"] = doc.Version
+	} else if sourceVersion != nil {
+		params["version"] = sourceVersion
 	}
 	return s.notify(ctx, "textDocument/publishDiagnostics", params)
 }
@@ -1385,7 +1393,31 @@ func tokenSpanRange(start, end kry.Token) Range {
 }
 
 func offsetFromLineColumn(text string, line, column int) int {
-	return offsetAt(text, Position{Line: uint32(max(0, line-1)), Character: uint32(max(0, column-1))})
+	line = max(1, line)
+	column = max(1, column)
+	lineStart := 0
+	for currentLine := 1; currentLine < line; currentLine++ {
+		next := strings.IndexByte(text[lineStart:], '\n')
+		if next < 0 {
+			return len(text)
+		}
+		lineStart += next + 1
+	}
+	lineEnd := len(text)
+	if next := strings.IndexByte(text[lineStart:], '\n'); next >= 0 {
+		lineEnd = lineStart + next
+	}
+	if lineEnd > lineStart && text[lineEnd-1] == '\r' {
+		lineEnd--
+	}
+	for remaining := column - 1; remaining > 0 && lineStart < lineEnd; remaining-- {
+		_, size := utf8.DecodeRuneInString(text[lineStart:lineEnd])
+		if size == 0 {
+			break
+		}
+		lineStart += size
+	}
+	return lineStart
 }
 
 func positionAt(text string, offset int) Position {

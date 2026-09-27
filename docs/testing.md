@@ -12,6 +12,31 @@ make benchmark
 make check-docs
 ```
 
+## Benchmarking and profiling
+
+`make benchmark` reports time and allocation counts. The phase benchmark uses
+`examples/native_features.kry` and separates lexing, parsing, checking, and
+interpreter execution. Run it directly when comparing those stages:
+
+```bash
+go test -run='^$' -bench='^BenchmarkInterpreterPhases$' -benchmem ./internal/kry
+```
+
+After a phase stands out, capture its CPU profile and inspect the hottest Go
+functions with the standard pprof viewer:
+
+```bash
+go test -run='^$' -bench='^BenchmarkInterpreterPhases$' -benchmem -cpuprofile=cpu.pprof ./internal/kry
+go tool pprof -top cpu.pprof
+```
+
+For a representative CLI workload, `kry --cpuprofile run.pprof run FILE.kry`
+profiles checking and execution together; `kry --cpuprofile check.pprof check
+FILE.kry` profiles validation only. Both files can be inspected with
+`go tool pprof -top`. The CLI option writes a Go CPU profile and is available
+for `run` and `check`; backend-generation benchmarks should use Go's benchmark
+profile flags directly.
+
 The native Go tests cover recursive functions, `if`, `while`, mutable bindings, checked operators, homogeneous arrays, Unicode strings including embedded NUL bytes, bytes, assertions, static diagnostics, modules, enums, exhaustive options and results, bounded threads and channels, worker failure propagation, deterministic artifacts, formatter behavior, malformed input, sandbox traversal, resource limits, and REPL state. The race target exercises the worker and channel fixtures. `make fuzz-smoke` runs four real Go fuzz targets for two seconds each over the lexer, parser/checker, artifact decoder, and KIR decoder; longer local runs can use Go's `-fuzztime` flag.
 
 | Area | Required coverage |

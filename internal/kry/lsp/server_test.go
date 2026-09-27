@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/Xyraniz/Kryndel/internal/kry"
 	"go.lsp.dev/jsonrpc2"
@@ -357,6 +358,140 @@ func TestOffsetUsesUTF16Characters(t *testing.T) {
 	}
 	if got := offsetAt(text, Position{Line: 1, Character: 0}); got != len("x😀y\r\n") {
 		t.Fatalf("second-line start mapped to byte offset %d", got)
+	}
+}
+
+func TestDiagnosticOffsetsUseRuneColumnsAndUTF16Positions(t *testing.T) {
+	cases := []struct {
+		name  string
+		text  string
+		match string
+	}{
+		{name: "BMP before diagnostic with CRLF", text: "let label = \"☀\"; missing()\r\n", match: "missing"},
+		{name: "supplementary before diagnostic with CRLF", text: "let label = \"😀\"; missing()\r\n", match: "missing"},
+		{name: "EOF at end of line", text: "let label = \"😀\"", match: "<eof>"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := &kry.Source{Name: "diagnostic.kry", Text: tc.text}
+			tokens, diagnostic := kry.Lex(source, kry.DefaultLimits())
+			if diagnostic != nil {
+				t.Fatal(diagnostic)
+			}
+			var selected kry.Token
+			found := false
+			for _, token := range tokens {
+				if (tc.match == "<eof>" && token.Kind == kry.EOF) || (token.Kind == kry.ID && token.Text() == tc.match) {
+					selected, found = token, true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("test token %q not found", tc.match)
+			}
+
+			gotOffset := offsetFromLineColumn(tc.text, selected.Line, selected.Column)
+			if gotOffset != selected.Start {
+				t.Fatalf("diagnostic line/column mapped to byte %d; want token byte %d", gotOffset, selected.Start)
+			}
+			got := positionAt(tc.text, gotOffset)
+			prefix := tc.text[:selected.Start]
+			lineStart := strings.LastIndex(prefix, "\n") + 1
+			linePrefix := strings.TrimSuffix(prefix[lineStart:], "\r")
+			want := Position{
+				Line:      uint32(strings.Count(prefix, "\n")),
+				Character: uint32(len(utf16.Encode([]rune(linePrefix)))),
+			}
+			if got != want {
+				t.Fatalf("diagnostic position = %#v, want UTF-16 position %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestImportedDiagnosticsUseOpenSourceVersionAndUTF16Range(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kry.toml"), []byte("name = \"lsp-diagnostic-test\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srcDir := filepath.Join(dir, "src")
+	if err := os.Mkdir(srcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(srcDir, "main.kry")
+	libPath := filepath.Join(srcDir, "lib.kry")
+	mainText := "import \"lib\"\nfn main() -> Int { return imported() }\n"
+	libText := "pub fn imported() -> Int { let marker: String = \"😀\"; let broken: Int = \"wrong\"; return 1 }\r\n"
+	program, diagnostic := kry.LoadProgramWithSources(mainPath, map[string]string{
+		mainPath: mainText,
+		libPath:  libText,
+	}, kry.DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("load imported source: %v", diagnostic)
+	}
+	_, checkDiagnostic := kry.Check(program, kry.DefaultLimits())
+	if checkDiagnostic == nil || checkDiagnostic.Source != libPath {
+		t.Fatalf("checker diagnostic = %#v, want source %s", checkDiagnostic, libPath)
+	}
+
+	source := &kry.Source{Name: libPath, Text: libText}
+	tokens, lexDiagnostic := kry.Lex(source, kry.DefaultLimits())
+	if lexDiagnostic != nil {
+		t.Fatal(lexDiagnostic)
+	}
+	byteOffset := -1
+	// The mismatch is reported at the declaration token; resolve that exact
+	// lexer location to make the expected editor range independent of UTF-8 byte lengths.
+	for _, token := range tokens {
+		if token.Line == checkDiagnostic.Line && token.Column == checkDiagnostic.Column {
+			byteOffset = token.Start
+			break
+		}
+	}
+	if byteOffset < 0 {
+		t.Fatalf("no imported-source token at diagnostic %d:%d", checkDiagnostic.Line, checkDiagnostic.Column)
+	}
+
+	mainURI, libURI := uriFromPath(mainPath), uriFromPath(libPath)
+	server := NewServer()
+	mainDoc := document{URI: mainURI, Path: mainPath, Text: mainText, Version: 8}
+	server.docs[mainURI] = mainDoc
+	server.docs[libURI] = document{URI: libURI, Path: libPath, Text: libText, Version: 13}
+	serverSide, clientSide := net.Pipe()
+	server.conn = jsonrpc2.NewConn(jsonrpc2.NewStream(serverSide))
+	client := jsonrpc2.NewConn(jsonrpc2.NewStream(clientSide))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	defer server.conn.Close()
+	defer client.Close()
+	packets := make(chan diagnosticsPacket, 1)
+	client.Go(ctx, func(_ context.Context, _ jsonrpc2.Replier, request jsonrpc2.Request) error {
+		if request.Method() == "textDocument/publishDiagnostics" {
+			var packet diagnosticsPacket
+			if err := json.Unmarshal(request.Params(), &packet); err != nil {
+				return err
+			}
+			packets <- packet
+		}
+		return nil
+	})
+	if err := server.publishDiagnostic(ctx, mainURI, mainDoc, checkDiagnostic); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case packet := <-packets:
+		if packet.URI != libURI || packet.Version != 13 {
+			t.Fatalf("imported diagnostic destination/version = %s/%d, want %s/13", packet.URI, packet.Version, libURI)
+		}
+		if len(packet.Diagnostics) != 1 {
+			t.Fatalf("imported diagnostic count = %d, want 1", len(packet.Diagnostics))
+		}
+		want := positionAt(libText, byteOffset)
+		if got := packet.Diagnostics[0].Range.Start; got != want {
+			t.Fatalf("imported diagnostic range starts at %#v, want %#v", got, want)
+		}
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for imported diagnostic: %v", ctx.Err())
 	}
 }
 
