@@ -32,7 +32,7 @@ generation is not implemented.
 `MZ`/`PE\0\0` signatures and reports architecture and section count without
 executing the file; it is not a complete PE validator. Broader IR lowering
 and a native runtime are still required for the full language. The
-`KRYNATIVE5` bundle and interpreter cover the portable language features.
+`KRYNATIVE6` bundle and interpreter cover the portable language features; the bundle embeds checked KIR and validates it against its source entries.
 
 The [Windows x64 ABI contract](windows-abi.md) records the register, stack,
 return, unwind, and import rules a direct PE backend must follow. CI runs the

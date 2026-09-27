@@ -18,7 +18,7 @@ import (
 // so a Kryndel program can consume it using the standard Json value API.
 const (
 	KIRFormat  = "kry-ir"
-	KIRVersion = 3
+	KIRVersion = 5
 )
 
 type KIRTarget struct {
@@ -28,25 +28,28 @@ type KIRTarget struct {
 }
 
 type KIRDocument struct {
-	Format          string         `json:"format"`
-	Version         int            `json:"version"`
-	LanguageVersion string         `json:"language_version"`
-	Module          string         `json:"module"`
-	Source          string         `json:"source"`
-	Target          KIRTarget      `json:"target"`
-	Imports         []string       `json:"imports"`
-	Sources         []string       `json:"sources"`
-	Structs         []*KIRStruct   `json:"structs"`
-	Enums           []*KIREnum     `json:"enums"`
-	Functions       []*KIRFunction `json:"functions"`
-	Statements      []*KIRStmt     `json:"statements"`
+	Format          string          `json:"format"`
+	Version         int             `json:"version"`
+	LanguageVersion string          `json:"language_version"`
+	Module          string          `json:"module"`
+	Source          string          `json:"source"`
+	Target          KIRTarget       `json:"target"`
+	Imports         []string        `json:"imports"`
+	Sources         []string        `json:"sources"`
+	Structs         []*KIRStruct    `json:"structs"`
+	Enums           []*KIREnum      `json:"enums"`
+	Traits          []*KIRTrait     `json:"traits"`
+	TraitImpls      []*KIRTraitImpl `json:"trait_impls"`
+	Functions       []*KIRFunction  `json:"functions"`
+	Statements      []*KIRStmt      `json:"statements"`
 }
 
 type KIRStruct struct {
-	Name   string      `json:"name"`
-	Public bool        `json:"public"`
-	Module string      `json:"module"`
-	Fields []*KIRField `json:"fields"`
+	Name       string          `json:"name"`
+	Public     bool            `json:"public"`
+	Module     string          `json:"module"`
+	TypeParams []*KIRTypeParam `json:"type_params"`
+	Fields     []*KIRField     `json:"fields"`
 }
 
 type KIRField struct {
@@ -60,6 +63,31 @@ type KIREnum struct {
 	Public   bool     `json:"public"`
 	Module   string   `json:"module"`
 	Variants []string `json:"variants"`
+}
+
+type KIRTrait struct {
+	Name    string            `json:"name"`
+	Public  bool              `json:"public"`
+	Module  string            `json:"module"`
+	Methods []*KIRTraitMethod `json:"methods"`
+}
+
+type KIRTraitMethod struct {
+	Name   string      `json:"name"`
+	Params []*KIRParam `json:"params"`
+	Return string      `json:"return"`
+}
+
+type KIRTraitImpl struct {
+	Trait   string                `json:"trait"`
+	For     string                `json:"for"`
+	Module  string                `json:"module"`
+	Methods []*KIRTraitImplMethod `json:"methods"`
+}
+
+type KIRTraitImplMethod struct {
+	Name   string `json:"name"`
+	Target string `json:"target"`
 }
 
 type KIRTypeParam struct {
@@ -85,9 +113,13 @@ type KIRBinding struct {
 
 type KIRFunction struct {
 	Name       string          `json:"name"`
+	Source     string          `json:"source"`
+	Line       int             `json:"line"`
+	Column     int             `json:"column"`
 	Public     bool            `json:"public"`
 	Worker     bool            `json:"worker"`
 	Unsafe     bool            `json:"unsafe"`
+	Trait      string          `json:"trait"`
 	Module     string          `json:"module"`
 	Receiver   string          `json:"receiver"`
 	Return     string          `json:"return"`
@@ -102,40 +134,43 @@ type KIRCapture struct {
 }
 
 type KIRExpr struct {
-	Kind        string       `json:"kind"`
-	Source      string       `json:"source"`
-	Line        int          `json:"line"`
-	Column      int          `json:"column"`
-	Type        string       `json:"type"`
-	Const       *KIRValue    `json:"const"`
-	Int         int64        `json:"int"`
-	UInt        uint64       `json:"uint"`
-	UIntBits    uint8        `json:"uint_bits"`
-	Float       float64      `json:"float"`
-	Bool        bool         `json:"bool"`
-	String      string       `json:"string"`
-	Name        string       `json:"name"`
-	Operator    string       `json:"operator"`
-	CallTarget  string       `json:"call_target"`
-	BuiltinID   string       `json:"builtin_id"`
-	Left        *KIRExpr     `json:"left"`
-	Right       *KIRExpr     `json:"right"`
-	Operand     *KIRExpr     `json:"operand"`
-	Args        []*KIRExpr   `json:"args"`
-	Items       []*KIRExpr   `json:"items"`
-	Base        *KIRExpr     `json:"base"`
-	Field       string       `json:"field"`
-	Receiver    *KIRExpr     `json:"receiver"`
-	MapKeys     []*KIRExpr   `json:"map_keys"`
-	StructName  string       `json:"struct_name"`
-	Fields      []string     `json:"fields"`
-	Values      []*KIRExpr   `json:"values"`
-	EnumType    string       `json:"enum_type"`
-	EnumVariant string       `json:"enum_variant"`
-	Tail        bool         `json:"tail"`
-	Callee      *KIRExpr     `json:"callee"`
-	Lambda      *KIRFunction `json:"lambda"`
-	Binding     *KIRBinding  `json:"binding"`
+	Kind             string       `json:"kind"`
+	Source           string       `json:"source"`
+	Line             int          `json:"line"`
+	Column           int          `json:"column"`
+	Type             string       `json:"type"`
+	Const            *KIRValue    `json:"const"`
+	Int              int64        `json:"int"`
+	UInt             uint64       `json:"uint"`
+	UIntBits         uint8        `json:"uint_bits"`
+	Float            float64      `json:"float"`
+	Bool             bool         `json:"bool"`
+	String           string       `json:"string"`
+	Name             string       `json:"name"`
+	Operator         string       `json:"operator"`
+	CallTarget       string       `json:"call_target"`
+	TraitName        string       `json:"trait_name"`
+	BuiltinID        string       `json:"builtin_id"`
+	Left             *KIRExpr     `json:"left"`
+	Right            *KIRExpr     `json:"right"`
+	Operand          *KIRExpr     `json:"operand"`
+	Args             []*KIRExpr   `json:"args"`
+	Items            []*KIRExpr   `json:"items"`
+	Base             *KIRExpr     `json:"base"`
+	Field            string       `json:"field"`
+	Receiver         *KIRExpr     `json:"receiver"`
+	MapKeys          []*KIRExpr   `json:"map_keys"`
+	StructName       string       `json:"struct_name"`
+	StructType       string       `json:"struct_type"`
+	GenericArguments []string     `json:"generic_arguments"`
+	Fields           []string     `json:"fields"`
+	Values           []*KIRExpr   `json:"values"`
+	EnumType         string       `json:"enum_type"`
+	EnumVariant      string       `json:"enum_variant"`
+	Tail             bool         `json:"tail"`
+	Callee           *KIRExpr     `json:"callee"`
+	Lambda           *KIRFunction `json:"lambda"`
+	Binding          *KIRBinding  `json:"binding"`
 }
 
 type KIRStmt struct {
@@ -198,7 +233,7 @@ type KIRValue struct {
 	OK       bool        `json:"ok"`
 }
 
-// EmitKIR serializes a checked program into deterministic KIR v3 JSON. The
+// EmitKIR serializes a checked program into deterministic KIR v5 JSON. The
 // checker is required so the format cannot accidentally become an untyped
 // source transport when a caller forgets to validate first.
 func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
@@ -210,7 +245,7 @@ func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 		Format: KIRFormat, Version: KIRVersion, LanguageVersion: LanguageVersion, Module: paths.name(p.Module),
 		Source: paths.source(p.Source), Target: KIRTarget{OS: target.OS, Arch: target.Arch, GUI: target.GUI},
 		Imports: make([]string, 0, len(p.Imports)), Sources: make([]string, 0, len(p.Sources)),
-		Structs: make([]*KIRStruct, 0, len(p.Structs)), Enums: make([]*KIREnum, 0, len(p.Enums)),
+		Structs: make([]*KIRStruct, 0, len(p.Structs)), Enums: make([]*KIREnum, 0, len(p.Enums)), Traits: make([]*KIRTrait, 0, len(p.Traits)), TraitImpls: make([]*KIRTraitImpl, 0, len(p.TraitImpls)),
 		Functions: make([]*KIRFunction, 0, len(p.Functions)), Statements: make([]*KIRStmt, 0, len(p.Statements)),
 	}
 	functionTargets := kirFunctionTargets(p, paths)
@@ -221,7 +256,10 @@ func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 		d.Sources = append(d.Sources, paths.source(x))
 	}
 	for _, x := range p.Structs {
-		s := &KIRStruct{Name: x.Name, Public: x.Public, Module: paths.name(x.Module), Fields: make([]*KIRField, 0, len(x.Fields))}
+		s := &KIRStruct{Name: x.Name, Public: x.Public, Module: paths.name(x.Module), TypeParams: make([]*KIRTypeParam, 0, len(x.TypeParams)), Fields: make([]*KIRField, 0, len(x.Fields))}
+		for _, parameter := range x.TypeParams {
+			s.TypeParams = append(s.TypeParams, &KIRTypeParam{Name: parameter.Name, Constraint: parameter.Constraint})
+		}
 		for _, f := range x.Fields {
 			s.Fields = append(s.Fields, &KIRField{Name: f.Name, Public: f.Public, Type: typeString(f.Type, f.Spec)})
 		}
@@ -230,8 +268,19 @@ func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	for _, x := range p.Enums {
 		d.Enums = append(d.Enums, &KIREnum{Name: x.Name, Public: x.Public, Module: paths.name(x.Module), Variants: append([]string(nil), x.Variants...)})
 	}
+	for _, x := range p.Traits {
+		trait := &KIRTrait{Name: x.Name, Public: x.Public, Module: paths.name(x.Module), Methods: make([]*KIRTraitMethod, 0, len(x.Methods))}
+		for _, method := range x.Methods {
+			entry := &KIRTraitMethod{Name: method.Name, Return: typeSpecString(method.Return), Params: make([]*KIRParam, 0, len(method.Params))}
+			for _, parameter := range method.Params {
+				entry.Params = append(entry.Params, &KIRParam{Name: parameter.Name, Type: typeSpecString(parameter.Type)})
+			}
+			trait.Methods = append(trait.Methods, entry)
+		}
+		d.Traits = append(d.Traits, trait)
+	}
 	for _, x := range p.Functions {
-		f := &KIRFunction{Name: x.Name, Public: x.Public, Worker: x.Worker, Unsafe: x.Unsafe, Module: paths.name(x.Module), Receiver: typeSpecString(x.Receiver), Return: typeSpecString(x.Return), TypeParams: make([]*KIRTypeParam, 0, len(x.TypeParams)), Params: make([]*KIRParam, 0, len(x.Params)), Captures: []*KIRCapture{}, Body: kirStmts(x.Body, c, functionTargets, paths)}
+		f := &KIRFunction{Name: x.Name, Source: paths.tokenSource(x.Tok), Line: x.Tok.Line, Column: x.Tok.Column, Public: x.Public, Worker: x.Worker, Unsafe: x.Unsafe, Trait: x.Trait, Module: paths.name(x.Module), Receiver: typeSpecString(x.Receiver), Return: typeSpecString(x.Return), TypeParams: make([]*KIRTypeParam, 0, len(x.TypeParams)), Params: make([]*KIRParam, 0, len(x.Params)), Captures: []*KIRCapture{}, Body: kirStmts(x.Body, c, functionTargets, paths)}
 		for _, tp := range x.TypeParams {
 			f.TypeParams = append(f.TypeParams, &KIRTypeParam{Name: tp.Name, Constraint: tp.Constraint})
 		}
@@ -239,6 +288,13 @@ func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 			f.Params = append(f.Params, &KIRParam{Name: param.Name, Type: typeSpecString(param.Type), Default: kirExpr(param.Default, c, functionTargets, paths), Binding: kirBinding(param.Name, typeSpecString(param.Type), false, param.Tok, paths)})
 		}
 		d.Functions = append(d.Functions, f)
+	}
+	for _, implementation := range p.TraitImpls {
+		entry := &KIRTraitImpl{Trait: implementation.Trait, For: typeSpecString(implementation.Target), Module: paths.name(implementation.Module), Methods: make([]*KIRTraitImplMethod, 0, len(implementation.Methods))}
+		for _, method := range implementation.Methods {
+			entry.Methods = append(entry.Methods, &KIRTraitImplMethod{Name: method.Name, Target: "function:" + functionTargets[method]})
+		}
+		d.TraitImpls = append(d.TraitImpls, entry)
 	}
 	for _, x := range p.Statements {
 		d.Statements = append(d.Statements, kirStmt(x, c, functionTargets, paths))
@@ -340,7 +396,15 @@ func kirExpr(e *Expr, c *Checker, functionTargets map[*Function]string, paths ki
 	if e == nil {
 		return nil
 	}
-	k := &KIRExpr{Kind: exprName(e.Kind), Source: paths.tokenSource(e.Tok), Line: e.Tok.Line, Column: e.Tok.Column, Type: typeString(e.Type, nil), Int: e.Int, Float: e.Float, Bool: e.Bool, String: e.Str, Name: e.Name, Operator: opText(e.Op), CallTarget: "", Left: kirExpr(e.Left, c, functionTargets, paths), Right: kirExpr(e.Right, c, functionTargets, paths), Operand: kirExpr(e.Operand, c, functionTargets, paths), Args: make([]*KIRExpr, 0, len(e.Args)), Items: make([]*KIRExpr, 0, len(e.Items)), Base: kirExpr(e.Base, c, functionTargets, paths), Field: e.Field, Receiver: kirExpr(e.Receiver, c, functionTargets, paths), MapKeys: make([]*KIRExpr, 0, len(e.MapKeys)), StructName: e.StructName, Fields: append([]string(nil), e.Fields...), Values: make([]*KIRExpr, 0, len(e.Values)), EnumType: e.EnumType, EnumVariant: e.EnumVariant, Tail: e.Tail}
+	genericArguments := make([]string, 0, len(e.GenericArguments))
+	for _, argument := range e.GenericArguments {
+		genericArguments = append(genericArguments, argument.String())
+	}
+	structType := ""
+	if e.StructType != nil {
+		structType = TypeSpecString(e.StructType)
+	}
+	k := &KIRExpr{Kind: exprName(e.Kind), Source: paths.tokenSource(e.Tok), Line: e.Tok.Line, Column: e.Tok.Column, Type: typeString(e.Type, nil), Int: e.Int, Float: e.Float, Bool: e.Bool, String: e.Str, Name: e.Name, Operator: opText(e.Op), CallTarget: "", TraitName: e.TraitName, Left: kirExpr(e.Left, c, functionTargets, paths), Right: kirExpr(e.Right, c, functionTargets, paths), Operand: kirExpr(e.Operand, c, functionTargets, paths), Args: make([]*KIRExpr, 0, len(e.Args)), Items: make([]*KIRExpr, 0, len(e.Items)), Base: kirExpr(e.Base, c, functionTargets, paths), Field: e.Field, Receiver: kirExpr(e.Receiver, c, functionTargets, paths), MapKeys: make([]*KIRExpr, 0, len(e.MapKeys)), StructName: e.StructName, StructType: structType, GenericArguments: genericArguments, Fields: append([]string(nil), e.Fields...), Values: make([]*KIRExpr, 0, len(e.Values)), EnumType: e.EnumType, EnumVariant: e.EnumVariant, Tail: e.Tail}
 	for _, x := range e.Args {
 		k.Args = append(k.Args, kirExpr(x, c, functionTargets, paths))
 	}
@@ -372,6 +436,8 @@ func kirExpr(e *Expr, c *Checker, functionTargets map[*Function]string, paths ki
 	if b, ok := c.Env.Builtins[e.Name]; ok && e.Kind == ExCall && e.Receiver == nil && e.Function == nil && (e.Callee == nil || e.Callee.Type == nil || e.Callee.Type.Kind != TyFunction) {
 		k.BuiltinID = b.ID
 		k.CallTarget = "builtin:" + b.Name
+	} else if e.Function != nil && e.TraitName != "" && e.Function.Receiver == nil {
+		k.CallTarget = "trait:" + e.TraitName + "::" + e.Function.Name
 	} else if e.Function != nil {
 		target := functionTargets[e.Function]
 		if target == "" {
@@ -394,7 +460,7 @@ func kirLambda(function *Function, captures []Capture, c *Checker, functionTarge
 	if function == nil {
 		return nil
 	}
-	k := &KIRFunction{Name: function.Name, Worker: false, Unsafe: function.Unsafe, Module: paths.name(function.Module), Return: typeSpecString(function.Return), TypeParams: []*KIRTypeParam{}, Params: make([]*KIRParam, 0, len(function.Params)), Captures: make([]*KIRCapture, 0, len(captures)), Body: kirStmts(function.Body, c, functionTargets, paths)}
+	k := &KIRFunction{Name: function.Name, Source: paths.tokenSource(function.Tok), Line: function.Tok.Line, Column: function.Tok.Column, Worker: false, Unsafe: function.Unsafe, Module: paths.name(function.Module), Return: typeSpecString(function.Return), TypeParams: []*KIRTypeParam{}, Params: make([]*KIRParam, 0, len(function.Params)), Captures: make([]*KIRCapture, 0, len(captures)), Body: kirStmts(function.Body, c, functionTargets, paths)}
 	for _, parameter := range function.Params {
 		k.Params = append(k.Params, &KIRParam{Name: parameter.Name, Type: typeSpecString(parameter.Type), Default: nil, Binding: kirBinding(parameter.Name, typeSpecString(parameter.Type), false, parameter.Tok, paths)})
 	}
@@ -476,7 +542,7 @@ func DecodeKIR(data []byte, lim Limits) (*KIRDocument, error) {
 	if d.Format != KIRFormat {
 		return nil, fmt.Errorf("unsupported KIR format %q", d.Format)
 	}
-	if d.Version != 1 && d.Version != 2 && d.Version != KIRVersion {
+	if d.Version < 1 || d.Version > KIRVersion {
 		return nil, fmt.Errorf("unsupported KIR version %d", d.Version)
 	}
 	if d.LanguageVersion == "" && d.Version == 1 {

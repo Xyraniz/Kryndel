@@ -436,9 +436,6 @@ fn main() -> Nil {
 // and filesystem builtins natively and checks the output matches the
 // interpreter byte-for-byte.
 func TestNativeBackendBuiltinsParity(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("native parity test requires linux/amd64")
-	}
 	src := `fn main() -> Nil {
     match json_parse("{\"b\":2,\"a\":[1,2,3]}") {
         ok(doc) => { println(json_stringify(doc)) }
@@ -450,32 +447,20 @@ func TestNativeBackendBuiltinsParity(t *testing.T) {
     return nil
 }
 `
-	p, d := Parse(&Source{Name: "main.kry", Text: src}, DefaultLimits())
-	if d != nil {
-		t.Fatal(d)
+	interpreted, diagnostic := runInterpreterCapture(t, src)
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
 	}
-	c, d := Check(p, DefaultLimits())
-	if d != nil {
-		t.Fatal(d)
-	}
-	elf, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf")
+	native, status, err := buildAndRunNativeAOT(t, src)
 	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "program")
-	if err := os.WriteFile(path, elf, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	out, err := exec.Command(path).Output()
-	if err != nil {
-		t.Fatalf("AOT executable failed: %v", err)
+		t.Fatalf("AOT build failed: %v", err)
 	}
 	want := "{\"a\":[1,2,3],\"b\":2}\n" +
 		"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n" +
 		"2d93cbc1be167bcb1637a4a23cbff01a7878f0c50ee833954ea5221bb1b8c628\n" +
-		"/tmp/a/b\n"
-	if string(out) != want {
-		t.Fatalf("native builtin output mismatch:\n got %q\nwant %q", out, want)
+		filepath.Clean("/tmp/a/b") + "\n"
+	if interpreted != want || status != 0 || native != interpreted {
+		t.Fatalf("native builtin output mismatch:\ninterpreter: %q\nAOT (%d): %q\nwant: %q", interpreted, status, native, want)
 	}
 }
 
@@ -483,9 +468,6 @@ func TestNativeBackendBuiltinsParity(t *testing.T) {
 // extended string, array, collection and math builtins natively and checks the
 // output matches the interpreter byte-for-byte.
 func TestNativeBackendExtendedBuiltins(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("native parity test requires linux/amd64")
-	}
 	src := `fn main() -> Nil {
     match string_repeat("ab", 3) {
         ok(s) => { println(s) }
@@ -543,29 +525,17 @@ func TestNativeBackendExtendedBuiltins(t *testing.T) {
     return nil
 }
 `
-	p, d := Parse(&Source{Name: "main.kry", Text: src}, DefaultLimits())
-	if d != nil {
-		t.Fatal(d)
+	interpreted, diagnostic := runInterpreterCapture(t, src)
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
 	}
-	c, d := Check(p, DefaultLimits())
-	if d != nil {
-		t.Fatal(d)
-	}
-	elf, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf")
+	native, status, err := buildAndRunNativeAOT(t, src)
 	if err != nil {
 		t.Fatalf("extended builtins must be supported by the native backend: %v", err)
 	}
-	path := filepath.Join(t.TempDir(), "program")
-	if err := os.WriteFile(path, elf, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	out, err := exec.Command(path).Output()
-	if err != nil {
-		t.Fatalf("AOT executable failed: %v", err)
-	}
 	want := "ababab\n6\n007\n7..\n3\n5\nABC\nabc\n[1, 2, 3]\n1\n10\n2\n9\n[1, 2]\n[3, 4]\ntrue\n[1, 2]\nfalse\n[1, 3]\n0\n0.7853981633974483\n0.7853981633974483\n1\n2\n3\n3\n-1\n0\n10\n0\n"
-	if string(out) != want {
-		t.Fatalf("native extended builtin output mismatch:\n got %q\nwant %q", out, want)
+	if interpreted != want || status != 0 || native != interpreted {
+		t.Fatalf("native extended builtin output mismatch:\ninterpreter: %q\nAOT (%d): %q\nwant %q", interpreted, status, native, want)
 	}
 }
 
@@ -573,9 +543,6 @@ func TestNativeBackendExtendedBuiltins(t *testing.T) {
 // actors, task groups, threads and runtime polymorphism natively and checks the
 // output matches the interpreter byte-for-byte.
 func TestNativeBackendConcurrency(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("native parity test requires linux/amd64")
-	}
 	src := `fn worker() -> Int {
     shared_write(shared, 7)
     return shared_read(shared)
@@ -619,29 +586,17 @@ show("format")
 let moved: Result[Nil, String] = poly_reorder("format", "add_suffix", "add_prefix")
 show("format")
 `
-	p, d := Parse(&Source{Name: "main.kry", Text: src}, DefaultLimits())
-	if d != nil {
-		t.Fatal(d)
+	interpreted, diagnostic := runInterpreterCapture(t, src)
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
 	}
-	c, d := Check(p, DefaultLimits())
-	if d != nil {
-		t.Fatal(d)
-	}
-	elf, err := BuildNative(p, c, NativeTarget{OS: "linux", Arch: "amd64"}, "elf")
+	native, status, err := buildAndRunNativeAOT(t, src)
 	if err != nil {
 		t.Fatalf("concurrency builtins must be supported by the native backend: %v", err)
 	}
-	path := filepath.Join(t.TempDir(), "program")
-	if err := os.WriteFile(path, elf, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	out, err := exec.Command(path).Output()
-	if err != nil {
-		t.Fatalf("AOT executable failed: %v", err)
-	}
 	want := "7\n7\n7\n9\n5\ngroup ok\n12\nprefix:value\nvalue:suffix\n"
-	if string(out) != want {
-		t.Fatalf("native concurrency output mismatch:\n got %q\nwant %q", out, want)
+	if interpreted != want || status != 0 || native != interpreted {
+		t.Fatalf("native concurrency output mismatch:\ninterpreter: %q\nAOT (%d): %q\nwant %q", interpreted, status, native, want)
 	}
 }
 

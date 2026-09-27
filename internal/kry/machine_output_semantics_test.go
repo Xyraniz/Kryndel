@@ -61,26 +61,31 @@ println("b")
 		t.Skip("generated ELF execution requires native linux-amd64")
 	}
 	path := writeDirectProgram(t, "", image)
+	astOutput, astDiagnostic := directRuntimeResult(t, program, checker)
+	if astDiagnostic == nil {
+		t.Fatal("AST runtime did not report the configured output limit")
+	}
 	var stdout, stderr bytes.Buffer
 	cmd := exec.Command(path)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Run()
-	if status, ok := directExitCode(err); !ok || status != 1 || stdout.String() != "a" || stderr.Len() != 0 {
-		t.Fatalf("accumulated output limit: err=%v stdout=%q stderr=%q, want exit 1, stdout a, empty stderr", err, stdout.String(), stderr.String())
+	if status, ok := directExitCode(err); !ok || status != 1 || stdout.String() != string(astOutput) || stderr.String() != astDiagnostic.Format(false) {
+		t.Fatalf("accumulated output limit: err=%v stdout=%q stderr=%q, want exit 1 and AST stdout/stderr %q/%q", err, stdout.String(), stderr.String(), astOutput, astDiagnostic.Format(false))
 	}
 }
 
 func TestDirectELFDynamicPrintKindsCountTheCompleteNewline(t *testing.T) {
 	tests := []struct {
-		name       string
-		source     string
-		limit      int64
-		wantOutput string
+		name              string
+		source            string
+		limit             int64
+		wantOutput        string
+		wantASTDiagnostic bool
 	}{
 		{name: "dynamic string", source: "let mut text: String = \"xy\"\nif true { println(text) }\n", limit: 3, wantOutput: "xy\n"},
 		{name: "dynamic integer", source: "let mut value: Int = 12\nif true { println(value) }\n", limit: 3, wantOutput: "12\n"},
 		{name: "dynamic bool", source: "let mut value: Bool = true\nif true { println(value) }\n", limit: 5, wantOutput: "true\n"},
-		{name: "accumulated loop", source: "let mut value: Int = 0\nwhile value < 2 { println(\"x\"); value = value + 1 }\n", limit: 3, wantOutput: "x\n"},
+		{name: "accumulated loop", source: "let mut value: Int = 0\nwhile value < 2 { println(\"x\"); value = value + 1 }\n", limit: 3, wantOutput: "x\n", wantASTDiagnostic: true},
 		{name: "counter shared with callee", source: "fn emit() -> Nil { println(\"b\"); return nil }\nfn main() -> Nil { print(\"a\"); emit(); return nil }\n", limit: 2, wantOutput: "a"},
 	}
 	for _, test := range tests {
@@ -97,13 +102,21 @@ func TestDirectELFDynamicPrintKindsCountTheCompleteNewline(t *testing.T) {
 				return
 			}
 			path := writeDirectProgram(t, "", image)
+			wantStderr := ""
+			if test.wantASTDiagnostic {
+				_, diagnostic := directRuntimeResult(t, program, checker)
+				if diagnostic == nil {
+					t.Fatal("AST runtime did not report the configured output limit")
+				}
+				wantStderr = diagnostic.Format(false)
+			}
 			var stdout, stderr bytes.Buffer
 			cmd := exec.Command(path)
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 			err = cmd.Run()
 			if test.name == "accumulated loop" || test.name == "counter shared with callee" {
-				if status, ok := directExitCode(err); !ok || status != 1 || stdout.String() != test.wantOutput || stderr.Len() != 0 {
-					t.Fatalf("loop output/status = %q/%v stderr=%q, want %q/1/empty", stdout.String(), err, stderr.String(), test.wantOutput)
+				if status, ok := directExitCode(err); !ok || status != 1 || stdout.String() != test.wantOutput || stderr.String() != wantStderr {
+					t.Fatalf("loop output/status = %q/%v stderr=%q, want %q/1/%q", stdout.String(), err, stderr.String(), test.wantOutput, wantStderr)
 				}
 				return
 			}
@@ -112,6 +125,18 @@ func TestDirectELFDynamicPrintKindsCountTheCompleteNewline(t *testing.T) {
 			}
 		})
 	}
+}
+
+func directRuntimeResult(t *testing.T, program *Program, checker *Checker) ([]byte, *Diagnostic) {
+	t.Helper()
+	var output bytes.Buffer
+	runtime, diagnostic := NewRuntime(program, checker, checker.Env.Lim, Sandbox{})
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	runtime.output = &output
+	diagnostic = runtime.run()
+	return output.Bytes(), diagnostic
 }
 
 func TestDirectELFWriteFailureExitsNonzero(t *testing.T) {

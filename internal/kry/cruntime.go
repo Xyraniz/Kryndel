@@ -28,15 +28,26 @@ const cRuntimePrelude = `
 
 /* ---- portability shims ------------------------------------------------- */
 #ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <direct.h>
 #include <io.h>
 #include <process.h>
 #include <windows.h>
+typedef SOCKET KSocketFD;
+#define K_INVALID_SOCKET INVALID_SOCKET
 #define k_mkdir(p) _mkdir(p)
 #define k_rmdir(p) _rmdir(p)
 static void k_sleep_ms(long long m) { Sleep((DWORD)m); }
 #else
+#include <netdb.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/wait.h>
+#include <dlfcn.h>
+typedef int KSocketFD;
+#define K_INVALID_SOCKET (-1)
 #define k_mkdir(p) mkdir((p), 0755)
 #define k_rmdir(p) rmdir(p)
 static void k_sleep_ms(long long m) { struct timespec ts; ts.tv_sec=m/1000; ts.tv_nsec=(m%1000)*1000000LL; nanosleep(&ts,NULL); }
@@ -50,6 +61,10 @@ static long long k_max_mem = 268435456LL;
 static long long k_out = 0;
 static long long k_max_out = 16777216LL;
 static long long k_max_json = 67108864LL;
+static long long k_max_wall_ms = 0;
+static long long k_max_tcp_receive = 0;
+static long long k_max_array_elements = 1000000LL;
+static void k_sqlite_cleanup(void);
 
 static void kfail(const char *msg) {
     snprintf(k_errbuf, sizeof(k_errbuf), "%s", msg);
@@ -66,6 +81,8 @@ static void *kalloc(size_t n) {
 
 /* ---- value model ------------------------------------------------------- */
 typedef struct KValue KValue;
+typedef struct KTcpSocket KTcpSocket;
+typedef struct KSQLiteHandle KSQLiteHandle;
 typedef struct { char *data; size_t len; } KStr;
 typedef struct { KValue *items; size_t len; } KArr;
 typedef struct { KValue *keys; KValue *vals; size_t len; } KMap;
@@ -89,6 +106,8 @@ struct KValue {
         struct { KValue *cell; } sh;
         struct { struct KChan *ch; } ac;
         struct { struct KHandle *h; } hd;
+        struct { KTcpSocket *socket; } tcp;
+        struct { KSQLiteHandle *database; } sqlite;
     } u;
     struct KValue *json_root;
 };
@@ -96,7 +115,7 @@ struct KValue {
 enum { K_NIL=0, K_INT, K_FLOAT, K_BOOL, K_STRING, K_BYTES, K_ARRAY,
        K_STRUCT, K_ENUM, K_OPTION, K_RESULT, K_MAP, K_SET, K_JSON,
        K_SHARED, K_ACTOR, K_THREAD, K_TASKGROUP, K_CHANNEL,
-       K_UINT, K_JSON_NUMBER };
+       K_UINT, K_JSON_NUMBER, K_TCP, K_SQLITE };
 
 static KValue kv_nil(void) { KValue v; memset(&v,0,sizeof(v)); v.tag=K_NIL; return v; }
 static KValue kv_int(long long x) { KValue v; memset(&v,0,sizeof(v)); v.tag=K_INT; v.u.i=x; return v; }
@@ -267,6 +286,7 @@ static void k_disp(KBuf *b, KValue v) {
     case K_THREAD: kb_puts(b,"<Thread>"); break;
     case K_TASKGROUP: kb_puts(b,"<TaskGroup>"); break;
     case K_CHANNEL: kb_puts(b,"<Channel>"); break;
+    case K_TCP: kb_puts(b,"<TcpSocket>"); break;
     default: kb_puts(b,"<invalid>"); break;
     }
 }
@@ -308,6 +328,7 @@ static int k_equal(KValue a, KValue b) {
     case K_RESULT:
         return a.u.res.ok==b.u.res.ok && k_equal(*a.u.res.inner,*b.u.res.inner);
     case K_SHARED: return a.u.sh.cell==b.u.sh.cell;
+    case K_TCP: return a.u.tcp.socket==b.u.tcp.socket;
     case K_ACTOR: case K_CHANNEL: return a.u.ac.ch==b.u.ac.ch;
     case K_THREAD: case K_TASKGROUP: return a.u.hd.h==b.u.hd.h;
     }
@@ -2374,6 +2395,717 @@ static KValue k_clamp(KValue v, KValue lo, KValue hi) {
     if (lo.u.f>hi.u.f) kfail("clamp lower bound exceeds upper bound");
     double x=v.u.f; if (x<lo.u.f) x=lo.u.f; if (x>hi.u.f) x=hi.u.f;
     return kv_float(x);
+}
+
+/* ---- bounded TCP client ------------------------------------------------ */
+struct KTcpSocket {
+    KSocketFD fd;
+    int closed;
+    struct KTcpSocket *next;
+};
+static KTcpSocket *k_tcp_sockets = NULL;
+#ifdef _WIN32
+static int k_tcp_winsock_started = 0;
+#define K_TCP_CLOSE(fd) closesocket(fd)
+#define K_TCP_INTERRUPTED(error) ((error)==WSAEINTR)
+#define K_TCP_WOULD_BLOCK(error) ((error)==WSAEWOULDBLOCK)
+#define K_TCP_CONNECT_PENDING(error) ((error)==WSAEWOULDBLOCK || (error)==WSAEINPROGRESS || (error)==WSAEALREADY)
+#else
+#define K_TCP_CLOSE(fd) close(fd)
+#define K_TCP_INTERRUPTED(error) ((error)==EINTR)
+#define K_TCP_WOULD_BLOCK(error) ((error)==EAGAIN || (error)==EWOULDBLOCK)
+#define K_TCP_CONNECT_PENDING(error) ((error)==EINPROGRESS || (error)==EWOULDBLOCK || (error)==EALREADY)
+#endif
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
+static KValue kv_tcp(KTcpSocket *socket) {
+    KValue value; memset(&value,0,sizeof(value)); value.tag=K_TCP;
+    value.u.tcp.socket=socket; return value;
+}
+static int k_tcp_socket_error(void) {
+#ifdef _WIN32
+    return WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+static const char *k_tcp_error_text(int error) {
+#ifdef _WIN32
+    switch (error) {
+    case WSAECONNREFUSED: return "connection refused";
+    case WSAETIMEDOUT: return "i/o timeout";
+    case WSAECONNRESET: return "connection reset";
+    case WSAEHOSTUNREACH: return "no route to host";
+    case WSAENETUNREACH: return "network unreachable";
+    case WSAEWOULDBLOCK: return "i/o timeout";
+    default: return "network operation failed";
+    }
+#else
+    switch (error) {
+    case ECONNREFUSED: return "connection refused";
+    case ETIMEDOUT: case EAGAIN: return "i/o timeout";
+    case ECONNRESET: return "connection reset";
+    case EHOSTUNREACH: return "no route to host";
+    case ENETUNREACH: return "network unreachable";
+    default: return "network operation failed";
+    }
+#endif
+}
+static unsigned long long k_tcp_now_ms(void) {
+#ifdef _WIN32
+    return (unsigned long long)GetTickCount64();
+#else
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC,&now)!=0) return 0;
+    return (unsigned long long)now.tv_sec*1000ULL+(unsigned long long)now.tv_nsec/1000000ULL;
+#endif
+}
+static unsigned long long k_tcp_deadline_after(unsigned long long now, unsigned long long duration) {
+    return now>ULLONG_MAX-duration?ULLONG_MAX:now+duration;
+}
+static int k_tcp_deadline_reached(unsigned long long now, unsigned long long deadline) {
+    return now>=deadline;
+}
+static int k_tcp_set_blocking(KSocketFD fd, int blocking) {
+#ifdef _WIN32
+    u_long nonblocking=blocking?0UL:1UL;
+    return ioctlsocket(fd,FIONBIO,&nonblocking)==0 ? 0 : -1;
+#else
+    int flags=fcntl(fd,F_GETFL,0);
+    if (flags<0) return -1;
+    if (blocking) flags&=~O_NONBLOCK; else flags|=O_NONBLOCK;
+    return fcntl(fd,F_SETFL,flags);
+#endif
+}
+static unsigned long long k_tcp_operation_deadline(void) {
+    long long timeout=k_max_wall_ms>0?k_max_wall_ms:30000;
+    return k_tcp_deadline_after(k_tcp_now_ms(),(unsigned long long)timeout);
+}
+static void k_tcp_set_timeout_error(void) {
+#ifdef _WIN32
+    WSASetLastError(WSAETIMEDOUT);
+#else
+    errno=ETIMEDOUT;
+#endif
+}
+static int k_tcp_deadline_expired(unsigned long long deadline) {
+    if (!k_tcp_deadline_reached(k_tcp_now_ms(),deadline)) return 0;
+    k_tcp_set_timeout_error();
+    return 1;
+}
+static int k_tcp_wait_connected(KSocketFD fd, unsigned long long deadline) {
+    for (;;) {
+        unsigned long long now=k_tcp_now_ms();
+        if (k_tcp_deadline_reached(now,deadline)) return 0;
+        unsigned long long remaining=deadline-now;
+        struct timeval timeout;
+        timeout.tv_sec=(long)(remaining/1000ULL);
+        timeout.tv_usec=(long)((remaining%1000ULL)*1000ULL);
+        fd_set writable, exceptional;
+        FD_ZERO(&writable); FD_ZERO(&exceptional);
+#ifndef _WIN32
+        if ((unsigned long long)fd>=FD_SETSIZE) return -1;
+#endif
+        FD_SET(fd,&writable); FD_SET(fd,&exceptional);
+#ifdef _WIN32
+        int ready=select(0,NULL,&writable,&exceptional,&timeout);
+#else
+        int ready=select(fd+1,NULL,&writable,&exceptional,&timeout);
+#endif
+        if (ready>0) {
+            int error=0;
+#ifdef _WIN32
+            int length=(int)sizeof(error);
+#else
+            socklen_t length=(socklen_t)sizeof(error);
+#endif
+            if (getsockopt(fd,SOL_SOCKET,SO_ERROR,(char*)&error,&length)!=0) return -1;
+            if (error!=0) {
+#ifdef _WIN32
+                WSASetLastError(error);
+#else
+                errno=error;
+#endif
+                return -1;
+            }
+            return 1;
+        }
+        if (ready==0) return 0;
+        int error=k_tcp_socket_error();
+        if (!K_TCP_INTERRUPTED(error)) return -1;
+    }
+}
+static int k_tcp_wait_io(KSocketFD fd, int writing, unsigned long long deadline) {
+    for (;;) {
+        unsigned long long now=k_tcp_now_ms();
+        if (k_tcp_deadline_reached(now,deadline)) {
+            k_tcp_set_timeout_error();
+            return 0;
+        }
+        unsigned long long remaining=deadline-now;
+        struct timeval timeout;
+        timeout.tv_sec=(long)(remaining/1000ULL);
+        timeout.tv_usec=(long)((remaining%1000ULL)*1000ULL);
+        fd_set ready;
+        FD_ZERO(&ready);
+#ifndef _WIN32
+        if ((unsigned long long)fd>=FD_SETSIZE) {
+            errno=EINVAL;
+            return -1;
+        }
+#endif
+        FD_SET(fd,&ready);
+#ifdef _WIN32
+        int selected=select(0,writing?NULL:&ready,writing?&ready:NULL,NULL,&timeout);
+#else
+        int selected=select(fd+1,writing?NULL:&ready,writing?&ready:NULL,NULL,&timeout);
+#endif
+        if (selected>0) return 1;
+        if (selected==0) {
+            k_tcp_set_timeout_error();
+            return 0;
+        }
+        int error=k_tcp_socket_error();
+        if (!K_TCP_INTERRUPTED(error)) return -1;
+    }
+}
+static KValue k_tcp_connect_error(KValue host, KValue port, const char *reason) {
+    char port_text[32]; snprintf(port_text,sizeof(port_text),"%lld",port.u.i);
+    KBuf message; kb_init(&message);
+    kb_puts(&message,"dial tcp "); kb_putn(&message,host.u.s.data,host.u.s.len);
+    kb_putc(&message,':'); kb_puts(&message,port_text); kb_puts(&message,": connect: "); kb_puts(&message,reason);
+    return kv_res(0,kv_str_take(message.buf,message.len));
+}
+static KValue k_tcp_connect(KValue host, KValue port) {
+    if (port.u.i<1 || port.u.i>65535) return kv_res(0,kv_cstr("port must be between 1 and 65535"));
+    if (memchr(host.u.s.data,0,host.u.s.len)) return kv_res(0,kv_cstr("host contains NUL"));
+    unsigned long long deadline=k_tcp_operation_deadline();
+#ifdef _WIN32
+    if (!k_tcp_winsock_started) {
+        WSADATA data;
+        if (WSAStartup(MAKEWORD(2,2),&data)!=0) return kv_res(0,kv_cstr("cannot initialize TCP sockets"));
+        k_tcp_winsock_started=1;
+    }
+#endif
+    char service[8]; snprintf(service,sizeof(service),"%lld",port.u.i);
+    struct addrinfo hints; memset(&hints,0,sizeof(hints));
+    hints.ai_family=AF_UNSPEC; hints.ai_socktype=SOCK_STREAM; hints.ai_protocol=IPPROTO_TCP;
+    struct addrinfo *addresses=NULL;
+    int lookup=getaddrinfo(host.u.s.data,service,&hints,&addresses);
+    if (lookup!=0) {
+        if (k_tcp_deadline_expired(deadline))
+            return k_tcp_connect_error(host,port,k_tcp_error_text(k_tcp_socket_error()));
+        return k_tcp_connect_error(host,port,"name resolution failed");
+    }
+    if (k_tcp_deadline_expired(deadline)) {
+        freeaddrinfo(addresses);
+        return k_tcp_connect_error(host,port,k_tcp_error_text(k_tcp_socket_error()));
+    }
+    /* Reserve before opening descriptors: kalloc can longjmp on budget failure. */
+    KTcpSocket *handle=(KTcpSocket*)kalloc(sizeof(KTcpSocket));
+    memset(handle,0,sizeof(*handle));
+    int last_error=0;
+    KSocketFD connected=K_INVALID_SOCKET;
+    for (struct addrinfo *address=addresses;address;address=address->ai_next) {
+        KSocketFD fd=socket(address->ai_family,address->ai_socktype,address->ai_protocol);
+        if (fd==K_INVALID_SOCKET) { last_error=k_tcp_socket_error(); continue; }
+        if (k_tcp_set_blocking(fd,0)!=0) { last_error=k_tcp_socket_error(); K_TCP_CLOSE(fd); continue; }
+        int result=connect(fd,address->ai_addr,(int)address->ai_addrlen);
+        if (result!=0) {
+            int error=k_tcp_socket_error();
+            if (!K_TCP_CONNECT_PENDING(error)) { last_error=error; K_TCP_CLOSE(fd); continue; }
+            result=k_tcp_wait_connected(fd,deadline);
+            if (result<=0) {
+                last_error=result==0 ?
+#ifdef _WIN32
+                    WSAETIMEDOUT
+#else
+                    ETIMEDOUT
+#endif
+                    : k_tcp_socket_error();
+                K_TCP_CLOSE(fd); continue;
+            }
+        }
+        connected=fd; break;
+    }
+    freeaddrinfo(addresses);
+    if (connected==K_INVALID_SOCKET) return k_tcp_connect_error(host,port,k_tcp_error_text(last_error));
+    handle->fd=connected; handle->next=k_tcp_sockets; k_tcp_sockets=handle;
+    return kv_res(1,kv_tcp(handle));
+}
+static KValue k_tcp_send(KValue value, KValue bytes) {
+    KTcpSocket *socket=value.tag==K_TCP?value.u.tcp.socket:NULL;
+    if (!socket) kfail("invalid TcpSocket handle");
+    if (socket->closed) return kv_res(0,kv_cstr("TcpSocket handle is closed"));
+    unsigned long long deadline=k_tcp_operation_deadline();
+    size_t written=0;
+    while (written<bytes.u.s.len) {
+        if (k_tcp_deadline_expired(deadline)) {
+            KBuf message; kb_init(&message); kb_puts(&message,"write tcp: "); kb_puts(&message,k_tcp_error_text(k_tcp_socket_error()));
+            return kv_res(0,kv_str_take(message.buf,message.len));
+        }
+#ifdef _WIN32
+        size_t remaining=bytes.u.s.len-written;
+        int amount=remaining>(size_t)INT_MAX?INT_MAX:(int)remaining;
+        int n=send(socket->fd,bytes.u.s.data+written,amount,0);
+#else
+        ssize_t n=send(socket->fd,bytes.u.s.data+written,bytes.u.s.len-written,MSG_NOSIGNAL);
+#endif
+        if (n>0) { written+=(size_t)n; continue; }
+        if (n==0) return kv_res(0,kv_cstr("TCP write made no progress"));
+        int error=k_tcp_socket_error();
+        if (K_TCP_INTERRUPTED(error)) continue;
+        if (K_TCP_WOULD_BLOCK(error)) {
+            int ready=k_tcp_wait_io(socket->fd,1,deadline);
+            if (ready>0) continue;
+            error=k_tcp_socket_error();
+        }
+        KBuf message; kb_init(&message); kb_puts(&message,"write tcp: "); kb_puts(&message,k_tcp_error_text(error));
+        return kv_res(0,kv_str_take(message.buf,message.len));
+    }
+    return kv_res(1,kv_int((long long)written));
+}
+static KValue k_tcp_receive(KValue value, KValue maximum) {
+    if (maximum.u.i<1 || maximum.u.i>k_max_tcp_receive)
+        return kv_res(0,kv_cstr("receive size is outside configured limits"));
+    KTcpSocket *socket=value.tag==K_TCP?value.u.tcp.socket:NULL;
+    if (!socket) kfail("invalid TcpSocket handle");
+    if (socket->closed) return kv_res(0,kv_cstr("TcpSocket handle is closed"));
+    size_t length=(size_t)maximum.u.i;
+    unsigned long long deadline=k_tcp_operation_deadline();
+    char *data=(char*)kalloc(length+1);
+    for (;;) {
+        if (k_tcp_deadline_expired(deadline)) {
+            KBuf message; kb_init(&message); kb_puts(&message,"read tcp: "); kb_puts(&message,k_tcp_error_text(k_tcp_socket_error()));
+            return kv_res(0,kv_str_take(message.buf,message.len));
+        }
+#ifdef _WIN32
+        int received=recv(socket->fd,data,(int)length,0);
+#else
+        ssize_t received=recv(socket->fd,data,length,0);
+#endif
+        if (received==0) return kv_res(0,kv_cstr("EOF"));
+        if (received>0) return kv_res(1,kv_bytesn(data,(size_t)received));
+        int error=k_tcp_socket_error();
+        if (K_TCP_INTERRUPTED(error)) continue;
+        if (K_TCP_WOULD_BLOCK(error)) {
+            int ready=k_tcp_wait_io(socket->fd,0,deadline);
+            if (ready>0) continue;
+            error=k_tcp_socket_error();
+        }
+        KBuf message; kb_init(&message);
+        kb_puts(&message,"read tcp: "); kb_puts(&message,k_tcp_error_text(error));
+        return kv_res(0,kv_str_take(message.buf,message.len));
+    }
+}
+static KValue k_tcp_close(KValue value) {
+    KTcpSocket *socket=value.tag==K_TCP?value.u.tcp.socket:NULL;
+    if (!socket) kfail("invalid TcpSocket handle");
+    if (socket->closed) kfail("TcpSocket handle is already closed");
+    socket->closed=1;
+    if (K_TCP_CLOSE(socket->fd)!=0) kfail(k_tcp_error_text(k_tcp_socket_error()));
+    return kv_nil();
+}
+static int k_tcp_has_open_sockets(void) {
+    for (KTcpSocket *socket=k_tcp_sockets;socket;socket=socket->next) if (!socket->closed) return 1;
+    return 0;
+}
+static void k_tcp_cleanup(void) {
+    for (KTcpSocket *socket=k_tcp_sockets;socket;socket=socket->next) {
+        if (!socket->closed) { socket->closed=1; K_TCP_CLOSE(socket->fd); }
+    }
+#ifdef _WIN32
+    if (k_tcp_winsock_started) { WSACleanup(); k_tcp_winsock_started=0; }
+#endif
+}
+
+/* ---- dynamically loaded SQLite ---------------------------------------- */
+typedef struct sqlite3 KSQLiteNativeDB;
+typedef struct sqlite3_stmt KSQLiteNativeStatement;
+
+struct KSQLiteHandle {
+    KSQLiteNativeDB *db;
+    int closed;
+    struct KSQLiteHandle *next;
+};
+
+typedef struct KSQLiteTrackedStatement {
+    KSQLiteNativeStatement *statement;
+    struct KSQLiteTrackedStatement *next;
+} KSQLiteTrackedStatement;
+
+typedef struct {
+    int (*open_v2)(const char*,KSQLiteNativeDB**,int,const char*);
+    int (*close_v2)(KSQLiteNativeDB*);
+    const char *(*errmsg)(KSQLiteNativeDB*);
+    int (*exec)(KSQLiteNativeDB*,const char*,int(*)(void*,int,char**,char**),void*,char**);
+    int (*prepare_v2)(KSQLiteNativeDB*,const char*,int,KSQLiteNativeStatement**,const char**);
+    int (*step)(KSQLiteNativeStatement*);
+    int (*finalize)(KSQLiteNativeStatement*);
+    int (*column_count)(KSQLiteNativeStatement*);
+    int (*column_type)(KSQLiteNativeStatement*,int);
+    const unsigned char *(*column_text)(KSQLiteNativeStatement*,int);
+    const void *(*column_blob)(KSQLiteNativeStatement*,int);
+    int (*column_bytes)(KSQLiteNativeStatement*,int);
+    long long (*column_int64)(KSQLiteNativeStatement*,int);
+    double (*column_double)(KSQLiteNativeStatement*,int);
+    int (*changes)(KSQLiteNativeDB*);
+    int (*busy_timeout)(KSQLiteNativeDB*,int);
+} KSQLiteAPI;
+
+static KSQLiteAPI k_sqlite_api;
+static void *k_sqlite_library;
+static KSQLiteHandle *k_sqlite_handles;
+static KSQLiteTrackedStatement *k_sqlite_statements;
+
+static void k_sqlite_unload(void) {
+#ifdef _WIN32
+    if (k_sqlite_library) FreeLibrary((HMODULE)k_sqlite_library);
+#else
+    if (k_sqlite_library) dlclose(k_sqlite_library);
+#endif
+    k_sqlite_library=NULL;
+    memset(&k_sqlite_api,0,sizeof(k_sqlite_api));
+}
+
+static int k_sqlite_resolve(void *library, KSQLiteAPI *api) {
+#ifdef _WIN32
+#define K_SQLITE_SYM(name) api->name=(void*)GetProcAddress((HMODULE)library,"sqlite3_" #name)
+#else
+#define K_SQLITE_SYM(name) api->name=dlsym(library,"sqlite3_" #name)
+#endif
+    memset(api,0,sizeof(*api));
+    K_SQLITE_SYM(open_v2);
+    K_SQLITE_SYM(close_v2);
+    K_SQLITE_SYM(errmsg);
+    K_SQLITE_SYM(exec);
+    K_SQLITE_SYM(prepare_v2);
+    K_SQLITE_SYM(step);
+    K_SQLITE_SYM(finalize);
+    K_SQLITE_SYM(column_count);
+    K_SQLITE_SYM(column_type);
+    K_SQLITE_SYM(column_text);
+    K_SQLITE_SYM(column_blob);
+    K_SQLITE_SYM(column_bytes);
+    K_SQLITE_SYM(column_int64);
+    K_SQLITE_SYM(column_double);
+    K_SQLITE_SYM(changes);
+    K_SQLITE_SYM(busy_timeout);
+#undef K_SQLITE_SYM
+    return api->open_v2 && api->close_v2 && api->errmsg && api->exec &&
+           api->prepare_v2 && api->step && api->finalize && api->column_count &&
+           api->column_type && api->column_text && api->column_blob && api->column_bytes &&
+           api->column_int64 && api->column_double && api->changes && api->busy_timeout;
+}
+
+static const char *k_sqlite_load(void) {
+    if (k_sqlite_library) return NULL;
+#ifdef _WIN32
+    const char *names[]={"winsqlite3.dll","sqlite3.dll",NULL};
+    for (int i=0;names[i];i++) {
+        HMODULE library=LoadLibraryA(names[i]);
+        if (!library) continue;
+        KSQLiteAPI api;
+        if (k_sqlite_resolve((void*)library,&api)) {
+            k_sqlite_library=(void*)library; k_sqlite_api=api; return NULL;
+        }
+        FreeLibrary(library);
+    }
+    return "SQLite library unavailable: install winsqlite3.dll or sqlite3.dll";
+#else
+    const char *names[]={"libsqlite3.so.0","libsqlite3.so",NULL};
+    for (int i=0;names[i];i++) {
+        void *library=dlopen(names[i],RTLD_NOW|RTLD_LOCAL);
+        if (!library) continue;
+        KSQLiteAPI api;
+        if (k_sqlite_resolve(library,&api)) {
+            k_sqlite_library=library; k_sqlite_api=api; return NULL;
+        }
+        dlclose(library);
+    }
+    return "SQLite library unavailable: install libsqlite3.so.0 or libsqlite3.so";
+#endif
+}
+
+static void k_sqlite_track_statement(KSQLiteTrackedStatement *tracked, KSQLiteNativeStatement *statement) {
+    tracked->statement=statement;
+    tracked->next=k_sqlite_statements;
+    k_sqlite_statements=tracked;
+}
+
+static int k_sqlite_finalize(KSQLiteTrackedStatement *tracked) {
+    if (!tracked || !tracked->statement || !k_sqlite_api.finalize) return 0;
+    KSQLiteNativeStatement *statement=tracked->statement;
+    tracked->statement=NULL;
+    return k_sqlite_api.finalize(statement);
+}
+
+static void k_sqlite_cleanup(void) {
+    for (KSQLiteTrackedStatement *tracked=k_sqlite_statements;tracked;tracked=tracked->next)
+        (void)k_sqlite_finalize(tracked);
+    for (KSQLiteHandle *handle=k_sqlite_handles;handle;handle=handle->next) {
+        if (handle->db && k_sqlite_api.close_v2) {
+            handle->closed=1;
+            (void)k_sqlite_api.close_v2(handle->db);
+            handle->db=NULL;
+        }
+    }
+    k_sqlite_statements=NULL;
+    k_sqlite_handles=NULL;
+    k_sqlite_unload();
+}
+
+static int k_sqlite_has_open_handles(void) {
+    for (KSQLiteHandle *handle=k_sqlite_handles;handle;handle=handle->next)
+        if (!handle->closed) return 1;
+    return 0;
+}
+
+static int k_sqlite_string_has_nul(KValue value) {
+    return value.tag!=K_STRING || memchr(value.u.s.data,0,value.u.s.len)!=NULL;
+}
+
+static KSQLiteHandle *k_sqlite_handle(KValue value) {
+    return value.tag==K_SQLITE?value.u.sqlite.database:NULL;
+}
+
+static const char *k_sqlite_error(KSQLiteHandle *handle, int status) {
+    if (handle && handle->db && k_sqlite_api.errmsg) {
+        const char *message=k_sqlite_api.errmsg(handle->db);
+        if (message && *message) return message;
+    }
+    (void)status;
+    return "SQLite operation failed";
+}
+
+static void k_sqlite_copy_error(KSQLiteHandle *handle, int status, char *buffer, size_t capacity) {
+    const char *message=k_sqlite_error(handle,status);
+    const char *prefixes[]={"SQL logic error: ","constraint failed: ",NULL};
+    for (int i=0;prefixes[i];i++) {
+        size_t prefix_length=strlen(prefixes[i]);
+        if (strncmp(message,prefixes[i],prefix_length)==0) { message+=prefix_length; break; }
+    }
+    size_t length=strlen(message);
+    if (length>1 && message[length-1]==')') {
+        for (size_t i=length-1;i>1;i--) {
+            if (message[i-1]=='(' && message[i-2]==' ') {
+                int numeric=i<length-1;
+                for (size_t j=i;j<length-1;j++) if (message[j]<'0'||message[j]>'9') numeric=0;
+                if (numeric) length=i-2;
+                break;
+            }
+        }
+    }
+    if (capacity==0) return;
+    if (length>=capacity) length=capacity-1;
+    memcpy(buffer,message,length);
+    buffer[length]=0;
+}
+
+static KValue k_sqlite_open(KValue path) {
+    if (path.tag!=K_STRING) kfail("invalid SQLite path");
+    if (k_sqlite_string_has_nul(path)) return kv_res(0,kv_cstr("path contains NUL"));
+    const char *load_error=k_sqlite_load();
+    if (load_error) return kv_res(0,kv_cstr(load_error));
+
+    KSQLiteHandle *handle=(KSQLiteHandle*)kalloc(sizeof(KSQLiteHandle));
+    memset(handle,0,sizeof(*handle));
+    int status=k_sqlite_api.open_v2(path.u.s.data,&handle->db,2|4|64|0x10000,NULL);
+    if (status!=0) {
+        char message[512];
+        k_sqlite_copy_error(handle,status,message,sizeof(message));
+        if (handle->db) (void)k_sqlite_api.close_v2(handle->db);
+        handle->db=NULL;
+        return kv_res(0,kv_cstr(message));
+    }
+    status=k_sqlite_api.busy_timeout(handle->db,5000);
+    if (status!=0) {
+        char message[512];
+        k_sqlite_copy_error(handle,status,message,sizeof(message));
+        (void)k_sqlite_api.close_v2(handle->db);
+        handle->db=NULL;
+        return kv_res(0,kv_cstr(message));
+    }
+    handle->closed=0;
+    handle->next=k_sqlite_handles;
+    k_sqlite_handles=handle;
+    KValue database; memset(&database,0,sizeof(database));
+    database.tag=K_SQLITE; database.u.sqlite.database=handle;
+    return kv_res(1,database);
+}
+
+static KValue k_sqlite_exec(KValue value, KValue query) {
+    KSQLiteHandle *handle=k_sqlite_handle(value);
+    if (!handle) kfail("invalid SQLite handle");
+    if (handle->closed || !handle->db) return kv_res(0,kv_cstr("SQLite handle is closed"));
+    if (query.tag!=K_STRING) kfail("invalid SQLite query");
+    if (k_sqlite_string_has_nul(query)) return kv_res(0,kv_cstr("query contains NUL"));
+    int status=k_sqlite_api.exec(handle->db,query.u.s.data,NULL,NULL,NULL);
+    if (status!=0) {
+        char message[512];
+        k_sqlite_copy_error(handle,status,message,sizeof(message));
+        return kv_res(0,kv_cstr(message));
+    }
+    return kv_res(1,kv_int(k_sqlite_api.changes(handle->db)));
+}
+
+static KValue *k_sqlite_grow_rows(KValue *rows, size_t old_capacity, size_t new_capacity) {
+    if (new_capacity>SIZE_MAX/sizeof(KValue)) kfail("memory budget exceeded");
+    size_t old_bytes=old_capacity*sizeof(KValue), new_bytes=new_capacity*sizeof(KValue);
+    if (new_bytes>(size_t)LLONG_MAX || k_mem<(long long)old_bytes ||
+        (long long)new_bytes>k_max_mem || k_mem-(long long)old_bytes>k_max_mem-(long long)new_bytes)
+        kfail("memory budget exceeded");
+    KValue *grown=(KValue*)realloc(rows,new_bytes);
+    if (!grown) kfail("out of memory");
+    k_mem=k_mem-(long long)old_bytes+(long long)new_bytes;
+    return grown;
+}
+
+static void k_fmt_float(double v, char *out, size_t outsz);
+static void k_sqlite_format_float(double number, char *buffer, size_t capacity) {
+    if (number==0.0 && signbit(number)) { snprintf(buffer,capacity,"-0"); return; }
+    k_fmt_float(number,buffer,capacity);
+}
+
+static KValue k_sqlite_column_value(KSQLiteNativeStatement *statement, int column) {
+    int type=k_sqlite_api.column_type(statement,column);
+    if (type==5) return kv_cstr("");
+    if (type==1) {
+        char buffer[32];
+        snprintf(buffer,sizeof(buffer),"%lld",k_sqlite_api.column_int64(statement,column));
+        return kv_cstr(buffer);
+    }
+    if (type==2) {
+        char buffer[64];
+        k_sqlite_format_float(k_sqlite_api.column_double(statement,column),buffer,sizeof(buffer));
+        return kv_cstr(buffer);
+    }
+    int length=k_sqlite_api.column_bytes(statement,column);
+    if (length<0) kfail("SQLite returned an invalid column length");
+    const void *data=type==4?k_sqlite_api.column_blob(statement,column):(const void*)k_sqlite_api.column_text(statement,column);
+    if (!data && length>0) kfail("SQLite returned an invalid column value");
+    if (!data) data="";
+    return kv_strn((const char*)data,(size_t)length);
+}
+
+static int k_sqlite_tail_has_sql(const char *tail, const char *end) {
+    const char *cursor=tail;
+    while (cursor<end) {
+        if (*cursor==' '||*cursor=='\t'||*cursor=='\r'||*cursor=='\n'||*cursor=='\f'||*cursor=='\v'||*cursor==';') { cursor++; continue; }
+        if (end-cursor>=2 && cursor[0]=='-' && cursor[1]=='-') {
+            cursor+=2;
+            while (cursor<end && *cursor!='\n') cursor++;
+            continue;
+        }
+        if (end-cursor>=2 && cursor[0]=='/' && cursor[1]=='*') {
+            cursor+=2;
+            while (end-cursor>=2 && !(cursor[0]=='*' && cursor[1]=='/')) cursor++;
+            if (end-cursor>=2) cursor+=2;
+            continue;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static KValue k_sqlite_query(KValue value, KValue query) {
+    KSQLiteHandle *handle=k_sqlite_handle(value);
+    if (!handle) kfail("invalid SQLite handle");
+    if (k_max_array_elements<1) return kv_res(0,kv_cstr("SQLite row limit must be positive"));
+    if (handle->closed || !handle->db) return kv_res(0,kv_cstr("SQLite handle is closed"));
+    if (query.tag!=K_STRING) kfail("invalid SQLite query");
+    if (k_sqlite_string_has_nul(query)) return kv_res(0,kv_cstr("query contains NUL"));
+    if (query.u.s.len>(size_t)INT_MAX) return kv_res(0,kv_cstr("SQL query is too large"));
+
+    KSQLiteTrackedStatement *tracked=(KSQLiteTrackedStatement*)kalloc(sizeof(KSQLiteTrackedStatement));
+    tracked->statement=NULL;
+    tracked->next=k_sqlite_statements;
+    k_sqlite_statements=tracked;
+    KValue *rows=NULL;
+    size_t row_count=0, capacity=0;
+    const char *cursor=query.u.s.data;
+    const char *end=cursor+query.u.s.len;
+    while (cursor<end) {
+        const char *tail=cursor;
+        int status=k_sqlite_api.prepare_v2(handle->db,cursor,(int)(end-cursor),&tracked->statement,&tail);
+        if (status!=0) {
+            char message[512];
+            k_sqlite_copy_error(handle,status,message,sizeof(message));
+            (void)k_sqlite_finalize(tracked);
+            return kv_res(0,kv_cstr(message));
+        }
+        if (!tail || tail<cursor || tail>end) {
+            (void)k_sqlite_finalize(tracked);
+            return kv_res(0,kv_cstr("SQLite returned an invalid SQL parser position"));
+        }
+        if (!tracked->statement) {
+            if (tail==cursor) break;
+            cursor=tail;
+            continue;
+        }
+
+        int is_final=!k_sqlite_tail_has_sql(tail,end);
+        int column_count=k_sqlite_api.column_count(tracked->statement);
+        if (column_count<0 || (size_t)column_count>SIZE_MAX/sizeof(KValue)) {
+            (void)k_sqlite_finalize(tracked);
+            return kv_res(0,kv_cstr("SQLite returned an invalid column count"));
+        }
+        if (is_final && (long long)column_count>k_max_array_elements) {
+            (void)k_sqlite_finalize(tracked);
+            return kv_res(0,kv_cstr("SQLite result exceeds configured column limit"));
+        }
+        if (is_final) { rows=NULL; row_count=0; capacity=0; }
+        for (;;) {
+            status=k_sqlite_api.step(tracked->statement);
+            if (status==101) break;
+            if (status!=100) {
+                char message[512];
+                k_sqlite_copy_error(handle,status,message,sizeof(message));
+                (void)k_sqlite_finalize(tracked);
+                return kv_res(0,kv_cstr(message));
+            }
+            if (!is_final) continue;
+            if ((long long)row_count>=k_max_array_elements) {
+                (void)k_sqlite_finalize(tracked);
+                return kv_res(0,kv_cstr("SQLite result exceeds configured row limit"));
+            }
+            if (row_count==capacity) {
+                size_t next=capacity?capacity*2:8;
+                if (next<capacity || (long long)next>k_max_array_elements) next=(size_t)k_max_array_elements;
+                rows=k_sqlite_grow_rows(rows,capacity,next);
+                capacity=next;
+            }
+            if ((size_t)column_count>SIZE_MAX/sizeof(KValue)) kfail("memory budget exceeded");
+            KValue *cells=(KValue*)kalloc((size_t)column_count*sizeof(KValue));
+            for (int column=0;column<column_count;column++) cells[column]=k_sqlite_column_value(tracked->statement,column);
+            rows[row_count++]=kv_arr(cells,(size_t)column_count);
+        }
+        status=k_sqlite_finalize(tracked);
+        if (status!=0) {
+            char message[512];
+            k_sqlite_copy_error(handle,status,message,sizeof(message));
+            return kv_res(0,kv_cstr(message));
+        }
+        cursor=tail;
+    }
+    return kv_res(1,kv_arr(rows,row_count));
+}
+
+static KValue k_sqlite_close(KValue value) {
+    KSQLiteHandle *handle=k_sqlite_handle(value);
+    if (!handle) kfail("invalid SQLite handle");
+    if (handle->closed || !handle->db) kfail("SQLite handle is already closed");
+    handle->closed=1;
+    int status=k_sqlite_api.close_v2(handle->db);
+    if (status==0) handle->db=NULL;
+    else {
+        char message[512];
+        k_sqlite_copy_error(handle,status,message,sizeof(message));
+        kfail(message);
+    }
+    return kv_nil();
 }
 `
 

@@ -39,9 +39,16 @@ func Parse(src *Source, lim Limits) (*Program, *Diagnostic) {
 		case p.check(ENUM):
 			e := p.enumDecl(pub)
 			prog.Enums = append(prog.Enums, e)
+		case p.check(TRAIT):
+			t := p.traitDecl(pub)
+			prog.Traits = append(prog.Traits, t)
 		case p.match(IMPL):
 			p.Pos--
-			prog.Functions = append(prog.Functions, p.implDecl()...)
+			functions, traitImpl := p.implDecl()
+			prog.Functions = append(prog.Functions, functions...)
+			if traitImpl != nil {
+				prog.TraitImpls = append(prog.TraitImpls, traitImpl)
+			}
 		case p.match(IMPORT):
 			t := p.expect(STRING, "import expects a quoted module path")
 			if p.Err != nil {
@@ -64,7 +71,7 @@ func Parse(src *Source, lim Limits) (*Program, *Diagnostic) {
 			p.end()
 		default:
 			if pub || private {
-				p.fail(p.peek(), "'pub' must be followed by a function, struct, or enum")
+				p.fail(p.peek(), "'pub' must be followed by a function, struct, enum, or trait")
 				break
 			}
 			s := p.statement()
@@ -156,6 +163,11 @@ func (p *Parser) typeSpec() *TypeSpec {
 		s.Return = p.typeSpec()
 		return s
 	}
+	if p.check(ID) && p.peek().Text() == "dyn" && p.Pos+1 < len(p.Tokens) && p.Tokens[p.Pos+1].Kind == ID {
+		t := p.advance()
+		p.fail(t, "dynamic trait objects using 'dyn Trait' are not supported; use a generic trait bound")
+		return &TypeSpec{Name: t.Text(), Tok: t}
+	}
 	t := p.expect(ID, "expected a type name")
 	s := &TypeSpec{Name: t.Text(), Tok: t}
 	if p.match(LBRACKET) {
@@ -175,23 +187,7 @@ func (p *Parser) function(pub bool) *Function {
 	t := p.expect(FN, "expected 'fn'")
 	n := p.expect(ID, "expected a function name")
 	f := &Function{Name: n.Text(), NameToken: n, Public: pub, Tok: t, Return: &TypeSpec{Name: "Nil", Tok: t}, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
-	if p.match(LBRACKET) {
-		if !p.check(RBRACKET) {
-			for {
-				pt := p.expect(ID, "expected a type parameter name")
-				param := TypeParam{Name: pt.Text(), Tok: pt}
-				if p.match(COLON) {
-					constraint := p.expect(ID, "expected a type constraint")
-					param.Constraint = constraint.Text()
-				}
-				f.TypeParams = append(f.TypeParams, param)
-				if !p.match(COMMA) {
-					break
-				}
-			}
-		}
-		p.expect(RBRACKET, "expected ']' after type parameters")
-	}
+	f.TypeParams = p.typeParams()
 	p.expect(LPAREN, "expected '(' after function name")
 	if !p.check(RPAREN) {
 		seenDefault := false
@@ -219,10 +215,38 @@ func (p *Parser) function(pub bool) *Function {
 	f.EndToken = p.prev()
 	return f
 }
+
+func (p *Parser) typeParams() []TypeParam {
+	if !p.match(LBRACKET) {
+		return nil
+	}
+	var params []TypeParam
+	if !p.check(RBRACKET) {
+		for {
+			pt := p.expect(ID, "expected a type parameter name")
+			param := TypeParam{Name: pt.Text(), Tok: pt}
+			if p.match(COLON) {
+				constraint := p.expect(ID, "expected a type constraint")
+				param.Constraint = constraint.Text()
+				if p.match(PLUS) {
+					p.fail(p.prev(), "multiple trait bounds are not supported; use one constraint per type parameter")
+				}
+			}
+			params = append(params, param)
+			if !p.match(COMMA) {
+				break
+			}
+		}
+	}
+	p.expect(RBRACKET, "expected ']' after type parameters")
+	return params
+}
+
 func (p *Parser) structDecl(pub bool) *StructDecl {
 	t := p.expect(STRUCT, "expected 'struct'")
 	n := p.expect(ID, "expected a struct name")
 	d := &StructDecl{Name: n.Text(), NameToken: n, Public: pub, Tok: t, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
+	d.TypeParams = p.typeParams()
 	p.expect(LBRACE, "expected '{' after struct name")
 	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
 		public := !p.match(PRIVATE)
@@ -237,21 +261,97 @@ func (p *Parser) structDecl(pub bool) *StructDecl {
 	d.EndToken = p.prev()
 	return d
 }
-func (p *Parser) implDecl() []*Function {
+func (p *Parser) traitDecl(pub bool) *TraitDecl {
+	t := p.expect(TRAIT, "expected 'trait'")
+	n := p.expect(ID, "expected a trait name")
+	d := &TraitDecl{Name: n.Text(), NameToken: n, Public: pub, Tok: t, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
+	if p.check(LBRACKET) {
+		p.fail(p.peek(), "generic trait declarations are not supported")
+		return d
+	}
+	p.expect(LBRACE, "expected '{' after trait name")
+	seen := map[string]bool{}
+	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
+		if !p.check(FN) {
+			p.fail(p.peek(), "traits may contain method signatures only")
+			break
+		}
+		method := p.traitMethod(d.Name)
+		if seen[method.Name] {
+			p.fail(method.NameToken, "trait '%s' declares method '%s' more than once", d.Name, method.Name)
+			break
+		}
+		seen[method.Name] = true
+		d.Methods = append(d.Methods, method)
+		p.end()
+	}
+	p.expect(RBRACE, "expected '}' after trait declaration")
+	d.EndToken = p.prev()
+	return d
+}
+
+func (p *Parser) traitMethod(trait string) *Function {
+	t := p.expect(FN, "expected 'fn' in trait declaration")
+	n := p.expect(ID, "expected a trait method name")
+	f := &Function{Name: n.Text(), NameToken: n, Trait: trait, Public: true, Tok: t, Return: &TypeSpec{Name: "Nil", Tok: t}, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
+	if p.check(LBRACKET) {
+		p.fail(p.peek(), "generic trait methods are not supported")
+		return f
+	}
+	p.expect(LPAREN, "expected '(' after trait method name")
+	if !p.check(RPAREN) {
+		for {
+			pt := p.expect(ID, "expected a trait method parameter name")
+			p.expect(COLON, "trait method parameters require an explicit type")
+			param := Param{Name: pt.Text(), Type: p.typeSpec(), Tok: pt}
+			if p.match(EQUAL) {
+				p.fail(p.prev(), "trait method parameters cannot have defaults")
+			}
+			f.Params = append(f.Params, param)
+			if !p.match(COMMA) {
+				break
+			}
+		}
+	}
+	p.expect(RPAREN, "expected ')' after trait method parameters")
+	if p.match(ARROW) {
+		f.Return = p.typeSpec()
+	}
+	if p.check(LBRACE) {
+		p.fail(p.peek(), "default trait method bodies are not supported")
+	}
+	return f
+}
+
+func (p *Parser) implDecl() ([]*Function, *TraitImplDecl) {
 	t := p.expect(IMPL, "expected 'impl'")
-	receiver := p.typeSpec()
-	p.expect(LBRACE, "expected '{' after impl receiver")
+	head := p.typeSpec()
+	traitImpl := (*TraitImplDecl)(nil)
+	receiver := head
+	if p.match(FOR) {
+		receiver = p.typeSpec()
+		traitImpl = &TraitImplDecl{Trait: head.Name, TraitToken: head.Tok, Target: receiver, Tok: t, Module: t.Source.Name, VisibilityScope: sourceVisibilityScope(t.Source)}
+		if head.Function || len(head.Params) != 0 {
+			p.fail(head.Tok, "trait implementations must name one non-generic trait")
+		}
+	}
+	p.expect(LBRACE, "expected '{' after impl type")
 	var out []*Function
 	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
 		pub := p.match(PUB)
 		f := p.function(pub)
 		f.Receiver = receiver
+		if traitImpl != nil {
+			f.Trait = traitImpl.Trait
+			f.Public = true
+			traitImpl.Methods = append(traitImpl.Methods, f)
+		}
 		f.Tok = t
 		out = append(out, f)
 		p.end()
 	}
 	p.expect(RBRACE, "expected '}' after impl block")
-	return out
+	return out, traitImpl
 }
 func (p *Parser) enumDecl(pub bool) *EnumDecl {
 	t := p.expect(ENUM, "expected 'enum'")
@@ -623,22 +723,25 @@ func (p *Parser) primary() *Expr {
 			x.VariantToken = v
 			return x
 		}
-		if p.check(LBRACE) && p.Pos+2 < len(p.Tokens) && p.Tokens[p.Pos+1].Kind == ID && p.Tokens[p.Pos+2].Kind == COLON {
+		if p.check(LBRACKET) && p.looksLikeGenericStructLiteral() {
+			spec := &TypeSpec{Name: e.Name, Tok: t}
 			p.advance()
-			x := p.node(t, ExStruct)
-			x.StructName = e.Name
-			for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
-				f := p.expect(ID, "expected a struct field name")
-				p.expect(COLON, "expected ':' after struct field name")
-				x.Fields = append(x.Fields, f.Text())
-				x.FieldTokens = append(x.FieldTokens, f)
-				x.Values = append(x.Values, p.expression())
-				if !p.match(COMMA) {
-					break
+			if !p.check(RBRACKET) {
+				for {
+					spec.Params = append(spec.Params, p.typeSpec())
+					if !p.match(COMMA) {
+						break
+					}
 				}
 			}
-			p.expect(RBRACE, "expected '}' after struct literal")
+			p.expect(RBRACKET, "expected ']' after generic struct type")
+			p.expect(LBRACE, "expected '{' after generic struct type")
+			x := p.structLiteral(t, spec)
 			return x
+		}
+		if p.looksLikeStructLiteral() {
+			p.advance()
+			return p.structLiteral(t, &TypeSpec{Name: e.Name, Tok: t})
 		}
 		return e
 	case p.match(LPAREN):
@@ -689,6 +792,56 @@ func (p *Parser) primary() *Expr {
 	}
 	p.fail(t, "expected an expression")
 	return p.node(t, ExNil)
+}
+
+func (p *Parser) looksLikeStructLiteral() bool {
+	if !p.check(LBRACE) || p.Pos+1 >= len(p.Tokens) {
+		return false
+	}
+	return p.Pos+2 < len(p.Tokens) && p.Tokens[p.Pos+1].Kind == ID && p.Tokens[p.Pos+2].Kind == COLON
+}
+
+func (p *Parser) looksLikeGenericStructLiteral() bool {
+	if !p.check(LBRACKET) {
+		return false
+	}
+	depth := 0
+	for i := p.Pos; i < len(p.Tokens); i++ {
+		switch p.Tokens[i].Kind {
+		case LBRACKET:
+			depth++
+		case RBRACKET:
+			depth--
+			if depth == 0 {
+				if i+1 >= len(p.Tokens) || p.Tokens[i+1].Kind != LBRACE {
+					return false
+				}
+				if i+2 >= len(p.Tokens) {
+					return false
+				}
+				return p.Tokens[i+2].Kind == RBRACE || i+3 < len(p.Tokens) && p.Tokens[i+2].Kind == ID && p.Tokens[i+3].Kind == COLON
+			}
+		}
+	}
+	return false
+}
+
+func (p *Parser) structLiteral(token Token, spec *TypeSpec) *Expr {
+	x := p.node(token, ExStruct)
+	x.StructName = spec.Name
+	x.StructType = spec
+	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
+		f := p.expect(ID, "expected a struct field name")
+		p.expect(COLON, "expected ':' after struct field name")
+		x.Fields = append(x.Fields, f.Text())
+		x.FieldTokens = append(x.FieldTokens, f)
+		x.Values = append(x.Values, p.expression())
+		if !p.match(COMMA) {
+			break
+		}
+	}
+	p.expect(RBRACE, "expected '}' after struct literal")
+	return x
 }
 
 func (p *Parser) lambda() *Expr {

@@ -16,12 +16,11 @@ const (
 )
 
 // BuildDirectELF emits a small, dependency-free ELF64 executable directly.
-// The static path preserves the first byte-stable bootstrap slice; programs
-// containing assignments or control flow use the second machine-code slice.
-// Both paths emit genuine x86-64 instructions and reject unsupported language
-// constructs before bytes are returned. The current dynamic slice also
-// supports scalar and pointer-like SysV AMD64 function calls, including the
-// immutable qword-array ABI and its Linux mmap runtime.
+// The bounded scalar/control-flow slice is lowered from decoded KIR into
+// runtime x86-64 instructions. Other programs continue through the existing
+// static or AST-backed dynamic emitters, which support additional constructs
+// including SysV AMD64 function calls and the immutable qword-array ABI.
+// Every path rejects unsupported semantics before returning executable bytes.
 func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	if target.OS != "linux" || target.Arch != "amd64" {
 		return nil, fmt.Errorf("direct ELF backend currently supports only linux-amd64")
@@ -43,6 +42,11 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 	}
 	document, err := DecodeKIR(kir, c.Env.Lim)
 	if err != nil {
+		return nil, fmt.Errorf("direct backend rejected KIR: %w", err)
+	}
+	if err := validateKIRDirectELFSubset(document); err == nil {
+		return buildDirectKIRELF(document, c.Env.Lim, kirSourceMap(p))
+	} else if !errors.Is(err, errKIRSubsetUnsupported) {
 		return nil, fmt.Errorf("direct backend rejected KIR: %w", err)
 	}
 	output, err := directStaticKIROutput(document, c.Env.Lim.MaxOutputBytes)

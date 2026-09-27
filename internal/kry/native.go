@@ -368,6 +368,11 @@ func compileC(src string, target NativeTarget) ([]byte, error) {
 		args[len(args)-2] = wslPath(cpath)
 		args[4] = wslPath(out)
 	}
+	if target.OS == "windows" {
+		args = append(args, "-lws2_32")
+	} else if target.OS == "linux" {
+		args = append(args, "-ldl")
+	}
 	args = append(append([]string{}, compiler.prefix...), args...)
 	cmd := nativeExecCommand(compiler.program, args...)
 	var stderr bytes.Buffer

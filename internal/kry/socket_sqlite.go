@@ -20,6 +20,32 @@ func sqlitePath(sb Sandbox, path string) (string, error) {
 	return sb.Resolve(path, true)
 }
 
+// sqliteErrorMessage hides the SQLite driver's class prefix and numeric
+// result-code suffix so the interpreter and native C backend expose the same
+// core message when their SQLite libraries use the same wording.
+func sqliteErrorMessage(message string) string {
+	for _, prefix := range []string{"SQL logic error: ", "constraint failed: "} {
+		message = strings.TrimPrefix(message, prefix)
+	}
+	open := strings.LastIndex(message, " (")
+	if open >= 0 && strings.HasSuffix(message, ")") {
+		code := message[open+2 : len(message)-1]
+		if code != "" {
+			digits := true
+			for _, r := range code {
+				if r < '0' || r > '9' {
+					digits = false
+					break
+				}
+			}
+			if digits {
+				message = message[:open]
+			}
+		}
+	}
+	return message
+}
+
 func sqliteOpen(sb Sandbox, path string) (*sqliteHandle, error) {
 	resolved, err := sqlitePath(sb, path)
 	if err != nil {
@@ -115,6 +141,9 @@ func sqliteQuery(h *sqliteHandle, query string, maxRows int) ([][]string, error)
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, err
+	}
+	if len(columns) > maxRows {
+		return nil, fmt.Errorf("SQLite result exceeds configured column limit")
 	}
 	result := make([][]string, 0)
 	for rows.Next() {

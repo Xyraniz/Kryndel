@@ -81,15 +81,51 @@ and direct PE backends reject a program that uses function types, function
 references, or lambdas with a backend-specific diagnostic before emission.
 
 Parameters have explicit types; generic type parameters use the declared `Copy`,
-`Integer`, `Numeric`, or `Comparable` constraints. Overloads are selected from
-the complete argument type tuple. Zero matches and multiple equally specific
-matches are type errors.
+`Integer`, `Numeric`, or `Comparable` constraints, or one user-defined trait
+constraint. Overloads are selected from the complete argument type tuple. Zero
+matches and multiple equally specific matches are type errors.
 
 Method calls use the receiver's checked type and the same overload rules for
 their explicit arguments. A private method is visible only within its declaring
 module. The checker-selected declaration is retained in KIR and is the target
 the interpreter invokes; runtime dispatch does not select a method again by
 name.
+
+Traits define named method signatures for static dispatch:
+
+```kryndel
+trait Render {
+    fn render() -> String
+}
+
+struct North { label: String }
+struct South { label: String }
+
+impl Render for North {
+    fn render() -> String { return "north:" + self.label }
+}
+impl Render for South {
+    fn render() -> String { return "south:" + self.label }
+}
+
+fn render[T: Render](value: T) -> String { return value.render() }
+```
+
+The receiver is implicit in a trait method signature and is named `self` in an
+implementation. Each implementation must provide every declared method exactly
+once with the same explicit parameters and return type. A concrete type may
+implement a trait only once. Generic struct instances can be implementation
+targets when fully specified, such as `impl Render for Box[Int]`; generic
+functions with a `T: Render` bound are checked against the declared signatures
+and resolved to the concrete implementation after `T` is inferred. The
+interpreter uses that checked target, and C AOT specializes generic calls and
+emits direct calls to the implementation.
+
+This static-dispatch slice supports non-generic traits and methods and one trait
+bound per generic parameter. Generic traits or methods, default method bodies,
+associated types or constants, generic and blanket implementations, multiple
+bounds, `dyn Trait`, and implementations for non-struct types are rejected with
+diagnostics. Traits are not runtime values.
 
 Generic calls use structural type inference with the following rules:
 
@@ -101,19 +137,36 @@ Generic calls use structural type inference with the following rules:
 | Generic result with an unresolved parameter | The expected result type may infer remaining parameters; otherwise the call has no matching overload. |
 | Competing overloads | Apply constraints and argument inference to each candidate; exactly one candidate must match. |
 
+User-defined structs may declare constrained type parameters. A use must
+provide exactly one argument for each parameter, and each argument must satisfy
+the declaration's constraint. `Box[T]` field types are substituted for a
+concrete `Box[Int]` instance; struct literals spell the instance explicitly as
+`Box[Int]{value: 1}`. An `impl Box[T]` block makes methods available to every
+matching instance. Methods may add their own constrained type parameters, and
+receiver and method parameters are inferred together from the receiver,
+arguments, and expected result. Generic enums and generic associated constants
+are not supported.
+
 Type nesting is bounded by the configured `MaxTypeDepth` resource limit.
 Overload candidate sets are bounded by `MaxOverloadsPerName` (256 by default)
-so a call cannot trigger an unbounded overload search. The current compiler
-checks generic calls but does not monomorphize or generate per-instantiation
-code.
+so a call cannot trigger an unbounded overload search.
 `Integer` accepts `Int` and all `UInt` widths, and enables `%` in generic
 bodies. `Numeric` accepts `Integer` types and `Float`, and enables `+`, `-`,
 `*`, `/`, and ordered comparisons. Generic unary negation remains unavailable
 because a `Numeric` or `Integer` parameter may be an unsigned type. Concrete
 `Float` remainder is rejected by the checker.
 Generic parameters may infer a function type when a function accepts or returns
-one, subject to their declared constraints. Generic struct declarations,
-type-associated items, and monomorphization controls are also not implemented.
+one, subject to their declared constraints. In a generic higher-order call, an
+explicitly typed lambda can infer its parameter types even when the callback is
+listed before the value that supplies the same type parameter. Overloaded or
+generic named function references are resolved after the other arguments and
+expected return type have supplied enough information. Generic methods use the
+same inference rules as generic functions.
+
+Generic enums, generic associated constants, and explicit monomorphization
+controls are not implemented. Generic user-defined structs and their methods
+are supported with checked type substitution and C AOT monomorphization for
+concrete uses.
 
 Explicit call arguments evaluate left to right. Omitted trailing defaults are
 evaluated in declaration order in the callee's lexical environment,
@@ -262,8 +315,8 @@ the compiler must not reinterpret them as the current dialect. Each published
 language version must retain source, stdout, exit-status, and diagnostic fixtures
 under `tests/compat/<version>/`.
 
-The current compiler supports language version 1.0.0. New manifests, KIR v3,
-and KRYNATIVE5 artifacts record it explicitly. For compatibility, manifests
-without the field, KIR v1 documents, and KRYNATIVE3/KRYNATIVE4 artifacts are
-interpreted as 1.0.0. Unknown or malformed versions are rejected instead of
-being silently treated as the current dialect.
+The current compiler supports language version 1.0.0. New manifests, KIR v5,
+and KRYNATIVE6 artifacts record it explicitly. For compatibility, manifests
+without the field, KIR v1 documents, and KRYNATIVE3 through KRYNATIVE5 artifacts
+are interpreted as 1.0.0. Unknown or malformed versions are rejected instead
+of being silently treated as the current dialect.

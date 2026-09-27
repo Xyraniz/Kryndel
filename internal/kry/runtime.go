@@ -162,6 +162,7 @@ type Value struct {
 	Array      []Value
 	ArrayStore *persistentArray
 	Struct     *StructDecl
+	StructType *Type
 	Fields     []Value
 	Enum       *EnumDecl
 	Variant    string
@@ -424,7 +425,11 @@ func display(v Value) string {
 		return b.String()
 	case VStruct:
 		var b strings.Builder
-		b.WriteString(v.Struct.Name)
+		if v.StructType != nil {
+			b.WriteString(v.StructType.String())
+		} else {
+			b.WriteString(v.Struct.Name)
+		}
 		b.WriteByte('{')
 		for i, f := range v.Struct.Fields {
 			if i > 0 {
@@ -542,7 +547,7 @@ func cloneValue(v Value) Value {
 	case VArray:
 		return Value{Kind: VArray, Array: v.Array, ArrayStore: v.ArrayStore}
 	case VStruct:
-		return Value{Kind: VStruct, Struct: v.Struct, Fields: v.Fields}
+		return Value{Kind: VStruct, Struct: v.Struct, StructType: v.StructType, Fields: v.Fields}
 	case VOption:
 		return v
 	case VResult:
@@ -608,7 +613,7 @@ func equalValue(a, b Value) bool {
 		}
 		return true
 	case VStruct:
-		if a.Struct != b.Struct || len(a.Fields) != len(b.Fields) {
+		if a.Struct != b.Struct || (a.StructType != nil || b.StructType != nil) && !typeEqual(a.StructType, b.StructType) || len(a.Fields) != len(b.Fields) {
 			return false
 		}
 		for i := range a.Fields {
@@ -813,10 +818,11 @@ type TaskGroup struct {
 }
 
 type TailCall struct {
-	Function    *Function
-	Environment *RunScope
-	Receiver    *Value
-	Args        []Value
+	Function         *Function
+	Environment      *RunScope
+	Receiver         *Value
+	Args             []Value
+	GenericArguments []*Type
 }
 
 type Thread struct {
@@ -902,6 +908,7 @@ type RunBinding struct {
 type RunScope struct {
 	Parent     *RunScope
 	Values     map[string]RunBinding
+	TypeParams map[string]*Type
 	Defers     [][]*Stmt
 	ReturnType *Type
 }
@@ -915,6 +922,18 @@ func (s *RunScope) get(n string) (*RunBinding, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (s *RunScope) typeParameters() map[string]*Type {
+	params := map[string]*Type{}
+	for current := s; current != nil; current = current.Parent {
+		for name, typ := range current.TypeParams {
+			if _, exists := params[name]; !exists {
+				params[name] = typ
+			}
+		}
+	}
+	return params
 }
 func (s *RunScope) define(n string, v Value, m bool) error {
 	if _, ok := s.Values[n]; ok {
@@ -1463,7 +1482,11 @@ func (r *Runtime) evalExpr(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 			}
 			vals[idx] = v
 		}
-		return Value{Kind: VStruct, Struct: t.Struct, Fields: vals}, nil
+		instanceType := substituteType(e.Type, sc.typeParameters(), 0)
+		if instanceType == nil || instanceType.Kind != TyStruct || instanceType.Struct == nil {
+			return nilVal(), r.fail(e, "generic struct type could not be instantiated at runtime")
+		}
+		return Value{Kind: VStruct, Struct: instanceType.Struct, StructType: instanceType, Fields: vals}, nil
 	case ExUnary:
 		v, d := r.evalExpr(sc, e.Operand)
 		if d != nil {
@@ -1860,7 +1883,27 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		}
 		x := cloneValue(v)
 		receiver = &x
-		f = e.Function
+		if e.TraitName != "" {
+			typ := receiver.StructType
+			if typ == nil && receiver.Struct != nil {
+				typ = &Type{Kind: TyStruct, Name: receiver.Struct.Name, Struct: receiver.Struct}
+			}
+			if typ != nil {
+				if implementation := r.Checker.Env.TraitImpls[e.TraitName][typ.String()]; implementation != nil {
+					for _, method := range implementation.Methods {
+						if method.Name == e.Name {
+							f = method
+							break
+						}
+					}
+				}
+			}
+			if f == nil {
+				return nilVal(), r.fail(e, "trait '%s' has no implementation for receiver type %s", e.TraitName, receiverTypeName(typ))
+			}
+		} else {
+			f = e.Function
+		}
 		if f == nil {
 			f = r.Funcs[methodKey(r.Checker.Env.Types[e.Receiver.Type.String()], e.Name)]
 			if f == nil {
@@ -1897,6 +1940,7 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 	// Defaults execute after explicit arguments in a scope containing the
 	// receiver and parameters whose values are already known.
 	defaultScope := newRunScope(functionEnv)
+	defaultScope.TypeParams = runtimeCallTypeParams(f, e.GenericArguments, receiver)
 	if receiver != nil {
 		_ = defaultScope.define("self", *receiver, false)
 	}
@@ -1916,12 +1960,23 @@ func (r *Runtime) evalCall(sc *RunScope, e *Expr) (Value, *Diagnostic) {
 		_ = defaultScope.define(f.Params[i].Name, v, false)
 	}
 	if e.Tail {
-		return Value{Kind: VTailCall, Tail: &TailCall{Function: f, Environment: functionEnv, Receiver: receiver, Args: args}}, nil
+		return Value{Kind: VTailCall, Tail: &TailCall{Function: f, Environment: functionEnv, Receiver: receiver, Args: args, GenericArguments: append([]*Type(nil), e.GenericArguments...)}}, nil
 	}
 	return r.invokeFunction(e, f, functionEnv, receiver, args)
 }
 
+func receiverTypeName(typ *Type) string {
+	if typ == nil {
+		return "<unknown>"
+	}
+	return typ.String()
+}
+
 func (r *Runtime) invokeFunction(e *Expr, f *Function, functionEnv *RunScope, receiver *Value, args []Value) (Value, *Diagnostic) {
+	var genericArguments []*Type
+	if e != nil {
+		genericArguments = append([]*Type(nil), e.GenericArguments...)
+	}
 	debugFrameIndex := -1
 	if r.debugger != nil {
 		debugFrameIndex = len(r.debugFrames)
@@ -1940,6 +1995,7 @@ func (r *Runtime) invokeFunction(e *Expr, f *Function, functionEnv *RunScope, re
 			r.debugFrames[debugFrameIndex].Function = f.Name
 		}
 		child := newRunScope(functionEnv)
+		child.TypeParams = runtimeCallTypeParams(f, genericArguments, receiver)
 		if receiver != nil {
 			_ = child.define("self", *receiver, false)
 		}
@@ -1969,6 +2025,7 @@ func (r *Runtime) invokeFunction(e *Expr, f *Function, functionEnv *RunScope, re
 			functionEnv = x.Value.Tail.Environment
 			receiver = x.Value.Tail.Receiver
 			args = x.Value.Tail.Args
+			genericArguments = x.Value.Tail.GenericArguments
 			continue
 		}
 		if x.Code == evalReturn {
@@ -1976,6 +2033,26 @@ func (r *Runtime) invokeFunction(e *Expr, f *Function, functionEnv *RunScope, re
 		}
 		return nilVal(), nil
 	}
+}
+
+func runtimeCallTypeParams(function *Function, genericArguments []*Type, receiver *Value) map[string]*Type {
+	params := map[string]*Type{}
+	if function == nil {
+		return params
+	}
+	for i, parameter := range function.TypeParams {
+		if i < len(genericArguments) && genericArguments[i] != nil {
+			params[parameter.Name] = genericArguments[i]
+		}
+	}
+	if function.Receiver != nil && receiver != nil && receiver.StructType != nil && receiver.StructType.Struct != nil {
+		for i, parameter := range receiver.StructType.Struct.TypeParams {
+			if i < len(receiver.StructType.Params) {
+				params[parameter.Name] = receiver.StructType.Params[i]
+			}
+		}
+	}
+	return params
 }
 func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic) {
 	bad := func(m string) (Value, *Diagnostic) { return nilVal(), r.fail(e, "%s", m) }
@@ -2913,20 +2990,20 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	case "sqlite_open":
 		db, err := sqliteOpen(r.Sandbox, a[0].S)
 		if err != nil {
-			return resVal(false, stringVal(err.Error())), nil
+			return resVal(false, stringVal(sqliteErrorMessage(err.Error()))), nil
 		}
 		r.trackResource(e, "SQLite", db.isClosed, func() error { return sqliteClose(db) })
 		return resVal(true, Value{Kind: VSQLite, SQLite: db}), nil
 	case "sqlite_exec":
 		count, err := sqliteExec(a[0].SQLite, a[1].S)
 		if err != nil {
-			return resVal(false, stringVal(err.Error())), nil
+			return resVal(false, stringVal(sqliteErrorMessage(err.Error()))), nil
 		}
 		return resVal(true, intVal(count)), nil
 	case "sqlite_query":
 		rows, err := sqliteQuery(a[0].SQLite, a[1].S, r.Lim.MaxArrayElements)
 		if err != nil {
-			return resVal(false, stringVal(err.Error())), nil
+			return resVal(false, stringVal(sqliteErrorMessage(err.Error()))), nil
 		}
 		result := make([]Value, len(rows))
 		for i, row := range rows {
@@ -2939,7 +3016,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		return resVal(true, arrVal(result)), nil
 	case "sqlite_close":
 		if err := sqliteClose(a[0].SQLite); err != nil {
-			return bad(err.Error())
+			return bad(sqliteErrorMessage(err.Error()))
 		}
 		return nilVal(), nil
 	case "tcp_connect":

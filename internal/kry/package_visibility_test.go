@@ -89,11 +89,13 @@ func TestManifestPackageVisibilityAndArtifactReplay(t *testing.T) {
 	}
 }
 
-func TestArtifactV3AndV4RemainReadable(t *testing.T) {
-	for _, version := range []uint32{3, 4} {
+func TestArtifactV3V4AndV5RemainReadable(t *testing.T) {
+	for _, version := range []uint32{3, 4, 5} {
 		name := "v3"
 		if version == 4 {
 			name = "v4"
+		} else if version == 5 {
+			name = "v5"
 		}
 		t.Run(name, func(t *testing.T) {
 			artifact := makeLegacyArtifact(version, []byte("println(7)\n"))
@@ -116,12 +118,14 @@ func makeLegacyArtifact(version uint32, source []byte) []byte {
 	var b bytes.Buffer
 	if version == 3 {
 		b.WriteString(legacyArtifactMagic)
+	} else if version == 4 {
+		b.WriteString(olderArtifactMagic)
 	} else {
 		b.WriteString(previousArtifactMagic)
 	}
 	writeU32(&b, version)
 	compiler := legacyCompilerID
-	if version == 4 {
+	if version >= 4 {
 		compiler = previousCompilerIdentity
 	}
 	writeString(&b, compiler)
@@ -132,6 +136,9 @@ func makeLegacyArtifact(version uint32, source []byte) []byte {
 	writeString(&b, runtime.GOOS+"/"+runtime.GOARCH)
 	writeU32(&b, 1)
 	writeString(&b, "<root>")
+	if version >= 5 {
+		writeString(&b, artifactRootScope)
+	}
 	writeU64(&b, uint64(len(source)))
 	hash := sha256.Sum256(source)
 	b.Write(hash[:])

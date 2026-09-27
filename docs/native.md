@@ -9,7 +9,7 @@ make
 ./tools/kry run examples/fibonacci.kry
 ```
 
-Kryndel exposes three distinct products. `kry run` interprets source on the portable Go runtime. `kry build --format=kexe` writes a portable `KRYNATIVE5` bundle containing checked source files; it is not a machine-code executable. `kry build --format=elf-direct` emits Linux amd64 machine code directly for its explicitly supported subset. The native AOT formats (`elf`, `exe`, and `pe`) use the generated-C backend by default. On a Windows amd64 target, `kry build --format=exe --no-external-toolchain` selects the C-free `pe-direct` machine backend; `--format=pe-direct` requests it explicitly. This backend has an explicit bounded language subset and fails on unsupported constructs. C AOT accepts Linux amd64/arm64 and Windows amd64 targets; target OS and architecture are validated before C lowering. `--format=c` emits C source without invoking a compiler. To compile a supported Windows PE with the Kryndel-authored compiler rather than the Go direct backend, run `bash scripts/build-selfhost-pe.sh SOURCE.kry [OUTPUT.exe]` from Linux amd64 or WSL; this invokes the checked-in Stage 1 ELF directly, without Go, C, an assembler, or a linker.
+Kryndel exposes three distinct products. `kry run` interprets source on the portable Go runtime. `kry build --format=kexe` writes a portable `KRYNATIVE6` bundle containing checked source files and canonical typed KIR; it is not a machine-code executable. The loader validates the KIR and requires it to match the KIR regenerated from the embedded sources. `kry build --format=elf-direct` emits Linux amd64 machine code directly for its explicitly supported subset. The native AOT formats (`elf`, `exe`, and `pe`) use the generated-C backend by default. On a Windows amd64 target, `kry build --format=exe --no-external-toolchain` selects the C-free `pe-direct` machine backend; `--format=pe-direct` requests it explicitly. This backend has an explicit bounded language subset and fails on unsupported constructs. C AOT accepts Linux amd64/arm64 and Windows amd64 targets; target OS and architecture are validated before C lowering. `--format=c` emits C source without invoking a compiler. To compile a supported Windows PE with the Kryndel-authored compiler rather than the Go direct backend, run `bash scripts/build-selfhost-pe.sh SOURCE.kry [OUTPUT.exe]` from Linux amd64 or WSL; this invokes the checked-in Stage 1 ELF directly, without Go, C, an assembler, or a linker.
 
 The executable does not require C, Python, Rust, Node.js, or an equivalent runtime to execute interpreted Kryndel programs. Building the Go toolchain requires Go and the modules listed in `go.mod`; Go builds include those dependencies in the resulting executable. Windows webcam capture additionally uses the external `ffmpeg` executable. Host integrations that need Go libraries or platform frameworks are rejected by native backends with their builtin name instead of embedding or invoking the VM.
 
@@ -21,9 +21,9 @@ On Windows, Linux/amd64 native builds use `x86_64-linux-gnu-gcc` and Linux/arm64
 | --- | --- | ---: |
 | `check source.kry` | Read, lex, parse, resolve modules, and type-check without effects. | `0` |
 | `run source.kry` | Check and execute source. | `0` |
-| `run file.kexe` | Validate the container and execute its source payload. | `0` |
-| `build source.kry` | Check and write a deterministic `KRYNATIVE5` bundle. | `0` |
-| `build source.kry --format=kexe` | Write a portable bundle containing validated source; no compiler is invoked. | `0` |
+| `run file.kexe` | Validate embedded KIR against the checked source payload, then execute the program. | `0` |
+| `build source.kry` | Check and write a deterministic `KRYNATIVE6` bundle with checked source and typed KIR. | `0` |
+| `build source.kry --format=kexe` | Write a portable source-and-KIR bundle; no external compiler is invoked. | `0` |
 | `build source.kry --format=exe --target=windows-x64` | Check and write a real PE32+ entrypoint for the selected target. | `0` |
 | `build source.kry --format=elf --target=linux-x64` | Check and write an ELF64 executable with the generated-C AOT backend; an external C compiler is required. | `0` |
 | `build source.kry --format=elf-direct --target=linux-x64` | Use the dependency-free direct machine backend for the documented scalar-output, immutable String-pointer, dynamic String-concatenation, immutable qword-Array literal/index/push/get/concat, tagged Option/Result construction and inspection, Int/Bool/UInt assignment/control-flow, and scalar/pointer-function slice; no C compiler is invoked. | `0` |
@@ -45,29 +45,32 @@ Diagnostics use the stable form `error[category]: file:line:column`, followed by
 
 `--format=llvm-ir` is rejected explicitly until Kryndel has a real lowering to LLVM's typed SSA model. It never emits placeholder IR.
 
-## KRYNATIVE5 format
+## KRYNATIVE6 format
 
 The artifact is a deterministic, self-contained bundle. It is written through a temporary file, flushed and synchronized, then renamed atomically:
 
 ```text
-KRYNATIVE5\0
+KRYNATIVE6\0
 
-u32 format version (=5)
+u32 format version (=6)
 u64 compiler-identity length, UTF-8 bytes
 u64 language-version length, UTF-8 bytes (currently `1.0.0`)
 three-byte header tag `KRY`
-u64 target-identity length, UTF-8 bytes
+u64 target identity length, UTF-8 bytes (`portable/any` in KRYNATIVE6)
 u32 source-entry count
 repeat source-entry count:
   u64 logical path length, UTF-8 bytes
   u64 package visibility scope length, UTF-8 bytes
   u64 source length, exact UTF-8 source bytes
   32-byte SHA-256 of those source bytes
+u64 canonical KIR length
+32-byte SHA-256 of those KIR bytes
+exact canonical KIR JSON bytes
 ```
 
-The `<root>` entry is always first; all remaining entries are sorted by canonical UTF-8 logical path. Module paths and visibility scopes are relative, traversal-safe identifiers. The decoder rejects incompatible compiler or target metadata, truncated fields, integer-size inconsistencies, duplicate entries, invalid hashes, unsafe paths, trailing bytes, and source artifacts masquerading as modules. `run file.kexe` reuses the normal parse, module, checker, and runtime pipeline over the embedded sources, so a missing external module cannot change execution. Package visibility metadata preserves private access between the source files of the same manifest-backed package.
+The `<root>` entry is always first; all remaining entries are sorted by canonical UTF-8 logical path. Module paths and visibility scopes are relative, traversal-safe identifiers. KRYNATIVE6 uses a target-neutral KIR so the same checked artifact can run across supported operating systems and architectures; older versions retain their recorded host target. The decoder rejects incompatible compiler or target metadata, truncated fields, integer-size inconsistencies, duplicate entries, invalid hashes, unsafe paths, trailing bytes, and source artifacts masquerading as modules. It decodes and validates the typed KIR, then the engine checks that it is byte-for-byte the canonical KIR regenerated from the embedded source files. Missing external modules therefore cannot alter execution. Package visibility metadata preserves private access between the source files of the same manifest-backed package.
 
-The reader also accepts KRYNATIVE4 version 4 artifacts and legacy KRYNATIVE3 version 3 files with compiler identity `kryndel-go-1.2.0`, treating KRYNATIVE3 as language version 1.0.0. KRYNATIVE4 artifacts retain file-local module visibility because they predate package-scope metadata. The former `KRYNATIVE1` single-source container is rejected.
+The reader also accepts KRYNATIVE5 version 5, KRYNATIVE4 version 4, and legacy KRYNATIVE3 version 3 files; v3 uses compiler identity `kryndel-go-1.2.0` and language version 1.0.0. V3–v5 artifacts are rechecked from their source entries and have KIR regenerated at load time. KRYNATIVE4 and earlier artifacts retain file-local module visibility because they predate package-scope metadata. The former `KRYNATIVE1` single-source container is rejected.
 
 ## Native binary formats
 
@@ -167,6 +170,59 @@ runtime. The generated C implementation is advertised for Linux amd64, Linux
 arm64, and Windows amd64; the differential suite does not claim runtime
 verification on arm64 or Windows.
 
+C AOT also implements the TCP client builtins `tcp_connect`, `tcp_send`,
+`tcp_receive`, and `tcp_close` for Linux amd64/arm64 and Windows amd64.
+Connections use nonblocking sockets; connect, send, and receive wait against a
+single absolute deadline captured once at the start of each operation. Partial
+writes and readiness retries reuse that deadline, so they cannot extend a send;
+`tcp_send` returns the full byte count on success and an error if the deadline
+expires. Receive sizes use the configured source-size limit. Closed-handle
+operations, invalid ports, EOF, and unclosed-socket diagnostics are explicit;
+the C runtime closes remaining sockets on exit. Operating-system connection
+errors retain their broad cause but can differ in detail from Go's resolver and
+socket messages. Host lookup uses synchronous `getaddrinfo`/WinSock resolution,
+which the native deadline cannot interrupt. `tcp_listen`, `tcp_accept`,
+`tcp_local_port`, UDP, HTTP/TLS, and WebSockets remain unsupported by C AOT;
+the direct ELF and direct PE backends still reject all TCP builtins. Windows C
+output links WinSock (`ws2_32`); add `-lws2_32` when compiling emitted C source
+manually. Differential execution tests cover Linux amd64 and Windows amd64,
+not Linux arm64.
+
+### SQLite in C AOT
+
+The generated-C AOT backend implements `sqlite_open`, `sqlite_exec`,
+`sqlite_query`, and `sqlite_close` on Linux amd64/arm64 and Windows amd64. It
+loads SQLite at program startup and does not need SQLite development headers:
+
+- Linux tries `libsqlite3.so.0`, then `libsqlite3.so`; manually compiling
+  emitted C should link with `-ldl` on systems where `dlopen` is not in libc.
+- Windows tries `winsqlite3.dll`, then `sqlite3.dll`.
+- If neither library is available, `sqlite_open` returns an `Err` that names
+  the missing runtime library. Programs can still be built without SQLite
+  installed, but need one of these libraries to open a database.
+
+`:memory:` databases and file paths are supported. Relative file paths resolve
+from the process working directory and remain subject to host file permissions.
+Queries return `Array[Array[String]]`: `NULL` becomes an empty string, integers
+use decimal text, floats use shortest round-trip text, and TEXT/BLOB values
+preserve their bytes in a Kryndel `String`. Result row count and columns per row
+are each bounded by `MaxArrayElements`; allocations for rows, cells, and copied
+values count against `MaxMemoryBytes`. SQLite's own internal allocations are
+managed by the loaded SQLite library. A 5-second SQLite busy timeout is set on
+each handle. SQLite diagnostics discard the driver's class prefix and trailing
+numeric result-code suffix. The remaining message comes from the loaded SQLite
+library, so wording can still vary between SQLite versions and platforms.
+
+The C runtime finalizes active statements and closes open database handles on
+runtime errors, and reports an unclosed handle at normal exit. Direct ELF and
+direct PE do not implement SQLite and reject these builtins before emitting an
+executable. SQLite file access is not confined by a native-runtime sandbox;
+restricted interpreter mode continues to deny SQLite because database
+`ATTACH` paths cannot be safely confined by the current authorizer.
+Differential execution tests cover Windows amd64 and Linux amd64/WSL; Linux
+arm64 is listed as a supported C AOT target but is not runtime-tested by this
+matrix.
+
 ### Cryptography in the native runtime
 
 The C runtime implements the full crypto surface so native executables do not
@@ -190,7 +246,7 @@ encryption; it does not replace it.
 
 ### Sealed artifacts
 
-A sealed artifact (`KRYSEAL1`) is the plain `KRYNATIVE5` byte stream wrapped in
+A sealed artifact (`KRYSEAL1`) is the plain `KRYNATIVE6` byte stream wrapped in
 AES-256-GCM with a PBKDF2-HMAC-SHA-256 key derived from a passphrase. The
 container is self-describing (magic, version, iteration count, salt, nonce,
 length) so the KDF or cipher can be revised without breaking old files. The

@@ -56,6 +56,7 @@ type Expr struct {
 	Receiver              *Expr
 	MapKeys               []*Expr
 	StructName            string
+	StructType            *TypeSpec
 	Fields                []string
 	FieldTokens           []Token
 	Values                []*Expr
@@ -65,12 +66,14 @@ type Expr struct {
 	Type                  *Type
 	// Scope is retained on variable references so editor completion can use the
 	// checked lexical environment, including when the reference is unresolved.
-	Scope      *Scope
-	Function   *Function
-	Lambda     *Function
-	Captures   []Capture
-	ConstValue *Value
-	Tail       bool
+	Scope            *Scope
+	Function         *Function
+	TraitName        string
+	GenericArguments []*Type
+	Lambda           *Function
+	Captures         []Capture
+	ConstValue       *Value
+	Tail             bool
 }
 type StmtKind int
 
@@ -154,6 +157,7 @@ type Function struct {
 	EndToken        Token
 	Public          bool
 	Worker          bool
+	Trait           string
 	TypeParams      []TypeParam
 	Params          []Param
 	Return          *TypeSpec
@@ -183,6 +187,7 @@ type StructDecl struct {
 	NameToken       Token
 	EndToken        Token
 	Public          bool
+	TypeParams      []TypeParam
 	Fields          []FieldDecl
 	Tok             Token
 	Module          string
@@ -201,6 +206,25 @@ type EnumDecl struct {
 	VisibilityScope string
 	Type            *Type
 }
+type TraitDecl struct {
+	Name            string
+	NameToken       Token
+	EndToken        Token
+	Public          bool
+	Methods         []*Function
+	Tok             Token
+	Module          string
+	VisibilityScope string
+}
+type TraitImplDecl struct {
+	Trait           string
+	TraitToken      Token
+	Target          *TypeSpec
+	Methods         []*Function
+	Tok             Token
+	Module          string
+	VisibilityScope string
+}
 type ImportDecl struct {
 	Path string
 	Tok  Token
@@ -211,6 +235,8 @@ type Program struct {
 	Functions       []*Function
 	Structs         []*StructDecl
 	Enums           []*EnumDecl
+	Traits          []*TraitDecl
+	TraitImpls      []*TraitImplDecl
 	Imports         []ImportDecl
 	Sources         []*Source
 	Module          string

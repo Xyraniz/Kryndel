@@ -119,6 +119,55 @@ generic numeric bodies can use arithmetic and ordered comparisons, while `%`
 requires `Integer`. `Copy` is structural and excludes channels, threads, actors,
 sockets, and other owned handles.
 
+Generic function and method calls can infer type parameters through callback
+signatures. A lambda's explicit signature can infer a type parameter before a
+later argument supplies it, and overloaded or generic function references are
+resolved once the call's other arguments or expected result provide enough
+type information. User-defined structs also accept type parameters and checked
+constraints:
+
+```kryndel
+struct Box[T: Copy] { value: T }
+impl Box[T] {
+    fn get() -> T { return self.value }
+    fn map[U: Copy](callback: fn(T) -> U) -> Box[U] {
+        return Box[U]{value: callback(self.value)}
+    }
+}
+let boxed: Box[Int] = Box[Int]{value: 3}
+let text: Box[String] = boxed.map(fn(value: Int) -> String { return "three" })
+```
+
+Traits provide a checked static method contract that multiple types can
+implement. A generic function can call the methods in its single trait bound;
+the checker resolves that call to each concrete implementation, and C AOT
+monomorphizes the function for the concrete receiver types:
+
+```kryndel
+trait Render { fn render() -> String }
+
+struct North { label: String }
+struct South { label: String }
+
+impl Render for North {
+    fn render() -> String { return "north:" + self.label }
+}
+impl Render for South {
+    fn render() -> String { return "south:" + self.label }
+}
+
+fn render[T: Render](value: T) -> String { return value.render() }
+```
+
+Trait implementations must match every declared method signature exactly.
+Traits and methods cannot be generic, and the current static-dispatch subset
+does not include default methods, associated items, blanket implementations,
+multiple bounds, or `dyn Trait` values.
+
+Generic struct literals name their concrete type arguments. Field access,
+method lookup, assignments, returns, and nested generic containers use the
+substituted concrete field types. Generic enums are not implemented.
+
 Overload resolution is multiple dispatch over the complete argument tuple, not just the function name or first argument. Every visible candidate is checked against the static argument types; exactly one candidate must match. If two concrete or generic candidates match equally, compilation fails with an ambiguity diagnostic instead of depending on declaration order.
 
 Struct fields are public by default inside a public API, but `private field: T` makes access and construction outside the defining visibility scope a static error. That scope is the source file for standalone modules and the manifest-backed package for its source files; callers outside the package cannot access its private fields. This is enforced by the checker rather than by naming convention.

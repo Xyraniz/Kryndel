@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	artifactMagic            = "KRYNATIVE5\x00"
-	previousArtifactMagic    = "KRYNATIVE4\x00"
+	artifactMagic            = "KRYNATIVE6\x00"
+	previousArtifactMagic    = "KRYNATIVE5\x00"
+	olderArtifactMagic       = "KRYNATIVE4\x00"
 	legacyArtifactMagic      = "KRYNATIVE3\x00"
 	compilerIdentity         = "kryndel-go-" + CompilerVersion
 	previousCompilerIdentity = compilerIdentity
@@ -31,6 +32,7 @@ type ArtifactEntry struct {
 type Artifact struct {
 	Compiler, Target, LanguageVersion string
 	Entries                           []ArtifactEntry
+	KIR                               []byte
 }
 
 func safeArtifactPath(p string) bool {
@@ -70,6 +72,20 @@ func relativeArtifactScope(base, scope string) (string, error) {
 }
 
 func BuildArtifact(prog *Program, root string) ([]byte, *Diagnostic) {
+	checker, diagnostic := Check(prog, DefaultLimits())
+	if diagnostic != nil {
+		return nil, diagnostic
+	}
+	return BuildArtifactWithChecker(prog, checker, root, DefaultLimits())
+}
+
+// BuildArtifactWithChecker stores the canonical checked KIR beside the source
+// entries. Older artifact versions remain readable, while new builds validate
+// the typed representation against the embedded sources before execution.
+func BuildArtifactWithChecker(prog *Program, checker *Checker, root string, limits Limits) ([]byte, *Diagnostic) {
+	if prog == nil || checker == nil || checker.Prog != prog {
+		return nil, Diag(CatArtifact, nil, 1, 1, "cannot build artifact without its checked program")
+	}
 	absRoot, _ := filepath.Abs(root)
 	base := filepath.Dir(absRoot)
 	rootScope := sourceVisibilityScope(prog.Source)
@@ -112,13 +128,28 @@ func BuildArtifact(prog *Program, root string) ([]byte, *Diagnostic) {
 		entries[i].Hash = sha256.Sum256(entries[i].Data)
 	}
 	sort.Slice(entries[1:], func(i, j int) bool { return entries[i+1].Path < entries[j+1].Path })
+	artifactProgram, diagnostic := ProgramFromArtifact(&Artifact{Entries: entries}, limits)
+	if diagnostic != nil {
+		return nil, diagnostic
+	}
+	artifactChecker, diagnostic := Check(artifactProgram, limits)
+	if diagnostic != nil {
+		return nil, diagnostic
+	}
+	kir, err := EmitKIR(artifactProgram, artifactChecker, NativeTarget{OS: "portable", Arch: "any"})
+	if err != nil {
+		return nil, Diag(CatArtifact, prog.Source, 1, 1, "cannot emit checked KIR: %v", err)
+	}
+	if _, err := DecodeKIR(kir, limits); err != nil {
+		return nil, Diag(CatArtifact, prog.Source, 1, 1, "invalid checked KIR: %v", err)
+	}
 	var b bytes.Buffer
 	b.WriteString(artifactMagic)
-	writeU32(&b, 5)
+	writeU32(&b, 6)
 	writeString(&b, compilerIdentity)
 	writeString(&b, LanguageVersion)
 	b.Write([]byte{'K', 'R', 'Y'})
-	writeString(&b, runtime.GOOS+"/"+runtime.GOARCH)
+	writeString(&b, "portable/any")
 	writeU32(&b, uint32(len(entries)))
 	for _, e := range entries {
 		writeString(&b, e.Path)
@@ -126,6 +157,13 @@ func BuildArtifact(prog *Program, root string) ([]byte, *Diagnostic) {
 		writeU64(&b, uint64(len(e.Data)))
 		b.Write(e.Hash[:])
 		b.Write(e.Data)
+	}
+	writeU64(&b, uint64(len(kir)))
+	kirHash := sha256.Sum256(kir)
+	b.Write(kirHash[:])
+	b.Write(kir)
+	if limits.MaxArtifactBytes > 0 && b.Len() > limits.MaxArtifactBytes {
+		return nil, Diag(CatResource, prog.Source, 1, 1, "artifact exceeds configured output size limit")
 	}
 	return b.Bytes(), nil
 }
@@ -153,8 +191,11 @@ func DecodeArtifact(data []byte, lim Limits) (*Artifact, *Diagnostic) {
 	expectedCompiler := compilerIdentity
 	switch string(magic) {
 	case artifactMagic:
-		formatVersion = 5
+		formatVersion = 6
 	case previousArtifactMagic:
+		formatVersion = 5
+		expectedCompiler = previousCompilerIdentity
+	case olderArtifactMagic:
 		formatVersion = 4
 		expectedCompiler = previousCompilerIdentity
 	case legacyArtifactMagic:
@@ -186,7 +227,11 @@ func DecodeArtifact(data []byte, lim Limits) (*Artifact, *Diagnostic) {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid header tag or length")
 	}
 	target, ok := readString(r, 64)
-	if !ok || target != runtime.GOOS+"/"+runtime.GOARCH {
+	wantTarget := runtime.GOOS + "/" + runtime.GOARCH
+	if formatVersion >= 6 {
+		wantTarget = "portable/any"
+	}
+	if !ok || target != wantTarget {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: incompatible target")
 	}
 	n, ok := readU32(r)
@@ -218,7 +263,7 @@ func DecodeArtifact(data []byte, lim Limits) (*Artifact, *Diagnostic) {
 			}
 		}
 		size, ok := readU64(r)
-		if !ok || size > uint64(lim.MaxSourceBytes) || size > uint64(r.Len())-32 {
+		if !ok || size > uint64(lim.MaxSourceBytes) || uint64(r.Len()) < 32 || size > uint64(r.Len())-32 {
 			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid length")
 		}
 		var hash [32]byte
@@ -236,6 +281,29 @@ func DecodeArtifact(data []byte, lim Limits) (*Artifact, *Diagnostic) {
 			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid UTF-8")
 		}
 		a.Entries = append(a.Entries, ArtifactEntry{Path: path, VisibilityScope: scope, Data: payload, Hash: hash})
+	}
+	if formatVersion >= 6 {
+		size, ok := readU64(r)
+		if !ok || size > uint64(lim.MaxArtifactBytes) || uint64(r.Len()) < 32 || size > uint64(r.Len())-32 {
+			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid KIR length")
+		}
+		var hash [32]byte
+		if n, err := r.Read(hash[:]); err != nil || n != len(hash) {
+			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: truncated KIR hash")
+		}
+		a.KIR = make([]byte, size)
+		if n, err := r.Read(a.KIR); err != nil || n != len(a.KIR) {
+			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: truncated KIR")
+		}
+		if sha256.Sum256(a.KIR) != hash {
+			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid KIR hash")
+		}
+		if _, err := DecodeKIR(a.KIR, lim); err != nil {
+			if strings.Contains(err.Error(), "instruction limit") {
+				return nil, Diag(CatResource, nil, 1, 1, "IR instruction limit exceeded")
+			}
+			return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: invalid KIR: %v", err)
+		}
 	}
 	if r.Len() != 0 {
 		return nil, Diag(CatArtifact, nil, 1, 1, "malformed native artifact: trailing bytes")
@@ -323,7 +391,7 @@ func ProgramFromArtifact(a *Artifact, lim Limits) (*Program, *Diagnostic) {
 	if d != nil {
 		return nil, d
 	}
-	out := &Program{Source: rootSrc, Module: rootSrc.Name, VisibilityScope: root.VisibilityScope, Statements: root.Statements, Functions: append([]*Function{}, root.Functions...), Structs: append([]*StructDecl{}, root.Structs...), Enums: append([]*EnumDecl{}, root.Enums...), Sources: []*Source{rootSrc}}
+	out := &Program{Source: rootSrc, Module: rootSrc.Name, VisibilityScope: root.VisibilityScope, Statements: root.Statements, Functions: append([]*Function{}, root.Functions...), Structs: append([]*StructDecl{}, root.Structs...), Enums: append([]*EnumDecl{}, root.Enums...), Traits: append([]*TraitDecl{}, root.Traits...), TraitImpls: append([]*TraitImplDecl{}, root.TraitImpls...), Sources: []*Source{rootSrc}}
 	for _, e := range a.Entries[1:] {
 		s := &Source{Name: e.Path, Text: string(e.Data), VisibilityScope: e.VisibilityScope}
 		p, d := Parse(s, lim)
@@ -334,6 +402,8 @@ func ProgramFromArtifact(a *Artifact, lim Limits) (*Program, *Diagnostic) {
 		out.Functions = append(out.Functions, p.Functions...)
 		out.Structs = append(out.Structs, p.Structs...)
 		out.Enums = append(out.Enums, p.Enums...)
+		out.Traits = append(out.Traits, p.Traits...)
+		out.TraitImpls = append(out.TraitImpls, p.TraitImpls...)
 	}
 	return out, nil
 }

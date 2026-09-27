@@ -27,7 +27,7 @@ func kirFunctionTargets(program *Program, paths kirPathNames) map[*Function]stri
 		for _, parameter := range function.Params {
 			parameters = append(parameters, typeSpecString(parameter.Type))
 		}
-		targets[function] = kirFunctionIdentity(function.Name, paths.name(function.Module), typeSpecString(function.Receiver), parameters)
+		targets[function] = kirFunctionIdentity(function.Name, paths.name(function.Module), kirFunctionReceiverIdentity(function.Trait, typeSpecString(function.Receiver)), parameters)
 	}
 	return targets
 }
@@ -44,7 +44,14 @@ func kirFunctionTargetFromDocument(function *KIRFunction) string {
 		}
 		parameters = append(parameters, parameter.Type)
 	}
-	return kirFunctionIdentity(function.Name, function.Module, function.Receiver, parameters)
+	return kirFunctionIdentity(function.Name, function.Module, kirFunctionReceiverIdentity(function.Trait, function.Receiver), parameters)
+}
+
+func kirFunctionReceiverIdentity(trait, receiver string) string {
+	if trait == "" {
+		return receiver
+	}
+	return "trait:" + trait + " for " + receiver
 }
 
 func kirFunctionIdentity(name, module, receiver string, parameters []string) string {

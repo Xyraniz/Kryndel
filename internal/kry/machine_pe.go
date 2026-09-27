@@ -77,6 +77,9 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 	if staticErr == nil {
 		return buildDirectStaticPE(output, target.GUI, c.Env.Lim.MaxOutputBytes)
 	}
+	if err := validateNativeBuiltinSupport(&copyProgram, c, "pe-direct", target); err != nil {
+		return nil, err
+	}
 	stmts, err := validateDirectPEProgram(&copyProgram)
 	if err != nil {
 		return nil, fmt.Errorf("direct PE dynamic subset: %w (static output path: %v)", err, staticErr)

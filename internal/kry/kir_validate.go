@@ -28,6 +28,12 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 	if err := checkKIRCount("enums", len(document.Enums), limits.MaxASTNodes); err != nil {
 		return err
 	}
+	if err := checkKIRCount("traits", len(document.Traits), limits.MaxASTNodes); err != nil {
+		return err
+	}
+	if err := checkKIRCount("trait implementations", len(document.TraitImpls), limits.MaxASTNodes); err != nil {
+		return err
+	}
 	if err := checkKIRCount("functions", len(document.Functions), limits.MaxASTNodes); err != nil {
 		return err
 	}
@@ -36,8 +42,51 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 	}
 	structs := make(map[string]*KIRStruct, len(document.Structs))
 	enums := make(map[string]*KIREnum, len(document.Enums))
+	traits := make(map[string]*KIRTrait, len(document.Traits))
 	functionCounts := make(map[string]int, len(document.Functions))
 	functionTargets := make(map[string]string, len(document.Functions))
+	functionGenericArguments := make(map[string]int, len(document.Functions))
+	if document.Version < 5 && (len(document.Traits) != 0 || len(document.TraitImpls) != 0) {
+		return fmt.Errorf("trait declarations and implementations require KIR version 5")
+	}
+	for _, trait := range document.Traits {
+		if trait == nil || trait.Name == "" {
+			return fmt.Errorf("trait declaration has no name")
+		}
+		if _, duplicate := traits[trait.Name]; duplicate {
+			return fmt.Errorf("duplicate trait declaration %q", trait.Name)
+		}
+		if len(trait.Methods) == 0 {
+			return fmt.Errorf("trait %q has no methods", trait.Name)
+		}
+		if err := checkKIRCount("trait methods", len(trait.Methods), limits.MaxArrayElements); err != nil {
+			return err
+		}
+		methods := map[string]bool{}
+		for _, method := range trait.Methods {
+			if method == nil || method.Name == "" || method.Return == "" || methods[method.Name] {
+				return fmt.Errorf("trait %q has an incomplete or duplicate method", trait.Name)
+			}
+			methods[method.Name] = true
+			if !validKIRTypeExpression(method.Return) || !validKIRTypeVariables(method.Return, map[string]bool{}) {
+				return fmt.Errorf("trait %q method %q has an invalid return type", trait.Name, method.Name)
+			}
+			if err := checkKIRCount("trait method parameters", len(method.Params), limits.MaxArrayElements); err != nil {
+				return err
+			}
+			parameterNames := map[string]bool{}
+			for _, parameter := range method.Params {
+				if parameter == nil || parameter.Name == "" || parameter.Type == "" || parameterNames[parameter.Name] || parameter.Default != nil || parameter.Binding != nil {
+					return fmt.Errorf("trait %q method %q has an invalid parameter", trait.Name, method.Name)
+				}
+				if !validKIRTypeExpression(parameter.Type) || !validKIRTypeVariables(parameter.Type, map[string]bool{}) {
+					return fmt.Errorf("trait %q method %q has an invalid parameter type", trait.Name, method.Name)
+				}
+				parameterNames[parameter.Name] = true
+			}
+		}
+		traits[trait.Name] = trait
+	}
 	for _, decl := range document.Structs {
 		if decl == nil || decl.Name == "" {
 			return fmt.Errorf("struct declaration has no name")
@@ -48,6 +97,22 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if err := checkKIRCount("struct fields", len(decl.Fields), limits.MaxArrayElements); err != nil {
 			return err
 		}
+		if err := checkKIRCount("struct type parameters", len(decl.TypeParams), limits.MaxArrayElements); err != nil {
+			return err
+		}
+		if document.Version < 4 && len(decl.TypeParams) != 0 {
+			return fmt.Errorf("generic struct declarations require KIR version 4")
+		}
+		parameters := map[string]bool{}
+		for _, parameter := range decl.TypeParams {
+			if parameter == nil || parameter.Name == "" || parameters[parameter.Name] {
+				return fmt.Errorf("struct %q has an empty or duplicate type parameter", decl.Name)
+			}
+			if !validKIRTypeConstraint(parameter.Constraint, document.Version, traits) {
+				return fmt.Errorf("struct %q has unknown constraint %q", decl.Name, parameter.Constraint)
+			}
+			parameters[parameter.Name] = true
+		}
 		fields := map[string]bool{}
 		for _, field := range decl.Fields {
 			if field == nil || field.Name == "" || field.Type == "" {
@@ -57,6 +122,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				return fmt.Errorf("struct %q has duplicate field %q", decl.Name, field.Name)
 			}
 			fields[field.Name] = true
+			if document.Version >= 4 && !validKIRTypeVariables(field.Type, parameters) {
+				return fmt.Errorf("struct %q field %q has an invalid type expression", decl.Name, field.Name)
+			}
 		}
 		structs[decl.Name] = decl
 	}
@@ -82,9 +150,23 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		}
 		enums[decl.Name] = decl
 	}
+	for name := range traits {
+		if structs[name] != nil || enums[name] != nil {
+			return fmt.Errorf("trait %q conflicts with a type declaration", name)
+		}
+	}
 	for _, function := range document.Functions {
 		if function == nil || function.Name == "" || function.Return == "" {
 			return fmt.Errorf("function declaration is incomplete")
+		}
+		if document.Version >= 5 && (function.Source == "" || function.Line < 1 || function.Column < 1) {
+			return fmt.Errorf("function %q has invalid source location metadata", function.Name)
+		}
+		if document.Version < 5 && (function.Source != "" || function.Line != 0 || function.Column != 0 || function.Trait != "") {
+			return fmt.Errorf("function source locations and trait implementation metadata require KIR version 5")
+		}
+		if function.Trait != "" && (traits[function.Trait] == nil || function.Receiver == "") {
+			return fmt.Errorf("function %q has an invalid trait implementation marker", function.Name)
 		}
 		if len(function.Captures) != 0 {
 			return fmt.Errorf("top-level function declarations cannot have closure captures")
@@ -103,6 +185,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		for _, parameter := range function.TypeParams {
 			if parameter == nil || parameter.Name == "" || seenTypeParams[parameter.Name] {
 				return fmt.Errorf("function %q has an empty or duplicate type parameter", function.Name)
+			}
+			if !validKIRTypeConstraint(parameter.Constraint, document.Version, traits) {
+				return fmt.Errorf("function %q has unknown constraint %q", function.Name, parameter.Constraint)
 			}
 			seenTypeParams[parameter.Name] = true
 		}
@@ -130,10 +215,105 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			return fmt.Errorf("duplicate function target %q", target)
 		}
 		functionTargets[target] = function.Name
+		functionGenericArguments[target] = len(function.TypeParams)
+	}
+	traitImplTargets := map[string]bool{}
+	traitImplementations := map[string]bool{}
+	for _, implementation := range document.TraitImpls {
+		if implementation == nil || implementation.Trait == "" || implementation.For == "" {
+			return fmt.Errorf("trait implementation is incomplete")
+		}
+		trait := traits[implementation.Trait]
+		if trait == nil {
+			return fmt.Errorf("trait implementation references unknown trait %q", implementation.Trait)
+		}
+		if !validKIRTraitTargetType(implementation.For, structs, enums) {
+			return fmt.Errorf("trait %q implementation has an invalid or non-concrete target type", implementation.Trait)
+		}
+		implementationKey := implementation.Trait + " for " + implementation.For
+		if traitImplementations[implementationKey] {
+			return fmt.Errorf("duplicate implementation of trait %q for %s", implementation.Trait, implementation.For)
+		}
+		traitImplementations[implementationKey] = true
+		if len(implementation.Methods) != len(trait.Methods) {
+			return fmt.Errorf("trait %q implementation for %s has missing or extra methods", implementation.Trait, implementation.For)
+		}
+		if err := checkKIRCount("trait implementation methods", len(implementation.Methods), limits.MaxArrayElements); err != nil {
+			return err
+		}
+		methods := map[string]bool{}
+		for _, method := range implementation.Methods {
+			if method == nil || method.Name == "" || methods[method.Name] {
+				return fmt.Errorf("trait %q implementation has an empty or duplicate method", implementation.Trait)
+			}
+			methods[method.Name] = true
+			traitMethod := kirTraitMethod(trait, method.Name)
+			if traitMethod == nil {
+				return fmt.Errorf("trait %q does not declare implementation method %q", implementation.Trait, method.Name)
+			}
+			prefix, target, ok := strings.Cut(method.Target, ":")
+			if !ok || prefix != "function" || target == "" {
+				return fmt.Errorf("trait %q method %q has an invalid function target", implementation.Trait, method.Name)
+			}
+			functionName, exists := functionTargets[target]
+			if !exists || functionName != method.Name {
+				return fmt.Errorf("trait %q method %q references an undeclared function target", implementation.Trait, method.Name)
+			}
+			var function *KIRFunction
+			for _, candidate := range document.Functions {
+				candidateTarget := candidate.Name
+				if functionCounts[candidate.Name] > 1 {
+					candidateTarget = kirFunctionTargetFromDocument(candidate)
+				}
+				if candidateTarget == target {
+					function = candidate
+					break
+				}
+			}
+			if function == nil || function.Trait != implementation.Trait || function.Receiver != implementation.For {
+				return fmt.Errorf("trait %q method %q targets a function with mismatched impl metadata", implementation.Trait, method.Name)
+			}
+			if !kirTraitFunctionMatches(traitMethod, function) {
+				return fmt.Errorf("trait %q method %q does not match its declared signature", implementation.Trait, method.Name)
+			}
+			traitImplTargets[target] = true
+		}
+		for _, declared := range trait.Methods {
+			if !methods[declared.Name] {
+				return fmt.Errorf("trait %q implementation is missing method %q", implementation.Trait, declared.Name)
+			}
+		}
+	}
+	for _, function := range document.Functions {
+		if function.Trait == "" {
+			continue
+		}
+		target := function.Name
+		if functionCounts[function.Name] > 1 {
+			target = kirFunctionTargetFromDocument(function)
+		}
+		if !traitImplTargets[target] {
+			return fmt.Errorf("trait implementation function %q is not referenced by an impl", function.Name)
+		}
 	}
 	// Declarations count toward the same document-wide node budget as the
 	// recursive expression, statement, pattern, and constant trees below.
-	nodeCount := len(document.Structs) + len(document.Enums) + len(document.Functions) + len(document.Statements)
+	nodeCount := len(document.Structs) + len(document.Enums) + len(document.Traits) + len(document.TraitImpls) + len(document.Functions) + len(document.Statements)
+	for _, trait := range document.Traits {
+		if trait != nil {
+			nodeCount += len(trait.Methods)
+			for _, method := range trait.Methods {
+				if method != nil {
+					nodeCount += len(method.Params)
+				}
+			}
+		}
+	}
+	for _, implementation := range document.TraitImpls {
+		if implementation != nil {
+			nodeCount += len(implementation.Methods)
+		}
+	}
 	if limits.MaxASTNodes > 0 && nodeCount > limits.MaxASTNodes {
 		return fmt.Errorf("node count exceeds configured limit")
 	}
@@ -198,11 +378,33 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if expression.Type == "" {
 			return fmt.Errorf("%s expression %q at %s:%d has no checked type", expression.Kind, expression.Name, expression.Source, expression.Line)
 		}
+		if document.Version < 5 && expression.TraitName != "" {
+			return fmt.Errorf("trait method calls require KIR version 5")
+		}
+		if expression.Kind != "call" && expression.TraitName != "" {
+			return fmt.Errorf("non-call expression has a trait method target")
+		}
 		if len(expression.Type) > limits.MaxSourceBytes && limits.MaxSourceBytes > 0 {
 			return fmt.Errorf("expression type exceeds configured string limit")
 		}
 		if document.Version < 3 && (expression.Binding != nil || expression.Callee != nil || expression.Lambda != nil) {
 			return fmt.Errorf("function values and resolved expression bindings require KIR version 3")
+		}
+		if document.Version < 4 && (expression.StructType != "" || len(expression.GenericArguments) != 0) {
+			return fmt.Errorf("generic type call metadata requires KIR version 4")
+		}
+		if document.Version >= 4 {
+			for _, argument := range expression.GenericArguments {
+				if !validKIRTypeExpression(argument) {
+					return fmt.Errorf("expression has an invalid generic type argument")
+				}
+			}
+			if expression.Kind == "call" && strings.HasPrefix(expression.CallTarget, "function:") {
+				target := strings.TrimPrefix(expression.CallTarget, "function:")
+				if arity, exists := functionGenericArguments[target]; exists && len(expression.GenericArguments) != arity {
+					return fmt.Errorf("function call %q has %d generic type argument(s), expected %d", target, len(expression.GenericArguments), arity)
+				}
+			}
 		}
 		if expression.Kind != "var" && expression.Binding != nil {
 			return fmt.Errorf("non-variable expression has a resolved binding")
@@ -260,7 +462,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			}
 		case "call":
 			if expression.Callee != nil {
-				if document.Version < 3 || expression.Name != "" || expression.CallTarget != "" || expression.BuiltinID != "" {
+				if document.Version < 3 || expression.Name != "" || expression.CallTarget != "" || expression.BuiltinID != "" || expression.TraitName != "" {
 					return fmt.Errorf("indirect call has an invalid name or target")
 				}
 				params, result, ok := parseKIRFunctionType(expression.Callee.Type)
@@ -284,7 +486,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				}
 				prefix, name, _ := strings.Cut(expression.CallTarget, ":")
 				if prefix == "builtin" {
-					if name != expression.Name {
+					if name != expression.Name || expression.TraitName != "" {
 						return fmt.Errorf("call expression name does not match its target")
 					}
 					builtin, ok := Builtins()[name]
@@ -294,7 +496,31 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 					if expression.BuiltinID != "" && expression.BuiltinID != builtin.ID {
 						return fmt.Errorf("call to builtin %q has a mismatched builtin id", name)
 					}
+				} else if prefix == "trait" {
+					traitName, methodName, ok := strings.Cut(name, "::")
+					trait := traits[traitName]
+					if document.Version < 5 || !ok || trait == nil || methodName != expression.Name || expression.TraitName != traitName || expression.Receiver == nil {
+						return fmt.Errorf("call references an invalid trait method target")
+					}
+					var signature *KIRTraitMethod
+					for _, method := range trait.Methods {
+						if method.Name == methodName {
+							signature = method
+							break
+						}
+					}
+					if signature == nil || len(signature.Params) != len(expression.Args) || expression.Type != signature.Return {
+						return fmt.Errorf("call to trait method %q does not match its signature", methodName)
+					}
+					for i, parameter := range signature.Params {
+						if expression.Args[i] == nil || expression.Args[i].Type != parameter.Type {
+							return fmt.Errorf("call to trait method %q has a mismatched argument", methodName)
+						}
+					}
 				} else {
+					if expression.TraitName != "" {
+						return fmt.Errorf("function call has unexpected trait metadata")
+					}
 					resolvedName, ok := functionTargets[name]
 					if !ok {
 						return fmt.Errorf("call references undeclared function or unresolved overload %q", name)
@@ -309,8 +535,14 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				return fmt.Errorf("lambda expression is missing its versioned function body")
 			}
 			lambda := expression.Lambda
-			if lambda.Name == "" || lambda.Return == "" || len(lambda.TypeParams) != 0 || lambda.Receiver != "" || lambda.Public || lambda.Worker {
+			if lambda.Name == "" || lambda.Return == "" || len(lambda.TypeParams) != 0 || lambda.Receiver != "" || lambda.Public || lambda.Worker || lambda.Trait != "" {
 				return fmt.Errorf("lambda function metadata is invalid")
+			}
+			if document.Version >= 5 && (lambda.Source == "" || lambda.Line < 1 || lambda.Column < 1) {
+				return fmt.Errorf("lambda has invalid source location metadata")
+			}
+			if document.Version < 5 && (lambda.Source != "" || lambda.Line != 0 || lambda.Column != 0) {
+				return fmt.Errorf("lambda source locations require KIR version 5")
 			}
 			if err := checkKIRCount("lambda parameters", len(lambda.Params), limits.MaxArrayElements); err != nil {
 				return err
@@ -378,8 +610,15 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			}
 		case "struct":
 			decl := structs[expression.StructName]
-			if expression.StructName == "" || expression.Type != expression.StructName || decl == nil || len(expression.Fields) != len(expression.Values) || len(expression.Fields) != len(decl.Fields) {
+			if expression.StructName == "" || decl == nil || len(expression.Fields) != len(expression.Values) || len(expression.Fields) != len(decl.Fields) {
 				return fmt.Errorf("struct expression has an unknown type or mismatched fields and values")
+			}
+			instanceType := expression.StructName
+			if document.Version >= 4 {
+				instanceType = expression.StructType
+			}
+			if expression.Type != instanceType || !validKIRStructInstanceType(instanceType, decl) {
+				return fmt.Errorf("struct expression has an invalid generic instantiation")
 			}
 			declaredFields := make(map[string]bool, len(decl.Fields))
 			for _, field := range decl.Fields {
@@ -605,6 +844,9 @@ func checkKIRCount(label string, count, maximum int) error {
 }
 
 func validKIRTarget(target KIRTarget) bool {
+	if target.OS == "portable" {
+		return target.Arch == "any" && !target.GUI
+	}
 	switch target.OS {
 	case "linux", "windows", "darwin":
 	default:
@@ -615,7 +857,229 @@ func validKIRTarget(target KIRTarget) bool {
 
 func validKIRCallTarget(target string) bool {
 	prefix, name, ok := strings.Cut(target, ":")
-	return ok && name != "" && (prefix == "builtin" || prefix == "function")
+	if !ok || name == "" {
+		return false
+	}
+	if prefix == "builtin" || prefix == "function" {
+		return true
+	}
+	if prefix == "trait" {
+		trait, method, found := strings.Cut(name, "::")
+		return found && trait != "" && method != "" && !strings.Contains(method, "::")
+	}
+	return false
+}
+
+func validKIRTypeConstraint(constraint string, version int, traits map[string]*KIRTrait) bool {
+	switch constraint {
+	case "", "Any", "Copy", "Integer", "Numeric", "Comparable":
+		return true
+	default:
+		return version >= 5 && traits[constraint] != nil
+	}
+}
+
+func kirTraitMethod(trait *KIRTrait, name string) *KIRTraitMethod {
+	if trait == nil {
+		return nil
+	}
+	for _, method := range trait.Methods {
+		if method != nil && method.Name == name {
+			return method
+		}
+	}
+	return nil
+}
+
+func kirTraitFunctionMatches(signature *KIRTraitMethod, function *KIRFunction) bool {
+	if signature == nil || function == nil || len(signature.Params) != len(function.Params) || len(function.TypeParams) != 0 {
+		return false
+	}
+	for i, parameter := range signature.Params {
+		if parameter == nil || function.Params[i] == nil || parameter.Type != function.Params[i].Type || function.Params[i].Default != nil {
+			return false
+		}
+	}
+	return signature.Return == function.Return
+}
+
+func validKIRTraitTargetType(encoded string, structs map[string]*KIRStruct, enums map[string]*KIREnum) bool {
+	spec, ok := parseKIRTypeExpression(encoded)
+	if !ok || spec.Function || structs[spec.Name] == nil || !validKIRStructInstanceType(encoded, structs[spec.Name]) {
+		return false
+	}
+	for _, argument := range spec.Params {
+		if !validKIRConcreteType(argument, structs, enums, 0) {
+			return false
+		}
+	}
+	return true
+}
+
+func validKIRConcreteType(spec *TypeSpec, structs map[string]*KIRStruct, enums map[string]*KIREnum, depth int) bool {
+	if spec == nil || depth > 128 {
+		return false
+	}
+	if spec.Function {
+		if !validKIRConcreteType(spec.Return, structs, enums, depth+1) {
+			return false
+		}
+		for _, parameter := range spec.Params {
+			if !validKIRConcreteType(parameter, structs, enums, depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	if declaration := structs[spec.Name]; declaration != nil {
+		if len(spec.Params) != len(declaration.TypeParams) {
+			return false
+		}
+		for _, argument := range spec.Params {
+			if !validKIRConcreteType(argument, structs, enums, depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	if enums[spec.Name] != nil {
+		return len(spec.Params) == 0
+	}
+	if len(spec.Params) == 0 {
+		switch spec.Name {
+		case "Void", "Nil", "Int", "UInt8", "UInt16", "UInt32", "UInt64", "Float", "Bool", "String", "Bytes", "Json", "WebSocket", "Regex", "Random", "SQLite", "TcpSocket", "TcpListener", "UdpSocket", "FFILibrary", "FFISymbol", "FFIBuffer", "TaskGroup":
+			return true
+		}
+		return false
+	}
+	arities := map[string]int{"Array": 1, "Option": 1, "Result": 2, "Channel": 1, "Thread": 1, "Map": 2, "Set": 1, "Actor": 1, "Shared": 1}
+	arity, known := arities[spec.Name]
+	if !known || len(spec.Params) != arity {
+		return false
+	}
+	for _, argument := range spec.Params {
+		if !validKIRConcreteType(argument, structs, enums, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+func validKIRStructInstanceType(encoded string, declaration *KIRStruct) bool {
+	if declaration == nil {
+		return false
+	}
+	if len(declaration.TypeParams) == 0 {
+		return encoded == declaration.Name
+	}
+	arguments, ok := splitKIRGenericArguments(encoded, declaration.Name)
+	if !ok || len(arguments) != len(declaration.TypeParams) {
+		return false
+	}
+	for _, argument := range arguments {
+		if !validKIRTypeExpression(argument) {
+			return false
+		}
+	}
+	return true
+}
+
+func splitKIRGenericArguments(encoded, name string) ([]string, bool) {
+	prefix := name + "["
+	if !strings.HasPrefix(encoded, prefix) || !strings.HasSuffix(encoded, "]") {
+		return nil, false
+	}
+	inner := encoded[len(prefix) : len(encoded)-1]
+	if inner == "" {
+		return nil, false
+	}
+	var arguments []string
+	start, square, round := 0, 0, 0
+	for i, r := range inner {
+		switch r {
+		case '[':
+			square++
+		case ']':
+			square--
+			if square < 0 {
+				return nil, false
+			}
+		case '(':
+			round++
+		case ')':
+			round--
+			if round < 0 {
+				return nil, false
+			}
+		case ',':
+			if square == 0 && round == 0 {
+				argument := strings.TrimSpace(inner[start:i])
+				if argument == "" {
+					return nil, false
+				}
+				arguments = append(arguments, argument)
+				start = i + 1
+			}
+		}
+	}
+	if square != 0 || round != 0 {
+		return nil, false
+	}
+	last := strings.TrimSpace(inner[start:])
+	if last == "" {
+		return nil, false
+	}
+	arguments = append(arguments, last)
+	return arguments, true
+}
+
+func validKIRTypeExpression(encoded string) bool {
+	if encoded == "" {
+		return false
+	}
+	_, ok := parseKIRTypeExpression(encoded)
+	return ok
+}
+
+func validKIRTypeVariables(encoded string, parameters map[string]bool) bool {
+	spec, ok := parseKIRTypeExpression(encoded)
+	if !ok {
+		return false
+	}
+	var visit func(*TypeSpec) bool
+	visit = func(current *TypeSpec) bool {
+		if current == nil {
+			return false
+		}
+		if parameters[current.Name] && len(current.Params) != 0 {
+			return false
+		}
+		if current.Function && !visit(current.Return) {
+			return false
+		}
+		for _, child := range current.Params {
+			if !visit(child) {
+				return false
+			}
+		}
+		return true
+	}
+	return visit(spec)
+}
+
+func parseKIRTypeExpression(encoded string) (*TypeSpec, bool) {
+	limits := DefaultLimits()
+	source := &Source{Name: "<KIR type>", Text: encoded}
+	tokens, diagnostic := Lex(source, limits)
+	if diagnostic != nil {
+		return nil, false
+	}
+	parser := &Parser{Tokens: tokens, Lim: limits}
+	spec := parser.typeSpec()
+	if parser.Err != nil || !parser.check(EOF) || TypeSpecString(spec) != encoded {
+		return nil, false
+	}
+	return spec, true
 }
 
 func isKIRUnaryOperator(operator string) bool {

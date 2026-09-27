@@ -25,8 +25,16 @@ func FormatSource(src *Source, lim Limits) (string, *Diagnostic) {
 	for _, e := range p.Enums {
 		f.enumDecl(e)
 	}
+	for _, trait := range p.Traits {
+		f.traitDecl(trait)
+	}
 	for _, fn := range p.Functions {
-		f.function(fn)
+		if fn.Trait == "" {
+			f.function(fn)
+		}
+	}
+	for _, implementation := range p.TraitImpls {
+		f.traitImpl(implementation)
 	}
 	for _, s := range p.Statements {
 		f.stmt(s)
@@ -69,7 +77,18 @@ func (f *Formatter) structDecl(s *StructDecl) {
 	if s.Public {
 		pre = "pub "
 	}
-	f.line(pre + "struct " + s.Name + " {")
+	name := s.Name
+	if len(s.TypeParams) != 0 {
+		params := make([]string, len(s.TypeParams))
+		for i, param := range s.TypeParams {
+			params[i] = param.Name
+			if param.Constraint != "" {
+				params[i] += ": " + param.Constraint
+			}
+		}
+		name += "[" + strings.Join(params, ", ") + "]"
+	}
+	f.line(pre + "struct " + name + " {")
 	f.indent++
 	for _, x := range s.Fields {
 		prefix := ""
@@ -96,11 +115,47 @@ func (f *Formatter) enumDecl(e *EnumDecl) {
 	f.line("}")
 	f.line("")
 }
+func (f *Formatter) traitDecl(trait *TraitDecl) {
+	pre := ""
+	if trait.Public {
+		pre = "pub "
+	}
+	f.line(pre + "trait " + trait.Name + " {")
+	f.indent++
+	for _, method := range trait.Methods {
+		params := make([]string, len(method.Params))
+		for i, param := range method.Params {
+			params[i] = param.Name + ": " + f.typeSpec(param.Type)
+		}
+		f.line("fn " + method.Name + "(" + strings.Join(params, ", ") + ") -> " + f.typeSpec(method.Return))
+	}
+	f.indent--
+	f.line("}")
+	f.line("")
+}
+func (f *Formatter) traitImpl(implementation *TraitImplDecl) {
+	f.line("impl " + implementation.Trait + " for " + f.typeSpec(implementation.Target) + " {")
+	f.indent++
+	for _, method := range implementation.Methods {
+		f.functionDecl(method)
+	}
+	f.indent--
+	f.line("}")
+	f.line("")
+}
 func (f *Formatter) function(fn *Function) {
-	if fn.Receiver != nil {
+	if fn.Receiver != nil && fn.Trait == "" {
 		f.line("impl " + f.typeSpec(fn.Receiver) + " {")
 		f.indent++
 	}
+	f.functionDecl(fn)
+	if fn.Receiver != nil && fn.Trait == "" {
+		f.indent--
+		f.line("}")
+	}
+	f.line("")
+}
+func (f *Formatter) functionDecl(fn *Function) {
 	pre := ""
 	if fn.Public {
 		pre = "pub "
@@ -134,11 +189,6 @@ func (f *Formatter) function(fn *Function) {
 	}
 	f.indent--
 	f.line("}")
-	if fn.Receiver != nil {
-		f.indent--
-		f.line("}")
-	}
-	f.line("")
 }
 func (f *Formatter) stmt(s *Stmt) {
 	switch s.Kind {
@@ -348,7 +398,7 @@ func (f *Formatter) expr(e *Expr) string {
 		}
 		return x + "]"
 	case ExStruct:
-		x := e.StructName + "{"
+		x := f.typeSpec(e.StructType) + "{"
 		for i, n := range e.Fields {
 			if i > 0 {
 				x += ", "

@@ -349,10 +349,35 @@ func (c *Checker) checkFunction(f *Function) *Diagnostic {
 		}
 		c.Env.TypeParams[param.Name] = Generic(param.Name, param.Constraint)
 	}
+	if f.Receiver != nil && !f.Receiver.Function {
+		if template := c.Env.Types[f.Receiver.Name]; template != nil && template.Kind == TyStruct {
+			if len(f.Receiver.Params) != len(template.Struct.TypeParams) {
+				return Diag(CatType, f.Receiver.Tok.Source, f.Receiver.Tok.Line, f.Receiver.Tok.Column, "impl receiver for '%s' must provide %d type argument(s)", template.Name, len(template.Struct.TypeParams))
+			}
+			for i, parameter := range template.Struct.TypeParams {
+				spec := f.Receiver.Params[i]
+				if len(spec.Params) == 0 && !spec.Function {
+					if _, exists := c.Env.TypeParams[spec.Name]; exists {
+						return Diag(CatType, spec.Tok.Source, spec.Tok.Line, spec.Tok.Column, "receiver type parameter '%s' conflicts with a method type parameter", spec.Name)
+					}
+					c.Env.TypeParams[spec.Name] = Generic(spec.Name, parameter.Constraint)
+				}
+			}
+		}
+	}
 	defer func() { c.currentFunction = nil; c.currentReturn = nil; c.Env.TypeParams = previousParams }()
 	for _, param := range f.TypeParams {
-		if param.Constraint != "" && param.Constraint != "Copy" && param.Constraint != "Integer" && param.Constraint != "Numeric" && param.Constraint != "Comparable" {
+		if !knownTypeConstraint(c.Env, param.Constraint) {
 			return Diag(CatType, param.Tok.Source, param.Tok.Line, param.Tok.Column, "unknown type constraint '%s'", param.Constraint)
+		}
+	}
+	if f.Receiver != nil && !f.Receiver.Function {
+		if template := c.Env.Types[f.Receiver.Name]; template != nil && template.Kind == TyStruct {
+			for _, param := range template.Struct.TypeParams {
+				if param.Constraint != "" && param.Constraint != "Any" && param.Constraint != "Copy" && param.Constraint != "Integer" && param.Constraint != "Numeric" && param.Constraint != "Comparable" {
+					return Diag(CatType, param.Tok.Source, param.Tok.Line, param.Tok.Column, "unknown type constraint '%s'", param.Constraint)
+				}
+			}
 		}
 	}
 	if f.Receiver != nil {
@@ -1259,7 +1284,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 					d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "field '%s' is private", e.Field)
 					break
 				}
-				t = f.Type
+				t = structFieldType(bt, f)
 				e.Definition = f.Tok
 			}
 		}
@@ -1271,7 +1296,13 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		if st == nil || st.Kind != TyStruct {
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown struct '%s'", e.StructName)
 			break
-		} else if name := inaccessibleTypeName(st, sc.VisibilityScope, 0); name != "" {
+		}
+		instance, instanceDiagnostic := resolveSpec(c.Env, e.StructType, 0)
+		if instanceDiagnostic != nil {
+			d = instanceDiagnostic
+			break
+		}
+		if name := inaccessibleTypeName(instance, sc.VisibilityScope, 0); name != "" {
 			d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "struct '%s' is private", name)
 			break
 		}
@@ -1290,7 +1321,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			var ft *Type
 			for _, f := range st.Struct.Fields {
 				if f.Name == n {
-					ft = f.Type
+					ft = structFieldType(instance, f)
 				}
 			}
 			if ft == nil {
@@ -1311,7 +1342,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				d = Diag(CatType, e.Values[i].Tok.Source, e.Values[i].Tok.Line, e.Values[i].Tok.Column, "field '%s' expected %s, found %s", n, ft, vt)
 			}
 		}
-		t = st
+		t = instance
 	case ExPropagate:
 		inner, dd := c.checkExpr(sc, e.Operand, c.currentReturn)
 		if dd != nil {
@@ -1372,11 +1403,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		if d != nil {
 			return TError, d
 		}
-		key := methodKey(rt, e.Name)
-		candidates := c.Env.Overloads[key]
-		if len(candidates) == 0 && c.Env.Functions[key] != nil {
-			candidates = []*Function{c.Env.Functions[key]}
-		}
+		candidates := c.methodsForReceiver(rt, e.Name)
 		if len(candidates) == 0 {
 			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown method '%s' for %s", e.Name, rt)
 		}
@@ -1388,7 +1415,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				continue
 			}
 			visible = true
-			if returnType, ok := c.matchFunctionCall(sc, e, candidate, expected); ok {
+			if returnType, ok := c.matchFunctionCall(sc, e, candidate, expected, rt); ok {
 				if matched != nil {
 					return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "ambiguous call to method '%s': multiple overloads match", e.Name)
 				}
@@ -1402,6 +1429,9 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of method '%s' matches the argument types", e.Name)
 		}
 		e.Function = matched
+		if matched.Receiver == nil {
+			e.TraitName = matched.Trait
+		}
 		e.Definition = matched.NameToken
 		return matchedType, nil
 	}
@@ -1428,7 +1458,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	for _, f := range candidates {
 		if f.Public || f.VisibilityScope == sc.VisibilityScope {
 			visible = true
-			if rt, ok := c.matchFunctionCall(sc, e, f, expected); ok {
+			if rt, ok := c.matchFunctionCall(sc, e, f, expected, nil); ok {
 				if matched != nil {
 					return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "ambiguous call to '%s': multiple overloads match", e.Name)
 				}
@@ -1447,7 +1477,58 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of '%s' matches the argument types", e.Name)
 }
 
-func (c *Checker) matchFunctionCall(sc *Scope, e *Expr, f *Function, expectedReturn *Type) (*Type, bool) {
+func (c *Checker) methodsForReceiver(receiver *Type, name string) []*Function {
+	if receiver == nil {
+		return nil
+	}
+	seen := map[*Function]bool{}
+	var methods []*Function
+	add := func(candidate *Function) {
+		if candidate != nil && !seen[candidate] {
+			seen[candidate] = true
+			methods = append(methods, candidate)
+		}
+	}
+	key := methodKey(receiver, name)
+	for _, candidate := range c.Env.Overloads[key] {
+		add(candidate)
+	}
+	if len(c.Env.Overloads[key]) == 0 {
+		add(c.Env.Functions[key])
+	}
+	if receiver.Kind == TyGeneric {
+		if trait := c.Env.Traits[genericConstraint(receiver)]; trait != nil {
+			for _, method := range trait.Methods {
+				if method.Name == name {
+					add(method)
+				}
+			}
+		}
+	}
+	if receiver.Kind == TyStruct && receiver.Struct != nil {
+		for _, candidates := range c.Env.Overloads {
+			for _, candidate := range candidates {
+				if candidate.Name == name && candidate.Receiver != nil && candidate.Receiver.Name == receiver.Struct.Name {
+					add(candidate)
+				}
+			}
+		}
+		for traitName, implementations := range c.Env.TraitImpls {
+			implementation := implementations[receiver.String()]
+			if implementation == nil {
+				continue
+			}
+			for _, method := range implementation.Methods {
+				if method.Name == name && method.Trait == traitName {
+					add(method)
+				}
+			}
+		}
+	}
+	return methods
+}
+
+func (c *Checker) matchFunctionCall(sc *Scope, e *Expr, f *Function, expectedReturn *Type, receiver *Type) (*Type, bool) {
 	if len(e.Args) < minArgs(f) || len(e.Args) > len(f.Params) {
 		return nil, false
 	}
@@ -1459,9 +1540,55 @@ func (c *Checker) matchFunctionCall(sc *Scope, e *Expr, f *Function, expectedRet
 		c.Env.TypeParams[param.Name] = Generic(param.Name, param.Constraint)
 		constraints[param.Name] = param.Constraint
 	}
+	if f.Receiver != nil && !f.Receiver.Function {
+		if template := c.Env.Types[f.Receiver.Name]; template != nil && template.Kind == TyStruct {
+			for _, param := range template.Struct.TypeParams {
+				if _, exists := c.Env.TypeParams[param.Name]; !exists {
+					c.Env.TypeParams[param.Name] = Generic(param.Name, param.Constraint)
+					constraints[param.Name] = param.Constraint
+				}
+			}
+		}
+	}
 	defer func() { c.Env.TypeParams = previous }()
+	if f.Receiver != nil && receiver != nil {
+		for name, generic := range c.Env.TypeParams {
+			if generic != nil && generic.Kind == TyGeneric {
+				constraints[name] = genericConstraint(generic)
+			}
+		}
+		if !unifyGenericSpec(c.Env, f.Receiver, receiver, 0, constraints, inferred) {
+			return nil, false
+		}
+	}
+	var deferredFunctionValues []int
 	for i, arg := range e.Args {
 		paramSpec := f.Params[i].Type
+		if typeSpecHasUnresolvedGeneric(paramSpec, c.Env) {
+			if arg.Kind == ExLambda {
+				// A lambda has an explicit signature, so infer from that signature
+				// before applying context from a later argument such as T itself.
+				actual, d := c.checkExpr(sc, arg, nil)
+				if d != nil || !unifyGenericSpec(c.Env, paramSpec, actual, 0, constraints, inferred) {
+					return nil, false
+				}
+				continue
+			}
+			if arg.Kind == ExVar && !sc.has(arg.Name) {
+				if hasUniqueConcreteFunctionValue(c, sc, arg.Name) {
+					actual, d := c.checkExpr(sc, arg, nil)
+					if d != nil || !unifyGenericSpec(c.Env, paramSpec, actual, 0, constraints, inferred) {
+						return nil, false
+					}
+					continue
+				}
+				// An overload or generic function reference needs the final
+				// function type. Let the other arguments and expected result infer
+				// its generic parameters first.
+				deferredFunctionValues = append(deferredFunctionValues, i)
+				continue
+			}
+		}
 		argumentExpected, err := resolveSpec(c.Env, paramSpec, 0)
 		if err != nil {
 			return nil, false
@@ -1476,6 +1603,17 @@ func (c *Checker) matchFunctionCall(sc *Scope, e *Expr, f *Function, expectedRet
 			return nil, false
 		}
 	}
+	for _, i := range deferredFunctionValues {
+		paramSpec := f.Params[i].Type
+		argumentExpected, err := resolveSpec(c.Env, paramSpec, 0)
+		if err != nil {
+			return nil, false
+		}
+		actual, d := c.checkExpr(sc, e.Args[i], argumentExpected)
+		if d != nil || !unifyGenericSpec(c.Env, paramSpec, actual, 0, constraints, inferred) {
+			return nil, false
+		}
+	}
 	for _, param := range f.TypeParams {
 		if !inferred[param.Name] {
 			return nil, false
@@ -1485,7 +1623,55 @@ func (c *Checker) matchFunctionCall(sc *Scope, e *Expr, f *Function, expectedRet
 	if d != nil || expectedReturn != nil && functionReturnContainsGeneric(f.Return, f.TypeParams) && !compatible(expectedReturn, rt) {
 		return nil, false
 	}
+	if len(f.TypeParams) != 0 {
+		arguments := make([]*Type, len(f.TypeParams))
+		for i, parameter := range f.TypeParams {
+			arguments[i] = c.Env.TypeParams[parameter.Name]
+			if arguments[i] == nil {
+				return nil, false
+			}
+		}
+		e.GenericArguments = arguments
+	}
 	return rt, true
+}
+
+func typeSpecHasUnresolvedGeneric(spec *TypeSpec, env *TypeEnv) bool {
+	if spec == nil || env == nil {
+		return false
+	}
+	if spec.Function && typeSpecHasUnresolvedGeneric(spec.Return, env) {
+		return true
+	}
+	if len(spec.Params) == 0 {
+		if parameter := env.TypeParams[spec.Name]; parameter != nil && parameter.Kind == TyGeneric {
+			return true
+		}
+	}
+	for _, child := range spec.Params {
+		if typeSpecHasUnresolvedGeneric(child, env) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUniqueConcreteFunctionValue(checker *Checker, scope *Scope, name string) bool {
+	candidates := checker.Env.Overloads[name]
+	if len(candidates) == 0 && checker.Env.Functions[name] != nil {
+		candidates = []*Function{checker.Env.Functions[name]}
+	}
+	var visible *Function
+	for _, candidate := range candidates {
+		if !candidate.Public && candidate.VisibilityScope != scope.VisibilityScope {
+			continue
+		}
+		if visible != nil || len(candidate.TypeParams) != 0 {
+			return false
+		}
+		visible = candidate
+	}
+	return visible != nil
 }
 
 func functionReturnContainsGeneric(spec *TypeSpec, params []TypeParam) bool {
@@ -1531,7 +1717,7 @@ func unifyGenericSpec(env *TypeEnv, spec *TypeSpec, actual *Type, depth int, con
 			if inferred[spec.Name] {
 				return typeEqual(generic, actual)
 			}
-			if !satisfiesConstraint(actual, constraints[spec.Name]) {
+			if !env.satisfiesConstraint(actual, constraints[spec.Name]) {
 				return false
 			}
 			env.TypeParams[spec.Name] = actual
@@ -1566,12 +1752,70 @@ func typeArguments(t *Type) []*Type {
 		return []*Type{t.A}
 	case TyResult, TyMap:
 		return []*Type{t.A, t.B}
+	case TyStruct:
+		return append([]*Type(nil), t.Params...)
 	case TyFunction:
 		args := append([]*Type(nil), t.Params...)
 		return append(args, t.Return)
 	default:
 		return nil
 	}
+}
+
+func structFieldType(instance *Type, field FieldDecl) *Type {
+	if instance == nil || instance.Kind != TyStruct || instance.Struct == nil || len(instance.Params) != len(instance.Struct.TypeParams) {
+		return field.Type
+	}
+	substitutions := make(map[string]*Type, len(instance.Params))
+	for i, parameter := range instance.Struct.TypeParams {
+		substitutions[parameter.Name] = instance.Params[i]
+	}
+	return substituteType(field.Type, substitutions, 0)
+}
+
+func substituteType(original *Type, substitutions map[string]*Type, depth int) *Type {
+	if original == nil || depth > 128 {
+		return original
+	}
+	if original.Kind == TyGeneric {
+		if replacement := substitutions[original.Name]; replacement != nil {
+			if replacement == original {
+				return original
+			}
+			if replacement.Kind == TyGeneric {
+				if next := substitutions[replacement.Name]; next != nil && next != replacement {
+					return substituteType(next, substitutions, depth+1)
+				}
+			}
+			return replacement
+		}
+		return original
+	}
+	copy := *original
+	changed := false
+	if original.A != nil {
+		copy.A = substituteType(original.A, substitutions, depth+1)
+		changed = changed || copy.A != original.A
+	}
+	if original.B != nil {
+		copy.B = substituteType(original.B, substitutions, depth+1)
+		changed = changed || copy.B != original.B
+	}
+	if original.Return != nil {
+		copy.Return = substituteType(original.Return, substitutions, depth+1)
+		changed = changed || copy.Return != original.Return
+	}
+	if len(original.Params) != 0 {
+		copy.Params = make([]*Type, len(original.Params))
+		for i, parameter := range original.Params {
+			copy.Params[i] = substituteType(parameter, substitutions, depth+1)
+			changed = changed || copy.Params[i] != parameter
+		}
+	}
+	if !changed {
+		return original
+	}
+	return &copy
 }
 
 // minArgs returns the number of required (non-defaulted) parameters.

@@ -60,9 +60,15 @@ func parseBenchmarkTokens(source *Source, tokens []Token, limits Limits) (*Progr
 			program.Structs = append(program.Structs, p.structDecl(pub))
 		case p.check(ENUM):
 			program.Enums = append(program.Enums, p.enumDecl(pub))
+		case p.check(TRAIT):
+			program.Traits = append(program.Traits, p.traitDecl(pub))
 		case p.match(IMPL):
 			p.Pos--
-			program.Functions = append(program.Functions, p.implDecl()...)
+			functions, implementation := p.implDecl()
+			program.Functions = append(program.Functions, functions...)
+			if implementation != nil {
+				program.TraitImpls = append(program.TraitImpls, implementation)
+			}
 		case p.match(IMPORT):
 			token := p.expect(STRING, "import expects a quoted module path")
 			if p.Err != nil {

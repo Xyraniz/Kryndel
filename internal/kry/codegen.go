@@ -22,12 +22,21 @@ type cgen struct {
 	buf     strings.Builder
 	tmp     int
 	structs []*StructDecl
-	enums   []*EnumDecl
-	// structID maps a struct name to its runtime type id.
+	// structInstances are the concrete runtime types represented by the
+	// generated KValue structs. Generic declarations contribute one entry per
+	// closed type used by a reachable function specialization.
+	structInstances []cStructInstance
+	enums           []*EnumDecl
+	// structID maps the instantiated type identity to its runtime id.
 	structID map[string]int
 	enumID   map[string]int
 	// fnName maps a resolved function to its generated C symbol.
-	fnName map[*Function]string
+	fnName                map[*Function]string
+	functionIndex         map[*Function]int
+	functionInstances     []*cFunctionInstance
+	functionInstanceByKey map[string]*cFunctionInstance
+	functionSubstitution  map[string]*Type
+	regularFunctions      []*Function
 	// unsupported records the first construct the backend cannot lower.
 	unsupported string
 	// deferBases tracks the runtime defer-stack depth at each enclosing block.
@@ -53,6 +62,18 @@ type cgen struct {
 	obfuscate bool
 }
 
+type cStructInstance struct {
+	name string
+	decl *StructDecl
+}
+
+type cFunctionInstance struct {
+	function      *Function
+	symbol        string
+	key           string
+	substitutions map[string]*Type
+}
+
 // GenerateC lowers a checked program to C source. It returns an error when the
 // program uses a construct the native backend does not support, so callers can
 // surface an honest diagnostic rather than emitting a broken binary.
@@ -74,24 +95,27 @@ func generateC(p *Program, c *Checker, obfuscate bool) (string, error) {
 		return "", err
 	}
 	g := &cgen{
-		prog:      p,
-		env:       c.Env,
-		structID:  map[string]int{},
-		enumID:    map[string]int{},
-		fnName:    map[*Function]string{},
-		globals:   map[string]bool{},
-		obfuscate: obfuscate,
+		prog:                  p,
+		env:                   c.Env,
+		structID:              map[string]int{},
+		enumID:                map[string]int{},
+		fnName:                map[*Function]string{},
+		functionIndex:         map[*Function]int{},
+		functionInstanceByKey: map[string]*cFunctionInstance{},
+		globals:               map[string]bool{},
+		obfuscate:             obfuscate,
 	}
 	g.structs = append(g.structs, p.Structs...)
 	g.enums = append(g.enums, p.Enums...)
-	for i, s := range g.structs {
-		g.structID[s.Name] = i
-	}
 	for i, e := range g.enums {
 		g.enumID[e.Name] = i
 	}
-	for _, f := range p.Functions {
+	for i, f := range p.Functions {
+		g.functionIndex[f] = i
 		g.fnName[f] = g.symbol(f)
+	}
+	if err := g.planInstances(); err != nil {
+		return "", err
 	}
 	g.collectPolyHandlers()
 	g.collectGlobals()
@@ -111,10 +135,351 @@ func generateC(p *Program, c *Checker, obfuscate bool) (string, error) {
 
 func (g *cgen) symbol(f *Function) string {
 	name := sanitize(f.Name)
+	if f.Trait != "" {
+		name = sanitize(f.Trait) + "_" + name
+	}
 	if f.Receiver != nil {
 		name = sanitize(TypeSpecString(f.Receiver)) + "_" + name
 	}
 	return "kfn_" + name
+}
+
+func (g *cgen) functionNeedsSpecialization(f *Function) bool {
+	if f == nil {
+		return false
+	}
+	if len(f.TypeParams) != 0 {
+		return true
+	}
+	if f.Receiver == nil || f.Receiver.Function {
+		return false
+	}
+	if declaration := g.structDecl(f.Receiver.Name); declaration != nil {
+		return len(declaration.TypeParams) != 0
+	}
+	return false
+}
+
+func (g *cgen) functionHasGenericReceiver(f *Function) bool {
+	if f == nil || f.Receiver == nil || f.Receiver.Function {
+		return false
+	}
+	declaration := g.structDecl(f.Receiver.Name)
+	return declaration != nil && len(declaration.TypeParams) != 0
+}
+
+func (g *cgen) planInstances() error {
+	for _, declaration := range g.structs {
+		if len(declaration.TypeParams) == 0 {
+			if err := g.addStructInstance(&Type{Kind: TyStruct, Name: declaration.Name, Struct: declaration}); err != nil {
+				return err
+			}
+		}
+	}
+	for _, function := range g.prog.Functions {
+		if g.functionNeedsSpecialization(function) {
+			continue
+		}
+		g.regularFunctions = append(g.regularFunctions, function)
+		if err := g.walkFunctionForInstances(function, nil); err != nil {
+			return err
+		}
+	}
+	if err := g.walkStatementsForInstances(g.prog.Statements, nil); err != nil {
+		return err
+	}
+	for next := 0; next < len(g.functionInstances); next++ {
+		instance := g.functionInstances[next]
+		if err := g.walkFunctionForInstances(instance.function, instance.substitutions); err != nil {
+			return err
+		}
+		if len(g.functionInstances) > 4096 {
+			return fmt.Errorf("C AOT generic monomorphization exceeded 4096 function instances")
+		}
+	}
+	return nil
+}
+
+func (g *cgen) walkFunctionForInstances(function *Function, substitutions map[string]*Type) error {
+	if function == nil {
+		return nil
+	}
+	for _, parameter := range function.Params {
+		if err := g.walkExprForInstances(parameter.Default, substitutions); err != nil {
+			return err
+		}
+	}
+	return g.walkStatementsForInstances(function.Body, substitutions)
+}
+
+func (g *cgen) walkStatementsForInstances(statements []*Stmt, substitutions map[string]*Type) error {
+	for _, statement := range statements {
+		if statement == nil {
+			continue
+		}
+		for _, expression := range []*Expr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
+			if err := g.walkExprForInstances(expression, substitutions); err != nil {
+				return err
+			}
+		}
+		for _, branch := range [][]*Stmt{statement.Then, statement.Else, statement.Body} {
+			if err := g.walkStatementsForInstances(branch, substitutions); err != nil {
+				return err
+			}
+		}
+		for _, arm := range statement.Arms {
+			if err := g.walkStatementsForInstances(arm.Body, substitutions); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (g *cgen) walkExprForInstances(expression *Expr, substitutions map[string]*Type) error {
+	if expression == nil {
+		return nil
+	}
+	if expression.Kind == ExStruct {
+		instanceType := substituteType(expression.Type, substitutions, 0)
+		if err := g.addStructInstance(instanceType); err != nil {
+			return err
+		}
+	}
+	if expression.Kind == ExCall && expression.TraitName != "" {
+		function, err := g.traitImplementationMethod(expression, substitutions)
+		if err != nil {
+			return err
+		}
+		if g.functionNeedsSpecialization(function) {
+			if _, err := g.functionInstanceForCall(function, expression.Receiver, nil, substitutions, true); err != nil {
+				return err
+			}
+		}
+	} else if expression.Kind == ExCall && expression.Function != nil && g.functionNeedsSpecialization(expression.Function) {
+		if _, err := g.functionInstanceForCall(expression.Function, expression.Receiver, expression.GenericArguments, substitutions, true); err != nil {
+			return err
+		}
+	}
+	for _, child := range []*Expr{expression.Left, expression.Right, expression.Operand, expression.Callee, expression.Base, expression.Receiver} {
+		if err := g.walkExprForInstances(child, substitutions); err != nil {
+			return err
+		}
+	}
+	for _, children := range [][]*Expr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
+		for _, child := range children {
+			if err := g.walkExprForInstances(child, substitutions); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (g *cgen) traitImplementationMethod(expression *Expr, substitutions map[string]*Type) (*Function, error) {
+	if expression == nil || expression.Receiver == nil || expression.Receiver.Type == nil || expression.TraitName == "" {
+		return nil, fmt.Errorf("C AOT cannot resolve an incomplete trait method call")
+	}
+	receiverType := substituteType(expression.Receiver.Type, substitutions, 0)
+	if receiverType == nil || receiverType.Kind != TyStruct || typeContainsGeneric(receiverType, 0) || typeContainsUnknown(receiverType, 0) {
+		return nil, fmt.Errorf("C AOT trait dispatch for %s.%s requires a concrete struct receiver after specialization", expression.TraitName, expression.Name)
+	}
+	if err := g.addStructInstance(receiverType); err != nil {
+		return nil, err
+	}
+	implementation := g.env.TraitImpls[expression.TraitName][receiverType.String()]
+	if implementation == nil {
+		return nil, fmt.Errorf("C AOT has no implementation of trait %q for %s", expression.TraitName, receiverType)
+	}
+	for _, method := range implementation.Methods {
+		if method.Name == expression.Name {
+			return method, nil
+		}
+	}
+	return nil, fmt.Errorf("C AOT trait %q implementation for %s has no method %q", expression.TraitName, receiverType, expression.Name)
+}
+
+func (g *cgen) addStructInstance(instanceType *Type) error {
+	if instanceType == nil || instanceType.Kind != TyStruct || instanceType.Struct == nil {
+		return fmt.Errorf("C AOT cannot lower a struct expression without resolved struct type metadata")
+	}
+	if len(instanceType.Params) != len(instanceType.Struct.TypeParams) {
+		return fmt.Errorf("C AOT cannot lower malformed generic struct type %s: expected %d type argument(s), got %d", instanceType, len(instanceType.Struct.TypeParams), len(instanceType.Params))
+	}
+	if typeContainsGeneric(instanceType, 0) {
+		return fmt.Errorf("C AOT cannot lower open generic struct type %s without concrete type arguments", instanceType)
+	}
+	if typeContainsUnknown(instanceType, 0) {
+		return fmt.Errorf("C AOT cannot lower struct type %s with unresolved type arguments", instanceType)
+	}
+	name := instanceType.String()
+	key := typeInstanceKey(instanceType)
+	if _, exists := g.structID[key]; exists {
+		return nil
+	}
+	g.structID[key] = len(g.structInstances)
+	g.structInstances = append(g.structInstances, cStructInstance{name: name, decl: instanceType.Struct})
+	return nil
+}
+
+func typeContainsGeneric(typ *Type, depth int) bool {
+	if typ == nil || depth > 128 {
+		return false
+	}
+	if typ.Kind == TyGeneric {
+		return true
+	}
+	for _, child := range typeArguments(typ) {
+		if typeContainsGeneric(child, depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+func typeContainsUnknown(typ *Type, depth int) bool {
+	if typ == nil || depth > 128 {
+		return true
+	}
+	if typ.Kind == TyUnknown || typ.Kind == TyError {
+		return true
+	}
+	for _, child := range typeArguments(typ) {
+		if typeContainsUnknown(child, depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+func typeDepth(typ *Type, depth int) int {
+	if typ == nil {
+		return depth
+	}
+	maximum := depth
+	for _, child := range typeArguments(typ) {
+		if childDepth := typeDepth(child, depth+1); childDepth > maximum {
+			maximum = childDepth
+		}
+	}
+	return maximum
+}
+
+func typeInstanceKey(typ *Type) string {
+	seen := make(map[*Type]int)
+	var key func(*Type, int) string
+	key = func(current *Type, depth int) string {
+		if current == nil {
+			return "<nil>"
+		}
+		if depth > 128 {
+			return "<depth-limit>"
+		}
+		if index, ok := seen[current]; ok {
+			return fmt.Sprintf("@%d", index)
+		}
+		seen[current] = len(seen)
+		defer delete(seen, current)
+		base := fmt.Sprintf("%d:%s:%d", current.Kind, current.Name, current.Bits)
+		switch current.Kind {
+		case TyStruct:
+			base = fmt.Sprintf("struct:%p", current.Struct)
+		case TyEnum:
+			base = fmt.Sprintf("enum:%p", current.Enum)
+		}
+		children := typeArguments(current)
+		if len(children) == 0 {
+			return base
+		}
+		var builder strings.Builder
+		builder.WriteString(base)
+		builder.WriteByte('[')
+		for i, child := range children {
+			if i != 0 {
+				builder.WriteByte(',')
+			}
+			builder.WriteString(key(child, depth+1))
+		}
+		builder.WriteByte(']')
+		return builder.String()
+	}
+	return key(typ, 0)
+}
+
+func (g *cgen) functionInstanceForCall(function *Function, receiver *Expr, arguments []*Type, outer map[string]*Type, create bool) (*cFunctionInstance, error) {
+	if function == nil {
+		return nil, fmt.Errorf("C AOT cannot specialize a missing function")
+	}
+	index, known := g.functionIndex[function]
+	if !known {
+		return nil, fmt.Errorf("C AOT cannot specialize function %q outside the checked program", function.Name)
+	}
+	substitutions := make(map[string]*Type, len(function.TypeParams)+2)
+	keyParts := make([]string, 0, len(function.TypeParams)+2)
+	if g.functionHasGenericReceiver(function) {
+		if receiver == nil || receiver.Type == nil {
+			return nil, fmt.Errorf("C AOT cannot specialize method %q without a resolved receiver type", function.Name)
+		}
+		receiverType := substituteType(receiver.Type, outer, 0)
+		declaration := g.structDecl(function.Receiver.Name)
+		if receiverType.Kind != TyStruct || receiverType.Struct != declaration || len(receiverType.Params) != len(declaration.TypeParams) {
+			return nil, fmt.Errorf("C AOT cannot specialize method %q for invalid receiver type %s", function.Name, receiverType)
+		}
+		for i, parameter := range declaration.TypeParams {
+			argument := receiverType.Params[i]
+			if typeContainsGeneric(argument, 0) || typeContainsUnknown(argument, 0) {
+				return nil, fmt.Errorf("C AOT cannot specialize method %q with unresolved receiver argument %s", function.Name, argument)
+			}
+			if typeDepth(argument, 1) > g.env.Lim.MaxTypeDepth {
+				return nil, fmt.Errorf("C AOT generic method specialization for %q exceeds the configured type-depth limit", function.Name)
+			}
+			substitutions[parameter.Name] = argument
+			keyParts = append(keyParts, "receiver="+typeInstanceKey(argument))
+		}
+	}
+	if len(arguments) != len(function.TypeParams) {
+		return nil, fmt.Errorf("C AOT cannot specialize generic function %q: expected %d checked type argument(s), got %d", function.Name, len(function.TypeParams), len(arguments))
+	}
+	for i, parameter := range function.TypeParams {
+		argument := substituteType(arguments[i], outer, 0)
+		if typeContainsGeneric(argument, 0) || typeContainsUnknown(argument, 0) {
+			return nil, fmt.Errorf("C AOT cannot specialize generic function %q with unresolved type argument %s", function.Name, argument)
+		}
+		if typeDepth(argument, 1) > g.env.Lim.MaxTypeDepth {
+			return nil, fmt.Errorf("C AOT generic function specialization for %q exceeds the configured type-depth limit", function.Name)
+		}
+		substitutions[parameter.Name] = argument
+		keyParts = append(keyParts, "function="+typeInstanceKey(argument))
+	}
+	key := fmt.Sprintf("%d|%s", index, strings.Join(keyParts, "|"))
+	if instance := g.functionInstanceByKey[key]; instance != nil {
+		return instance, nil
+	}
+	if !create {
+		return nil, fmt.Errorf("C AOT generic function specialization for %q was not planned", function.Name)
+	}
+	if len(g.functionInstances) >= 4096 {
+		return nil, fmt.Errorf("C AOT generic monomorphization exceeded 4096 function instances")
+	}
+	symbol := fmt.Sprintf("%s_g%d", g.symbol(function), len(g.functionInstances))
+	instance := &cFunctionInstance{function: function, symbol: symbol, key: key, substitutions: substitutions}
+	g.functionInstanceByKey[key] = instance
+	g.functionInstances = append(g.functionInstances, instance)
+	return instance, nil
+}
+
+func (g *cgen) functionSymbolForCall(function *Function, receiver *Expr, arguments []*Type) (string, error) {
+	if !g.functionNeedsSpecialization(function) {
+		if symbol := g.fnName[function]; symbol != "" {
+			return symbol, nil
+		}
+		return "", fmt.Errorf("C AOT has no emitted symbol for function %q", function.Name)
+	}
+	instance, err := g.functionInstanceForCall(function, receiver, arguments, g.functionSubstitution, false)
+	if err != nil {
+		return "", err
+	}
+	return instance.symbol, nil
 }
 
 func sanitize(s string) string {
@@ -146,6 +511,9 @@ func (g *cgen) fail(format string, args ...any) {
 // be passed through a wrapper function rather than written as a literal).
 func (g *cgen) collectPolyHandlers() {
 	for _, f := range g.prog.Functions {
+		if g.functionNeedsSpecialization(f) {
+			continue
+		}
 		if f.Receiver != nil || len(f.Params) != 1 {
 			continue
 		}
@@ -193,8 +561,11 @@ func (g *cgen) emitGlobals() {
 // emitPrototypes forward-declares every generated function so the dispatch
 // table and mutually recursive calls compile without ordering constraints.
 func (g *cgen) emitPrototypes() {
-	for _, f := range g.prog.Functions {
+	for _, f := range g.regularFunctions {
 		fmt.Fprintf(&g.buf, "static KValue %s(void);\n", g.fnName[f])
+	}
+	for _, instance := range g.functionInstances {
+		fmt.Fprintf(&g.buf, "static KValue %s(void);\n", instance.symbol)
 	}
 }
 
@@ -236,9 +607,9 @@ func (g *cgen) emitRuntime() {
 }
 
 func (g *cgen) emitMetadata() {
-	for i, s := range g.structs {
+	for i, instance := range g.structInstances {
 		fmt.Fprintf(&g.buf, "static const char *k_sf_%d[] = {", i)
-		for j, f := range s.Fields {
+		for j, f := range instance.decl.Fields {
 			if j > 0 {
 				g.buf.WriteString(", ")
 			}
@@ -246,14 +617,14 @@ func (g *cgen) emitMetadata() {
 		}
 		g.buf.WriteString("};\n")
 	}
-	if len(g.structs) == 0 {
+	if len(g.structInstances) == 0 {
 		g.buf.WriteString("static const char *k_sf_empty[] = {0};\n")
 	}
 	g.buf.WriteString("static KStructDesc k_structs_data[] = {\n")
-	for i, s := range g.structs {
-		fmt.Fprintf(&g.buf, "  {%s, %d, k_sf_%d},\n", cString(s.Name), len(s.Fields), i)
+	for i, instance := range g.structInstances {
+		fmt.Fprintf(&g.buf, "  {%s, %d, k_sf_%d},\n", cString(instance.name), len(instance.decl.Fields), i)
 	}
-	if len(g.structs) == 0 {
+	if len(g.structInstances) == 0 {
 		g.buf.WriteString("  {\"\", 0, k_sf_empty},\n")
 	}
 	g.buf.WriteString("};\n")
@@ -282,13 +653,15 @@ func (g *cgen) emitMetadata() {
 }
 
 func (g *cgen) emitFunctions() {
-	for _, f := range g.prog.Functions {
-		g.emitFunction(f)
+	for _, function := range g.regularFunctions {
+		g.emitFunction(function, g.fnName[function], nil)
+	}
+	for _, instance := range g.functionInstances {
+		g.emitFunction(instance.function, instance.symbol, instance.substitutions)
 	}
 }
 
-func (g *cgen) emitFunction(f *Function) {
-	name := g.fnName[f]
+func (g *cgen) emitFunction(f *Function, name string, substitutions map[string]*Type) {
 	fmt.Fprintf(&g.buf, "static KValue %s(void) {\n", name)
 	// Parameters are passed through a global argument frame so that the
 	// generated C stays simple and recursion works without prototypes.
@@ -297,6 +670,8 @@ func (g *cgen) emitFunction(f *Function) {
 	g.fnBase = "_fb"
 	g.deferBases = nil
 	g.loopBases = nil
+	previousSubstitution := g.functionSubstitution
+	g.functionSubstitution = substitutions
 	g.locals = append(g.locals, map[string]bool{})
 	if f.Receiver != nil {
 		fmt.Fprintf(&g.buf, "  KValue self = k_args[0];\n")
@@ -316,6 +691,7 @@ func (g *cgen) emitFunction(f *Function) {
 	}
 	g.block(f.Body, "  ")
 	g.locals = g.locals[:len(g.locals)-1]
+	g.functionSubstitution = previousSubstitution
 	fmt.Fprintf(&g.buf, "  return kv_nil();\n}\n")
 }
 
@@ -323,12 +699,24 @@ func (g *cgen) emitMain() {
 	g.buf.WriteString("int main(void) {\n")
 	fmt.Fprintf(&g.buf, "  k_max_json = %dLL;\n", g.env.Lim.MaxJSONBytes)
 	fmt.Fprintf(&g.buf, "  k_max_out = %dLL;\n", g.env.Lim.MaxOutputBytes)
+	maxMemory := g.env.Lim.MaxMemoryBytes
+	if maxMemory <= 0 {
+		maxMemory = DefaultLimits().MaxMemoryBytes
+	}
+	fmt.Fprintf(&g.buf, "  k_max_mem = %dLL;\n", maxMemory)
+	fmt.Fprintf(&g.buf, "  k_max_tcp_receive = %dLL;\n", g.env.Lim.MaxSourceBytes)
+	fmt.Fprintf(&g.buf, "  k_max_array_elements = %dLL;\n", g.env.Lim.MaxArrayElements)
+	wallMS := g.env.Lim.MaxWallTimeMS
+	if wallMS <= 0 {
+		wallMS = DefaultLimits().MaxWallTimeMS
+	}
+	fmt.Fprintf(&g.buf, "  k_max_wall_ms = %dLL;\n", wallMS)
 	g.buf.WriteString("  k_structs = k_structs_data;\n")
 	g.buf.WriteString("  k_enums = k_enums_data;\n")
 	g.buf.WriteString("  k_poly_names = k_poly_names_data;\n")
 	g.buf.WriteString("  k_poly_fns = k_poly_fns_data;\n")
 	g.buf.WriteString("  k_poly_nfns = k_poly_nfns_data;\n")
-	g.buf.WriteString("  if (setjmp(k_jmp)) { fflush(stdout); fprintf(stderr, \"kryndel: %s\\n\", k_errbuf); return 1; }\n")
+	g.buf.WriteString("  if (setjmp(k_jmp)) { k_sqlite_cleanup(); k_tcp_cleanup(); fflush(stdout); fprintf(stderr, \"kryndel: %s\\n\", k_errbuf); return 1; }\n")
 	g.buf.WriteString("  int _fb = k_ndefers;\n")
 	g.fnBase = "_fb"
 	g.deferBases = nil
@@ -342,6 +730,9 @@ func (g *cgen) emitMain() {
 		}
 	}
 	g.buf.WriteString("  while (k_ndefers > _fb) k_defers[--k_ndefers]();\n")
+	g.buf.WriteString("  if (k_tcp_has_open_sockets()) { k_sqlite_cleanup(); k_tcp_cleanup(); fflush(stdout); fprintf(stderr, \"kryndel: resource 'TcpSocket' was not closed before its owner finished\\n\"); return 1; }\n")
+	g.buf.WriteString("  if (k_sqlite_has_open_handles()) { k_sqlite_cleanup(); k_tcp_cleanup(); fflush(stdout); fprintf(stderr, \"kryndel: resource 'SQLite' was not closed before its owner finished\\n\"); return 1; }\n")
+	g.buf.WriteString("  k_sqlite_cleanup(); k_tcp_cleanup();\n")
 	g.buf.WriteString("  fflush(stdout);\n  return 0;\n}\n")
 }
 
@@ -679,7 +1070,17 @@ func (g *cgen) structLiteral(e *Expr) string {
 		g.fail("unknown struct '%s'", e.StructName)
 		return "kv_nil()"
 	}
-	id := g.structID[e.StructName]
+	instanceType := substituteType(e.Type, g.functionSubstitution, 0)
+	if instanceType == nil || instanceType.Kind != TyStruct || instanceType.Struct != decl {
+		g.fail("C AOT cannot lower struct '%s' without resolved instantiation metadata", e.StructName)
+		return "kv_nil()"
+	}
+	instanceName := instanceType.String()
+	id, ok := g.structID[typeInstanceKey(instanceType)]
+	if !ok {
+		g.fail("C AOT did not plan concrete struct type %s", instanceName)
+		return "kv_nil()"
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "({ KValue *_f = (KValue*)kalloc(sizeof(KValue)*%d);", len(decl.Fields))
 	for i := range decl.Fields {
@@ -804,22 +1205,30 @@ func (g *cgen) call(e *Expr) string {
 		g.fail("unknown function '%s'", e.Name)
 		return "kv_nil()"
 	}
-	return g.functionCall(f, nil, e.Args)
+	return g.functionCall(f, nil, e.Args, e.GenericArguments)
 }
 
 func (g *cgen) methodCall(e *Expr) string {
 	f := e.Function
+	if e.TraitName != "" {
+		var err error
+		f, err = g.traitImplementationMethod(e, g.functionSubstitution)
+		if err != nil {
+			g.fail("%s", err)
+			return "kv_nil()"
+		}
+	}
 	if f == nil {
 		g.fail("unknown method '%s'", e.Name)
 		return "kv_nil()"
 	}
-	return g.functionCall(f, e.Receiver, e.Args)
+	return g.functionCall(f, e.Receiver, e.Args, e.GenericArguments)
 }
 
-func (g *cgen) functionCall(f *Function, receiver *Expr, args []*Expr) string {
-	name := g.fnName[f]
-	if name == "" {
-		g.fail("unknown function '%s'", f.Name)
+func (g *cgen) functionCall(f *Function, receiver *Expr, args []*Expr, genericArguments []*Type) string {
+	name, err := g.functionSymbolForCall(f, receiver, genericArguments)
+	if err != nil {
+		g.fail("%s", err)
 		return "kv_nil()"
 	}
 	var b strings.Builder
@@ -976,6 +1385,22 @@ func (g *cgen) builtinCall(e *Expr, b Builtin) string {
 		return fmt.Sprintf("k_fs_exists(%s)", arg(0))
 	case "env_get":
 		return fmt.Sprintf("k_env_get(%s)", arg(0))
+	case "tcp_connect":
+		return fmt.Sprintf("k_tcp_connect(%s, %s)", arg(0), arg(1))
+	case "tcp_send":
+		return fmt.Sprintf("k_tcp_send(%s, %s)", arg(0), arg(1))
+	case "tcp_receive":
+		return fmt.Sprintf("k_tcp_receive(%s, %s)", arg(0), arg(1))
+	case "tcp_close":
+		return fmt.Sprintf("k_tcp_close(%s)", arg(0))
+	case "sqlite_open":
+		return fmt.Sprintf("k_sqlite_open(%s)", arg(0))
+	case "sqlite_exec":
+		return fmt.Sprintf("k_sqlite_exec(%s, %s)", arg(0), arg(1))
+	case "sqlite_query":
+		return fmt.Sprintf("k_sqlite_query(%s, %s)", arg(0), arg(1))
+	case "sqlite_close":
+		return fmt.Sprintf("k_sqlite_close(%s)", arg(0))
 	case "json_parse":
 		return fmt.Sprintf("k_json_parse(%s)", arg(0))
 	case "json_stringify":
@@ -1191,6 +1616,10 @@ func (g *cgen) threadSpawn(e *Expr) string {
 		g.fail("thread_spawn references unknown worker '%s'", e.Args[0].Str)
 		return "kv_nil()"
 	}
+	if g.functionNeedsSpecialization(f) {
+		g.fail("C AOT does not support generic worker function values without explicit type arguments")
+		return "kv_nil()"
+	}
 	return fmt.Sprintf("k_thread_spawn(%s)", g.fnName[f])
 }
 
@@ -1203,6 +1632,10 @@ func (g *cgen) taskSpawn(e *Expr) string {
 	f := g.env.Functions[e.Args[1].Str]
 	if f == nil {
 		g.fail("task_spawn references unknown worker '%s'", e.Args[1].Str)
+		return "kv_nil()"
+	}
+	if g.functionNeedsSpecialization(f) {
+		g.fail("C AOT does not support generic worker function values without explicit type arguments")
 		return "kv_nil()"
 	}
 	return fmt.Sprintf("k_task_spawn(%s, %s, 0, 0)", g.expr(e.Args[0]), g.fnName[f])

@@ -196,8 +196,8 @@ func TestOrderedCollectionPolicy(t *testing.T) {
 }
 
 func TestDifferentialCorpusInterpreterAndNative(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("native differential corpus requires linux/amd64")
+	if !((runtime.GOOS == "linux" || runtime.GOOS == "windows") && runtime.GOARCH == "amd64") {
+		t.Skip("native differential corpus requires linux/amd64 or windows/amd64")
 	}
 	fragments := []string{
 		`println(str(0.0 + 1.5))`,
@@ -216,7 +216,7 @@ func TestDifferentialCorpusInterpreterAndNative(t *testing.T) {
 		if interpErr != nil {
 			t.Fatalf("corpus case %d interpreter failed: %s", i, interpErr.Message)
 		}
-		native, code, err := buildAndRunLinuxELF(t, source)
+		native, code, err := buildAndRunNativeAOT(t, source)
 		if err != nil {
 			t.Fatalf("corpus case %d native failed: %v", i, err)
 		}
@@ -310,7 +310,7 @@ fn main() -> Nil {
 			if interpErr != nil {
 				t.Fatalf("interpreter failed: %s", interpErr.Message)
 			}
-			native, code, err := buildAndRunLinuxELF(t, interaction.source)
+			native, code, err := buildAndRunNativeAOT(t, interaction.source)
 			if err != nil {
 				t.Fatalf("native failed: %v", err)
 			}

@@ -162,6 +162,14 @@ func (t *Type) String() string {
 			params[i] = param.String()
 		}
 		return "fn(" + strings.Join(params, ", ") + ") -> " + t.Return.String()
+	case TyStruct:
+		if len(t.Params) != 0 {
+			params := make([]string, len(t.Params))
+			for i, param := range t.Params {
+				params[i] = param.String()
+			}
+			return t.Name + "[" + strings.Join(params, ", ") + "]"
+		}
 	case TyJSON:
 		return "Json"
 	case TyWebSocket:
@@ -192,7 +200,15 @@ func typeEqual(a, b *Type) bool {
 			return x.Bits == y.Bits
 		}
 		if x.Kind == TyStruct {
-			return x.Struct == y.Struct
+			if x.Struct != y.Struct || len(x.Params) != len(y.Params) {
+				return false
+			}
+			for i := range x.Params {
+				if !eq(x.Params[i], y.Params[i], d+1) {
+					return false
+				}
+			}
+			return true
 		}
 		if x.Kind == TyEnum {
 			return x.Enum == y.Enum
@@ -246,6 +262,12 @@ func typeKnown(t *Type) bool {
 			}
 		}
 		return true
+	case TyStruct:
+		for _, argument := range t.Params {
+			if !typeKnown(argument) {
+				return false
+			}
+		}
 
 	}
 	return true
@@ -269,7 +291,7 @@ func containsFunctionType(root *Type) bool {
 		}
 		if t.Kind == TyStruct && t.Struct != nil {
 			for _, field := range t.Struct.Fields {
-				if visit(field.Type, depth+1) {
+				if visit(structFieldType(t, field), depth+1) {
 					return true
 				}
 			}
@@ -354,8 +376,14 @@ func TypeCopyable(root *Type) bool {
 			if t.Struct == nil {
 				ok = false
 			} else {
+				for _, argument := range t.Params {
+					if !visit(argument, d+1) {
+						ok = false
+						break
+					}
+				}
 				for _, f := range t.Struct.Fields {
-					if !visit(f.Type, d+1) {
+					if !visit(structFieldType(t, f), d+1) {
 						ok = false
 						break
 					}
@@ -399,8 +427,13 @@ func TypeConstSafe(root *Type) bool {
 			if t.Struct == nil {
 				return false
 			}
+			for _, argument := range t.Params {
+				if !visit(argument, depth+1) {
+					return false
+				}
+			}
 			for _, f := range t.Struct.Fields {
-				if !visit(f.Type, depth+1) {
+				if !visit(structFieldType(t, f), depth+1) {
 					return false
 				}
 			}
@@ -571,6 +604,27 @@ func resolveSpec(env *TypeEnv, s *TypeSpec, depth int) (*Type, *Diagnostic) {
 		return TTaskGroup, nil
 
 	}
+	if template := env.Types[name]; template != nil && template.Kind == TyStruct {
+		params := template.Struct.TypeParams
+		if len(s.Params) != len(params) {
+			if len(params) == 0 {
+				return TError, Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "type '%s' does not accept type arguments", name)
+			}
+			return TError, Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "type '%s' expects %d type argument(s), got %d", name, len(params), len(s.Params))
+		}
+		arguments := make([]*Type, len(params))
+		for i, parameter := range params {
+			argument, d := resolveSpec(env, s.Params[i], depth+1)
+			if d != nil {
+				return TError, d
+			}
+			if !env.satisfiesConstraint(argument, parameter.Constraint) {
+				return TError, Diag(CatType, s.Params[i].Tok.Source, s.Params[i].Tok.Line, s.Params[i].Tok.Column, "type argument %s does not satisfy %s constraint for %s", argument, parameter.Constraint, parameter.Name)
+			}
+			arguments[i] = argument
+		}
+		return &Type{Kind: TyStruct, Name: template.Name, Struct: template.Struct, Params: arguments}, nil
+	}
 	if len(s.Params) == 0 {
 		if t := env.Types[name]; t != nil {
 			return t, nil
@@ -590,6 +644,8 @@ type TypeEnv struct {
 	Types      map[string]*Type
 	Functions  map[string]*Function
 	Overloads  map[string][]*Function
+	Traits     map[string]*TraitDecl
+	TraitImpls map[string]map[string]*TraitImplDecl
 	Builtins   map[string]Builtin
 	TypeParams map[string]*Type
 	Lim        Limits
@@ -597,13 +653,20 @@ type TypeEnv struct {
 }
 
 func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
-	e := &TypeEnv{Types: map[string]*Type{}, Functions: map[string]*Function{}, Overloads: map[string][]*Function{}, Lim: lim, Module: prog.Module}
+	e := &TypeEnv{Types: map[string]*Type{}, Functions: map[string]*Function{}, Overloads: map[string][]*Function{}, Traits: map[string]*TraitDecl{}, TraitImpls: map[string]map[string]*TraitImplDecl{}, Lim: lim, Module: prog.Module}
 	for _, s := range prog.Structs {
 		if _, ok := e.Types[s.Name]; ok {
 			return nil, Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "declaration '%s' is already defined", s.Name)
 		}
 		s.Type = &Type{Kind: TyStruct, Name: s.Name, Struct: s}
 		e.Types[s.Name] = s.Type
+		seenParams := map[string]bool{}
+		for _, parameter := range s.TypeParams {
+			if parameter.Name == "" || seenParams[parameter.Name] {
+				return nil, Diag(CatType, parameter.Tok.Source, parameter.Tok.Line, parameter.Tok.Column, "type parameter '%s' is duplicated", parameter.Name)
+			}
+			seenParams[parameter.Name] = true
+		}
 	}
 	for _, d := range prog.Enums {
 		if _, ok := e.Types[d.Name]; ok {
@@ -612,7 +675,26 @@ func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
 		d.Type = &Type{Kind: TyEnum, Name: d.Name, Enum: d}
 		e.Types[d.Name] = d.Type
 	}
+	for _, trait := range prog.Traits {
+		if _, exists := e.Types[trait.Name]; exists {
+			return nil, Diag(CatType, trait.Tok.Source, trait.Tok.Line, trait.Tok.Column, "declaration '%s' is already defined", trait.Name)
+		}
+		if _, exists := e.Traits[trait.Name]; exists {
+			return nil, Diag(CatType, trait.Tok.Source, trait.Tok.Line, trait.Tok.Column, "trait '%s' is already defined", trait.Name)
+		}
+		e.Traits[trait.Name] = trait
+	}
+	for _, s := range prog.Structs {
+		for _, parameter := range s.TypeParams {
+			if !knownTypeConstraint(e, parameter.Constraint) {
+				return nil, Diag(CatType, parameter.Tok.Source, parameter.Tok.Line, parameter.Tok.Column, "unknown type constraint '%s'", parameter.Constraint)
+			}
+		}
+	}
 	for _, f := range prog.Functions {
+		if f.Trait != "" {
+			continue // Trait implementation methods have a separate, unambiguous registry.
+		}
 		key := f.Name
 		if f.Receiver != nil {
 			key = TypeSpecString(f.Receiver) + "::" + f.Name
@@ -634,7 +716,15 @@ func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
 			e.Functions[key] = f
 		}
 	}
+	if d := registerTraitDeclarations(e, prog); d != nil {
+		return nil, d
+	}
 	for _, s := range prog.Structs {
+		previousParams := e.TypeParams
+		e.TypeParams = make(map[string]*Type, len(s.TypeParams))
+		for _, parameter := range s.TypeParams {
+			e.TypeParams[parameter.Name] = Generic(parameter.Name, parameter.Constraint)
+		}
 		seenFields := map[string]bool{}
 		for i := range s.Fields {
 			if seenFields[s.Fields[i].Name] {
@@ -650,6 +740,10 @@ func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
 			}
 			s.Fields[i].Type = t
 		}
+		e.TypeParams = previousParams
+	}
+	if d := registerTraitImplementations(e, prog); d != nil {
+		return nil, d
 	}
 	for _, s := range prog.Structs {
 		if !s.Public {
@@ -662,6 +756,143 @@ func typeDecls(prog *Program, lim Limits) (*TypeEnv, *Diagnostic) {
 		}
 	}
 	return e, nil
+}
+
+func knownTypeConstraint(env *TypeEnv, constraint string) bool {
+	if constraint == "" || constraint == "Any" || constraint == "Copy" || constraint == "Integer" || constraint == "Numeric" || constraint == "Comparable" {
+		return true
+	}
+	_, ok := env.Traits[constraint]
+	return ok
+}
+
+func (env *TypeEnv) satisfiesConstraint(typ *Type, constraint string) bool {
+	if _, trait := env.Traits[constraint]; trait {
+		if typ != nil && typ.Kind == TyGeneric {
+			return genericConstraint(typ) == constraint
+		}
+		if typ == nil || typ.Kind != TyStruct || typ.Struct == nil {
+			return false
+		}
+		return env.TraitImpls[constraint][typ.String()] != nil
+	}
+	return satisfiesConstraint(typ, constraint)
+}
+
+func registerTraitDeclarations(env *TypeEnv, program *Program) *Diagnostic {
+	for _, trait := range program.Traits {
+		if len(trait.Methods) == 0 {
+			return Diag(CatType, trait.Tok.Source, trait.Tok.Line, trait.Tok.Column, "trait '%s' must declare at least one method", trait.Name)
+		}
+		seen := map[string]bool{}
+		for _, method := range trait.Methods {
+			if method == nil || method.Name == "" || method.Trait != trait.Name || method.Receiver != nil || len(method.TypeParams) != 0 {
+				return Diag(CatType, trait.Tok.Source, trait.Tok.Line, trait.Tok.Column, "trait '%s' has an unsupported method declaration", trait.Name)
+			}
+			if seen[method.Name] {
+				return Diag(CatType, method.NameToken.Source, method.NameToken.Line, method.NameToken.Column, "trait '%s' declares method '%s' more than once", trait.Name, method.Name)
+			}
+			seen[method.Name] = true
+			for _, parameter := range method.Params {
+				if parameter.Default != nil {
+					return Diag(CatType, parameter.Tok.Source, parameter.Tok.Line, parameter.Tok.Column, "trait method parameters cannot have defaults")
+				}
+				if _, diagnostic := resolveSpec(env, parameter.Type, 0); diagnostic != nil {
+					return diagnostic
+				}
+			}
+			if _, diagnostic := resolveSpec(env, method.Return, 0); diagnostic != nil {
+				return diagnostic
+			}
+		}
+	}
+	return nil
+}
+
+func registerTraitImplementations(env *TypeEnv, program *Program) *Diagnostic {
+	for _, implementation := range program.TraitImpls {
+		trait := env.Traits[implementation.Trait]
+		if trait == nil {
+			return Diag(CatType, implementation.TraitToken.Source, implementation.TraitToken.Line, implementation.TraitToken.Column, "unknown trait '%s'", implementation.Trait)
+		}
+		target, diagnostic := resolveSpec(env, implementation.Target, 0)
+		if diagnostic != nil {
+			return Diag(CatType, implementation.Target.Tok.Source, implementation.Target.Tok.Line, implementation.Target.Tok.Column, "trait implementation target must be a concrete known type; generic and blanket implementations are not supported")
+		}
+		if target.Kind != TyStruct || target.Struct == nil || containsGenericType(target, 0) {
+			return Diag(CatType, implementation.Target.Tok.Source, implementation.Target.Tok.Line, implementation.Target.Tok.Column, "trait implementations currently require a concrete struct type; generic and blanket implementations are not supported")
+		}
+		implementations := env.TraitImpls[trait.Name]
+		if implementations == nil {
+			implementations = map[string]*TraitImplDecl{}
+			env.TraitImpls[trait.Name] = implementations
+		}
+		targetKey := target.String()
+		if implementations[targetKey] != nil {
+			return Diag(CatType, implementation.Tok.Source, implementation.Tok.Line, implementation.Tok.Column, "trait '%s' is already implemented for %s", trait.Name, target)
+		}
+		methods := make(map[string]*Function, len(implementation.Methods))
+		for _, method := range implementation.Methods {
+			if method == nil || method.Name == "" || method.Trait != trait.Name || len(method.TypeParams) != 0 {
+				return Diag(CatType, implementation.Tok.Source, implementation.Tok.Line, implementation.Tok.Column, "trait '%s' implementation contains an unsupported method", trait.Name)
+			}
+			if _, duplicate := methods[method.Name]; duplicate {
+				return Diag(CatType, method.NameToken.Source, method.NameToken.Line, method.NameToken.Column, "trait '%s' implementation repeats method '%s'", trait.Name, method.Name)
+			}
+			methods[method.Name] = method
+		}
+		for _, signature := range trait.Methods {
+			method := methods[signature.Name]
+			if method == nil {
+				return Diag(CatType, implementation.Tok.Source, implementation.Tok.Line, implementation.Tok.Column, "trait '%s' implementation for %s is missing method '%s'", trait.Name, target, signature.Name)
+			}
+			if !traitMethodSignaturesMatch(env, signature, method) {
+				return Diag(CatType, method.NameToken.Source, method.NameToken.Line, method.NameToken.Column, "method '%s' does not match trait '%s' signature", method.Name, trait.Name)
+			}
+			delete(methods, signature.Name)
+		}
+		if len(methods) != 0 {
+			for name, method := range methods {
+				return Diag(CatType, method.NameToken.Source, method.NameToken.Line, method.NameToken.Column, "trait '%s' does not declare method '%s'", trait.Name, name)
+			}
+		}
+		implementations[targetKey] = implementation
+	}
+	return nil
+}
+
+func traitMethodSignaturesMatch(env *TypeEnv, declaration, implementation *Function) bool {
+	if declaration == nil || implementation == nil || len(declaration.Params) != len(implementation.Params) || len(implementation.TypeParams) != 0 {
+		return false
+	}
+	for i := range declaration.Params {
+		if implementation.Params[i].Default != nil {
+			return false
+		}
+		declared, d1 := resolveSpec(env, declaration.Params[i].Type, 0)
+		provided, d2 := resolveSpec(env, implementation.Params[i].Type, 0)
+		if d1 != nil || d2 != nil || !typeEqual(declared, provided) {
+			return false
+		}
+	}
+	declared, d1 := resolveSpec(env, declaration.Return, 0)
+	provided, d2 := resolveSpec(env, implementation.Return, 0)
+	return d1 == nil && d2 == nil && typeEqual(declared, provided)
+}
+
+func containsGenericType(typ *Type, depth int) bool {
+	if typ == nil || depth > 128 {
+		return true
+	}
+	if typ.Kind == TyGeneric {
+		return true
+	}
+	for _, argument := range typeArguments(typ) {
+		if containsGenericType(argument, depth+1) {
+			return true
+		}
+	}
+	return false
 }
 func sameFunctionSignature(a, b *Function) bool {
 	if TypeSpecString(a.Receiver) != TypeSpecString(b.Receiver) || len(a.Params) != len(b.Params) {
@@ -684,8 +915,13 @@ func ensurePublicType(t *Type, local string, depth int) bool {
 		if t.Struct == nil || (!t.Struct.Public && t.Struct.Module != local) {
 			return false
 		}
+		for _, argument := range t.Params {
+			if !ensurePublicType(argument, local, depth+1) {
+				return false
+			}
+		}
 		for _, f := range t.Struct.Fields {
-			if !ensurePublicType(f.Type, local, depth+1) {
+			if !ensurePublicType(structFieldType(t, f), local, depth+1) {
 				return false
 			}
 		}
@@ -721,6 +957,11 @@ func inaccessibleTypeName(t *Type, visibilityScope string, depth int) string {
 	case TyStruct:
 		if t.Struct == nil || !t.Struct.Public && t.Struct.VisibilityScope != visibilityScope {
 			return t.Name
+		}
+		for _, argument := range t.Params {
+			if name := inaccessibleTypeName(argument, visibilityScope, depth+1); name != "" {
+				return name
+			}
 		}
 	case TyEnum:
 		if t.Enum == nil || !t.Enum.Public && t.Enum.VisibilityScope != visibilityScope {

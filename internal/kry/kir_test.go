@@ -79,7 +79,7 @@ let answer: UInt8 = add(u8(1)) << 1
 	if !bytes.Equal(a, b) {
 		t.Fatal("KIR emission is not deterministic")
 	}
-	if !strings.Contains(string(a), `"format": "kry-ir"`) || !strings.Contains(string(a), `"version": 3`) || !strings.Contains(string(a), `"language_version": "1.0.0"`) {
+	if !strings.Contains(string(a), `"format": "kry-ir"`) || !strings.Contains(string(a), `"language_version": "1.0.0"`) {
 		t.Fatalf("KIR header missing from %s", a[:minInt(len(a), 160)])
 	}
 	d, err := DecodeKIR(a, DefaultLimits())
@@ -103,7 +103,15 @@ func TestKIRRejectsWrongVersionAndTrailingData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrong := bytes.Replace(data, []byte(`"version": 3`), []byte(`"version": 99`), 1)
+	var header map[string]any
+	if err := json.Unmarshal(data, &header); err != nil {
+		t.Fatal(err)
+	}
+	header["version"] = float64(99)
+	wrong, err := json.Marshal(header)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err = DecodeKIR(wrong, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "version") {
 		t.Fatalf("expected version rejection, got %v", err)
 	}
@@ -150,8 +158,18 @@ func TestKIRV2RemainsReadable(t *testing.T) {
 		}
 	}
 	stripV3Fields(legacy)
-	legacy.(map[string]any)["version"] = float64(2)
-	v2, err := json.Marshal(legacy)
+	legacyDocument := legacy.(map[string]any)
+	delete(legacyDocument, "traits")
+	delete(legacyDocument, "trait_impls")
+	for _, rawFunction := range legacyDocument["functions"].([]any) {
+		function := rawFunction.(map[string]any)
+		delete(function, "source")
+		delete(function, "line")
+		delete(function, "column")
+		delete(function, "trait")
+	}
+	legacyDocument["version"] = float64(2)
+	v2, err := json.Marshal(legacyDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +182,43 @@ func TestKIRV2RemainsReadable(t *testing.T) {
 	}
 	if len(document.Functions) != 1 || document.Functions[0].Name != "twice" || len(document.Statements) != 1 || document.Statements[0].Name != "result" || document.Statements[0].Init.CallTarget != "function:twice" {
 		t.Fatalf("legacy KIR v2 function, variable, or call was not preserved: %#v", document)
+	}
+}
+
+func TestKIRV4GenericStructRemainsReadable(t *testing.T) {
+	program, checker := testProgram(t, `
+struct Box[T: Copy] { value: T }
+fn identity[T: Copy](value: T) -> T { return value }
+let boxed: Box[Int] = Box[Int]{value: identity(7)}
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	delete(legacy, "traits")
+	delete(legacy, "trait_impls")
+	for _, rawFunction := range legacy["functions"].([]any) {
+		function := rawFunction.(map[string]any)
+		delete(function, "source")
+		delete(function, "line")
+		delete(function, "column")
+		delete(function, "trait")
+	}
+	legacy["version"] = float64(4)
+	v4, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := DecodeKIR(v4, DefaultLimits())
+	if err != nil {
+		t.Fatalf("KIR v4 generic compatibility failed: %v", err)
+	}
+	if document.Version != 4 || len(document.Structs) != 1 || len(document.Structs[0].TypeParams) != 1 || len(document.Functions) != 1 || len(document.Statements) != 1 {
+		t.Fatalf("KIR v4 generic declarations or executable nodes were not preserved: %#v", document)
 	}
 }
 

@@ -31,6 +31,149 @@ let defaulted: Int = use_default(4)
 	}
 }
 
+func TestGenericHigherOrderInferenceAcrossArgumentOrder(t *testing.T) {
+	program, checker := testProgram(t, `
+fn transform[T: Copy](callback: fn(T) -> T, value: T) -> T { return callback(value) }
+fn transform_value_first[T: Copy](value: T, callback: fn(T) -> T) -> T { return callback(value) }
+struct Pipeline { seed: Int }
+impl Pipeline {
+    fn apply[T: Copy](callback: fn(T) -> T, value: T) -> T { return callback(value) }
+}
+fn increment(value: Int) -> Int { return value + 1 }
+fn increment(value: String) -> String { return value + "!" }
+fn identity[T: Copy](value: T) -> T { return value }
+fn identity_callback[T: Copy](callback: fn(T) -> T) -> fn(T) -> T { return callback }
+fn echo(value: Int) -> Int { return value }
+fn echo(value: String) -> String { return value }
+let lambda_first: Int = transform(fn(value: Int) -> Int { return value + 2 }, 3)
+let lambda_last: Int = transform_value_first(4, fn(value: Int) -> Int { return value + 3 })
+let overload_first: Int = transform(increment, 5)
+let generic_first: Int = transform(identity, 6)
+let callback_from_context: fn(Int) -> Int = identity_callback(echo)
+let pipeline: Pipeline = Pipeline{seed: 0}
+let generic_method_first: Int = pipeline.apply(fn(value: Int) -> Int { return value + 4 }, 3)
+assert_eq(lambda_first, 5)
+assert_eq(lambda_last, 7)
+assert_eq(overload_first, 6)
+assert_eq(generic_first, 6)
+assert_eq(callback_from_context(8), 8)
+assert_eq(generic_method_first, 7)
+`)
+	runtime, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	if diagnostic = runtime.run(); diagnostic != nil {
+		t.Fatalf("generic higher-order execution failed: %s", diagnostic.Message)
+	}
+}
+
+func TestGenericHigherOrderInferenceRejectsMismatchedLambdaSignature(t *testing.T) {
+	program, diagnostic := Parse(&Source{Name: "generic-callback-mismatch.kry", Text: `
+fn transform[T: Copy](callback: fn(T) -> T, value: T) -> T { return callback(value) }
+transform(fn(value: Int) -> String { return "wrong" }, 3)
+`}, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	if _, diagnostic = Check(program, DefaultLimits()); diagnostic == nil || !strings.Contains(diagnostic.Message, "no overload of 'transform'") {
+		t.Fatalf("expected a generic callback mismatch diagnostic, got %#v", diagnostic)
+	}
+}
+
+func TestGenericStructInstantiationAndMethods(t *testing.T) {
+	program, checker := testProgram(t, `
+struct Box[T: Copy] { value: T }
+impl Box[T] {
+    fn get() -> T { return self.value }
+    fn map[U: Copy](callback: fn(T) -> U) -> Box[U] {
+        return Box[U]{value: callback(self.value)}
+    }
+}
+fn make_box[T: Copy](value: T) -> Box[T] { return Box[T]{value: value} }
+let boxed: Box[Int] = make_box(13)
+assert_eq(boxed.get(), 13)
+let mapped: Box[String] = boxed.map(fn(value: Int) -> String { return "value=13" })
+assert_eq(mapped.value, "value=13")
+let nested: Box[Array[Int]] = Box[Array[Int]]{value: [2, 5, 8]}
+assert_eq(nested.value[1], 5)
+`)
+	runtime, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	if diagnostic = runtime.run(); diagnostic != nil {
+		t.Fatalf("generic struct execution failed: %s", diagnostic.Message)
+	}
+}
+
+func TestGenericStructRejectsBadArityConstraintAndFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{name: "missing arguments", source: "struct Box[T] { value: T }\nlet value = Box{value: 1}"},
+		{name: "wrong arity", source: "struct Pair[A, B] { first: A, second: B }\nlet value: Pair[Int] = Pair[Int]{first: 1, second: 2}"},
+		{name: "constraint", source: "struct CopyBox[T: Copy] { value: T }\nlet value: CopyBox[SQLite] = CopyBox[SQLite]{value: nil}"},
+		{name: "field type", source: "struct Box[T] { value: T }\nlet value: Box[Int] = Box[Int]{value: \"wrong\"}"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			program, diagnostic := Parse(&Source{Name: "generic-struct-error.kry", Text: test.source}, DefaultLimits())
+			if diagnostic != nil {
+				t.Fatal(diagnostic.Message)
+			}
+			if _, diagnostic = Check(program, DefaultLimits()); diagnostic == nil {
+				t.Fatal("expected generic struct type error")
+			}
+		})
+	}
+}
+
+func TestGenericStructKIRRoundTripPreservesInstantiation(t *testing.T) {
+	program, checker := testProgram(t, `
+struct Box[T] { value: T }
+fn wrap[T: Copy](value: T) -> Box[T] { return Box[T]{value: value} }
+let boxed: Box[Int] = wrap(9)
+assert_eq(boxed.value, 9)
+`)
+	encoded, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatalf("emit generic KIR: %v", err)
+	}
+	document, err := DecodeKIR(encoded, DefaultLimits())
+	if err != nil {
+		t.Fatalf("decode generic KIR: %v", err)
+	}
+	if document.Version != KIRVersion || len(document.Structs) != 1 || len(document.Structs[0].TypeParams) != 1 || document.Structs[0].TypeParams[0].Name != "T" {
+		t.Fatalf("generic struct metadata was lost: %#v", document.Structs)
+	}
+	var sawInstance bool
+	var walk func(*KIRExpr)
+	walk = func(expression *KIRExpr) {
+		if expression == nil {
+			return
+		}
+		if expression.Kind == "struct" && expression.StructName == "Box" && expression.StructType == "Box[T]" && expression.Type == "Box[T]" {
+			sawInstance = true
+		}
+		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Callee, expression.Base, expression.Receiver} {
+			walk(child)
+		}
+		for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
+			for _, child := range list {
+				walk(child)
+			}
+		}
+	}
+	for _, statement := range document.Functions[0].Body {
+		walk(statement.Return)
+	}
+	if !sawInstance {
+		t.Fatal("KIR did not preserve the generic struct expression and its instantiated type")
+	}
+}
+
 func TestNumericConstraintsEnableGenericOperations(t *testing.T) {
 	p, c := testProgram(t, `
 fn add[T: Numeric](a: T, b: T) -> T { return a + b }

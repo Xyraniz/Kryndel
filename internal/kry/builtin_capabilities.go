@@ -67,6 +67,14 @@ func nativeBuiltinBackendStatus(name, format string, target NativeTarget) string
 			}
 			return "supported"
 		}
+	case "pe-direct":
+		if nativeOutputTargetReason(format, target) != "" {
+			return "unsupported"
+		}
+		switch name {
+		case "print", "println", "u8", "u16", "u32", "u64":
+			return "supported"
+		}
 	}
 	return "unsupported"
 }
@@ -74,6 +82,11 @@ func nativeBuiltinBackendStatus(name, format string, target NativeTarget) string
 func validateNativeFeatureSupport(p *Program, c *Checker, format string, target NativeTarget) error {
 	if p == nil || c == nil || c.Env == nil {
 		return fmt.Errorf("missing checked program or type environment")
+	}
+	// Prefer the actionable builtin diagnostic over a secondary unsupported
+	// opaque-handle type error in a builtin's signature or arguments.
+	if err := validateNativeBuiltinSupport(p, c, format, target); err != nil {
+		return err
 	}
 	var walkExpr func(*Expr, bool) error
 	walkExpr = func(e *Expr, allowDirectOutput bool) error {
@@ -209,6 +222,77 @@ func validateNativeFeatureSupport(p *Program, c *Checker, format string, target 
 		}
 		for _, param := range function.Params {
 			if err := walkExpr(param.Default, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateNativeBuiltinSupport(p *Program, c *Checker, format string, target NativeTarget) error {
+	if p == nil || c == nil || c.Env == nil {
+		return fmt.Errorf("missing checked program or type environment")
+	}
+	var walkExpr func(*Expr) error
+	walkExpr = func(e *Expr) error {
+		if e == nil {
+			return nil
+		}
+		if e.Kind == ExCall && e.Function == nil {
+			if _, builtin := c.Env.Builtins[e.Name]; builtin && nativeBuiltinBackendStatus(e.Name, format, target) == "unsupported" {
+				return fmt.Errorf("builtin %q is not listed as supported by the %s backend for %s-%s; use the interpreter for this feature", e.Name, format, target.OS, target.Arch)
+			}
+		}
+		for _, child := range []*Expr{e.Left, e.Right, e.Operand, e.Base, e.Receiver} {
+			if err := walkExpr(child); err != nil {
+				return err
+			}
+		}
+		for _, list := range [][]*Expr{e.Args, e.Items, e.MapKeys, e.Values} {
+			for _, child := range list {
+				if err := walkExpr(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	var walkStmts func([]*Stmt) error
+	walkStmts = func(stmts []*Stmt) error {
+		for _, stmt := range stmts {
+			if stmt == nil {
+				continue
+			}
+			for _, expr := range []*Expr{stmt.Init, stmt.Expr, stmt.Target, stmt.Value, stmt.Cond, stmt.Iter, stmt.Return, stmt.Scrutinee} {
+				if err := walkExpr(expr); err != nil {
+					return err
+				}
+			}
+			for _, block := range [][]*Stmt{stmt.Then, stmt.Else, stmt.Body} {
+				if err := walkStmts(block); err != nil {
+					return err
+				}
+			}
+			for _, arm := range stmt.Arms {
+				if err := walkStmts(arm.Body); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := walkStmts(p.Statements); err != nil {
+		return err
+	}
+	for _, function := range p.Functions {
+		if function == nil {
+			continue
+		}
+		if err := walkStmts(function.Body); err != nil {
+			return err
+		}
+		for _, parameter := range function.Params {
+			if err := walkExpr(parameter.Default); err != nil {
 				return err
 			}
 		}

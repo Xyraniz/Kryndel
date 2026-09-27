@@ -37,6 +37,8 @@ type directMachine struct {
 	forIndexSlots       map[*Stmt]machineSlot
 	scopeStack          []map[string]machineSlot
 	functionReturns     map[string]*Type
+	diagnosticStacks    map[string]directELFDiagnosticStack
+	entryFunction       *Function
 	stringConcatLabel   int
 	stringConcatUsed    bool
 	arrayAllocLabel     int
@@ -87,8 +89,185 @@ type directMachine struct {
 	windowsStackDepth   int
 	outputLimit         int64
 	outputLimitSet      bool
+	outputLimitLabel    int
 	peImportRefs        []peImportRef
 	peFunctions         []peFunctionRange
+}
+
+type directELFDiagnosticStack struct {
+	frames []StackFrame
+	err    string
+}
+
+type directELFCallSite struct {
+	callee string
+	frame  StackFrame
+}
+
+const directELFDiagnosticPayloadMarker = "__DIRECT_ELF_KRY004_PAYLOAD__"
+
+func directELFDiagnosticStacks(p *Program, entry *Function) map[string]directELFDiagnosticStack {
+	stacks := map[string]directELFDiagnosticStack{}
+	if p == nil {
+		stacks[""] = directELFDiagnosticStack{err: "direct ELF backend cannot determine the result_unwrap diagnostic stack"}
+		return stacks
+	}
+
+	graph := map[string][]directELFCallSite{}
+	functions := map[string]*Function{}
+	for _, function := range p.Functions {
+		if function != nil {
+			functions[functionKey(function)] = function
+		}
+	}
+
+	root := ""
+	rootStatements := p.Statements
+	var rootFrames []StackFrame
+	if entry != nil {
+		root = functionKey(entry)
+		rootStatements = entry.Body
+		rootFrames = []StackFrame{directELFFunctionEntryFrame(entry)}
+	}
+
+	collectCalls := func(caller string, statements []*Stmt) {
+		var visitStmt func(*Stmt)
+		var visitBlock func([]*Stmt)
+		var visitExpr func(*Expr)
+		visitExpr = func(expression *Expr) {
+			if expression == nil {
+				return
+			}
+			if expression.Kind == ExCall && expression.Function != nil {
+				callee := functionKey(expression.Function)
+				graph[caller] = append(graph[caller], directELFCallSite{
+					callee: callee,
+					frame:  directELFCallFrame(expression),
+				})
+			}
+			for _, child := range []*Expr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
+				visitExpr(child)
+			}
+			for _, list := range [][]*Expr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
+				for _, child := range list {
+					visitExpr(child)
+				}
+			}
+			if expression.Lambda != nil {
+				visitBlock(expression.Lambda.Body)
+			}
+		}
+		visitStmt = func(statement *Stmt) {
+			if statement == nil {
+				return
+			}
+			for _, expression := range []*Expr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Return, statement.Scrutinee, statement.Iter} {
+				visitExpr(expression)
+			}
+			visitBlock(statement.Then)
+			visitBlock(statement.Else)
+			visitBlock(statement.Body)
+			for _, arm := range statement.Arms {
+				visitBlock(arm.Body)
+			}
+		}
+		visitBlock = func(block []*Stmt) {
+			for _, statement := range block {
+				visitStmt(statement)
+			}
+		}
+		visitBlock(statements)
+	}
+	collectCalls(root, rootStatements)
+	for key, function := range functions {
+		if key == root {
+			continue
+		}
+		collectCalls(key, function.Body)
+	}
+
+	stacks[root] = directELFDiagnosticStack{frames: append([]StackFrame(nil), rootFrames...)}
+	active := map[string]bool{}
+	pathFrames := make([]StackFrame, 0, len(functions))
+	var markReachable func(string, string, map[string]bool)
+	markReachable = func(current, reason string, seen map[string]bool) {
+		if seen[current] {
+			return
+		}
+		seen[current] = true
+		if _, ok := functions[current]; ok {
+			stacks[current] = directELFDiagnosticStack{err: reason}
+		}
+		for _, call := range graph[current] {
+			markReachable(call.callee, reason, seen)
+		}
+	}
+	var visit func(string)
+	visit = func(current string) {
+		if active[current] {
+			reason := fmt.Sprintf("direct ELF backend cannot reproduce result_unwrap diagnostic stack in function '%s': recursive call paths are unsupported", directELFFunctionName(functions[current], current))
+			markReachable(current, reason, map[string]bool{})
+			return
+		}
+		active[current] = true
+		for _, call := range graph[current] {
+			if active[call.callee] {
+				reason := fmt.Sprintf("direct ELF backend cannot reproduce result_unwrap diagnostic stack in function '%s': recursive call paths are unsupported", directELFFunctionName(functions[call.callee], call.callee))
+				markReachable(call.callee, reason, map[string]bool{})
+				continue
+			}
+			if _, exists := stacks[call.callee]; exists {
+				reason := fmt.Sprintf("direct ELF backend cannot reproduce result_unwrap diagnostic stack in function '%s': multiple call paths are unsupported", directELFFunctionName(functions[call.callee], call.callee))
+				markReachable(call.callee, reason, map[string]bool{})
+				continue
+			}
+			pathFrames = append(pathFrames, call.frame)
+			frames := make([]StackFrame, 0, len(pathFrames)+len(rootFrames))
+			for index := len(pathFrames) - 1; index >= 0; index-- {
+				frames = append(frames, pathFrames[index])
+			}
+			frames = append(frames, rootFrames...)
+			stacks[call.callee] = directELFDiagnosticStack{frames: frames}
+			visit(call.callee)
+			pathFrames = pathFrames[:len(pathFrames)-1]
+		}
+		delete(active, current)
+	}
+	visit(root)
+	return stacks
+}
+
+func directELFFunctionName(function *Function, fallback string) string {
+	if function != nil && function.Name != "" {
+		return function.Name
+	}
+	return fallback
+}
+
+func directELFFunctionEntryFrame(function *Function) StackFrame {
+	frame := StackFrame{Function: directELFFunctionName(function, "main"), Source: "<input>", Line: 1, Column: 1}
+	if function != nil {
+		frame.Line, frame.Column = function.Tok.Line, function.Tok.Column
+		if function.Tok.Source != nil {
+			frame.Source = function.Tok.Source.Name
+		}
+	}
+	return frame
+}
+
+func directELFCallFrame(expression *Expr) StackFrame {
+	frame := StackFrame{Function: "<function>", Source: "<input>", Line: 1, Column: 1}
+	if expression == nil {
+		return frame
+	}
+	if expression.Function != nil {
+		frame.Function = expression.Function.Name
+	}
+	frame.Line, frame.Column = expression.Tok.Line, expression.Tok.Column
+	if expression.Tok.Source != nil {
+		frame.Source = expression.Tok.Source.Name
+	}
+	return frame
 }
 
 type machineSlot struct {
@@ -137,6 +316,8 @@ func newDirectMachine() *directMachine {
 		forIterSlots:     map[*Stmt]machineSlot{},
 		forIndexSlots:    map[*Stmt]machineSlot{},
 		functionReturns:  map[string]*Type{},
+		diagnosticStacks: map[string]directELFDiagnosticStack{},
+		outputLimitLabel: -1,
 	}
 	m.endLabel = m.newLabel()
 	m.trapLabel = m.newLabel()
@@ -360,22 +541,26 @@ func (m *directMachine) emitOutputBudgetAddR8() error {
 	if !m.outputLimitSet {
 		return nil
 	}
+	limitLabel := m.outputLimitLabel
+	if limitLabel < 0 {
+		limitLabel = m.trapLabel
+	}
 	if m.outputLimit < 0 {
-		return m.emitJump(m.trapLabel)
+		return m.emitJump(limitLabel)
 	}
 	m.code = append(m.code,
 		0x49, 0x8b, 0x07, // mov rax, [r15]
 		0x4c, 0x01, 0xc0, // add rax, r8
 	)
-	if err := m.emitConditionalJump(0x82, m.trapLabel); err != nil { // jc: qword addition overflowed
+	if err := m.emitConditionalJump(0x82, limitLabel); err != nil { // jc: qword addition overflowed
 		return err
 	}
 	m.code = append(m.code, 0x48, 0xb9)
 	var limit [8]byte
 	binary.LittleEndian.PutUint64(limit[:], uint64(m.outputLimit))
-	m.code = append(m.code, limit[:]...)                             // mov rcx, configured output limit
-	m.code = append(m.code, 0x48, 0x39, 0xc8)                        // cmp rax, rcx
-	if err := m.emitConditionalJump(0x87, m.trapLabel); err != nil { // ja: cumulative bytes exceed the limit
+	m.code = append(m.code, limit[:]...)                            // mov rcx, configured output limit
+	m.code = append(m.code, 0x48, 0x39, 0xc8)                       // cmp rax, rcx
+	if err := m.emitConditionalJump(0x87, limitLabel); err != nil { // ja: cumulative bytes exceed the limit
 		return err
 	}
 	m.code = append(m.code, 0x49, 0x89, 0x07) // mov [r15], rax
@@ -385,9 +570,19 @@ func (m *directMachine) emitOutputBudgetAddR8() error {
 // emitELFWriteRSIRDX emits Linux write(1, RSI, RDX), retrying EINTR, handling
 // short writes, and trapping on zero progress or any other syscall error.
 func (m *directMachine) emitELFWriteRSIRDX() error {
+	return m.emitELFWriteRSIRDXFD(1)
+}
+
+// emitELFWriteRSIRDXFD emits Linux write(fd, RSI, RDX), retrying EINTR,
+// handling short writes, and trapping on zero progress or any other syscall
+// error.
+func (m *directMachine) emitELFWriteRSIRDXFD(fd byte) error {
 	empty := m.newLabel()
 	loop := m.newLabel()
 	done := m.newLabel()
+	if fd > 2 {
+		return fmt.Errorf("direct ELF write descriptor %d is unsupported", fd)
+	}
 	m.code = append(m.code, 0x48, 0x85, 0xd2) // test rdx, rdx
 	if err := m.emitConditionalJump(0x84, empty); err != nil {
 		return err
@@ -399,7 +594,7 @@ func (m *directMachine) emitELFWriteRSIRDX() error {
 	}
 	m.code = append(m.code,
 		0xb8, 0x01, 0, 0, 0, // mov eax, SYS_write
-		0xbf, 0x01, 0, 0, 0, // mov edi, STDOUT_FILENO
+		0xbf, fd, 0, 0, 0, // mov edi, file descriptor
 		0x4c, 0x89, 0xce, // mov rsi, r9
 		0x4c, 0x89, 0xd2, // mov rdx, r10
 		0x0f, 0x05, // syscall
@@ -427,6 +622,21 @@ func (m *directMachine) emitELFWriteRSIRDX() error {
 		return err
 	}
 	return nil
+}
+
+// emitELFWriteRawTo writes static bytes to a selected Linux file descriptor.
+// It is used for diagnostics so executable KIR errors remain visible on stderr.
+func (m *directMachine) emitELFWriteRawTo(text string, fd byte) error {
+	if uint64(len(text)) > uint64(^uint32(0)) {
+		return fmt.Errorf("direct ELF write exceeds the syscall byte-count limit")
+	}
+	offset := m.addData(text)
+	start := len(m.code)
+	m.code = append(m.code, 0x48, 0x8d, 0x35, 0, 0, 0, 0) // lea rsi, [rip + text]
+	m.code = append(m.code, 0xba, 0, 0, 0, 0)             // mov edx, byte length
+	binary.LittleEndian.PutUint32(m.code[len(m.code)-4:], uint32(len(text)))
+	m.dataRefs = append(m.dataRefs, machineDataRef{displacement: start + 3, instructionEnd: start + 7, dataOffset: offset})
+	return m.emitELFWriteRSIRDXFD(fd)
 }
 
 const (
@@ -821,8 +1031,38 @@ func (m *directMachine) emitUnwrapOr(e *Expr) error {
 	return m.bind(joinLabel)
 }
 
-func (m *directMachine) emitResultUnwrap(e *Expr) error {
-	if err := m.emitExpr(e); err != nil {
+func (m *directMachine) emitResultUnwrap(call, value *Expr) error {
+	if call == nil || len(call.Args) != 1 || value == nil {
+		return fmt.Errorf("direct ELF backend result_unwrap expects one argument")
+	}
+	if m.windowsABI {
+		return fmt.Errorf("direct ELF backend result_unwrap diagnostics are supported only for Linux ELF")
+	}
+	if value.Type == nil || value.Type.Kind != TyResult || value.Type.B == nil {
+		return fmt.Errorf("direct ELF backend cannot determine result_unwrap error payload type")
+	}
+	errorType := value.Type.B
+	switch errorType.Kind {
+	case TyString, TyInt, TyUInt, TyBool:
+	default:
+		return fmt.Errorf("direct ELF backend cannot report result_unwrap error payload type %s; supported error payload types are String, Int, UInt, and Bool", errorType.String())
+	}
+	stack, ok := m.diagnosticStacks[m.currentFunction]
+	if !ok {
+		return fmt.Errorf("direct ELF backend cannot reproduce result_unwrap diagnostic stack in function '%s': no unique entry call path is available", directELFFunctionName(nil, m.currentFunction))
+	}
+	if stack.err != "" {
+		return fmt.Errorf("%s", stack.err)
+	}
+	diagnostic := Diag(CatRuntime, call.Tok.Source, call.Tok.Line, call.Tok.Column, "cannot unwrap error Result: %s", directELFDiagnosticPayloadMarker)
+	diagnostic.Stack = append([]StackFrame(nil), stack.frames...)
+	formatted := diagnostic.Format(false)
+	parts := strings.SplitN(formatted, directELFDiagnosticPayloadMarker, 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("direct ELF backend could not construct result_unwrap diagnostic text")
+	}
+
+	if err := m.emitExpr(value); err != nil {
 		return err
 	}
 	m.code = append(m.code, 0x48, 0x85, 0xc0)
@@ -830,11 +1070,144 @@ func (m *directMachine) emitResultUnwrap(e *Expr) error {
 		return err
 	}
 	m.code = append(m.code, 0x48, 0x83, 0x38, 0)
-	if err := m.emitConditionalJump(0x85, m.trapLabel); err != nil {
+	errorLabel := m.newLabel()
+	joinLabel := m.newLabel()
+	if err := m.emitConditionalJump(0x85, errorLabel); err != nil {
 		return err
 	}
 	m.code = append(m.code, 0x48, 0x8b, 0x40, 0x08)
-	return nil
+	if err := m.emitJump(joinLabel); err != nil {
+		return err
+	}
+	if err := m.bind(errorLabel); err != nil {
+		return err
+	}
+	// Keep the boxed payload in a callee-saved register while stderr writes and
+	// integer formatting use caller-saved registers.
+	m.code = append(m.code, 0x4c, 0x8b, 0x60, 0x08) // mov r12, [rax+8]
+	if err := m.emitELFWriteRawTo(parts[0], 2); err != nil {
+		return err
+	}
+	switch errorType.Kind {
+	case TyString:
+		m.code = append(m.code, 0x4c, 0x89, 0xe0) // mov rax, r12
+		if err := m.emitELFWriteStringFD(2); err != nil {
+			return err
+		}
+	case TyInt:
+		m.code = append(m.code, 0x4c, 0x89, 0xe0) // mov rax, r12
+		if err := m.emitELFIntegerToFD(false, 2); err != nil {
+			return err
+		}
+	case TyUInt:
+		m.code = append(m.code, 0x4c, 0x89, 0xe0) // mov rax, r12
+		if err := m.emitELFIntegerToFD(true, 2); err != nil {
+			return err
+		}
+	case TyBool:
+		falseLabel := m.newLabel()
+		boolDone := m.newLabel()
+		m.code = append(m.code, 0x4d, 0x85, 0xe4) // test r12, r12
+		if err := m.emitConditionalJump(0x84, falseLabel); err != nil {
+			return err
+		}
+		if err := m.emitELFWriteRawTo("true", 2); err != nil {
+			return err
+		}
+		if err := m.emitJump(boolDone); err != nil {
+			return err
+		}
+		if err := m.bind(falseLabel); err != nil {
+			return err
+		}
+		if err := m.emitELFWriteRawTo("false", 2); err != nil {
+			return err
+		}
+		if err := m.bind(boolDone); err != nil {
+			return err
+		}
+	}
+	if err := m.emitELFWriteRawTo(parts[1], 2); err != nil {
+		return err
+	}
+	if err := m.emitExit(1); err != nil {
+		return err
+	}
+	return m.bind(joinLabel)
+}
+
+func (m *directMachine) emitELFWriteStringFD(fd byte) error {
+	// RAX points at {u64 byte length, u8 UTF-8 data[length]}.
+	m.code = append(m.code, 0x48, 0x8b, 0x10, 0x48, 0x8d, 0x70, 0x08)
+	return m.emitELFWriteRSIRDXFD(fd)
+}
+
+func (m *directMachine) emitELFIntegerToFD(unsigned bool, fd byte) error {
+	if fd > 2 {
+		return fmt.Errorf("direct ELF integer output descriptor %d is unsupported", fd)
+	}
+	// Use the reserved per-frame digit buffer so formatting a diagnostic cannot
+	// allocate memory and fail before the source diagnostic reaches stderr.
+	m.code = append(m.code, 0x4c, 0x8d, 0x85)
+	var buffer [4]byte
+	binary.LittleEndian.PutUint32(buffer[:], uint32(-m.bufferOffset))
+	m.code = append(m.code, buffer[:]...)
+	m.code = append(m.code, 0x49, 0xb9)
+	var ten [8]byte
+	binary.LittleEndian.PutUint64(ten[:], 10)
+	m.code = append(m.code, ten[:]...)
+	zero := m.newLabel()
+	digits := m.newLabel()
+	addSign := m.newLabel()
+	ready := m.newLabel()
+	m.code = append(m.code, 0x45, 0x31, 0xd2, 0x48, 0x85, 0xc0) // r10d=0; test value
+	if err := m.emitConditionalJump(0x84, zero); err != nil {
+		return err
+	}
+	if !unsigned {
+		if err := m.emitConditionalJump(0x89, digits); err != nil { // jns
+			return err
+		}
+		m.code = append(m.code, 0x41, 0xb2, 0x01, 0x48, 0xf7, 0xd8) // negative flag; abs (MinInt remains unsigned magnitude)
+	}
+	if err := m.bind(digits); err != nil {
+		return err
+	}
+	loop := m.newLabel()
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x31, 0xd2, 0x49, 0xf7, 0xf1, 0x80, 0xc2, 0x30, 0x49, 0xff, 0xc8, 0x41, 0x88, 0x10, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x85, loop); err != nil {
+		return err
+	}
+	if err := m.emitJump(addSign); err != nil {
+		return err
+	}
+	if err := m.bind(zero); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc8, 0x41, 0xc6, 0x00, 0x30) // emit zero
+	if err := m.emitJump(addSign); err != nil {
+		return err
+	}
+	if err := m.bind(addSign); err != nil {
+		return err
+	}
+	if !unsigned {
+		m.code = append(m.code, 0x45, 0x84, 0xd2)
+		if err := m.emitConditionalJump(0x84, ready); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x49, 0xff, 0xc8, 0x41, 0xc6, 0x00, 0x2d) // prepend '-'
+	}
+	if err := m.bind(ready); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xc6, 0x48, 0x8d, 0x95) // rsi=first digit; rdx=fixed buffer end
+	m.code = append(m.code, buffer[:]...)
+	m.code = append(m.code, 0x48, 0x29, 0xf2) // rdx = byte count
+	return m.emitELFWriteRSIRDXFD(fd)
 }
 
 func (m *directMachine) emitResultError(e *Expr) error {
@@ -5782,7 +6155,7 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			if len(e.Args) != 1 {
 				return fmt.Errorf("direct ELF backend result_unwrap expects one argument")
 			}
-			return m.emitResultUnwrap(e.Args[0])
+			return m.emitResultUnwrap(e, e.Args[0])
 		case "result_error":
 			if len(e.Args) != 1 {
 				return fmt.Errorf("direct ELF backend result_error expects one argument")
@@ -6572,9 +6945,13 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 		// integer formatting; keep the process-wide output count at +32.
 		m.emitOutputCounterInit(m.nextSlot + 32)
 	}
+	if m.entryFunction != nil {
+		m.currentFunction = functionKey(m.entryFunction)
+	}
 	if err := m.emitStatements(stmts); err != nil {
 		return nil, err
 	}
+	m.currentFunction = ""
 	if m.windowsABI || len(m.functionOrder) > 0 || m.stringConcatUsed || m.arrayRuntimeUsed || m.boxRuntimeUsed || m.structRuntimeUsed || m.hostRuntimeUsed || m.stringCharsUsed || m.mapRuntimeUsed {
 		if err := m.emitJump(m.endLabel); err != nil {
 			return nil, err
@@ -6786,6 +7163,15 @@ func buildDirectDynamicELF(p *Program, c *Checker) ([]byte, error) {
 	machine := newDirectMachine()
 	machine.outputLimit = c.Env.Lim.MaxOutputBytes
 	machine.outputLimitSet = true
+	if len(p.Statements) == 0 {
+		for _, function := range p.Functions {
+			if function != nil && function.Name == "main" {
+				machine.entryFunction = function
+				break
+			}
+		}
+	}
+	machine.diagnosticStacks = directELFDiagnosticStacks(p, machine.entryFunction)
 	if err := machine.prepareFunctions(p); err != nil {
 		return nil, err
 	}

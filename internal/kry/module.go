@@ -239,7 +239,7 @@ func safeComponents(root, target string) bool {
 	return true
 }
 func (l *ModuleLoader) merge(root *Program) *Program {
-	out := &Program{Source: root.Source, Module: root.Module, VisibilityScope: root.VisibilityScope, Imports: append([]ImportDecl{}, root.Imports...), Sources: []*Source{root.Source}, Statements: root.Statements, Functions: append([]*Function{}, root.Functions...), Structs: append([]*StructDecl{}, root.Structs...), Enums: append([]*EnumDecl{}, root.Enums...)}
+	out := &Program{Source: root.Source, Module: root.Module, VisibilityScope: root.VisibilityScope, Imports: append([]ImportDecl{}, root.Imports...), Sources: []*Source{root.Source}, Statements: root.Statements, Functions: append([]*Function{}, root.Functions...), Structs: append([]*StructDecl{}, root.Structs...), Enums: append([]*EnumDecl{}, root.Enums...), Traits: append([]*TraitDecl{}, root.Traits...), TraitImpls: append([]*TraitImplDecl{}, root.TraitImpls...)}
 	seen := map[string]bool{root.Source.Name: true}
 	var add func(*Program)
 	add = func(p *Program) {
@@ -266,6 +266,12 @@ func (l *ModuleLoader) merge(root *Program) *Program {
 			}
 			for _, e := range q.Enums {
 				out.Enums = append(out.Enums, e)
+			}
+			for _, trait := range q.Traits {
+				out.Traits = append(out.Traits, trait)
+			}
+			for _, implementation := range q.TraitImpls {
+				out.TraitImpls = append(out.TraitImpls, implementation)
 			}
 		}
 	}

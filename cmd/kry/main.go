@@ -548,13 +548,13 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 			if d := e.BuildSealedPath(src, out, e.Passphrase, iterations); d != nil {
 				return report(d, jsonMode)
 			}
-			fmt.Println("built " + out + " (encrypted; backend=portable KRYNATIVE4; external-toolchain=none)")
+			fmt.Println("built " + out + " (encrypted; backend=portable KRYNATIVE6; external-toolchain=none)")
 			return 0
 		}
 		if d := e.BuildPath(src, out); d != nil {
 			return report(d, jsonMode)
 		}
-		fmt.Println("built " + out + " (backend=portable KRYNATIVE4; external-toolchain=none)")
+		fmt.Println("built " + out + " (backend=portable KRYNATIVE6; external-toolchain=none)")
 		return 0
 	}
 	effectiveFormat := format
