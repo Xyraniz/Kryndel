@@ -16,6 +16,7 @@ const cRuntimePrelude = `
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
+#include <errno.h>
 #include <setjmp.h>
 #include <limits.h>
 #include <time.h>
@@ -50,6 +51,7 @@ static long long k_mem = 0;
 static long long k_max_mem = 268435456LL;
 static long long k_out = 0;
 static long long k_max_out = 16777216LL;
+static long long k_max_json = 67108864LL;
 
 static void kfail(const char *msg) {
     snprintf(k_errbuf, sizeof(k_errbuf), "%s", msg);
@@ -76,6 +78,7 @@ struct KValue {
     int tag;
     union {
         long long i;
+        unsigned long long u64;
         double f;
         int b;
         KStr s;
@@ -89,21 +92,38 @@ struct KValue {
         struct { struct KChan *ch; } ac;
         struct { struct KHandle *h; } hd;
     } u;
+    struct KValue *json_root;
 };
 
 enum { K_NIL=0, K_INT, K_FLOAT, K_BOOL, K_STRING, K_BYTES, K_ARRAY,
        K_STRUCT, K_ENUM, K_OPTION, K_RESULT, K_MAP, K_SET, K_JSON,
-       K_SHARED, K_ACTOR, K_THREAD, K_TASKGROUP, K_CHANNEL };
+       K_SHARED, K_ACTOR, K_THREAD, K_TASKGROUP, K_CHANNEL,
+       K_UINT, K_JSON_NUMBER };
 
 static KValue kv_nil(void) { KValue v; memset(&v,0,sizeof(v)); v.tag=K_NIL; return v; }
 static KValue kv_int(long long x) { KValue v; memset(&v,0,sizeof(v)); v.tag=K_INT; v.u.i=x; return v; }
+static KValue kv_uint64(unsigned long long x) { KValue v; memset(&v,0,sizeof(v)); v.tag=K_UINT; v.u.u64=x; return v; }
 static KValue kv_float(double x) { KValue v; memset(&v,0,sizeof(v)); v.tag=K_FLOAT; v.u.f=x; return v; }
 static KValue kv_bool(int x) { KValue v; memset(&v,0,sizeof(v)); v.tag=K_BOOL; v.u.b=x?1:0; return v; }
 static KValue kv_strn(const char *s, size_t n) {
     KValue v; memset(&v,0,sizeof(v)); v.tag=K_STRING;
     v.u.s.data = (char*)kalloc(n+1); memcpy(v.u.s.data,s,n); v.u.s.data[n]=0; v.u.s.len=n; return v;
 }
+static KValue kv_str_take(char *s, size_t n) {
+    KValue v; memset(&v,0,sizeof(v)); v.tag=K_STRING; v.u.s.data=s; v.u.s.len=n; return v;
+}
 static KValue kv_cstr(const char *s) { return kv_strn(s, strlen(s)); }
+static KValue kv_json_text(int tag, const char *s, size_t n) {
+    KValue v; memset(&v,0,sizeof(v)); v.tag=tag;
+    v.u.s.data=(char*)kalloc(n+1); memcpy(v.u.s.data,s,n); v.u.s.data[n]=0; v.u.s.len=n; return v;
+}
+static KValue kv_jsonn(const char *s, size_t n) { return kv_json_text(K_JSON,s,n); }
+static KValue kv_json_ownednode(KValue node, char *s, size_t n) {
+    KValue v; memset(&v,0,sizeof(v)); v.tag=K_JSON; v.u.s.data=s; v.u.s.len=n;
+    v.json_root=(KValue*)kalloc(sizeof(KValue)); *v.json_root=node;
+    return v;
+}
+static KValue kv_json_numbern(const char *s, size_t n) { return kv_json_text(K_JSON_NUMBER,s,n); }
 static KValue kv_bytesn(const char *s, size_t n) {
     KValue v; memset(&v,0,sizeof(v)); v.tag=K_BYTES;
     v.u.s.data = (char*)kalloc(n+1); memcpy(v.u.s.data,s,n); v.u.s.data[n]=0; v.u.s.len=n; return v;
@@ -143,8 +163,17 @@ const cRuntimeDisplay = `
 /* ---- string builder ---------------------------------------------------- */
 typedef struct { char *buf; size_t len; size_t cap; } KBuf;
 static void kb_init(KBuf *b) { b->cap=64; b->len=0; b->buf=(char*)kalloc(b->cap); b->buf[0]=0; }
-static void kb_grow(KBuf *b) { b->cap*=2; char *n=(char*)kalloc(b->cap); memcpy(n,b->buf,b->len); b->buf=n; }
-static void kb_putc(KBuf *b, char c) { if (b->len+1>=b->cap) kb_grow(b); b->buf[b->len++]=c; b->buf[b->len]=0; }
+static void kb_grow(KBuf *b) {
+    if (b->cap>SIZE_MAX/2 || b->cap>(size_t)LLONG_MAX) kfail("memory budget exceeded");
+    size_t next=b->cap*2;
+    long long old=(long long)b->cap;
+    if (k_mem<old || next>(size_t)LLONG_MAX || k_mem-old>k_max_mem-(long long)next) kfail("memory budget exceeded");
+    char *n=(char*)realloc(b->buf,next);
+    if (!n) kfail("out of memory");
+    k_mem=k_mem-old+(long long)next;
+    b->buf=n; b->cap=next;
+}
+static void kb_putc(KBuf *b, char c) { if (b->len>=b->cap-1) kb_grow(b); b->buf[b->len++]=c; b->buf[b->len]=0; }
 static void kb_putn(KBuf *b, const char *s, size_t n) { for (size_t i=0;i<n;i++) kb_putc(b,s[i]); }
 static void kb_puts(KBuf *b, const char *s) { while (*s) kb_putc(b,*s++); }
 
@@ -199,9 +228,11 @@ static void k_disp(KBuf *b, KValue v) {
     switch (v.tag) {
     case K_NIL: kb_puts(b,"nil"); break;
     case K_INT: snprintf(num,sizeof(num),"%lld",v.u.i); kb_puts(b,num); break;
+    case K_UINT: snprintf(num,sizeof(num),"%llu",v.u.u64); kb_puts(b,num); break;
     case K_FLOAT: k_fmt_float(v.u.f,num,sizeof(num)); kb_puts(b,num); break;
     case K_BOOL: kb_puts(b, v.u.b?"true":"false"); break;
     case K_STRING: case K_JSON: kb_putn(b,v.u.s.data,v.u.s.len); break;
+    case K_JSON_NUMBER: kb_putn(b,v.u.s.data,v.u.s.len); break;
     case K_BYTES: snprintf(num,sizeof(num),"<Bytes:%zu>",v.u.s.len); kb_puts(b,num); break;
     case K_ARRAY:
         kb_putc(b,'[');
@@ -244,7 +275,7 @@ static void k_disp(KBuf *b, KValue v) {
 
 static KValue k_display(KValue v) {
     KBuf b; kb_init(&b); k_disp(&b,v);
-    return kv_strn(b.buf,b.len);
+    return kv_str_take(b.buf,b.len);
 }
 
 /* ---- equality ---------------------------------------------------------- */
@@ -253,9 +284,10 @@ static int k_equal(KValue a, KValue b) {
     switch (a.tag) {
     case K_NIL: return 1;
     case K_INT: return a.u.i==b.u.i;
+    case K_UINT: return a.u.u64==b.u.u64;
     case K_FLOAT: return a.u.f==b.u.f;
     case K_BOOL: return a.u.b==b.u.b;
-    case K_STRING: case K_JSON: case K_BYTES:
+    case K_STRING: case K_JSON: case K_JSON_NUMBER: case K_BYTES:
         return a.u.s.len==b.u.s.len && memcmp(a.u.s.data,b.u.s.data,a.u.s.len)==0;
     case K_ARRAY: case K_SET:
         if (a.u.a.len!=b.u.a.len) return 0;
@@ -313,6 +345,7 @@ static long long k_rem_i(long long a, long long b) {
 
 static KValue k_add(KValue a, KValue b) {
     if (a.tag==K_INT && b.tag==K_INT) return kv_int(k_add_i(a.u.i,b.u.i));
+    if (a.tag==K_UINT && b.tag==K_UINT) return kv_uint64(a.u.u64+b.u.u64);
     if (a.tag==K_FLOAT && b.tag==K_FLOAT) { double z=a.u.f+b.u.f; if(!isfinite(z)) kfail("floating-point result must be finite"); return kv_float(z); }
     if (a.tag==K_STRING && b.tag==K_STRING) {
         char *p=(char*)kalloc(a.u.s.len+b.u.s.len+1);
@@ -336,21 +369,25 @@ static KValue k_add(KValue a, KValue b) {
 }
 static KValue k_sub(KValue a, KValue b) {
     if (a.tag==K_INT && b.tag==K_INT) return kv_int(k_sub_i(a.u.i,b.u.i));
+    if (a.tag==K_UINT && b.tag==K_UINT) return kv_uint64(a.u.u64-b.u.u64);
     if (a.tag==K_FLOAT && b.tag==K_FLOAT) { double z=a.u.f-b.u.f; if(!isfinite(z)) kfail("floating-point result must be finite"); return kv_float(z); }
     kfail("operator operands have incompatible types"); return kv_nil();
 }
 static KValue k_mul(KValue a, KValue b) {
     if (a.tag==K_INT && b.tag==K_INT) return kv_int(k_mul_i(a.u.i,b.u.i));
+    if (a.tag==K_UINT && b.tag==K_UINT) return kv_uint64(a.u.u64*b.u.u64);
     if (a.tag==K_FLOAT && b.tag==K_FLOAT) { double z=a.u.f*b.u.f; if(!isfinite(z)) kfail("floating-point result must be finite"); return kv_float(z); }
     kfail("operator operands have incompatible types"); return kv_nil();
 }
 static KValue k_div(KValue a, KValue b) {
     if (a.tag==K_INT && b.tag==K_INT) return kv_int(k_div_i(a.u.i,b.u.i));
+    if (a.tag==K_UINT && b.tag==K_UINT) { if (b.u.u64==0) kfail("division by zero"); return kv_uint64(a.u.u64/b.u.u64); }
     if (a.tag==K_FLOAT && b.tag==K_FLOAT) { if (b.u.f==0) kfail("floating division by zero"); double z=a.u.f/b.u.f; if(!isfinite(z)) kfail("floating-point result must be finite"); return kv_float(z); }
     kfail("operator operands have incompatible types"); return kv_nil();
 }
 static KValue k_rem(KValue a, KValue b) {
     if (a.tag==K_INT && b.tag==K_INT) return kv_int(k_rem_i(a.u.i,b.u.i));
+    if (a.tag==K_UINT && b.tag==K_UINT) { if (b.u.u64==0) kfail("remainder by zero"); return kv_uint64(a.u.u64%b.u.u64); }
     kfail("operator operands have incompatible types"); return kv_nil();
 }
 static KValue k_neg(KValue a) {
@@ -361,21 +398,25 @@ static KValue k_neg(KValue a) {
 static KValue k_not(KValue a) { if (a.tag!=K_BOOL) kfail("'!' expects Bool"); return kv_bool(!a.u.b); }
 static KValue k_lt(KValue a, KValue b) {
     if (a.tag==K_INT&&b.tag==K_INT) return kv_bool(a.u.i<b.u.i);
+    if (a.tag==K_UINT&&b.tag==K_UINT) return kv_bool(a.u.u64<b.u.u64);
     if (a.tag==K_FLOAT&&b.tag==K_FLOAT) return kv_bool(a.u.f<b.u.f);
     kfail("operator operands have incompatible types"); return kv_nil();
 }
 static KValue k_le(KValue a, KValue b) {
     if (a.tag==K_INT&&b.tag==K_INT) return kv_bool(a.u.i<=b.u.i);
+    if (a.tag==K_UINT&&b.tag==K_UINT) return kv_bool(a.u.u64<=b.u.u64);
     if (a.tag==K_FLOAT&&b.tag==K_FLOAT) return kv_bool(a.u.f<=b.u.f);
     kfail("operator operands have incompatible types"); return kv_nil();
 }
 static KValue k_gt(KValue a, KValue b) {
     if (a.tag==K_INT&&b.tag==K_INT) return kv_bool(a.u.i>b.u.i);
+    if (a.tag==K_UINT&&b.tag==K_UINT) return kv_bool(a.u.u64>b.u.u64);
     if (a.tag==K_FLOAT&&b.tag==K_FLOAT) return kv_bool(a.u.f>b.u.f);
     kfail("operator operands have incompatible types"); return kv_nil();
 }
 static KValue k_ge(KValue a, KValue b) {
     if (a.tag==K_INT&&b.tag==K_INT) return kv_bool(a.u.i>=b.u.i);
+    if (a.tag==K_UINT&&b.tag==K_UINT) return kv_bool(a.u.u64>=b.u.u64);
     if (a.tag==K_FLOAT&&b.tag==K_FLOAT) return kv_bool(a.u.f>=b.u.f);
     kfail("operator operands have incompatible types"); return kv_nil();
 }
@@ -431,6 +472,10 @@ static int k_utf8_valid(const char *s, size_t len) {
 /* ---- conversions ------------------------------------------------------- */
 static KValue k_to_int(KValue v) {
     if (v.tag==K_INT) return v;
+    if (v.tag==K_UINT) {
+        if (v.u.u64>(unsigned long long)LLONG_MAX) kfail("UInt is outside Int range");
+        return kv_int((long long)v.u.u64);
+    }
     if (v.tag==K_BOOL) return kv_int(v.u.b?1:0);
     if (v.tag==K_FLOAT) {
         if (!isfinite(v.u.f) || v.u.f < (double)LLONG_MIN || v.u.f > (double)LLONG_MAX) kfail("float is outside Int range");
@@ -460,6 +505,7 @@ static int k_to_bool(KValue v) {
     case K_NIL: return 0;
     case K_BOOL: return v.u.b;
     case K_INT: return v.u.i!=0;
+    case K_UINT: return v.u.u64!=0;
     case K_FLOAT: return v.u.f!=0 && !isnan(v.u.f);
     case K_STRING: case K_BYTES: return v.u.s.len>0;
     case K_ARRAY: case K_SET: return v.u.a.len>0;
@@ -971,9 +1017,16 @@ static void k_json_escape(KBuf *b, const char *s, size_t n) {
     kb_putc(b, '"');
     for (size_t i=0;i<n;i++) {
         unsigned char c = (unsigned char)s[i];
+        if (c==0xE2 && i+2<n && (unsigned char)s[i+1]==0x80 && ((unsigned char)s[i+2]==0xA8 || (unsigned char)s[i+2]==0xA9)) {
+            kb_puts(b, (unsigned char)s[i+2]==0xA8 ? "\\u2028" : "\\u2029");
+            i+=2;
+            continue;
+        }
         switch (c) {
             case '"': kb_puts(b,"\\\""); break;
             case '\\': kb_puts(b,"\\\\"); break;
+            case '\b': kb_puts(b,"\\b"); break;
+            case '\f': kb_puts(b,"\\f"); break;
             case '\n': kb_puts(b,"\\n"); break;
             case '\r': kb_puts(b,"\\r"); break;
             case '\t': kb_puts(b,"\\t"); break;
@@ -1021,13 +1074,23 @@ static void k_json_float(KBuf *b, double v) {
         else { for (int i=0;i<dp;i++) kb_putc(b,digits[i]); kb_putc(b,'.'); for (int i=dp;i<nd;i++) kb_putc(b,digits[i]); }
     }
 }
+typedef struct { KValue key; size_t index; } KJsonKeyIndex;
+static int k_json_key_index_compare(const void *left, const void *right) {
+    const KJsonKeyIndex *a=(const KJsonKeyIndex*)left, *b=(const KJsonKeyIndex*)right;
+    size_t n=a->key.u.s.len<b->key.u.s.len?a->key.u.s.len:b->key.u.s.len;
+    int order=memcmp(a->key.u.s.data,b->key.u.s.data,n);
+    if (order) return order;
+    return a->key.u.s.len<b->key.u.s.len?-1:(a->key.u.s.len>b->key.u.s.len?1:0);
+}
 static void k_json_write(KBuf *b, KValue v) {
     switch (v.tag) {
         case K_NIL: kb_puts(b,"null"); break;
         case K_BOOL: kb_puts(b, v.u.b?"true":"false"); break;
         case K_INT: { char t[32]; snprintf(t,sizeof(t),"%lld",v.u.i); kb_puts(b,t); break; }
+        case K_UINT: { char t[32]; snprintf(t,sizeof(t),"%llu",v.u.u64); kb_puts(b,t); break; }
         case K_FLOAT: k_json_float(b, v.u.f); break;
-        case K_STRING: case K_JSON: k_json_escape(b, v.u.s.data, v.u.s.len); break;
+        case K_STRING: k_json_escape(b, v.u.s.data, v.u.s.len); break;
+        case K_JSON: case K_JSON_NUMBER: kb_putn(b,v.u.s.data,v.u.s.len); break;
         case K_BYTES: k_json_escape(b, v.u.s.data, v.u.s.len); break;
         case K_ARRAY: case K_SET: {
             kb_putc(b,'[');
@@ -1035,21 +1098,17 @@ static void k_json_write(KBuf *b, KValue v) {
             kb_putc(b,']'); break;
         }
         case K_MAP: {
-            /* Go's json.Marshal sorts object keys; sort by rendered key string. */
+            /* Go's json.Marshal sorts object keys by their original UTF-8 bytes. */
             size_t n=v.u.m.len;
-            size_t *idx=(size_t*)kalloc(sizeof(size_t)*(n?n:1));
-            for (size_t i=0;i<n;i++) idx[i]=i;
-            for (size_t i=0;i<n;i++) for (size_t j=i+1;j<n;j++) {
-                KBuf ka,kb; kb_init(&ka); kb_init(&kb);
-                k_json_write(&ka, v.u.m.keys[idx[i]]); k_json_write(&kb, v.u.m.keys[idx[j]]);
-                if (strcmp(ka.buf,kb.buf)>0) { size_t t=idx[i]; idx[i]=idx[j]; idx[j]=t; }
-            }
+            KJsonKeyIndex *idx=(KJsonKeyIndex*)kalloc(sizeof(KJsonKeyIndex)*(n?n:1));
+            for (size_t i=0;i<n;i++) { idx[i].key=v.u.m.keys[i]; idx[i].index=i; }
+            qsort(idx,n,sizeof(KJsonKeyIndex),k_json_key_index_compare);
             kb_putc(b,'{');
             for (size_t i=0;i<n;i++) {
                 if (i) kb_putc(b,',');
-                k_json_write(b, v.u.m.keys[idx[i]]);
+                k_json_write(b, v.u.m.keys[idx[i].index]);
                 kb_putc(b,':');
-                k_json_write(b, v.u.m.vals[idx[i]]);
+                k_json_write(b, v.u.m.vals[idx[i].index]);
             }
             kb_putc(b,'}'); break;
         }
@@ -1059,19 +1118,61 @@ static void k_json_write(KBuf *b, KValue v) {
     }
 }
 static KValue k_json_stringify(KValue v) {
+    if (v.tag==K_JSON) { v.tag=K_STRING; v.json_root=NULL; return v; }
     KBuf b; kb_init(&b); k_json_write(&b, v);
-    return kv_strn(b.buf, b.len);
+    return kv_str_take(b.buf, b.len);
 }
 
-typedef struct { const char *p; size_t n; size_t i; } KJson;
+typedef struct { const char *p; size_t n; size_t i; int depth; } KJson;
+typedef struct { KValue key; KValue value; size_t order; } KJsonObjectEntry;
+static int k_json_object_entry_compare(const void *left, const void *right) {
+    const KJsonObjectEntry *a=(const KJsonObjectEntry*)left, *b=(const KJsonObjectEntry*)right;
+    size_t n=a->key.u.s.len<b->key.u.s.len?a->key.u.s.len:b->key.u.s.len;
+    int order=memcmp(a->key.u.s.data,b->key.u.s.data,n);
+    if (order) return order;
+    if (a->key.u.s.len!=b->key.u.s.len) return a->key.u.s.len<b->key.u.s.len?-1:1;
+    return a->order<b->order?-1:(a->order>b->order?1:0);
+}
 static void k_json_ws(KJson *j) { while (j->i<j->n) { char c=j->p[j->i]; if (c==' '||c=='\t'||c=='\n'||c=='\r') j->i++; else break; } }
 static KValue k_json_value(KJson *j);
+static unsigned k_json_hex4(KJson *j) {
+    if (j->i+4>j->n) kfail("invalid JSON string escape");
+    unsigned value=0;
+    for (int i=0;i<4;i++) {
+        unsigned char c=(unsigned char)j->p[j->i++];
+        unsigned digit;
+        if (c>='0'&&c<='9') digit=c-'0';
+        else if (c>='a'&&c<='f') digit=c-'a'+10;
+        else if (c>='A'&&c<='F') digit=c-'A'+10;
+        else kfail("invalid JSON string escape");
+        value=(value<<4)|digit;
+    }
+    return value;
+}
+static void k_json_put_utf8(KBuf *b, unsigned cp) {
+    if (cp<0x80) kb_putc(b,(char)cp);
+    else if (cp<0x800) { kb_putc(b,(char)(0xC0|(cp>>6))); kb_putc(b,(char)(0x80|(cp&0x3F))); }
+    else if (cp<0x10000) { kb_putc(b,(char)(0xE0|(cp>>12))); kb_putc(b,(char)(0x80|((cp>>6)&0x3F))); kb_putc(b,(char)(0x80|(cp&0x3F))); }
+    else { kb_putc(b,(char)(0xF0|(cp>>18))); kb_putc(b,(char)(0x80|((cp>>12)&0x3F))); kb_putc(b,(char)(0x80|((cp>>6)&0x3F))); kb_putc(b,(char)(0x80|(cp&0x3F))); }
+}
+static size_t k_json_utf8_sequence(const unsigned char *s, size_t n) {
+    if (!n) return 0;
+    unsigned char a=s[0];
+    if (a>=0xC2 && a<=0xDF) return n>=2 && (s[1]&0xC0)==0x80 ? 2 : 0;
+    if (a==0xE0) return n>=3 && s[1]>=0xA0 && s[1]<=0xBF && (s[2]&0xC0)==0x80 ? 3 : 0;
+    if ((a>=0xE1 && a<=0xEC) || (a>=0xEE && a<=0xEF)) return n>=3 && (s[1]&0xC0)==0x80 && (s[2]&0xC0)==0x80 ? 3 : 0;
+    if (a==0xED) return n>=3 && s[1]>=0x80 && s[1]<=0x9F && (s[2]&0xC0)==0x80 ? 3 : 0;
+    if (a==0xF0) return n>=4 && s[1]>=0x90 && s[1]<=0xBF && (s[2]&0xC0)==0x80 && (s[3]&0xC0)==0x80 ? 4 : 0;
+    if (a>=0xF1 && a<=0xF3) return n>=4 && (s[1]&0xC0)==0x80 && (s[2]&0xC0)==0x80 && (s[3]&0xC0)==0x80 ? 4 : 0;
+    if (a==0xF4) return n>=4 && s[1]>=0x80 && s[1]<=0x8F && (s[2]&0xC0)==0x80 && (s[3]&0xC0)==0x80 ? 4 : 0;
+    return 0;
+}
 static KValue k_json_string(KJson *j) {
     j->i++; /* opening quote */
     KBuf b; kb_init(&b);
     while (j->i<j->n) {
         char c=j->p[j->i++];
-        if (c=='"') return kv_strn(b.buf,b.len);
+        if (c=='"') return kv_str_take(b.buf,b.len);
         if (c=='\\') {
             if (j->i>=j->n) break;
             char e=j->p[j->i++];
@@ -1085,50 +1186,101 @@ static KValue k_json_string(KJson *j) {
                 case 'r': kb_putc(&b,'\r'); break;
                 case 't': kb_putc(&b,'\t'); break;
                 case 'u': {
-                    if (j->i+4>j->n) kfail("invalid JSON string escape");
-                    char h[5]; memcpy(h,j->p+j->i,4); h[4]=0; j->i+=4;
-                    unsigned cp=(unsigned)strtoul(h,NULL,16);
-                    if (cp>=0xD800 && cp<=0xDBFF && j->i+6<=j->n && j->p[j->i]=='\\' && j->p[j->i+1]=='u') {
-                        char h2[5]; memcpy(h2,j->p+j->i+2,4); h2[4]=0;
-                        unsigned lo=(unsigned)strtoul(h2,NULL,16);
-                        if (lo>=0xDC00 && lo<=0xDFFF) { cp=0x10000+((cp-0xD800)<<10)+(lo-0xDC00); j->i+=6; }
-                    }
-                    if (cp<0x80) kb_putc(&b,(char)cp);
-                    else if (cp<0x800) { kb_putc(&b,(char)(0xC0|(cp>>6))); kb_putc(&b,(char)(0x80|(cp&0x3F))); }
-                    else if (cp<0x10000) { kb_putc(&b,(char)(0xE0|(cp>>12))); kb_putc(&b,(char)(0x80|((cp>>6)&0x3F))); kb_putc(&b,(char)(0x80|(cp&0x3F))); }
-                    else { kb_putc(&b,(char)(0xF0|(cp>>18))); kb_putc(&b,(char)(0x80|((cp>>12)&0x3F))); kb_putc(&b,(char)(0x80|((cp>>6)&0x3F))); kb_putc(&b,(char)(0x80|(cp&0x3F))); }
+                    unsigned cp=k_json_hex4(j);
+                    if (cp>=0xD800 && cp<=0xDBFF) {
+                        if (j->i+2<=j->n && j->p[j->i]=='\\' && j->p[j->i+1]=='u') {
+                            size_t second=j->i;
+                            j->i+=2;
+                            unsigned lo=k_json_hex4(j);
+                            if (lo>=0xDC00 && lo<=0xDFFF) cp=0x10000+((cp-0xD800)<<10)+(lo-0xDC00);
+                            else { j->i=second; cp=0xFFFD; }
+                        } else cp=0xFFFD;
+                    } else if (cp>=0xDC00 && cp<=0xDFFF) cp=0xFFFD;
+                    k_json_put_utf8(&b,cp);
                     break;
                 }
                 default: kfail("invalid JSON string escape");
             }
-        } else kb_putc(&b,c);
+        } else {
+            unsigned char byte=(unsigned char)c;
+            if (byte<0x20) kfail("invalid control character in JSON string");
+            if (byte<0x80) kb_putc(&b,c);
+            else {
+                size_t start=j->i-1;
+                size_t sequence=k_json_utf8_sequence((const unsigned char*)j->p+start,j->n-start);
+                if (!sequence) k_json_put_utf8(&b,0xFFFD);
+                else { kb_putn(&b,j->p+start,sequence); j->i=start+sequence; }
+            }
+        }
     }
     kfail("unterminated JSON string");
     return kv_nil();
 }
 static KValue k_json_number(KJson *j) {
     size_t start=j->i; int isf=0;
-    if (j->i<j->n && (j->p[j->i]=='-'||j->p[j->i]=='+')) j->i++;
-    while (j->i<j->n) {
-        char c=j->p[j->i];
-        if (c>='0'&&c<='9') j->i++;
-        else if (c=='.'||c=='e'||c=='E'||c=='+'||c=='-') { isf=1; j->i++; }
-        else break;
+    if (j->i<j->n && j->p[j->i]=='-') j->i++;
+    if (j->i>=j->n || j->p[j->i]<'0' || j->p[j->i]>'9') kfail("invalid JSON number");
+    if (j->p[j->i]=='0') j->i++;
+    else while (j->i<j->n && j->p[j->i]>='0' && j->p[j->i]<='9') j->i++;
+    if (j->i<j->n && j->p[j->i]=='.') {
+        isf=1; j->i++;
+        if (j->i>=j->n || j->p[j->i]<'0' || j->p[j->i]>'9') kfail("invalid JSON number");
+        while (j->i<j->n && j->p[j->i]>='0' && j->p[j->i]<='9') j->i++;
     }
-    char tmp[64]; size_t len=j->i-start; if (len>=sizeof(tmp)) len=sizeof(tmp)-1;
-    memcpy(tmp,j->p+start,len); tmp[len]=0;
-    if (isf) return kv_float(strtod(tmp,NULL));
-    return kv_int(strtoll(tmp,NULL,10));
+    if (j->i<j->n && (j->p[j->i]=='e' || j->p[j->i]=='E')) {
+        isf=1; j->i++;
+        if (j->i<j->n && (j->p[j->i]=='+' || j->p[j->i]=='-')) j->i++;
+        if (j->i>=j->n || j->p[j->i]<'0' || j->p[j->i]>'9') kfail("invalid JSON number");
+        while (j->i<j->n && j->p[j->i]>='0' && j->p[j->i]<='9') j->i++;
+    }
+    size_t len=j->i-start;
+    char *text=(char*)kalloc(len+1); memcpy(text,j->p+start,len); text[len]=0;
+    char *end=NULL;
+    errno=0;
+    if (!isf) {
+        long long value=strtoll(text,&end,10);
+        if (errno!=ERANGE && end==text+len) return kv_int(value);
+        return kv_json_numbern(text,len);
+    }
+    double value=strtod(text,&end);
+    if (errno!=ERANGE && end==text+len && isfinite(value)) return kv_float(value);
+    return kv_json_numbern(text,len);
+}
+#define K_MAX_JSON_NESTING_DEPTH 256
+static int k_json_exceeds_nesting_depth(const char *text, size_t len) {
+    size_t depth=0;
+    int in_string=0, escaped=0;
+    for (size_t i=0;i<len;i++) {
+        unsigned char c=(unsigned char)text[i];
+        if (in_string) {
+            if (escaped) { escaped=0; continue; }
+            if (c=='\\') escaped=1;
+            else if (c=='"') in_string=0;
+            continue;
+        }
+        if (c=='"') in_string=1;
+        else if (c=='[' || c=='{') {
+            if (++depth>K_MAX_JSON_NESTING_DEPTH) return 1;
+        } else if ((c==']' || c=='}') && depth) depth--;
+    }
+    return 0;
 }
 static KValue k_json_value(KJson *j) {
     k_json_ws(j);
     if (j->i>=j->n) kfail("unexpected end of JSON");
     char c=j->p[j->i];
     if (c=='{') {
+        if (j->depth>=K_MAX_JSON_NESTING_DEPTH) kfail("JSON nesting exceeds configured limit");
+        j->depth++;
         j->i++; k_json_ws(j);
-        KValue *keys=(KValue*)kalloc(sizeof(KValue)*8); KValue *vals=(KValue*)kalloc(sizeof(KValue)*8);
+        KJsonObjectEntry *entries=(KJsonObjectEntry*)kalloc(sizeof(KJsonObjectEntry)*8);
         size_t cap=8,n=0;
-        if (j->i<j->n && j->p[j->i]=='}') { j->i++; return kv_map(keys,vals,0); }
+        if (j->i<j->n && j->p[j->i]=='}') {
+            j->i++; j->depth--;
+            KValue *keys=(KValue*)kalloc(sizeof(KValue));
+            KValue *vals=(KValue*)kalloc(sizeof(KValue));
+            return kv_map(keys,vals,0);
+        }
         for (;;) {
             k_json_ws(j);
             if (j->i>=j->n || j->p[j->i]!='"') kfail("invalid JSON object key");
@@ -1137,19 +1289,36 @@ static KValue k_json_value(KJson *j) {
             if (j->i>=j->n || j->p[j->i]!=':') kfail("invalid JSON object");
             j->i++;
             KValue val=k_json_value(j);
-            if (n==cap) { size_t nc=cap*2; KValue *nk=(KValue*)kalloc(sizeof(KValue)*nc); KValue *nv=(KValue*)kalloc(sizeof(KValue)*nc); memcpy(nk,keys,sizeof(KValue)*n); memcpy(nv,vals,sizeof(KValue)*n); keys=nk; vals=nv; cap=nc; }
-            keys[n]=key; vals[n]=val; n++;
+            if (n==cap) {
+                if (cap>SIZE_MAX/2/sizeof(KJsonObjectEntry)) kfail("memory budget exceeded");
+                size_t nc=cap*2;
+                KJsonObjectEntry *next=(KJsonObjectEntry*)kalloc(sizeof(KJsonObjectEntry)*nc);
+                memcpy(next,entries,sizeof(KJsonObjectEntry)*n);
+                entries=next; cap=nc;
+            }
+            entries[n]=(KJsonObjectEntry){key,val,n}; n++;
             k_json_ws(j);
             if (j->i<j->n && j->p[j->i]==',') { j->i++; continue; }
             if (j->i<j->n && j->p[j->i]=='}') { j->i++; break; }
             kfail("invalid JSON object");
         }
-        return kv_map(keys,vals,n);
+        j->depth--;
+        qsort(entries,n,sizeof(KJsonObjectEntry),k_json_object_entry_compare);
+        KValue *keys=(KValue*)kalloc(sizeof(KValue)*(n?n:1));
+        KValue *vals=(KValue*)kalloc(sizeof(KValue)*(n?n:1));
+        size_t unique=0;
+        for (size_t i=0;i<n;i++) {
+            if (unique && k_equal(keys[unique-1],entries[i].key)) vals[unique-1]=entries[i].value;
+            else { keys[unique]=entries[i].key; vals[unique]=entries[i].value; unique++; }
+        }
+        return kv_map(keys,vals,unique);
     }
     if (c=='[') {
+        if (j->depth>=K_MAX_JSON_NESTING_DEPTH) kfail("JSON nesting exceeds configured limit");
+        j->depth++;
         j->i++; k_json_ws(j);
         KValue *items=(KValue*)kalloc(sizeof(KValue)*8); size_t cap=8,n=0;
-        if (j->i<j->n && j->p[j->i]==']') { j->i++; return kv_arr(items,0); }
+        if (j->i<j->n && j->p[j->i]==']') { j->i++; j->depth--; return kv_arr(items,0); }
         for (;;) {
             KValue val=k_json_value(j);
             if (n==cap) { size_t nc=cap*2; KValue *ni=(KValue*)kalloc(sizeof(KValue)*nc); memcpy(ni,items,sizeof(KValue)*n); items=ni; cap=nc; }
@@ -1159,7 +1328,7 @@ static KValue k_json_value(KJson *j) {
             if (j->i<j->n && j->p[j->i]==']') { j->i++; break; }
             kfail("invalid JSON array");
         }
-        return kv_arr(items,n);
+        j->depth--; return kv_arr(items,n);
     }
     if (c=='"') return k_json_string(j);
     if (c=='t') { if (j->i+4<=j->n && !memcmp(j->p+j->i,"true",4)) { j->i+=4; return kv_bool(1); } kfail("invalid JSON literal"); }
@@ -1168,7 +1337,10 @@ static KValue k_json_value(KJson *j) {
     return k_json_number(j);
 }
 static KValue k_json_parse(KValue text) {
-    KJson j; j.p=text.u.s.data; j.n=text.u.s.len; j.i=0;
+    if (k_max_json<0 || text.u.s.len>(size_t)k_max_json) return kv_res(0,kv_cstr("JSON input exceeds configured limit"));
+    if (k_json_exceeds_nesting_depth(text.u.s.data,text.u.s.len))
+        return kv_res(0,kv_cstr("JSON nesting exceeds configured limit"));
+    KJson j; j.p=text.u.s.data; j.n=text.u.s.len; j.i=0; j.depth=0;
     KValue v;
     /* Parse under a nested error guard so malformed input yields err(...). */
     jmp_buf saved; memcpy(&saved,&k_jmp,sizeof(jmp_buf));
@@ -1176,9 +1348,107 @@ static KValue k_json_parse(KValue text) {
     v = k_json_value(&j);
     k_json_ws(&j);
     if (j.i != j.n) { memcpy(&k_jmp,&saved,sizeof(jmp_buf)); return kv_res(0,kv_cstr("invalid JSON")); }
+    KBuf b; kb_init(&b); k_json_write(&b,v);
     memcpy(&k_jmp,&saved,sizeof(jmp_buf));
-    return kv_res(1,v);
+    return kv_res(1,kv_json_ownednode(v,b.buf,b.len));
 }
+static KValue k_json_unwrap(KValue value) {
+    if (value.tag!=K_JSON) kfail("invalid Json value: value is not JSON");
+    if (value.json_root) return *value.json_root;
+    KJson j; j.p=value.u.s.data; j.n=value.u.s.len; j.i=0; j.depth=0;
+    jmp_buf saved; memcpy(&saved,&k_jmp,sizeof(jmp_buf));
+    if (setjmp(k_jmp)) { memcpy(&k_jmp,&saved,sizeof(jmp_buf)); kfail("invalid Json value: invalid JSON"); }
+    KValue node=k_json_value(&j);
+    k_json_ws(&j);
+    if (j.i!=j.n) { memcpy(&k_jmp,&saved,sizeof(jmp_buf)); kfail("invalid Json value: trailing data"); }
+    memcpy(&k_jmp,&saved,sizeof(jmp_buf));
+    return node;
+}
+static KValue k_json_wrap(KValue node) {
+    KBuf b; kb_init(&b); k_json_write(&b,node);
+    return kv_json_ownednode(node,b.buf,b.len);
+}
+static KValue k_json_kind(KValue value) {
+    KValue node=k_json_unwrap(value);
+    switch (node.tag) {
+        case K_NIL: return kv_cstr("null");
+        case K_BOOL: return kv_cstr("bool");
+        case K_INT: case K_UINT: case K_FLOAT: case K_JSON_NUMBER: return kv_cstr("number");
+        case K_STRING: return kv_cstr("string");
+        case K_ARRAY: return kv_cstr("array");
+        case K_MAP: return kv_cstr("object");
+        default: kfail("invalid Json value: unsupported node"); return kv_nil();
+    }
+}
+static KValue k_json_object_get(KValue value, KValue key) {
+    KValue node=k_json_unwrap(value);
+    if (node.tag!=K_MAP) return kv_res(0,kv_cstr("JSON value is not an object"));
+    if (key.tag==K_STRING) {
+        for (size_t i=node.u.m.len;i>0;i--) {
+            KValue candidate=node.u.m.keys[i-1];
+            if (candidate.tag==K_STRING && candidate.u.s.len==key.u.s.len && !memcmp(candidate.u.s.data,key.u.s.data,key.u.s.len))
+                return kv_res(1,k_json_wrap(node.u.m.vals[i-1]));
+        }
+    }
+    return kv_res(0,kv_cstr("JSON object key not found"));
+}
+static KValue k_json_array_len(KValue value) {
+    KValue node=k_json_unwrap(value);
+    if (node.tag!=K_ARRAY) return kv_res(0,kv_cstr("JSON value is not an array"));
+    return kv_res(1,kv_int((long long)node.u.a.len));
+}
+static KValue k_json_array_get(KValue value, KValue index) {
+    KValue node=k_json_unwrap(value);
+    if (node.tag!=K_ARRAY) return kv_res(0,kv_cstr("JSON value is not an array"));
+    if (index.tag!=K_INT || index.u.i<0 || (unsigned long long)index.u.i>=node.u.a.len)
+        return kv_res(0,kv_cstr("JSON array index out of range"));
+    return kv_res(1,k_json_wrap(node.u.a.items[(size_t)index.u.i]));
+}
+static KValue k_json_string_value(KValue value) {
+    KValue node=k_json_unwrap(value);
+    if (node.tag!=K_STRING) return kv_res(0,kv_cstr("JSON value is not a string"));
+    return kv_res(1,kv_strn(node.u.s.data,node.u.s.len));
+}
+static KValue k_json_int(KValue value) {
+    KValue node=k_json_unwrap(value);
+    if (node.tag==K_INT) return kv_res(1,node);
+    if (node.tag!=K_JSON_NUMBER) return kv_res(0,kv_cstr("JSON value is not a number"));
+    char *end=NULL; errno=0;
+    long long parsed=strtoll(node.u.s.data,&end,10);
+    if (errno==ERANGE || end!=node.u.s.data+node.u.s.len)
+        return kv_res(0,kv_cstr("JSON number is not a signed Int"));
+    return kv_res(1,kv_int(parsed));
+}
+static KValue k_json_uint(KValue value) {
+    KValue node=k_json_unwrap(value);
+    if (node.tag==K_INT) {
+        if (node.u.i<0) return kv_res(0,kv_cstr("JSON number is not a UInt64"));
+        return kv_res(1,kv_uint64((unsigned long long)node.u.i));
+    }
+    if (node.tag!=K_JSON_NUMBER) return kv_res(0,kv_cstr("JSON value is not a number"));
+    if (node.u.s.len==0 || node.u.s.data[0]=='-') return kv_res(0,kv_cstr("JSON number is not a UInt64"));
+    char *end=NULL; errno=0;
+    unsigned long long parsed=strtoull(node.u.s.data,&end,10);
+    if (errno==ERANGE || end!=node.u.s.data+node.u.s.len)
+        return kv_res(0,kv_cstr("JSON number is not a UInt64"));
+    return kv_res(1,kv_uint64(parsed));
+}
+static KValue k_json_to_float(KValue value) {
+    KValue node=k_json_unwrap(value);
+    if (node.tag==K_FLOAT) return kv_res(1,node);
+    if (node.tag!=K_JSON_NUMBER) return kv_res(0,kv_cstr("JSON value is not a number"));
+    char *end=NULL; errno=0;
+    double parsed=strtod(node.u.s.data,&end);
+    if ((errno==ERANGE && parsed!=0.0) || end!=node.u.s.data+node.u.s.len || !isfinite(parsed))
+        return kv_res(0,kv_cstr("JSON number is not a finite Float"));
+    return kv_res(1,kv_float(parsed));
+}
+static KValue k_json_bool(KValue value) {
+    KValue node=k_json_unwrap(value);
+    if (node.tag!=K_BOOL) return kv_res(0,kv_cstr("JSON value is not a Bool"));
+    return kv_res(1,node);
+}
+static KValue k_json_is_null(KValue value) { return kv_bool(k_json_unwrap(value).tag==K_NIL); }
 
 /* ---- extended filesystem ----------------------------------------------- */
 static char *k_cpath(KValue path) {

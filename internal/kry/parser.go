@@ -54,7 +54,9 @@ func Parse(src *Source, lim Limits) (*Program, *Diagnostic) {
 				p.fail(p.peek(), "const declarations cannot be public or private")
 				break
 			}
-			prog.Statements = append(prog.Statements, p.constStmt())
+			s := p.constStmt()
+			s.EndToken = p.prev()
+			prog.Statements = append(prog.Statements, s)
 			p.end()
 		default:
 			if pub || private {
@@ -63,6 +65,7 @@ func Parse(src *Source, lim Limits) (*Program, *Diagnostic) {
 			}
 			s := p.statement()
 			if s != nil {
+				s.EndToken = p.prev()
 				prog.Statements = append(prog.Statements, s)
 			}
 			p.end()
@@ -180,6 +183,7 @@ func (p *Parser) function(pub bool) *Function {
 		f.Return = p.typeSpec()
 	}
 	f.Body = p.block()
+	f.EndToken = p.prev()
 	return f
 }
 func (p *Parser) structDecl(pub bool) *StructDecl {
@@ -197,6 +201,7 @@ func (p *Parser) structDecl(pub bool) *StructDecl {
 		}
 	}
 	p.expect(RBRACE, "expected '}' after struct declaration")
+	d.EndToken = p.prev()
 	return d
 }
 func (p *Parser) implDecl() []*Function {
@@ -229,6 +234,7 @@ func (p *Parser) enumDecl(pub bool) *EnumDecl {
 		}
 	}
 	p.expect(RBRACE, "expected '}' after enum declaration")
+	d.EndToken = p.prev()
 	return d
 }
 func (p *Parser) block() []*Stmt {
@@ -237,6 +243,7 @@ func (p *Parser) block() []*Stmt {
 	for !p.check(RBRACE) && !p.check(EOF) && p.Err == nil {
 		s := p.statement()
 		if s != nil {
+			s.EndToken = p.prev()
 			out = append(out, s)
 		}
 		p.end()
@@ -334,6 +341,7 @@ func (p *Parser) ifStmt(t Token) *Stmt {
 			s.Else = p.block()
 		}
 	}
+	s.EndToken = p.prev()
 	return s
 }
 func (p *Parser) matchStmt(t Token) *Stmt {

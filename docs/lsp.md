@@ -39,6 +39,12 @@ language-servers = ["kryndel"]
 - Go to definition resolves function overloads to the selected function and
   follows local bindings, struct fields, struct literals, enum variants, and
   imported declarations where the checked AST records the reference.
+- References find local, function, type, and enum variant declarations and
+  their uses across open documents and their imported dependency graph. The
+  `includeDeclaration` option controls whether the declaration is returned.
+- Document symbols list functions, methods, structs and fields, enums and
+  variants, parameters, and local bindings. Parsed symbols remain available
+  when type checking reports a diagnostic.
 - Hover shows checked expression types and user function or builtin
   signatures.
 - Completion offers language keywords, primitive/container types, builtins,

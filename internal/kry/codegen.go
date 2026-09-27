@@ -318,6 +318,7 @@ func (g *cgen) emitFunction(f *Function) {
 
 func (g *cgen) emitMain() {
 	g.buf.WriteString("int main(void) {\n")
+	fmt.Fprintf(&g.buf, "  k_max_json = %dLL;\n", g.env.Lim.MaxJSONBytes)
 	g.buf.WriteString("  k_structs = k_structs_data;\n")
 	g.buf.WriteString("  k_enums = k_enums_data;\n")
 	g.buf.WriteString("  k_poly_names = k_poly_names_data;\n")
@@ -975,6 +976,26 @@ func (g *cgen) builtinCall(e *Expr, b Builtin) string {
 		return fmt.Sprintf("k_json_parse(%s)", arg(0))
 	case "json_stringify":
 		return fmt.Sprintf("k_json_stringify(%s)", arg(0))
+	case "json_kind":
+		return fmt.Sprintf("k_json_kind(%s)", arg(0))
+	case "json_object_get":
+		return fmt.Sprintf("k_json_object_get(%s, %s)", arg(0), arg(1))
+	case "json_array_len":
+		return fmt.Sprintf("k_json_array_len(%s)", arg(0))
+	case "json_array_get":
+		return fmt.Sprintf("k_json_array_get(%s, %s)", arg(0), arg(1))
+	case "json_string":
+		return fmt.Sprintf("k_json_string_value(%s)", arg(0))
+	case "json_int":
+		return fmt.Sprintf("k_json_int(%s)", arg(0))
+	case "json_uint":
+		return fmt.Sprintf("k_json_uint(%s)", arg(0))
+	case "json_float":
+		return fmt.Sprintf("k_json_to_float(%s)", arg(0))
+	case "json_bool":
+		return fmt.Sprintf("k_json_bool(%s)", arg(0))
+	case "json_is_null":
+		return fmt.Sprintf("k_json_is_null(%s)", arg(0))
 	case "crypto_sha256":
 		return fmt.Sprintf("k_crypto_sha256(%s)", arg(0))
 	case "crypto_hmac_sha256":

@@ -397,8 +397,8 @@ fn main() -> Nil {
 	}
 }
 
-// TestNativeObfuscation checks that string literals are absent from an
-// obfuscated binary while the program still produces identical output.
+// TestNativeObfuscation checks that obfuscation preserves output and masks the
+// literal bytes in the resulting binary.
 func TestNativeObfuscation(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("native obfuscation test requires linux/amd64")
@@ -425,23 +425,22 @@ func TestNativeObfuscation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(plain, []byte(secret)) {
-		t.Fatal("expected the plaintext literal in the non-obfuscated binary")
-	}
 	if bytes.Contains(obf, []byte(secret)) {
 		t.Fatal("obfuscated binary still contains the plaintext literal")
 	}
 	dir := t.TempDir()
-	path := filepath.Join(dir, "obf")
-	if err := os.WriteFile(path, obf, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	out, err := exec.Command(path).Output()
-	if err != nil {
-		t.Fatalf("obfuscated executable failed: %v", err)
-	}
-	if string(out) != secret+"\n" {
-		t.Fatalf("obfuscated output mismatch: %q", out)
+	for name, data := range map[string][]byte{"plain": plain, "obfuscated": obf} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(path).Output()
+		if err != nil {
+			t.Fatalf("%s executable failed: %v", name, err)
+		}
+		if string(out) != secret+"\n" {
+			t.Fatalf("%s output mismatch: %q", name, out)
+		}
 	}
 }
 

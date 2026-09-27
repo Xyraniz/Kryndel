@@ -151,6 +151,22 @@ they are rejected with a categorized diagnostic instead of silently degrading.
 Output is never mislabeled as native merely because a file has a native-looking
 suffix.
 
+C AOT JSON support includes `json_parse`, `json_stringify`, `json_kind`,
+`json_object_get`, `json_array_len`, `json_array_get`, `json_string`,
+`json_int`, `json_uint`, `json_float`, `json_bool`, and `json_is_null`. Accessor
+results retain the interpreter's typed errors and integer range behavior,
+including the full UInt64 range. Both implementations replace invalid UTF-8
+and unpaired surrogate escapes with U+FFFD, keep the last duplicate object
+key, and reject documents nested deeper than 256 containers with the same
+`Result` error. The JSON builtins are unsupported by `elf-direct`; capabilities
+reports that explicitly, and a build using one fails with a builtin-specific
+diagnostic. Differential regression tests execute the interpreter and C AOT
+output on Linux amd64, including accessor errors, number boundaries, escaped
+duplicate keys, large objects, nesting limits, and invalid UTF-8 through the C
+runtime. The generated C implementation is advertised for Linux amd64, Linux
+arm64, and Windows amd64; the differential suite does not claim runtime
+verification on arm64 or Windows.
+
 ### Cryptography in the native runtime
 
 The C runtime implements the full crypto surface so native executables do not

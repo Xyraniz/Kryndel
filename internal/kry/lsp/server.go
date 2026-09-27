@@ -117,6 +117,8 @@ func (s *Server) dispatch(ctx context.Context, req jsonrpc2.Request) (any, error
 				"positionEncoding":           "utf-16",
 				"textDocumentSync":           map[string]any{"openClose": true, "change": 1},
 				"definitionProvider":         true,
+				"referencesProvider":         true,
+				"documentSymbolProvider":     true,
 				"hoverProvider":              true,
 				"completionProvider":         map[string]any{"resolveProvider": false},
 				"documentFormattingProvider": true,
@@ -208,6 +210,30 @@ func (s *Server) dispatch(ctx context.Context, req jsonrpc2.Request) (any, error
 			return nil, invalidParams(err)
 		}
 		return s.definition(p.TextDocument.URI, p.Position)
+	case "textDocument/references":
+		var p struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+			Position Position `json:"position"`
+			Context  struct {
+				IncludeDeclaration bool `json:"includeDeclaration"`
+			} `json:"context"`
+		}
+		if err := decodeParams(req, &p); err != nil {
+			return nil, invalidParams(err)
+		}
+		return s.references(p.TextDocument.URI, p.Position, p.Context.IncludeDeclaration)
+	case "textDocument/documentSymbol":
+		var p struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+		}
+		if err := decodeParams(req, &p); err != nil {
+			return nil, invalidParams(err)
+		}
+		return s.documentSymbols(p.TextDocument.URI)
 	case "textDocument/hover":
 		var p struct {
 			TextDocument struct {
@@ -450,6 +476,454 @@ func (s *Server) definition(uri string, pos Position) (any, error) {
 		"uri":   uriFromPath(tok.Source.Name),
 		"range": tokenRange(tok),
 	}, nil
+}
+
+func (s *Server) references(uri string, pos Position, includeDeclaration bool) (any, error) {
+	doc, prog, checker, _ := s.analysis(uri)
+	if doc.URI == "" || prog == nil {
+		return []any{}, nil
+	}
+	selected, ok := tokenAt(doc.Text, pos)
+	if !ok {
+		return []any{}, nil
+	}
+	selected.Source.Name = doc.Path
+
+	var target kry.Token
+	var targetType *kry.Type
+	walkProgram(prog, func(e *kry.Expr) {
+		if target.Source == nil && exprMatchesToken(e, selected) {
+			if sameToken(e.VariantToken, selected) {
+				target = e.VariantDefinition
+			} else {
+				target = e.Definition
+			}
+		}
+	})
+	if target.Source == nil && checker != nil {
+		targetType = resolvedTypeAt(prog, checker, selected)
+	}
+	if target.Source == nil && targetType != nil {
+		target = typeDeclarationToken(targetType)
+	} else if target.Source == nil && declarationTokenExists(prog, selected) {
+		target = selected
+	}
+	if target.Source == nil {
+		return []any{}, nil
+	}
+	programs := []struct {
+		program *kry.Program
+		checker *kry.Checker
+	}{{program: prog, checker: checker}}
+	seenPrograms := map[string]bool{doc.Path: true}
+	for _, openURI := range s.openURIs() {
+		openDoc, openProgram, openChecker, _ := s.analysis(openURI)
+		if openDoc.URI == "" || openProgram == nil || seenPrograms[openDoc.Path] {
+			continue
+		}
+		seenPrograms[openDoc.Path] = true
+		programs = append(programs, struct {
+			program *kry.Program
+			checker *kry.Checker
+		}{program: openProgram, checker: openChecker})
+	}
+
+	tokens := make([]kry.Token, 0)
+	seen := make(map[string]bool)
+	add := func(token kry.Token) {
+		if token.Source == nil {
+			return
+		}
+		key := fmt.Sprintf("%s:%d:%d", token.Source.Name, token.Start, token.Length)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		tokens = append(tokens, token)
+	}
+	if includeDeclaration {
+		add(target)
+	}
+	for _, candidate := range programs {
+		walkProgram(candidate.program, func(e *kry.Expr) {
+			if sameToken(e.Definition, target) {
+				add(expressionNameToken(e))
+			}
+			if sameToken(e.VariantDefinition, target) {
+				add(e.VariantToken)
+			}
+		})
+		if targetType != nil && candidate.checker != nil && candidate.checker.Env != nil {
+			walkTypeSpecs(candidate.program, func(spec *kry.TypeSpec) {
+				if sameToken(typeDeclarationToken(candidate.checker.Env.Types[spec.Name]), target) {
+					add(spec.Tok)
+				}
+			})
+			walkPatterns(candidate.program, func(pattern kry.Pattern) {
+				if pattern.TypeName != "" && sameToken(typeDeclarationToken(candidate.checker.Env.Types[pattern.TypeName]), target) && pattern.Tok.Text() == pattern.TypeName {
+					add(pattern.Tok)
+				}
+			})
+		}
+	}
+	sort.Slice(tokens, func(i, j int) bool {
+		if tokens[i].Source.Name != tokens[j].Source.Name {
+			return tokens[i].Source.Name < tokens[j].Source.Name
+		}
+		return tokens[i].Start < tokens[j].Start
+	})
+	locations := make([]any, 0, len(tokens))
+	for _, token := range tokens {
+		locations = append(locations, map[string]any{"uri": uriFromPath(token.Source.Name), "range": tokenRange(token)})
+	}
+	return locations, nil
+}
+
+func (s *Server) openURIs() []string {
+	s.mu.RLock()
+	uris := make([]string, 0, len(s.docs))
+	for uri := range s.docs {
+		uris = append(uris, uri)
+	}
+	s.mu.RUnlock()
+	sort.Strings(uris)
+	return uris
+}
+
+func (s *Server) documentSymbols(uri string) (any, error) {
+	doc, prog, _, _ := s.analysis(uri)
+	if doc.URI == "" || prog == nil {
+		return []any{}, nil
+	}
+	return documentSymbolsFor(prog, doc.Path), nil
+}
+
+func expressionNameToken(e *kry.Expr) kry.Token {
+	if e.NameToken.Source != nil {
+		return e.NameToken
+	}
+	return e.Tok
+}
+
+func sameToken(a, b kry.Token) bool {
+	return a.Source != nil && b.Source != nil && a.Source.Name == b.Source.Name && a.Start == b.Start && a.Length == b.Length
+}
+
+func declarationTokenExists(program *kry.Program, selected kry.Token) bool {
+	found := false
+	walkDeclarationTokens(program, func(token kry.Token) {
+		if sameToken(token, selected) {
+			found = true
+		}
+	})
+	return found
+}
+
+func walkDeclarationTokens(program *kry.Program, visit func(kry.Token)) {
+	if program == nil {
+		return
+	}
+	for _, function := range program.Functions {
+		visit(function.NameToken)
+		for _, parameter := range function.TypeParams {
+			visit(parameter.Tok)
+		}
+		for _, parameter := range function.Params {
+			visit(parameter.Tok)
+		}
+	}
+	for _, declaration := range program.Structs {
+		visit(declaration.NameToken)
+		for _, field := range declaration.Fields {
+			visit(field.Tok)
+		}
+	}
+	for _, declaration := range program.Enums {
+		visit(declaration.NameToken)
+		for _, variant := range declaration.VariantTokens {
+			visit(variant)
+		}
+	}
+	var walkStmtDeclarations func(*kry.Stmt)
+	walkStmtDeclarations = func(stmt *kry.Stmt) {
+		if stmt == nil {
+			return
+		}
+		if stmt.NameToken.Source != nil {
+			visit(stmt.NameToken)
+		}
+		for _, child := range [][]*kry.Stmt{stmt.Then, stmt.Else, stmt.Body} {
+			for _, nested := range child {
+				walkStmtDeclarations(nested)
+			}
+		}
+		for _, arm := range stmt.Arms {
+			if arm.Pattern.BindingTok.Source != nil {
+				visit(arm.Pattern.BindingTok)
+			}
+			for _, nested := range arm.Body {
+				walkStmtDeclarations(nested)
+			}
+		}
+	}
+	for _, stmt := range program.Statements {
+		walkStmtDeclarations(stmt)
+	}
+	for _, function := range program.Functions {
+		for _, stmt := range function.Body {
+			walkStmtDeclarations(stmt)
+		}
+	}
+}
+
+func typeDeclarationToken(typ *kry.Type) kry.Token {
+	if typ == nil {
+		return kry.Token{}
+	}
+	if typ.Struct != nil {
+		return typ.Struct.NameToken
+	}
+	if typ.Enum != nil {
+		return typ.Enum.NameToken
+	}
+	return kry.Token{}
+}
+
+func resolvedTypeAt(program *kry.Program, checker *kry.Checker, selected kry.Token) *kry.Type {
+	if checker == nil || checker.Env == nil {
+		return nil
+	}
+	if typ := checker.Env.Types[selected.Text()]; typ != nil && sameToken(typeDeclarationToken(typ), selected) {
+		return typ
+	}
+	var found *kry.Type
+	walkTypeSpecs(program, func(spec *kry.TypeSpec) {
+		if sameToken(spec.Tok, selected) {
+			found = checker.Env.Types[spec.Name]
+		}
+	})
+	if found == nil {
+		walkPatterns(program, func(pattern kry.Pattern) {
+			if sameToken(pattern.Tok, selected) && pattern.TypeName != "" {
+				found = checker.Env.Types[pattern.TypeName]
+			}
+		})
+	}
+	return found
+}
+
+func walkTypeSpecs(program *kry.Program, visit func(*kry.TypeSpec)) {
+	if program == nil {
+		return
+	}
+	var walkType func(*kry.TypeSpec)
+	walkType = func(spec *kry.TypeSpec) {
+		if spec == nil {
+			return
+		}
+		visit(spec)
+		for _, parameter := range spec.Params {
+			walkType(parameter)
+		}
+	}
+	var walkStmtTypes func(*kry.Stmt)
+	walkStmtTypes = func(stmt *kry.Stmt) {
+		if stmt == nil {
+			return
+		}
+		walkType(stmt.Annotation)
+		for _, child := range [][]*kry.Stmt{stmt.Then, stmt.Else, stmt.Body} {
+			for _, nested := range child {
+				walkStmtTypes(nested)
+			}
+		}
+		for _, arm := range stmt.Arms {
+			for _, nested := range arm.Body {
+				walkStmtTypes(nested)
+			}
+		}
+	}
+	for _, function := range program.Functions {
+		walkType(function.Receiver)
+		walkType(function.Return)
+		for _, parameter := range function.Params {
+			walkType(parameter.Type)
+		}
+		for _, stmt := range function.Body {
+			walkStmtTypes(stmt)
+		}
+	}
+	for _, declaration := range program.Structs {
+		for _, field := range declaration.Fields {
+			walkType(field.Spec)
+		}
+	}
+	for _, stmt := range program.Statements {
+		walkStmtTypes(stmt)
+	}
+}
+
+func walkPatterns(program *kry.Program, visit func(kry.Pattern)) {
+	if program == nil {
+		return
+	}
+	var walkStmtPatterns func(*kry.Stmt)
+	walkStmtPatterns = func(stmt *kry.Stmt) {
+		if stmt == nil {
+			return
+		}
+		for _, child := range [][]*kry.Stmt{stmt.Then, stmt.Else, stmt.Body} {
+			for _, nested := range child {
+				walkStmtPatterns(nested)
+			}
+		}
+		for _, arm := range stmt.Arms {
+			visit(arm.Pattern)
+			for _, nested := range arm.Body {
+				walkStmtPatterns(nested)
+			}
+		}
+	}
+	for _, stmt := range program.Statements {
+		walkStmtPatterns(stmt)
+	}
+	for _, function := range program.Functions {
+		for _, stmt := range function.Body {
+			walkStmtPatterns(stmt)
+		}
+	}
+}
+
+func documentSymbolsFor(program *kry.Program, path string) []any {
+	if program == nil {
+		return []any{}
+	}
+	var symbols []any
+	for _, declaration := range program.Structs {
+		if declaration.NameToken.Source == nil || declaration.NameToken.Source.Name != path {
+			continue
+		}
+		item := newDocumentSymbolRange(declaration.Name, "", 23, declaration.NameToken, declaration.EndToken)
+		for _, field := range declaration.Fields {
+			if field.Tok.Source != nil && field.Tok.Source.Name == path {
+				addDocumentSymbolChild(item, newDocumentSymbol(field.Name, kry.TypeSpecString(field.Spec), 8, field.Tok))
+			}
+		}
+		symbols = append(symbols, item)
+	}
+	for _, declaration := range program.Enums {
+		if declaration.NameToken.Source == nil || declaration.NameToken.Source.Name != path {
+			continue
+		}
+		item := newDocumentSymbolRange(declaration.Name, "", 10, declaration.NameToken, declaration.EndToken)
+		for i, variant := range declaration.Variants {
+			if i < len(declaration.VariantTokens) && declaration.VariantTokens[i].Source != nil && declaration.VariantTokens[i].Source.Name == path {
+				addDocumentSymbolChild(item, newDocumentSymbol(variant, "", 22, declaration.VariantTokens[i]))
+			}
+		}
+		symbols = append(symbols, item)
+	}
+	for _, function := range program.Functions {
+		if function.NameToken.Source == nil || function.NameToken.Source.Name != path {
+			continue
+		}
+		if function.Receiver != nil {
+			symbols = append(symbols, functionDocumentSymbol(function, 6, function.Name, path))
+			continue
+		}
+		symbols = append(symbols, functionDocumentSymbol(function, 12, function.Name, path))
+	}
+	for _, statement := range program.Statements {
+		walkBindingDocumentSymbols(statement, path, func(symbol map[string]any) { symbols = append(symbols, symbol) })
+	}
+	sort.SliceStable(symbols, func(i, j int) bool {
+		leftSymbol, _ := symbols[i].(map[string]any)
+		rightSymbol, _ := symbols[j].(map[string]any)
+		left, _ := leftSymbol["range"].(Range)
+		right, _ := rightSymbol["range"].(Range)
+		if left.Start.Line != right.Start.Line {
+			return left.Start.Line < right.Start.Line
+		}
+		return left.Start.Character < right.Start.Character
+	})
+	return symbols
+}
+
+func newDocumentSymbol(name, detail string, kind int, token kry.Token) map[string]any {
+	return newDocumentSymbolRange(name, detail, kind, token, token)
+}
+
+func newDocumentSymbolRange(name, detail string, kind int, start, end kry.Token) map[string]any {
+	selectionRange := tokenRange(start)
+	rangeValue := tokenSpanRange(start, end)
+	symbol := map[string]any{
+		"name":           name,
+		"kind":           kind,
+		"range":          rangeValue,
+		"selectionRange": selectionRange,
+	}
+	if detail != "" {
+		symbol["detail"] = detail
+	}
+	return symbol
+}
+
+func addDocumentSymbolChild(parent map[string]any, child map[string]any) {
+	children, _ := parent["children"].([]any)
+	parent["children"] = append(children, child)
+}
+
+func functionDocumentSymbol(function *kry.Function, kind int, name, path string) map[string]any {
+	symbol := newDocumentSymbolRange(name, functionSignature(function), kind, function.NameToken, function.EndToken)
+	for _, parameter := range function.TypeParams {
+		if parameter.Tok.Source != nil && parameter.Tok.Source.Name == path {
+			addDocumentSymbolChild(symbol, newDocumentSymbol(parameter.Name, parameter.Constraint, 26, parameter.Tok))
+		}
+	}
+	for _, parameter := range function.Params {
+		if parameter.Tok.Source != nil && parameter.Tok.Source.Name == path {
+			addDocumentSymbolChild(symbol, newDocumentSymbol(parameter.Name, kry.TypeSpecString(parameter.Type), 13, parameter.Tok))
+		}
+	}
+	for _, statement := range function.Body {
+		walkBindingDocumentSymbols(statement, path, func(child map[string]any) { addDocumentSymbolChild(symbol, child) })
+	}
+	return symbol
+}
+
+func walkBindingDocumentSymbols(statement *kry.Stmt, path string, add func(map[string]any)) {
+	if statement == nil {
+		return
+	}
+	if binding := bindingDocumentSymbol(statement, path); binding != nil {
+		add(binding)
+	}
+	for _, child := range [][]*kry.Stmt{statement.Then, statement.Else, statement.Body} {
+		for _, nested := range child {
+			walkBindingDocumentSymbols(nested, path, add)
+		}
+	}
+	for _, arm := range statement.Arms {
+		if arm.Pattern.BindingTok.Source != nil && arm.Pattern.BindingTok.Source.Name == path {
+			add(newDocumentSymbol(arm.Pattern.Binding, "pattern binding", 13, arm.Pattern.BindingTok))
+		}
+		for _, nested := range arm.Body {
+			walkBindingDocumentSymbols(nested, path, add)
+		}
+	}
+}
+
+func bindingDocumentSymbol(statement *kry.Stmt, path string) map[string]any {
+	if statement.NameToken.Source == nil || statement.NameToken.Source.Name != path {
+		return nil
+	}
+	if statement.Kind == kry.StConst {
+		return newDocumentSymbolRange(statement.Name, "", 14, statement.NameToken, statement.EndToken)
+	}
+	if statement.Kind == kry.StLet || statement.Kind == kry.StFor {
+		return newDocumentSymbolRange(statement.Name, "", 13, statement.NameToken, statement.EndToken)
+	}
+	return nil
 }
 
 func (s *Server) hover(uri string, pos Position) (any, error) {
@@ -879,6 +1353,18 @@ func tokenRange(tok kry.Token) Range {
 		}
 	}
 	return Range{Start: positionAt(text, start), End: positionAt(text, end)}
+}
+
+func tokenSpanRange(start, end kry.Token) Range {
+	if start.Source == nil || end.Source == nil || start.Source.Name != end.Source.Name || end.Start < start.Start {
+		return tokenRange(start)
+	}
+	text := start.Source.Text
+	spanEnd := end.Start + end.Length
+	if spanEnd < end.Start || spanEnd > len(text) {
+		return tokenRange(start)
+	}
+	return Range{Start: positionAt(text, start.Start), End: positionAt(text, spanEnd)}
 }
 
 func offsetFromLineColumn(text string, line, column int) int {

@@ -32,7 +32,8 @@ func TestServerLSPRoundTrip(t *testing.T) {
 	if err := os.WriteFile(mainPath, []byte("fn on_disk() -> Nil {}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(libPath, []byte("pub fn from_lib(value: String) -> String { return value }"), 0o600); err != nil {
+	libText := "pub struct LibType { field: Int }\npub enum LibStatus { Ready }\npub fn from_lib(value: Int) -> Int { return value + 1 }\nimpl LibType { pub fn convert(value: Int) -> Int { let local = value; return local } }\n"
+	if err := os.WriteFile(libPath, []byte(libText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mainURI := uriFromPath(mainPath)
@@ -72,11 +73,10 @@ func TestServerLSPRoundTrip(t *testing.T) {
 	var initialized map[string]any
 	callLSP(t, ctx, client, "initialize", map[string]any{"processId": nil, "rootUri": uriFromPath(dir)}, &initialized)
 	capabilities, ok := initialized["capabilities"].(map[string]any)
-	if !ok || capabilities["definitionProvider"] != true || capabilities["hoverProvider"] != true || capabilities["documentFormattingProvider"] != true {
+	if !ok || capabilities["definitionProvider"] != true || capabilities["referencesProvider"] != true || capabilities["documentSymbolProvider"] != true || capabilities["hoverProvider"] != true || capabilities["documentFormattingProvider"] != true {
 		t.Fatalf("initialize did not advertise expected features: %#v", initialized)
 	}
 	notifyLSP(t, ctx, client, "initialized", map[string]any{})
-	libText := "pub fn from_lib(value: Int) -> Int { return value + 1 }"
 	notifyLSP(t, ctx, client, "textDocument/didOpen", map[string]any{"textDocument": map[string]any{
 		"uri": libURI, "languageId": "kryndel", "version": 1, "text": libText,
 	}})
@@ -106,8 +106,85 @@ func TestServerLSPRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(rangeData, &gotRange); err != nil {
 		t.Fatal(err)
 	}
-	if gotRange.Start.Line != 0 || gotRange.Start.Character != 7 {
+	if gotRange.Start.Line != 2 || gotRange.Start.Character != 7 {
 		t.Fatalf("definition range should select the imported function name: %#v", gotRange)
+	}
+	var importedReferences []map[string]any
+	callLSP(t, ctx, client, "textDocument/references", map[string]any{
+		"textDocument": map[string]any{"uri": mainURI},
+		"position":     Position{Line: 1, Character: 19},
+		"context":      map[string]any{"includeDeclaration": false},
+	}, &importedReferences)
+	if len(importedReferences) != 1 || importedReferences[0]["uri"] != mainURI {
+		t.Fatalf("references without declaration should include only the imported call: %#v", importedReferences)
+	}
+	callLSP(t, ctx, client, "textDocument/references", map[string]any{
+		"textDocument": map[string]any{"uri": mainURI},
+		"position":     Position{Line: 1, Character: 19},
+		"context":      map[string]any{"includeDeclaration": true},
+	}, &importedReferences)
+	if len(importedReferences) != 2 {
+		t.Fatalf("references with declaration should include the imported declaration and call: %#v", importedReferences)
+	}
+	callLSP(t, ctx, client, "textDocument/references", map[string]any{
+		"textDocument": map[string]any{"uri": libURI},
+		"position":     Position{Line: 2, Character: 9},
+		"context":      map[string]any{"includeDeclaration": false},
+	}, &importedReferences)
+	if len(importedReferences) != 1 || importedReferences[0]["uri"] != mainURI {
+		t.Fatalf("references from the imported declaration should find the open caller: %#v", importedReferences)
+	}
+	callLSP(t, ctx, client, "textDocument/references", map[string]any{
+		"textDocument": map[string]any{"uri": libURI},
+		"position":     Position{Line: 2, Character: 9},
+		"context":      map[string]any{"includeDeclaration": true},
+	}, &importedReferences)
+	if len(importedReferences) != 2 {
+		t.Fatalf("references from the imported declaration should include its declaration when requested: %#v", importedReferences)
+	}
+	var localReferences []map[string]any
+	callLSP(t, ctx, client, "textDocument/references", map[string]any{
+		"textDocument": map[string]any{"uri": mainURI},
+		"position":     Position{Line: 2, Character: 9},
+		"context":      map[string]any{"includeDeclaration": false},
+	}, &localReferences)
+	if len(localReferences) != 1 || localReferences[0]["uri"] != mainURI {
+		t.Fatalf("local references should exclude the binding declaration by default: %#v", localReferences)
+	}
+	callLSP(t, ctx, client, "textDocument/references", map[string]any{
+		"textDocument": map[string]any{"uri": mainURI},
+		"position":     Position{Line: 2, Character: 9},
+		"context":      map[string]any{"includeDeclaration": true},
+	}, &localReferences)
+	if len(localReferences) != 2 {
+		t.Fatalf("local references should include the binding declaration when requested: %#v", localReferences)
+	}
+	var mainSymbols []map[string]any
+	callLSP(t, ctx, client, "textDocument/documentSymbol", map[string]any{
+		"textDocument": map[string]any{"uri": mainURI},
+	}, &mainSymbols)
+	if !hasDocumentSymbol(mainSymbols, "answer", 13) || hasDocumentSymbol(mainSymbols, "from_lib", 12) {
+		t.Fatalf("main document symbols should contain its local binding, not the import's declaration: %#v", mainSymbols)
+	}
+	var libSymbols []map[string]any
+	callLSP(t, ctx, client, "textDocument/documentSymbol", map[string]any{
+		"textDocument": map[string]any{"uri": libURI},
+	}, &libSymbols)
+	for _, expected := range []struct {
+		name string
+		kind int
+	}{{"LibType", 23}, {"field", 8}, {"LibStatus", 10}, {"Ready", 22}, {"from_lib", 12}, {"value", 13}, {"convert", 6}, {"local", 13}} {
+		if !hasDocumentSymbol(libSymbols, expected.name, expected.kind) {
+			t.Fatalf("imported document symbols should contain %q (kind %d): %#v", expected.name, expected.kind, libSymbols)
+		}
+	}
+	for _, parentChild := range [][2]string{{"LibType", "field"}, {"LibStatus", "Ready"}, {"from_lib", "value"}, {"convert", "local"}} {
+		parent := findDocumentSymbol(libSymbols, parentChild[0], -1)
+		child := findDocumentSymbol(libSymbols, parentChild[1], -1)
+		if parent == nil || child == nil {
+			t.Fatalf("missing symbol range pair %q/%q: %#v", parentChild[0], parentChild[1], libSymbols)
+		}
+		assertDocumentSymbolContains(t, parent, child)
 	}
 	var localLocation map[string]any
 	callLSP(t, ctx, client, "textDocument/definition", map[string]any{
@@ -144,7 +221,7 @@ func TestServerLSPRoundTrip(t *testing.T) {
 		t.Fatalf("completion omitted imported or builtin symbols: %s", completionJSON)
 	}
 
-	badText := "import \"lib\"\nlet answer: Int = missing(1)\n"
+	badText := "import \"lib\"\nlet answer: Int = from_lib(1)\nprintln(answer)\nlet broken: Int = missing(1)\n"
 	notifyLSP(t, ctx, client, "textDocument/didChange", map[string]any{
 		"textDocument":   map[string]any{"uri": mainURI, "version": 2},
 		"contentChanges": []any{map[string]any{"text": badText}},
@@ -154,8 +231,32 @@ func TestServerLSPRoundTrip(t *testing.T) {
 	if changed.Version != 2 || len(changed.Diagnostics) != 1 || !strings.Contains(changed.Diagnostics[0].Message, "unknown function 'missing'") {
 		t.Fatalf("didChange should report the current type error: %#v", changed)
 	}
-	if changed.Diagnostics[0].Range.Start.Line != 1 {
+	if changed.Diagnostics[0].Range.Start.Line != 3 {
 		t.Fatalf("diagnostic range should point into the changed buffer: %#v", changed.Diagnostics[0].Range)
+	}
+	var referencesAfterError []map[string]any
+	callLSP(t, ctx, client, "textDocument/references", map[string]any{
+		"textDocument": map[string]any{"uri": mainURI},
+		"position":     Position{Line: 1, Character: 6},
+		"context":      map[string]any{"includeDeclaration": false},
+	}, &referencesAfterError)
+	if len(referencesAfterError) != 1 || referencesAfterError[0]["uri"] != mainURI {
+		t.Fatalf("references should remain available in a document with a later type error: %#v", referencesAfterError)
+	}
+	callLSP(t, ctx, client, "textDocument/references", map[string]any{
+		"textDocument": map[string]any{"uri": mainURI},
+		"position":     Position{Line: 1, Character: 6},
+		"context":      map[string]any{"includeDeclaration": true},
+	}, &referencesAfterError)
+	if len(referencesAfterError) != 2 {
+		t.Fatalf("references should include declaration and use with a later type error: %#v", referencesAfterError)
+	}
+	var symbolsAfterError []map[string]any
+	callLSP(t, ctx, client, "textDocument/documentSymbol", map[string]any{
+		"textDocument": map[string]any{"uri": mainURI},
+	}, &symbolsAfterError)
+	if !hasDocumentSymbol(symbolsAfterError, "answer", 13) {
+		t.Fatalf("document symbols should remain available for a parsed document with a type error: %#v", symbolsAfterError)
 	}
 
 	unformatted := "import \"lib\"\nlet answer:Int=from_lib(1)\n"
@@ -192,6 +293,49 @@ func TestServerLSPRoundTrip(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("server did not stop after the exit notification")
+	}
+}
+
+func hasDocumentSymbol(symbols []map[string]any, name string, kind int) bool {
+	return findDocumentSymbol(symbols, name, kind) != nil
+}
+
+func findDocumentSymbol(symbols []map[string]any, name string, kind int) map[string]any {
+	for _, symbol := range symbols {
+		if symbol["name"] == name && (kind < 0 || symbol["kind"] == float64(kind)) {
+			return symbol
+		}
+		children, _ := symbol["children"].([]any)
+		for _, child := range children {
+			if nested, ok := child.(map[string]any); ok {
+				if nested["name"] == name && (kind < 0 || nested["kind"] == float64(kind)) {
+					return nested
+				}
+				if found := findDocumentSymbol([]map[string]any{nested}, name, kind); found != nil {
+					return found
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func assertDocumentSymbolContains(t *testing.T, parent, child map[string]any) {
+	t.Helper()
+	var parentRange, childSelection Range
+	parentRangeJSON, _ := json.Marshal(parent["range"])
+	childSelectionJSON, _ := json.Marshal(child["selectionRange"])
+	if err := json.Unmarshal(parentRangeJSON, &parentRange); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(childSelectionJSON, &childSelection); err != nil {
+		t.Fatal(err)
+	}
+	beforeOrEqual := func(left, right Position) bool {
+		return left.Line < right.Line || left.Line == right.Line && left.Character <= right.Character
+	}
+	if !beforeOrEqual(parentRange.Start, childSelection.Start) || !beforeOrEqual(childSelection.End, parentRange.End) {
+		t.Fatalf("parent symbol range should contain its child selection: parent=%#v child=%#v", parentRange, childSelection)
 	}
 }
 

@@ -2245,6 +2245,9 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if len(a[0].S) > r.Lim.MaxJSONBytes {
 			return resVal(false, stringVal("JSON input exceeds configured limit")), nil
 		}
+		if jsonExceedsNestingDepth(a[0].S, maxJSONNestingDepth) {
+			return resVal(false, stringVal("JSON nesting exceeds configured limit")), nil
+		}
 		if !json.Valid([]byte(a[0].S)) {
 			return resVal(false, stringVal("invalid JSON")), nil
 		}
@@ -3845,6 +3848,46 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 	return bad("unknown builtin")
 }
 
+const maxJSONNestingDepth = 256
+
+// jsonExceedsNestingDepth scans only enough JSON structure to cap parser
+// recursion before the decoder runs. The caller still performs full syntax
+// validation; this scan only ignores brackets inside quoted strings and
+// escaped quotes.
+func jsonExceedsNestingDepth(text string, maxDepth int) bool {
+	depth := 0
+	inString, escaped := false, false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '[', '{':
+			depth++
+			if depth > maxDepth {
+				return true
+			}
+		case ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return false
+}
+
 // normalizeJSON converts json.Number values into Int (when integral) or Float
 // so the interpreter and the native backend agree on JSON number semantics.
 func normalizeJSON(v any) any {
@@ -3862,7 +3905,10 @@ func normalizeJSON(v any) any {
 		if f, err := t.Float64(); err == nil {
 			return f
 		}
-		return t.String()
+		// Keep out-of-range decimal and exponent forms as JSON numbers. The
+		// accessors can then report their own finite-Float/range errors instead
+		// of changing the node into a JSON string.
+		return t
 	case []any:
 		for i := range t {
 			t[i] = normalizeJSON(t[i])
@@ -3924,7 +3970,7 @@ func jsonNodeKind(v any) string {
 		return "null"
 	case bool:
 		return "bool"
-	case json.Number:
+	case int64, float64, json.Number:
 		return "number"
 	case string:
 		return "string"

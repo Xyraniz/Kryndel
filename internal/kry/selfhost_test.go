@@ -2568,114 +2568,6 @@ func TestStage24IntRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestStage25DirectJSON(t *testing.T) {
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_json_parse_stage25.kry")
-	program, d := LoadProgram(fixture, DefaultLimits(), "")
-	if d != nil {
-		t.Fatal(d.Message)
-	}
-	checker, d := Check(program, DefaultLimits())
-	if d != nil {
-		t.Fatal(d.Message)
-	}
-	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("direct ELF execution requires linux-amd64")
-	}
-	dir := t.TempDir()
-	runnable := filepath.Join(dir, "direct-json-stage25")
-	if err := os.WriteFile(runnable, data, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(runnable).Output()
-	if err != nil {
-		t.Fatalf("stage25 direct JSON ELF failed to execute: %v", err)
-	}
-	want := "true\ntrue\ntrue\ntrue\nfalse\nfalse\nobject\narray\nstring\nbool\nnull\nnumber\narray\nobject\ntrue\nfalse\n"
-	if string(output) != want {
-		t.Fatalf("unexpected stage25 direct JSON output %q", output)
-	}
-}
-
-func TestStage26DirectJSONString(t *testing.T) {
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_json_string_stage26.kry")
-	program, d := LoadProgram(fixture, DefaultLimits(), "")
-	if d != nil {
-		t.Fatal(d.Message)
-	}
-	checker, d := Check(program, DefaultLimits())
-	if d != nil {
-		t.Fatal(d.Message)
-	}
-	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("direct ELF execution requires linux-amd64")
-	}
-	dir := t.TempDir()
-	runnable := filepath.Join(dir, "direct-json-string-stage26")
-	if err := os.WriteFile(runnable, data, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(runnable).Output()
-	if err != nil {
-		t.Fatalf("stage26 direct JSON string ELF failed to execute: %v", err)
-	}
-	want := "hello\n[a\tb]\n[a\\b]\n[a/b]\nfalse\nfalse\nfalse\n"
-	if string(output) != want {
-		t.Fatalf("unexpected stage26 direct JSON string output %q", output)
-	}
-}
-
-func TestStage27DirectJSONInt(t *testing.T) {
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_json_int_stage27.kry")
-	program, d := LoadProgram(fixture, DefaultLimits(), "")
-	if d != nil {
-		t.Fatal(d.Message)
-	}
-	checker, d := Check(program, DefaultLimits())
-	if d != nil {
-		t.Fatal(d.Message)
-	}
-	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("direct ELF execution requires linux-amd64")
-	}
-	dir := t.TempDir()
-	runnable := filepath.Join(dir, "direct-json-int-stage27")
-	if err := os.WriteFile(runnable, data, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(runnable).Output()
-	if err != nil {
-		t.Fatalf("stage27 direct JSON int ELF failed to execute: %v", err)
-	}
-	want := "0\n0\n42\n-42\n9223372036854775807\n-9223372036854775808\n-7\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\n"
-	if string(output) != want {
-		t.Fatalf("unexpected stage27 direct JSON int output %q", output)
-	}
-}
-
 func TestStage28DirectU8Array(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {
@@ -2746,62 +2638,19 @@ func TestStage28DirectFunctionAndArraySlice(t *testing.T) {
 	}
 }
 
-func TestStage28DirectJSONStringToU8Array(t *testing.T) {
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "direct_json_string_bytes_stage28.kry")
-	program, d := LoadProgram(fixture, DefaultLimits(), "")
-	if d != nil {
-		t.Fatal(d.Message)
-	}
-	checker, d := Check(program, DefaultLimits())
-	if d != nil {
-		t.Fatal(d.Message)
-	}
-	data, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestSourceCompilerJSONIsRejectedByELFDirect(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("direct ELF execution requires linux-amd64")
-	}
-	dir := t.TempDir()
-	runnable := filepath.Join(dir, "direct-json-string-u8-stage28")
-	if err := os.WriteFile(runnable, data, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(runnable).Output()
-	if err != nil {
-		t.Fatalf("stage28 direct JSON string/u8 ELF failed to execute: %v", err)
-	}
-	if string(output) != "5\n104\n101\n111\n" {
-		t.Fatalf("unexpected stage28 JSON string/u8 output %q", output)
-	}
-}
-
-func TestStage28SourceCompilerBootstrap(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("source compiler ELF execution requires linux-amd64")
+		t.Skip("direct ELF capability check requires linux-amd64")
 	}
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "bootstrap_hello_stage27.kry")
 	compiler := filepath.Join(root, "..", "..", "selfhost", "source_kir_compiler.kry")
 	bootstrapLock := loadBootstrapLock(t, filepath.Join(root, "..", "..", "selfhost", "bootstrap.lock.json"))
 	compilerLimits := DefaultLimits()
 	compilerLimits.MaxArtifactBytes = bootstrapLock.SourceCompilerKIRMaxBytes
 	compilerLimits.MaxJSONBytes = bootstrapLock.SourceCompilerKIRMaxBytes
-	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
-	if d != nil {
-		t.Fatal(d.Message)
-	}
-	if _, d := Check(fixtureProgram, DefaultLimits()); d != nil {
-		t.Fatal(d.Message)
-	}
 	compilerProgram, d := LoadProgram(compiler, compilerLimits, "")
 	if d != nil {
 		t.Fatal(d.Message)
@@ -2810,35 +2659,9 @@ func TestStage28SourceCompilerBootstrap(t *testing.T) {
 	if d != nil {
 		t.Fatal(d.Message)
 	}
-	compilerELF, err := BuildDirectELF(compilerProgram, compilerChecker, NativeTarget{OS: "linux", Arch: "amd64"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	compilerPath := filepath.Join(dir, "source-kir-compiler")
-	outputPath := filepath.Join(dir, "bootstrap-output")
-	if err := os.WriteFile(compilerPath, compilerELF, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := exec.Command(compilerPath, fixture, outputPath).Run(); err != nil {
-		t.Fatalf("stage28 generated source compiler failed: %v", err)
-	}
-	generated, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := InspectNative(generated); err != nil {
-		t.Fatalf("stage28 generated bootstrap is not a valid native artifact: %v", err)
-	}
-	generatedPath := filepath.Join(dir, "bootstrap-output.run")
-	if err := os.WriteFile(generatedPath, generated, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(generatedPath).Output()
-	if err != nil {
-		t.Fatalf("stage28 generated bootstrap failed to execute: %v", err)
-	}
-	if string(output) != "hello from bootstrap\n" {
-		t.Fatalf("unexpected stage28 bootstrap output %q", output)
+	_, err = BuildDirectELF(compilerProgram, compilerChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	want := `builtin "json_parse" is not listed as supported by the elf-direct backend`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("ELF-direct should reject the source compiler with an explicit JSON diagnostic, got %v", err)
 	}
 }

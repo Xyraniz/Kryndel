@@ -87,6 +87,7 @@ const (
 type Stmt struct {
 	Kind          StmtKind
 	Tok           Token
+	EndToken      Token
 	NameToken     Token
 	Name          string
 	Type          *Type
@@ -143,6 +144,7 @@ type Param struct {
 type Function struct {
 	Name            string
 	NameToken       Token
+	EndToken        Token
 	Public          bool
 	Worker          bool
 	TypeParams      []TypeParam
@@ -165,6 +167,7 @@ type FieldDecl struct {
 type StructDecl struct {
 	Name            string
 	NameToken       Token
+	EndToken        Token
 	Public          bool
 	Fields          []FieldDecl
 	Tok             Token
@@ -175,6 +178,7 @@ type StructDecl struct {
 type EnumDecl struct {
 	Name            string
 	NameToken       Token
+	EndToken        Token
 	Public          bool
 	Variants        []string
 	VariantTokens   []Token

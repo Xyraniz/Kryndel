@@ -201,8 +201,35 @@ func TestBuiltinCapabilityMatrixListsEveryBackendAndTarget(t *testing.T) {
 		lookup[key] = row
 	}
 	jsonLinux := lookup["json_parse/linux-x64"]
-	if jsonLinux.Interpreter != "supported" || jsonLinux.CAOT != "supported" || jsonLinux.ELFDirect != "supported" || jsonLinux.SelfHosted != "partial" {
+	if jsonLinux.Interpreter != "supported" || jsonLinux.CAOT != "supported" || jsonLinux.ELFDirect != "unsupported" || jsonLinux.SelfHosted != "partial" {
 		t.Fatalf("unexpected Linux x64 json_parse capability: %#v", jsonLinux)
+	}
+	jsonBuiltins := []string{
+		"json_parse", "json_stringify", "json_kind", "json_object_get",
+		"json_array_len", "json_array_get", "json_string", "json_int",
+		"json_uint", "json_float", "json_bool", "json_is_null",
+	}
+	for _, name := range jsonBuiltins {
+		row, ok := lookup[name+"/linux-x64"]
+		if !ok {
+			t.Fatalf("builtin capability matrix is missing %s on Linux x64", name)
+		}
+		if row.Interpreter != "supported" || row.CAOT != "supported" || row.ELFDirect != "unsupported" {
+			t.Errorf("unexpected Linux x64 %s capability: %#v", name, row)
+		}
+		if _, listed := generatedCAOTBuiltinCases[name]; !listed {
+			t.Errorf("%s is advertised for CAOT but absent from generated CAOT inventory", name)
+		}
+		if _, listed := generatedDirectELFBuiltinCases[name]; listed {
+			t.Errorf("%s must remain absent from generated ELF-direct inventory", name)
+		}
+		wantSelfHosted := "unsupported"
+		if _, listed := generatedSelfHostedBuiltinNames[name]; listed {
+			wantSelfHosted = "partial"
+		}
+		if row.SelfHosted != wantSelfHosted {
+			t.Errorf("%s self-hosted capability is %q, want %q from generated inventory", name, row.SelfHosted, wantSelfHosted)
+		}
 	}
 	jsonWindows := lookup["json_parse/windows-x64"]
 	if jsonWindows.CAOT != "supported" || jsonWindows.ELFDirect != "unsupported" || jsonWindows.SelfHosted != "unsupported" {
