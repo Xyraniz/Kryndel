@@ -49,13 +49,14 @@ Lexical scopes are represented by parent-linked environments. A declaration is l
 ## Intermediate representation status
 
 The checker currently stores resolved expression types and call targets on AST
-nodes. The interpreter executes that checked AST. The generated-C and direct
-ELF backends also receive the AST plus checker state. KIR v2 is a deterministic,
-typed serialization of the checked tree, but it is not yet the single internal
-representation shared by execution and code generation. The `ValidatedIR` in
-`internal/kry/ir.go` currently records a bounded traversal and is not an
-executable lowering. Consequently, semantic parity still depends on tests
-between multiple implementations.
+nodes. The interpreter and C generator execute or lower that checked AST. The
+direct ELF backend now lowers its constant-output subset from decoded KIR, but
+its dynamic path still consumes the AST plus checker state. KIR v2 remains a
+typed serialization rather than the single internal representation shared by
+execution and code generation. The `ValidatedIR` in `internal/kry/ir.go`
+currently records a bounded traversal and is not an executable lowering.
+Consequently, semantic parity still depends on tests between multiple
+implementations.
 
 The planned compiler boundary is `source -> AST -> typed HIR -> validated
 MIR/KIR -> interpreter or target backend`. Resolution and overload selection

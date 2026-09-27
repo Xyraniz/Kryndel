@@ -41,6 +41,27 @@ println(prefix + str(40 + 2))
 	}
 }
 
+func TestDirectStaticOutputConsumesTypedKIR(t *testing.T) {
+	p, c := testProgram(t, `let prefix: String = "typed "
+println(prefix + str(40 + 2))
+`)
+	kir, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := DecodeKIR(kir, c.Env.Lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := directStaticKIROutput(document, c.Env.Lim.MaxOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "typed 42\n" {
+		t.Fatalf("KIR static output = %q", output)
+	}
+}
+
 func TestDirectELFRejectsDynamicConstructs(t *testing.T) {
 	p, c := testProgram(t, "let value: String = datetime_now()\nprintln(value)\n")
 	if _, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), `builtin "datetime_now" is not listed as supported by the elf-direct backend`) {

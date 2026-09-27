@@ -3,8 +3,9 @@
 KIR (`kry-ir`) is the stable interchange format between the checked Kryndel frontend and compiler backends. `kry emit file.kry --format=kry-ir` writes one canonical UTF-8 JSON document followed by a newline.
 
 KIR v2 is currently a typed serialization of the checked AST, not a shared
-execution IR. The Go interpreter, C generator, and direct ELF backend still
-consume the AST and checker state through separate paths. The self-hosted KIR
+execution IR. The Go interpreter and C generator still consume the AST and
+checker state. The direct ELF backend lowers its constant-output subset from
+decoded KIR; its dynamic path still consumes the AST. The self-hosted KIR
 backend accepts a narrower language subset and rejects unsupported constructs.
 See the [language specification](language-spec.md) for source semantics and
 the [architecture status](architecture.md#intermediate-representation-status)

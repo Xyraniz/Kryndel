@@ -38,12 +38,20 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	if _, err = DecodeKIR(kir, c.Env.Lim); err != nil {
+	document, err := DecodeKIR(kir, c.Env.Lim)
+	if err != nil {
 		return nil, fmt.Errorf("direct backend rejected KIR: %w", err)
 	}
-	output, err := directStaticOutput(p, c)
+	output, err := directStaticKIROutput(document, c.Env.Lim.MaxOutputBytes)
 	if err == nil {
 		return emitELF64WriteExit(output), nil
+	}
+	if !errors.Is(err, errDirectOutputLimit) {
+		if legacyOutput, legacyErr := directStaticOutput(p, c); legacyErr == nil {
+			return emitELF64WriteExit(legacyOutput), nil
+		} else {
+			err = legacyErr
+		}
 	}
 	stmts, stmtErr := directDynamicStatements(p)
 	if stmtErr == nil && (errors.Is(err, errDirectOutputLimit) || directHasDynamicControl(stmts) || directHasArrayFeatures(stmts) || directHasStructuredFeatures(stmts) || directHasUserFunctions(p)) {
