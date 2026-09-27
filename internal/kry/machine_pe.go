@@ -31,74 +31,16 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 	if p == nil || c == nil || c.Env == nil {
 		return nil, fmt.Errorf("missing checked program")
 	}
-	if err := validateFunctionValueSupport(p, "pe-direct"); err != nil {
-		return nil, err
-	}
+	limits := c.Env.Lim
 	kir, err := EmitKIR(p, c, target)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := DecodeKIR(kir, c.Env.Lim); err != nil {
+	document, err := DecodeKIR(kir, limits)
+	if err != nil {
 		return nil, fmt.Errorf("direct PE backend rejected KIR: %w", err)
 	}
-	if len(p.Statements) > 0 {
-		for _, f := range p.Functions {
-			if f.Name == "main" {
-				return nil, fmt.Errorf("direct PE backend does not support both top-level statements and main")
-			}
-		}
-	}
-	// A trailing explicit return nil is equivalent to falling off main. Check
-	// the shape here instead of broadening the static ELF slice implicitly.
-	copyProgram := *p
-	if len(p.Statements) == 0 {
-		for i, f := range p.Functions {
-			if f.Name != "main" {
-				continue
-			}
-			if len(f.Params) != 0 || (f.Return != nil && f.Return.Name != "Nil") {
-				return nil, fmt.Errorf("direct PE backend requires main() -> Nil")
-			}
-			copyFunction := *f
-			if n := len(copyFunction.Body); n > 0 && copyFunction.Body[n-1] != nil && copyFunction.Body[n-1].Kind == StReturn {
-				ret := copyFunction.Body[n-1].Return
-				if ret == nil || ret.Kind != ExNil {
-					return nil, fmt.Errorf("direct PE backend supports only return nil in main")
-				}
-				copyFunction.Body = copyFunction.Body[:n-1]
-			}
-			functions := append([]*Function(nil), copyProgram.Functions...)
-			functions[i] = &copyFunction
-			copyProgram.Functions = functions
-			break
-		}
-	}
-	output, staticErr := directStaticOutput(&copyProgram, c)
-	if staticErr == nil {
-		return buildDirectStaticPE(output, target.GUI, c.Env.Lim.MaxOutputBytes)
-	}
-	if err := validateNativeBuiltinSupport(&copyProgram, c, "pe-direct", target); err != nil {
-		return nil, err
-	}
-	stmts, err := validateDirectPEProgram(&copyProgram)
-	if err != nil {
-		return nil, fmt.Errorf("direct PE dynamic subset: %w (static output path: %v)", err, staticErr)
-	}
-	machine := newDirectMachine()
-	machine.windowsABI = true
-	machine.outputLimit = c.Env.Lim.MaxOutputBytes
-	machine.outputLimitSet = true
-	if err := machine.prepareFunctions(&copyProgram); err != nil {
-		return nil, fmt.Errorf("direct PE function setup: %w", err)
-	}
-	data, err := machine.build(stmts)
-	if err != nil {
-		return nil, err
-	}
-	if target.GUI {
-		pePut16(data, peSubsystemOffset, peSubsystemGUI)
-	}
-	return data, nil
+	return lowerDirectPEKIR(document, limits.MaxOutputBytes)
 }
 
 // validateDirectPEProgram prevents Linux syscalls or non-Win64 calling
