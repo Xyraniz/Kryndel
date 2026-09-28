@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Runtime testing and native backend parity
+
+`kry test` discovers `*_test.kry` files under `tests/` or in a selected file or directory, reports each case, captures stdout, and exits nonzero when any case fails or no tests are found. Profile-guided KIR binding lookup removes formatted strings from the validation hot path. Across five alternating end-to-end runs of the local 1M-sum benchmark, median time fell from 2.221s to 1.396s (37.1%), including startup, parsing, and checking.
+
+Direct PE `str` now converts `Int`, `UInt8/16/32/64`, `Bool`, and `String`; direct ELF has differential coverage for those types plus `Nil`. A shared fixture compares the interpreter, C AOT, ELF-direct, and PE-direct on their native hosts. C AOT adds bounded plain-HTTP `http_request` support for methods, bodies, chunked responses, UTF-8 validation, timeouts, and response limits; unsupported HTTPS fails explicitly. C AOT binding names are namespaced to avoid collisions with C keywords. Stage36 now applies both artifact and JSON input limits to the larger locked KIR, and Stage 2/3 remain byte-identical.
+
 ## Discord package 2.4.0
 
 The bot package ports discord.py's `discord.ext.commands` for prefix commands. Declarative command specs add aliases, checks, cooldowns, parameter converters, groups with dot-separated paths, a built-in help command, and an error slot (`discord.on_command_error.<name>` then `discord.on_command_error`) with a visible default reply. Registered commands run through checks, cooldown, argument validation, and conversion before their callback, while unregistered names keep the existing plain callback route. A typed layer adds `Context`, the `User`, `Member`, `Role`, `Channel`, and `Message` models, permission bitfield helpers, and guild/channel permission resolution from the object cache. `examples/discord_commands.kry` demonstrates the framework.
