@@ -186,7 +186,7 @@ fn main() -> Nil {
 				}
 			})
 
-			t.Run("reject ambiguous diagnostic stack", func(t *testing.T) {
+			t.Run("multiple helper callsites preserve diagnostic stack", func(t *testing.T) {
 				source := `fn unwrap(value: Result[Int, String]) -> Int {
     return result_unwrap(value)
 }
@@ -196,12 +196,9 @@ fn main() -> Nil {
     println(unwrap(failure))
     return nil
 }`
-				program, checker := parseCheckOptionResult(t, source)
-				_, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
-				const want = "function 'unwrap': direct ELF backend cannot reproduce result_unwrap diagnostic stack in function 'unwrap': multiple call paths are unsupported"
-				if err == nil || err.Error() != want {
-					t.Fatalf("ambiguous diagnostic stack must be rejected explicitly: got %v, want %q", err, want)
-				}
+				interpreter := runOptionResultInterpreter(t, source)
+				native := buildAndRunOptionResultDirectELF(t, source)
+				assertOptionResultProcessOutcome(t, "ELF-direct repeated helper result_unwrap", native, interpreter)
 			})
 		})
 	}

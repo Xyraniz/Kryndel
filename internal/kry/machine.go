@@ -44,7 +44,7 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("direct backend rejected KIR: %w", err)
 	}
-	if err := validateKIRDirectELFSubset(document); err == nil {
+	if err := validateKIRDirectELFValueSubset(document); err == nil {
 		return buildDirectKIRELF(document, c.Env.Lim, kirSourceMap(p))
 	} else if !errors.Is(err, errKIRSubsetUnsupported) {
 		return nil, fmt.Errorf("direct backend rejected KIR: %w", err)

@@ -86,7 +86,7 @@ func TestDirectELFDynamicPrintKindsCountTheCompleteNewline(t *testing.T) {
 		{name: "dynamic integer", source: "let mut value: Int = 12\nif true { println(value) }\n", limit: 3, wantOutput: "12\n"},
 		{name: "dynamic bool", source: "let mut value: Bool = true\nif true { println(value) }\n", limit: 5, wantOutput: "true\n"},
 		{name: "accumulated loop", source: "let mut value: Int = 0\nwhile value < 2 { println(\"x\"); value = value + 1 }\n", limit: 3, wantOutput: "x\n", wantASTDiagnostic: true},
-		{name: "counter shared with callee", source: "fn emit() -> Nil { println(\"b\"); return nil }\nfn main() -> Nil { print(\"a\"); emit(); return nil }\n", limit: 2, wantOutput: "a"},
+		{name: "counter shared with callee", source: "fn emit() -> Nil { println(\"b\"); return nil }\nfn main() -> Nil { print(\"a\"); emit(); return nil }\n", limit: 2, wantOutput: "a", wantASTDiagnostic: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
