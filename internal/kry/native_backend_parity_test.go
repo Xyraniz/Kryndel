@@ -23,6 +23,8 @@ func TestNativeBackendParityFixture(t *testing.T) {
 		name, format, target, builtin, want string
 	}{
 		{name: "C AOT Linux", format: "elf", target: "linux-x64", builtin: "str", want: "supported"},
+		{name: "C AOT macOS x64", format: "macho", target: "darwin-x64", builtin: "str", want: "supported"},
+		{name: "C AOT macOS ARM64", format: "macho", target: "darwin-arm64", builtin: "str", want: "supported"},
 		{name: "ELF direct str", format: "elf-direct", target: "linux-x64", builtin: "str", want: "partial"},
 		{name: "ELF direct print", format: "elf-direct", target: "linux-x64", builtin: "print", want: "partial"},
 		{name: "ELF direct println", format: "elf-direct", target: "linux-x64", builtin: "println", want: "partial"},
@@ -35,6 +37,10 @@ func TestNativeBackendParityFixture(t *testing.T) {
 			switch test.target {
 			case "linux-x64":
 				target = NativeTarget{OS: "linux", Arch: "amd64"}
+			case "darwin-x64":
+				target = NativeTarget{OS: "darwin", Arch: "amd64"}
+			case "darwin-arm64":
+				target = NativeTarget{OS: "darwin", Arch: "arm64"}
 			case "windows-x64":
 				target = NativeTarget{OS: "windows", Arch: "amd64"}
 			}
@@ -45,16 +51,15 @@ func TestNativeBackendParityFixture(t *testing.T) {
 	}
 
 	t.Run("C AOT", func(t *testing.T) {
-		if runtime.GOARCH != "amd64" || runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-			t.Skip("C AOT parity fixture requires Linux or Windows amd64")
+		target, format, targetName, ok := nativeHostCAOTTarget()
+		if !ok {
+			t.Skip("C AOT parity fixture requires Linux amd64/arm64, Darwin amd64/arm64, or Windows amd64")
 		}
-		target := NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH}
 		if !optionResultCompilerAvailable(target) {
 			t.Skipf("C compiler for %s-%s is unavailable", target.OS, target.Arch)
 		}
-		format := "elf"
-		if target.OS == "windows" {
-			format = "exe"
+		if status := nativeBuiltinBackendStatus("str", format, target); status != "supported" {
+			t.Fatalf("C AOT capability for str on %s = %q, want supported", targetName, status)
 		}
 		native := buildAndRunOptionResultNative(t, source, target, format)
 		assertOptionResultOutcome(t, "C AOT parity fixture", native, interpreter)
@@ -80,4 +85,27 @@ func TestNativeBackendParityFixture(t *testing.T) {
 			t.Fatalf("PE-direct fixture differs: interpreter=%q; PE stdout=%q stderr=%q status=%d", interpretedOutput, nativeOutput, nativeStderr, status)
 		}
 	})
+}
+
+func nativeHostCAOTTarget() (NativeTarget, string, string, bool) {
+	target := NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH}
+	archName := "x64"
+	if target.Arch == "arm64" {
+		archName = "arm64"
+	}
+	switch target.OS {
+	case "linux":
+		if target.Arch == "amd64" || target.Arch == "arm64" {
+			return target, "elf", "linux-" + archName, true
+		}
+	case "darwin":
+		if target.Arch == "amd64" || target.Arch == "arm64" {
+			return target, "macho", "darwin-" + archName, true
+		}
+	case "windows":
+		if target.Arch == "amd64" {
+			return target, "exe", "windows-x64", true
+		}
+	}
+	return NativeTarget{}, "", "", false
 }

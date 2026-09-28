@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,6 +25,7 @@ func TestNativeBackendDescriptions(t *testing.T) {
 		{format: "c", name: "C source", toolchain: "none (source only)"},
 		{format: "elf", name: "C AOT", toolchain: "external C compiler", requiresTool: true},
 		{format: "exe", name: "C AOT", toolchain: "external C compiler", requiresTool: true},
+		{format: "macho", name: "C AOT", toolchain: "native Darwin C compiler", requiresTool: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.format, func(t *testing.T) {
@@ -64,12 +66,6 @@ func TestNativeCapabilityMatrixMatchesTargetPolicy(t *testing.T) {
 		if !ok {
 			t.Fatalf("capability row has unknown target %q", row.Target)
 		}
-		if row.Format == "macho" {
-			if row.Status != "unsupported" {
-				t.Fatalf("Mach-O capability should be unsupported: %#v", row)
-			}
-			continue
-		}
 		reason := nativeOutputTargetReason(row.Format, target)
 		want := "supported"
 		if (row.Format == "elf-direct" || row.Format == "pe-direct") && reason == "" {
@@ -83,6 +79,53 @@ func TestNativeCapabilityMatrixMatchesTargetPolicy(t *testing.T) {
 	}
 	if len(seen) != len(rows) {
 		t.Fatalf("matrix has %d rows but only %d unique rows", len(rows), len(seen))
+	}
+}
+
+func TestMachOTargetPolicySupportsDarwinArchitectures(t *testing.T) {
+	for _, target := range []NativeTarget{
+		{OS: "darwin", Arch: "amd64"},
+		{OS: "darwin", Arch: "arm64"},
+	} {
+		if reason := nativeOutputTargetReason("macho", target); reason != "" {
+			t.Errorf("Mach-O rejected supported target %s-%s: %s", target.OS, target.Arch, reason)
+		}
+	}
+	for _, target := range []NativeTarget{
+		{OS: "linux", Arch: "arm64"},
+		{OS: "darwin", Arch: "386"},
+	} {
+		if reason := nativeOutputTargetReason("macho", target); reason == "" {
+			t.Errorf("Mach-O accepted unsupported target %s-%s", target.OS, target.Arch)
+		}
+	}
+
+	t.Setenv("KRY_CC", "")
+	if runtime.GOOS != "darwin" {
+		if _, err := compilerFor(NativeTarget{OS: "darwin", Arch: runtime.GOARCH}); err == nil {
+			t.Fatal("Mach-O cross compiler unexpectedly selected on a non-Darwin host")
+		}
+	}
+}
+
+func TestInspectNativeMachO(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		cpu  byte
+	}{
+		{name: "x64", cpu: 7},
+		{name: "arm64", cpu: 12},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			image := make([]byte, 32)
+			copy(image, []byte{0xcf, 0xfa, 0xed, 0xfe})
+			image[4], image[7] = test.cpu, 1 // CPU_TYPE_X86_64 or CPU_TYPE_ARM64, little-endian
+			image[12] = 2                    // MH_EXECUTE
+			info, err := InspectNative(image)
+			if err != nil || !strings.HasPrefix(info, "Mach-O\narchitecture: ") {
+				t.Fatalf("InspectNative(%s) = %q, %v", test.name, info, err)
+			}
+		})
 	}
 }
 
@@ -239,6 +282,10 @@ func TestBuiltinCapabilityMatrixListsEveryBackendAndTarget(t *testing.T) {
 	if jsonWindows.CAOT != "supported" || jsonWindows.ELFDirect != "unsupported" || jsonWindows.SelfHosted != "unsupported" {
 		t.Fatalf("unexpected Windows x64 json_parse capability: %#v", jsonWindows)
 	}
+	jsonDarwin := lookup["json_parse/darwin-arm64"]
+	if jsonDarwin.CAOT != "supported" || jsonDarwin.ELFDirect != "unsupported" {
+		t.Fatalf("unexpected Darwin ARM64 json_parse capability: %#v", jsonDarwin)
+	}
 	websocket := lookup["websocket_connect/linux-x64"]
 	if websocket.Interpreter != "supported" || websocket.CAOT != "unsupported" || websocket.ELFDirect != "unsupported" || websocket.PEDirect != "unsupported" || websocket.SelfHosted != "unsupported" {
 		t.Fatalf("unexpected websocket_connect capability: %#v", websocket)
@@ -303,6 +350,9 @@ func TestLanguageCapabilityMatrixCoversGeneratedItemsAndTargets(t *testing.T) {
 		if row.CAOT != check.caot || row.ELFDirect != check.direct || row.SelfHosted != check.selfHosted {
 			t.Errorf("%s has unexpected backend states: %#v", check.key, row)
 		}
+	}
+	if row := lookup["expression/ExFloat/darwin-arm64"]; row.CAOT != "supported" || row.ELFDirect != "unsupported" {
+		t.Errorf("unexpected Darwin ARM64 float expression capability: %#v", row)
 	}
 }
 

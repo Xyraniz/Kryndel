@@ -587,8 +587,10 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 		directFormat := "--format=elf-direct"
 		if format == "exe" || format == "pe" {
 			directFormat = "--format=pe-direct"
+		} else if format == "macho" {
+			directFormat = "--format=c and compile with a local clang"
 		}
-		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use %s for the supported direct backend", format, backend.Name, directFormat), jsonMode)
+		return report(kry.Diag(kry.CatCLI, nil, 1, 1, "--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use %s", format, backend.Name, directFormat), jsonMode)
 	}
 	if !targetParsed {
 		t, err = kry.ParseNativeTarget(target)
@@ -623,7 +625,7 @@ func buildCmd(e *kry.Engine, a []string, jsonMode bool) int {
 	}
 	// Native executables must be runnable even when the output path has no
 	// extension (the default for ELF targets).
-	if format == "exe" || format == "pe" || format == "pe-direct" || format == "elf" || format == "elf-direct" {
+	if format == "exe" || format == "pe" || format == "pe-direct" || format == "elf" || format == "elf-direct" || format == "macho" {
 		_ = os.Chmod(out, 0o755)
 	}
 	fmt.Printf("built %s (backend=%s; external-toolchain=%s)\n", out, backend.Name, backend.ExternalToolchain)
@@ -1164,7 +1166,7 @@ func printHelp() {
 	fmt.Println("       kry [global-options] FILE.kry|FILE.kexe")
 	fmt.Println("commands: help, check, run, debug, build, emit, inspect, capabilities, fmt, lsp, repl, doctor, version")
 	fmt.Println("project: new, init, add, remove, install, uninstall, update, search, test, package, publish, cache clean, registry serve")
-	fmt.Println("build formats: kexe, exe/pe (C AOT by default; --no-external-toolchain selects direct PE for Windows x64); elf (C AOT); elf-direct (Linux subset); pe-direct (Windows x64 subset, supports --gui); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
+	fmt.Println("build formats: kexe, exe/pe (C AOT by default; --no-external-toolchain selects direct PE for Windows x64); elf (C AOT); macho (Darwin C AOT, native compiler); elf-direct (Linux subset); pe-direct (Windows x64 subset, supports --gui); c; targets: windows-x64, windows-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64")
 	fmt.Println("build options: -o OUT, --format F, --target T, --gui, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
 	fmt.Println("check options: -Werror, -Werror=KRYW002,KRYW004, -Wno=KRYW003")
 	fmt.Println("debug commands: break FILE:LINE, breakpoints, clear ID|all, locals, print NAME, stack, continue, step, next, finish, quit")

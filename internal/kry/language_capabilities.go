@@ -83,6 +83,8 @@ func languageBackendStatus(inventory languageCapabilityInventory, feature, backe
 		format := "elf"
 		if target.OS == "windows" {
 			format = "exe"
+		} else if target.OS == "darwin" {
+			format = "macho"
 		}
 		if nativeOutputTargetReason(format, target) != "" {
 			return "unsupported"

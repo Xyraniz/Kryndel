@@ -57,14 +57,7 @@ func TestOptionResultBuiltinDifferentialConformance(t *testing.T) {
 	})
 	assertOptionResultCaseOutputs(t, "interpreter", optionResultCommonCases, commonInterpreter.stdout)
 
-	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" || runtime.GOOS == "windows" && runtime.GOARCH == "amd64" {
-		target := NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH}
-		format := "elf"
-		targetName := "linux-x64"
-		if target.OS == "windows" {
-			format = "exe"
-			targetName = "windows-x64"
-		}
+	if target, format, targetName, ok := nativeHostCAOTTarget(); ok {
 
 		t.Run("C AOT", func(t *testing.T) {
 			for _, builtin := range []string{"some", "none", "ok", "err", "is_some", "is_none", "is_ok", "is_err", "unwrap_or"} {
@@ -401,6 +394,11 @@ func buildAndRunOptionResultNative(t *testing.T, source string, target NativeTar
 	if err != nil {
 		t.Fatalf("C AOT build failed: %v", err)
 	}
+	if format == "macho" {
+		if info, err := InspectNative(data); err != nil || !strings.HasPrefix(info, "Mach-O\narchitecture: ") {
+			t.Fatalf("Mach-O output inspection = %q, %v", info, err)
+		}
+	}
 	extension := ""
 	if target.OS == "windows" {
 		extension = ".exe"
@@ -472,5 +470,57 @@ func assertOptionResultOutcome(t *testing.T, label string, got, want optionResul
 	t.Helper()
 	if got.stdout != want.stdout || got.stderr != want.stderr || got.exitStatus != want.exitStatus || !sameOptionResultDiagnostic(got.diagnostic, want.diagnostic) {
 		t.Errorf("%s diverged from the reference:\n  stdout: got %q; want %q\n  stderr: got %q; want %q\n  exit status: got %d; want %d\n  Diagnostic: got %#v; want %#v", label, got.stdout, want.stdout, got.stderr, want.stderr, got.exitStatus, want.exitStatus, got.diagnostic, want.diagnostic)
+	}
+}
+
+func TestNativeRuntimeFailureParityFixture(t *testing.T) {
+	const source = `print("before:")
+let zero: Int = 0
+let invalid: Int = 1 / zero
+`
+	interpreter := runOptionResultInterpreter(t, source)
+	if interpreter.diagnostic == nil || interpreter.diagnostic.Category != CatRuntime || interpreter.diagnostic.Message != "division by zero" {
+		t.Fatalf("unexpected interpreter failure: %#v", interpreter.diagnostic)
+	}
+	interpreter.exitStatus = 1
+	const wantOutput = "before:"
+	if interpreter.stdout != wantOutput {
+		t.Fatalf("interpreter stdout = %q, want %q", interpreter.stdout, wantOutput)
+	}
+
+	if target, format, _, ok := nativeHostCAOTTarget(); ok {
+		t.Run("C AOT", func(t *testing.T) {
+			if !optionResultCompilerAvailable(target) {
+				t.Skipf("C AOT failure parity needs the compiler for %s-%s", target.OS, target.Arch)
+			}
+			native := buildAndRunOptionResultNative(t, source, target, format)
+			assertNativeRuntimeFailureOutcome(t, format, native, interpreter, "division by zero")
+		})
+	}
+
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		t.Run("ELF direct", func(t *testing.T) {
+			native := buildAndRunOptionResultDirectELF(t, source)
+			assertOptionResultProcessOutcome(t, "ELF-direct runtime failure", native, interpreter)
+		})
+	}
+
+	if runtime.GOOS == "windows" && runtime.GOARCH == "amd64" {
+		t.Run("PE direct", func(t *testing.T) {
+			stdout, diagnostic, nativeOutput, nativeStderr, status := runDirectPEBuiltinOutcome(t, source, DefaultLimits())
+			if diagnostic == nil || diagnostic.Category != CatRuntime || diagnostic.Message != "division by zero" || stdout != wantOutput {
+				t.Fatalf("interpreter failure differs: stdout=%q diagnostic=%#v", stdout, diagnostic)
+			}
+			if nativeOutput != stdout || nativeStderr != "" || status != 1 {
+				t.Fatalf("PE-direct failure differs: interpreter stdout=%q error=%q; PE stdout=%q stderr=%q status=%d", stdout, diagnostic.Message, nativeOutput, nativeStderr, status)
+			}
+		})
+	}
+}
+
+func assertNativeRuntimeFailureOutcome(t *testing.T, label string, got, want optionResultObservedOutcome, message string) {
+	t.Helper()
+	if got.stdout != want.stdout || got.exitStatus != 1 || !strings.Contains(got.stderr, message) {
+		t.Fatalf("%s failure differs from interpreter: stdout=%q (want %q), stderr=%q (must contain %q), status=%d (want 1)", label, got.stdout, want.stdout, got.stderr, message, got.exitStatus)
 	}
 }

@@ -7,6 +7,8 @@ Kryndel is a small, statically checked language for developer tools and structur
 
 The implementation is written in Go and uses the standard library plus the Go modules listed in `go.mod` for host integrations. Source goes through lexing, parsing, module resolution, static checking, and runtime execution. Released binaries include their Go dependencies and do not need Go or another host-language runtime.
 
+Native C AOT builds support Linux amd64/arm64 and Windows amd64. `--format=macho` adds Darwin amd64/arm64 using the matching native macOS `cc` or `clang`; Mach-O cross compilation is not configured. CI runs the toolchain and native AOT tests on Linux ARM64, macOS x64, and macOS ARM64.
+
 ## Quick start
 
 A Go 1.27.1 or newer toolchain is needed when building from a checkout.

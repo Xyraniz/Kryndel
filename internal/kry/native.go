@@ -4,6 +4,7 @@ package kry
 
 import (
 	"bytes"
+	"debug/macho"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -70,7 +71,7 @@ func DescribeNativeBackend(format string) (NativeBackend, error) {
 	case "exe", "pe", "elf":
 		return NativeBackend{Name: "C AOT", ExternalToolchain: "external C compiler", RequiresExternalToolchain: true}, nil
 	case "macho":
-		return NativeBackend{}, fmt.Errorf("Mach-O output is not implemented; use --format=c with a local clang")
+		return NativeBackend{Name: "C AOT", ExternalToolchain: "native Darwin C compiler", RequiresExternalToolchain: true}, nil
 	default:
 		return NativeBackend{}, fmt.Errorf("unsupported native format %q", format)
 	}
@@ -90,7 +91,7 @@ func NativeCapabilityMatrix() []NativeCapability {
 		{name: "pe-direct", scope: "C-free PE32+ Windows x64 console subset: scalar/String values, up to four function arguments, if/while and print/println"},
 		{name: "exe", scope: "C AOT subset; host integrations without a C runtime implementation are rejected"},
 		{name: "pe", scope: "C AOT subset; host integrations without a C runtime implementation are rejected"},
-		{name: "macho", scope: "not implemented"},
+		{name: "macho", scope: "C AOT subset; native Darwin host compiler required"},
 	}
 	rows := make([]NativeCapability, 0, len(nativeCapabilityTargets)*len(formats)+1)
 	for _, format := range formats {
@@ -162,7 +163,7 @@ func ParseNativeTarget(raw string) (NativeTarget, error) {
 
 // BuildNative compiles a checked program into a runnable executable using the
 // requested backend. The "elf-direct" and "pe-direct" formats bypass C; the
-// "elf", "exe", and "pe" formats lower to C and invoke an external C compiler.
+// "elf", "exe", "pe", and "macho" formats lower to C and invoke a C compiler.
 func BuildNative(p *Program, c *Checker, target NativeTarget, format string) ([]byte, error) {
 	return BuildNativeOpts(p, c, target, format, false)
 }
@@ -193,7 +194,11 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 		return nil, err
 	}
 	if noExternalToolchain && backend.RequiresExternalToolchain {
-		return nil, fmt.Errorf("--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use --format=elf-direct or --format=pe-direct for a supported C-free backend", format, backend.Name)
+		suggestion := "--format=elf-direct or --format=pe-direct"
+		if format == "macho" {
+			suggestion = "--format=c and compile with a local clang"
+		}
+		return nil, fmt.Errorf("--no-external-toolchain forbids --format=%s: the %s backend requires an external C compiler; use %s", format, backend.Name, suggestion)
 	}
 	if format == "elf-direct" {
 		if err := validateNativeOutputTarget(format, target); err != nil {
@@ -231,9 +236,7 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 	switch format {
 	case "c":
 		return []byte(src), nil
-	case "exe", "pe", "elf":
-	case "macho":
-		return nil, fmt.Errorf("Mach-O output requires a Darwin toolchain; use --format=c and a local clang")
+	case "exe", "pe", "elf", "macho":
 	default:
 		return nil, fmt.Errorf("unsupported native format %q", format)
 	}
@@ -269,6 +272,13 @@ func nativeOutputTargetReason(format string, target NativeTarget) string {
 		}
 		if target.Arch != "amd64" && target.Arch != "arm64" {
 			return "C AOT currently supports Linux amd64 and arm64 targets only"
+		}
+	case "macho":
+		if target.OS != "darwin" {
+			return "Mach-O output requires a Darwin target"
+		}
+		if target.Arch != "amd64" && target.Arch != "arm64" {
+			return "C AOT currently supports Darwin amd64 and arm64 targets only"
 		}
 	case "elf-direct":
 		if target.OS != "linux" || target.Arch != "amd64" {
@@ -312,7 +322,10 @@ func compilerFor(target NativeTarget) (cCompiler, error) {
 		}
 		return cCompiler{}, fmt.Errorf("no cross compiler configured for linux-%s", target.Arch)
 	case "darwin":
-		return cCompiler{}, fmt.Errorf("no cross compiler configured for darwin-%s", target.Arch)
+		if hostOS != "darwin" || target.Arch != hostArch {
+			return cCompiler{}, fmt.Errorf("Darwin output requires a native Darwin %s host; cross compilation is not configured", target.Arch)
+		}
+		return cCompiler{program: "cc"}, nil
 	}
 	return cCompiler{}, fmt.Errorf("unsupported target %s-%s", target.OS, target.Arch)
 }
@@ -440,6 +453,13 @@ func InspectNative(data []byte) (string, error) {
 		}
 		machine := binary.LittleEndian.Uint16(data[18:20])
 		return fmt.Sprintf("ELF64\nmachine: 0x%x\n", machine), nil
+	}
+	if len(data) >= 4 && (bytes.Equal(data[:4], []byte{0xcf, 0xfa, 0xed, 0xfe}) || bytes.Equal(data[:4], []byte{0xfe, 0xed, 0xfa, 0xcf})) {
+		image, err := macho.NewFile(bytes.NewReader(data))
+		if err != nil {
+			return "Mach-O: invalid header", fmt.Errorf("invalid Mach-O: %w", err)
+		}
+		return fmt.Sprintf("Mach-O\narchitecture: %s\n", image.Cpu), nil
 	}
 	return "unknown binary format", fmt.Errorf("unrecognized executable format")
 }

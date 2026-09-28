@@ -29,6 +29,8 @@ func BuiltinCapabilityMatrix() []BuiltinCapability {
 			cFormat := "elf"
 			if target.target.OS == "windows" {
 				cFormat = "pe"
+			} else if target.target.OS == "darwin" {
+				cFormat = "macho"
 			}
 			selfHosted := "unsupported"
 			if target.name == "linux-x64" {
@@ -52,7 +54,7 @@ func BuiltinCapabilityMatrix() []BuiltinCapability {
 
 func nativeBuiltinBackendStatus(name, format string, target NativeTarget) string {
 	switch format {
-	case "elf", "exe", "pe", "c":
+	case "elf", "exe", "pe", "macho", "c":
 		if nativeOutputTargetReason(format, target) != "" {
 			return "unsupported"
 		}
