@@ -87,6 +87,7 @@ var generatedCAOTBuiltinCases = map[string]struct{}{
 	"fs_write_text":               {},
 	"hex_decode":                  {},
 	"hex_encode":                  {},
+	"http_request":                {},
 	"int":                         {},
 	"is_err":                      {},
 	"is_finite":                   {},
@@ -226,6 +227,7 @@ var generatedDirectELFBuiltinCases = map[string]struct{}{
 var generatedDirectPEBuiltinCases = map[string]struct{}{
 	"print":   {},
 	"println": {},
+	"str":     {},
 	"u16":     {},
 	"u32":     {},
 	"u64":     {},

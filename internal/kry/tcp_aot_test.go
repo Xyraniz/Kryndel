@@ -455,25 +455,29 @@ func TestCAOTTCPSendUsesOneAbsoluteDeadlineAcrossRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sendBody, err := extractCFunction(cSource, "static KValue k_tcp_send(KValue value, KValue bytes)")
+	sendBody, err := extractCFunction(cSource, "static KValue k_tcp_send_until(KValue value, KValue bytes, unsigned long long deadline)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendWrapper, err := extractCFunction(cSource, "static KValue k_tcp_send(KValue value, KValue bytes)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(operationDeadline, "k_tcp_deadline_after(k_tcp_now_ms(),(unsigned long long)timeout)") {
 		t.Fatalf("operation deadline does not use the tested absolute-deadline helper:\n%s", operationDeadline)
 	}
-	if strings.Count(sendBody, "k_tcp_operation_deadline()") != 1 {
-		t.Fatalf("tcp_send must capture exactly one deadline per operation:\n%s", sendBody)
+	if strings.Count(sendWrapper, "k_tcp_operation_deadline()") != 1 || !strings.Contains(sendWrapper, "k_tcp_send_until(value,bytes,k_tcp_operation_deadline())") {
+		t.Fatalf("tcp_send must pass exactly one captured deadline to the retry helper:\n%s", sendWrapper)
 	}
 	loopAt := strings.Index(sendBody, "while (written<bytes.u.s.len)")
-	deadlineAt := strings.Index(sendBody, "unsigned long long deadline=k_tcp_operation_deadline();")
+	deadlineAt := strings.Index(sendBody, "unsigned long long deadline)")
 	if loopAt < 0 || deadlineAt < 0 || deadlineAt > loopAt {
-		t.Fatalf("tcp_send must capture its deadline before entering the partial-write retry loop:\n%s", sendBody)
+		t.Fatalf("tcp_send retry helper must receive its deadline before entering the partial-write loop:\n%s", sendBody)
 	}
 	if !strings.Contains(sendBody, "k_tcp_wait_io(socket->fd,1,deadline)") || !strings.Contains(sendBody, "k_tcp_deadline_expired(deadline)") {
 		t.Fatalf("tcp_send retries must reuse the captured deadline for readiness waits and expiry checks:\n%s", sendBody)
 	}
-	if strings.Contains(sendBody, "k_tcp_wait_io(socket->fd,1,k_tcp_operation_deadline())") {
+	if strings.Contains(sendBody, "k_tcp_operation_deadline()") || strings.Contains(sendBody, "k_tcp_wait_io(socket->fd,1,k_tcp_operation_deadline())") {
 		t.Fatalf("tcp_send recomputes its deadline inside the readiness wait:\n%s", sendBody)
 	}
 

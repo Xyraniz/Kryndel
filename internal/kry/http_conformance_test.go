@@ -160,6 +160,9 @@ func TestNativeBackendsRejectHTTPBuiltinsWithExplicitDiagnostics(t *testing.T) {
 			t.Fatalf("check %s fixture: %s", builtin, diagnostic.Message)
 		}
 		for _, backend := range backends {
+			if builtin == "http_request" && (backend.format == "elf" || backend.format == "exe") {
+				continue
+			}
 			t.Run(builtin+"/"+backend.name, func(t *testing.T) {
 				_, err := BuildNative(program, checker, backend.target, backend.format)
 				want := fmt.Sprintf("builtin %q is not listed as supported by the %s backend for %s-%s; use the interpreter for this feature", builtin, backend.format, backend.target.OS, backend.target.Arch)

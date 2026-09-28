@@ -94,7 +94,7 @@ produce it; unsupported format/target pairs fail before C generation.
 from the target policy used by native build validation. `supported` means the
 backend implements that format/target pair, while `toolchain` names any
 external compiler requirement; it does not claim that compiler is installed
-on the current host. `partial` marks the direct ELF backend's language subset.
+on the current host. `partial` marks a bounded backend subset.
 The `feature_scope` field summarizes the backend, but this matrix does not yet
 probe every language construct and builtin independently.
 
@@ -102,8 +102,12 @@ Use `kry capabilities --builtins` for a generated row for each registered
 builtin and declared target, with interpreter, C AOT, direct ELF, direct PE,
 and current self-hosted subset status. JSON consumers can run `kry --json capabilities
 --builtins`. Native statuses are derived from generated backend dispatch
-inventories; `partial` marks the documented direct-ELF subset or current
-self-hosted frontend subset.
+inventories; `partial` marks bounded implementations such as the direct
+machine-code subsets, plain-HTTP C AOT, and the current self-hosted frontend.
+The direct ELF `str` subset covers the scalar output types plus `Nil`; direct
+PE `str` covers `Int`, unsigned integers, `Bool`, and `String`. Both remain
+`partial` because they do not implement every type accepted by interpreter
+`str`.
 
 > [!IMPORTANT]
 > `supported` describes backend support for a format and target; it does not
@@ -182,11 +186,20 @@ the C runtime closes remaining sockets on exit. Operating-system connection
 errors retain their broad cause but can differ in detail from Go's resolver and
 socket messages. Host lookup uses synchronous `getaddrinfo`/WinSock resolution,
 which the native deadline cannot interrupt. `tcp_listen`, `tcp_accept`,
-`tcp_local_port`, UDP, HTTP/TLS, and WebSockets remain unsupported by C AOT;
-the direct ELF and direct PE backends still reject all TCP builtins. Windows C
-output links WinSock (`ws2_32`); add `-lws2_32` when compiling emitted C source
-manually. Differential execution tests cover Linux amd64 and Windows amd64,
-not Linux arm64.
+`tcp_local_port`, UDP, and WebSockets remain unsupported by C AOT; the direct
+ELF and direct PE backends still reject all TCP builtins. C AOT implements
+`http_request` for plain `http://` URLs on Linux amd64/arm64 and Windows amd64.
+It shares one `MaxWallTimeMS` deadline across connect, send, and response read,
+limits response bodies to `MaxSourceBytes`, handles Content-Length and chunked
+bodies, and matches the interpreter's HTTP status, invalid UTF-8, size-limit,
+and timeout results. HTTPS, URL user information, custom headers, and the
+separate `http_get` and `http_request_auth` builtins are not supported by this
+subset; HTTPS is returned as an explicit error. Redirect responses are returned
+as HTTP status errors instead of being followed. Hostname resolution is
+synchronous and cannot be interrupted by the deadline. Differential execution
+tests cover Linux amd64 and Windows amd64, not Linux arm64. Windows C output
+links WinSock (`ws2_32`); add `-lws2_32` when compiling emitted C source
+manually.
 
 ### SQLite in C AOT
 

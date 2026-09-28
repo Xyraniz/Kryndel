@@ -57,6 +57,9 @@ func nativeBuiltinBackendStatus(name, format string, target NativeTarget) string
 			return "unsupported"
 		}
 		if _, ok := generatedCAOTBuiltinCases[name]; ok {
+			if name == "http_request" {
+				return "partial"
+			}
 			return "supported"
 		}
 	case "elf-direct":
@@ -64,7 +67,7 @@ func nativeBuiltinBackendStatus(name, format string, target NativeTarget) string
 			return "unsupported"
 		}
 		if _, ok := generatedDirectELFBuiltinCases[name]; ok {
-			if name == "print" || name == "println" {
+			if name == "print" || name == "println" || name == "str" {
 				return "partial"
 			}
 			return "supported"
@@ -74,7 +77,7 @@ func nativeBuiltinBackendStatus(name, format string, target NativeTarget) string
 			return "unsupported"
 		}
 		if _, ok := generatedDirectPEBuiltinCases[name]; ok {
-			if name == "print" || name == "println" {
+			if name == "print" || name == "println" || name == "str" {
 				return "partial"
 			}
 			return "supported"

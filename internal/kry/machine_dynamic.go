@@ -643,6 +643,8 @@ const (
 	peImportGetStdHandle = iota
 	peImportWriteFile
 	peImportExitProcess
+	peImportGetProcessHeap
+	peImportHeapAlloc
 )
 
 // emitPEImportedCall emits a RIP-relative indirect call through the PE IAT.
@@ -654,6 +656,91 @@ func (m *directMachine) emitPEImportedCall(importIndex int) {
 	m.peImportRefs = append(m.peImportRefs, peImportRef{
 		displacement: displacement, instructionEnd: len(m.code), importIndex: importIndex,
 	})
+}
+
+// emitPEStringFromInteger returns a heap-backed String object in RAX. PE
+// programs are one-shot processes, so Windows reclaims these immutable values
+// at process exit; allocating each conversion keeps returned and aliased
+// strings valid when the same str expression runs again.
+func (m *directMachine) emitPEStringFromInteger(unsigned bool) error {
+	m.code = append(m.code, 0x50) // preserve input while querying the process heap
+	m.windowsStackDepth += 8
+	outgoing := 32
+	if m.windowsStackDepth%16 != 0 {
+		outgoing += 16 - m.windowsStackDepth%16
+	}
+	m.code = append(m.code, 0x48, 0x83, 0xec, byte(outgoing))
+	m.windowsStackDepth += outgoing
+	m.emitPEImportedCall(peImportGetProcessHeap)
+	m.code = append(m.code, 0x48, 0x89, 0xc1, 0x31, 0xd2, 0x41, 0xb8, 28, 0, 0, 0)
+	m.emitPEImportedCall(peImportHeapAlloc)
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x84, m.trapLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0xc3) // preserve object in R11
+	m.code = append(m.code, 0x48, 0x8b, 0x84, 0x24)
+	var saved [4]byte
+	binary.LittleEndian.PutUint32(saved[:], uint32(outgoing))
+	m.code = append(m.code, saved[:]...) // restore source value from above shadow space
+	m.code = append(m.code, 0x48, 0x83, 0xc4, byte(outgoing+8))
+	m.windowsStackDepth -= outgoing + 8
+	m.code = append(m.code, 0x4d, 0x8d, 0x43, 28) // R8 = object + 28 (20-byte digit area)
+	m.code = append(m.code, 0x49, 0xb9)
+	var ten [8]byte
+	binary.LittleEndian.PutUint64(ten[:], 10)
+	m.code = append(m.code, ten[:]...)
+	m.code = append(m.code, 0x45, 0x31, 0xd2) // R10b records a minus sign
+	zero, digits, addSign, ready := m.newLabel(), m.newLabel(), m.newLabel(), m.newLabel()
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x84, zero); err != nil {
+		return err
+	}
+	if !unsigned {
+		if err := m.emitConditionalJump(0x89, digits); err != nil { // non-negative
+			return err
+		}
+		m.code = append(m.code, 0x41, 0xb2, 1, 0x48, 0xf7, 0xd8) // mark and negate
+	}
+	if err := m.bind(digits); err != nil {
+		return err
+	}
+	loop := m.newLabel()
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x48, 0x31, 0xd2, 0x49, 0xf7, 0xf1, 0x80, 0xc2, '0', 0x49, 0xff, 0xc8, 0x41, 0x88, 0x10)
+	m.code = append(m.code, 0x48, 0x85, 0xc0)
+	if err := m.emitConditionalJump(0x85, loop); err != nil {
+		return err
+	}
+	if err := m.emitJump(addSign); err != nil {
+		return err
+	}
+	if err := m.bind(zero); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0xff, 0xc8, 0x41, 0xc6, 0x00, '0')
+	if err := m.emitJump(addSign); err != nil {
+		return err
+	}
+	if err := m.bind(addSign); err != nil {
+		return err
+	}
+	if !unsigned {
+		m.code = append(m.code, 0x45, 0x84, 0xd2)
+		if err := m.emitConditionalJump(0x84, ready); err != nil {
+			return err
+		}
+		m.code = append(m.code, 0x49, 0xff, 0xc8, 0x41, 0xc6, 0x00, '-')
+	}
+	if err := m.bind(ready); err != nil {
+		return err
+	}
+	// The emitted digits are right-aligned. Put the length immediately before
+	// them so the ordinary {u64 length, bytes} String layout needs no copy.
+	m.code = append(m.code, 0x49, 0x8d, 0x4b, 28, 0x4c, 0x29, 0xc1, 0x4c, 0x89, 0xc0, 0x48, 0x83, 0xe8, 8, 0x48, 0x89, 0x08)
+	return nil
 }
 
 // emitPEWriteRDXR8 writes the bytes addressed by RDX with a DWORD length in

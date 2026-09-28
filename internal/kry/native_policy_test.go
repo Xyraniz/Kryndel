@@ -243,7 +243,12 @@ func TestBuiltinCapabilityMatrixListsEveryBackendAndTarget(t *testing.T) {
 	if websocket.Interpreter != "supported" || websocket.CAOT != "unsupported" || websocket.ELFDirect != "unsupported" || websocket.PEDirect != "unsupported" || websocket.SelfHosted != "unsupported" {
 		t.Fatalf("unexpected websocket_connect capability: %#v", websocket)
 	}
-	for _, name := range []string{"print", "println"} {
+	for _, target := range []string{"linux-x64", "linux-arm64", "windows-x64"} {
+		if row := lookup["http_request/"+target]; row.CAOT != "partial" {
+			t.Errorf("http_request C AOT capability on %s = %q, want partial: %#v", target, row.CAOT, row)
+		}
+	}
+	for _, name := range []string{"print", "println", "str"} {
 		if row := lookup[name+"/windows-x64"]; row.PEDirect != "partial" {
 			t.Errorf("%s PE-direct capability = %q, want partial: %#v", name, row.PEDirect, row)
 		}

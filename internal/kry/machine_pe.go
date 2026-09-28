@@ -299,6 +299,15 @@ func validateDirectPEExpr(e *Expr, allowOutput bool) error {
 				return fmt.Errorf("conversion %s requires an Int or UInt argument", e.Name)
 			}
 			return validateDirectPEExpr(arg, false)
+		case "str":
+			if len(e.Args) != 1 || e.Type == nil || e.Type.Kind != TyString {
+				return fmt.Errorf("conversion str must have one argument and return String")
+			}
+			arg := e.Args[0]
+			if arg == nil || arg.Type == nil || (arg.Type.Kind != TyInt && arg.Type.Kind != TyUInt && arg.Type.Kind != TyBool && arg.Type.Kind != TyString) {
+				return fmt.Errorf("direct PE str supports Int, UInt, Bool, and String values")
+			}
+			return validateDirectPEExpr(arg, false)
 		case "print", "println":
 			if !allowOutput || len(e.Args) != 1 {
 				return fmt.Errorf("only statement-form print(value) and println(value) are supported")
@@ -364,7 +373,8 @@ func buildDirectStaticPE(output []byte, gui bool, outputLimit int64) ([]byte, er
 
 // The .idata section contains one import descriptor, a null descriptor,
 // ILT/IAT entries, and three hint/name records.
-func peImportData(idataRVA uint32) (data []byte, iat [3]uint32) {
+func peImportData(idataRVA uint32) (data []byte, iat [5]uint32) {
+	names := [...]string{"GetStdHandle", "WriteFile", "ExitProcess", "GetProcessHeap", "HeapAlloc"}
 	data = make([]byte, 40)
 	dllName := uint32(len(data))
 	data = append(data, "KERNEL32.dll\x00"...)
@@ -372,10 +382,10 @@ func peImportData(idataRVA uint32) (data []byte, iat [3]uint32) {
 		data = append(data, 0)
 	}
 	ilt := uint32(len(data))
-	data = append(data, make([]byte, 4*8)...)
+	data = append(data, make([]byte, (len(names)+1)*8)...)
 	iatStart := uint32(len(data))
-	data = append(data, make([]byte, 4*8)...)
-	for i, name := range []string{"GetStdHandle", "WriteFile", "ExitProcess"} {
+	data = append(data, make([]byte, (len(names)+1)*8)...)
+	for i, name := range names {
 		nameRVA := idataRVA + uint32(len(data))
 		pePut64(data, int(ilt)+8*i, uint64(nameRVA))
 		pePut64(data, int(iatStart)+8*i, uint64(nameRVA))
@@ -512,7 +522,7 @@ func buildDirectDynamicPE(code, rdata []byte, dataRefs []machineDataRef, importR
 	pePut32(image, opt+112+8*3, pdataRVA)
 	pePut32(image, opt+112+8*3+4, tableSize)
 	pePut32(image, opt+112+8*12, iat[0])
-	pePut32(image, opt+112+8*12+4, 4*8)
+	pePut32(image, opt+112+8*12+4, uint32((len(iat)+1)*8))
 	sections := opt + 0xf0
 	peSection(image, sections, ".text", peTextRVA, uint32(len(code)), textRaw, 0x60000020)
 	peSection(image, sections+40, ".rdata", rdataRVA, uint32(len(rdata)), rdataRaw, 0x40000040)

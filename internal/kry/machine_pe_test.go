@@ -143,6 +143,48 @@ func TestDirectPEBuiltinDifferentialConformance(t *testing.T) {
 		{name: "u16", source: "println(u16(0))\nprintln(u16(65535))"},
 		{name: "u32", source: "println(u32(0))\nprintln(u32(4294967295))"},
 		{name: "u64", source: "println(u64(9223372036854775807))\nlet high: UInt64 = u64(9223372036854775807) + u64(1)\nprintln(high)"},
+		{name: "str dynamic Int, UInt, Bool, and String", source: `let mut signed: Int = -9223372036854775807
+signed = signed - 1
+let signedText: String = str(signed)
+let mut small8: UInt8 = u8(254)
+small8 = small8 + u8(1)
+let mut small16: UInt16 = u16(65534)
+small16 = small16 + u16(1)
+let mut small32: UInt32 = u32(4294967294)
+small32 = small32 + u32(1)
+let mut high: UInt64 = u64(9223372036854775807) + u64(1)
+high = high + u64(1)
+let highText: String = str(high)
+let mut flag: Bool = true
+let trueText: String = str(flag)
+flag = false
+let falseText: String = str(flag)
+let mut original: String = "first"
+let sameText: String = str(original)
+original = "second"
+println(signedText)
+println(str(small8))
+println(str(small16))
+println(str(small32))
+println(highText)
+println(trueText)
+println(falseText)
+println(sameText)
+println(original)`},
+		{name: "str dynamic result survives function return and another conversion", source: `fn describe(value: Int) -> String { return str(value) }
+let mut value: Int = 8
+let saved: String = describe(value)
+value = value + 1
+println(saved)
+println(describe(value))
+let mut alias: String = ""
+let mut index: Int = 0
+while index < 2 {
+    let current: String = str(index)
+    if index == 0 { alias = current }
+    index = index + 1
+}
+println(alias)`},
 	}
 	for _, test := range successCases {
 		t.Run("success/"+test.name, func(t *testing.T) {

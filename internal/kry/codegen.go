@@ -1372,6 +1372,8 @@ func (g *cgen) builtinCall(e *KIRExpr, b Builtin) string {
 		return fmt.Sprintf("k_fs_exists(%s)", arg(0))
 	case "env_get":
 		return fmt.Sprintf("k_env_get(%s)", arg(0))
+	case "http_request":
+		return fmt.Sprintf("k_http_request(%s, %s, %s)", arg(0), arg(1), arg(2))
 	case "tcp_connect":
 		return fmt.Sprintf("k_tcp_connect(%s, %s)", arg(0), arg(1))
 	case "tcp_send":

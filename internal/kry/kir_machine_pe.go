@@ -607,6 +607,15 @@ func validateKIRDirectPEExpr(expression *KIRExpr, allowOutput bool, functions ma
 				return fmt.Errorf("conversion %s requires an Int or UInt argument", expression.Name)
 			}
 			return validateKIRDirectPEExpr(argument, false, functions)
+		case "builtin:str":
+			if len(expression.Args) != 1 || expression.Type != "String" {
+				return fmt.Errorf("conversion str must have one argument and return String")
+			}
+			argument := expression.Args[0]
+			if argument == nil || (argument.Type != "Int" && argument.Type != "Bool" && argument.Type != "String" && !strings.HasPrefix(argument.Type, "UInt")) {
+				return fmt.Errorf("direct PE str supports Int, UInt, Bool, and String values")
+			}
+			return validateKIRDirectPEExpr(argument, false, functions)
 		case "builtin:print", "builtin:println":
 			if !allowOutput || len(expression.Args) != 1 {
 				return fmt.Errorf("only statement-form print(value) and println(value) are supported")
@@ -958,6 +967,41 @@ func (lowerer *kirPEMachine) emitBooleanOutput(newline bool) error {
 	return lowerer.machine.bind(doneLabel)
 }
 
+func (lowerer *kirPEMachine) emitStringConversion(argument *KIRExpr) error {
+	if argument == nil {
+		return fmt.Errorf("direct PE str is missing its value")
+	}
+	if err := lowerer.emitExpr(argument); err != nil {
+		return err
+	}
+	switch argument.Type {
+	case "String":
+		return nil
+	case "Bool":
+		falseLabel, doneLabel := lowerer.machine.newLabel(), lowerer.machine.newLabel()
+		lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x85, 0xc0)
+		if err := lowerer.machine.emitConditionalJump(0x84, falseLabel); err != nil {
+			return err
+		}
+		lowerer.machine.emitStringAddress("true")
+		if err := lowerer.machine.emitJump(doneLabel); err != nil {
+			return err
+		}
+		if err := lowerer.machine.bind(falseLabel); err != nil {
+			return err
+		}
+		lowerer.machine.emitStringAddress("false")
+		return lowerer.machine.bind(doneLabel)
+	case "Int":
+		return lowerer.machine.emitPEStringFromInteger(false)
+	default:
+		if strings.HasPrefix(argument.Type, "UInt") {
+			return lowerer.machine.emitPEStringFromInteger(true)
+		}
+		return fmt.Errorf("direct PE str does not support %s", argument.Type)
+	}
+}
+
 func (lowerer *kirPEMachine) emitExpr(expression *KIRExpr) error {
 	if expression == nil {
 		return fmt.Errorf("direct PE cannot lower a missing KIR expression")
@@ -1034,6 +1078,11 @@ func (lowerer *kirPEMachine) emitExpr(expression *KIRExpr) error {
 			return lowerer.emitFunctionCall(expression)
 		}
 		switch expression.CallTarget {
+		case "builtin:str":
+			if len(expression.Args) != 1 {
+				return fmt.Errorf("direct PE str expects one argument")
+			}
+			return lowerer.emitStringConversion(expression.Args[0])
 		case "builtin:u8", "builtin:u16", "builtin:u32", "builtin:u64":
 			if len(expression.Args) != 1 {
 				return fmt.Errorf("direct PE conversion %s expects one argument", expression.Name)
