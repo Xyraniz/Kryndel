@@ -1,0 +1,23 @@
+fn describe(value: Int) -> String {
+    return str(value)
+}
+
+fn main() -> Nil {
+    let mut signed: Int = -9223372036854775807
+    signed = signed - 1
+    print("integer=")
+    println(describe(40 + 2))
+    println(str(signed))
+
+    let mut enabled: Bool = true
+    println(str(enabled))
+    enabled = false
+    println(str(enabled))
+
+    let mut original: String = "first"
+    let saved: String = str(original)
+    original = "second"
+    println(saved)
+    println(original)
+    return nil
+}

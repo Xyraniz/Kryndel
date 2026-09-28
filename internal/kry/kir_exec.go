@@ -25,19 +25,33 @@ type kirExecBinding struct {
 type kirExecScope struct {
 	parent *kirExecScope
 	names  map[string]string
-	values map[string]*kirExecBinding
+	values map[kirExecBindingKey]*kirExecBinding
 	defers [][]*KIRStmt
 	types  map[string]string
 }
 
-func newKIRExecScope(parent *kirExecScope) *kirExecScope {
-	return &kirExecScope{parent: parent, names: map[string]string{}, values: map[string]*kirExecBinding{}}
+type kirExecBindingKey struct {
+	source       string
+	name         string
+	line, column int
 }
 
-func (scope *kirExecScope) find(identity string) (*kirExecBinding, bool) {
+func kirExecKey(binding *KIRBinding) kirExecBindingKey {
+	if binding == nil {
+		return kirExecBindingKey{}
+	}
+	return kirExecBindingKey{source: binding.Source, name: binding.Name, line: binding.Line, column: binding.Column}
+}
+
+func newKIRExecScope(parent *kirExecScope) *kirExecScope {
+	return &kirExecScope{parent: parent, names: map[string]string{}, values: map[kirExecBindingKey]*kirExecBinding{}}
+}
+
+func (scope *kirExecScope) find(binding *KIRBinding) (*kirExecBinding, bool) {
+	key := kirExecKey(binding)
 	for current := scope; current != nil; current = current.parent {
-		if binding, ok := current.values[identity]; ok {
-			return binding, true
+		if value, ok := current.values[key]; ok {
+			return value, true
 		}
 	}
 	return nil, false
@@ -62,11 +76,12 @@ func (scope *kirExecScope) define(binding *KIRBinding, value Value) error {
 		return fmt.Errorf("binding '%s' is already defined in this scope", binding.Name)
 	}
 	identity := kirBindingIdentity(binding)
-	if _, exists := scope.values[identity]; exists {
+	key := kirExecKey(binding)
+	if _, exists := scope.values[key]; exists {
 		return fmt.Errorf("binding '%s' has a duplicate identity", binding.Name)
 	}
 	scope.names[binding.Name] = identity
-	scope.values[identity] = &kirExecBinding{meta: binding, value: cloneValue(value)}
+	scope.values[key] = &kirExecBinding{meta: binding, value: cloneValue(value)}
 	return nil
 }
 
@@ -615,7 +630,7 @@ func validateKIRExecBlockAtDepth(statements []*KIRStmt, scope *kirExecScope, ret
 			if err := validateKIRExecExpr(statement.Target, scope, false, functions, document); err != nil {
 				return err
 			}
-			binding, ok := scope.find(kirBindingIdentity(statement.Target.Binding))
+			binding, ok := scope.find(statement.Target.Binding)
 			if !ok || !sameKIRBinding(binding.meta, statement.Target.Binding) {
 				return fmt.Errorf("invalid KIR executable: assignment to unresolved binding '%s'", statement.Target.Name)
 			}
@@ -1013,7 +1028,7 @@ func validateKIRExecExpr(expression *KIRExpr, scope *kirExecScope, allowOutput b
 		if !validKIRBinding(expression.Binding) {
 			return fmt.Errorf("invalid KIR executable: variable has no local binding")
 		}
-		binding, ok := scope.find(kirBindingIdentity(expression.Binding))
+		binding, ok := scope.find(expression.Binding)
 		if !ok || !sameKIRBinding(binding.meta, expression.Binding) {
 			return fmt.Errorf("invalid KIR executable: variable '%s' references an undeclared binding", expression.Name)
 		}
@@ -1396,7 +1411,7 @@ func validateKIRExecExpr(expression *KIRExpr, scope *kirExecScope, allowOutput b
 			if capture == nil || !validKIRBinding(capture.Binding) {
 				return fmt.Errorf("invalid KIR executable: lambda has invalid capture metadata")
 			}
-			visible, ok := scope.find(kirBindingIdentity(capture.Binding))
+			visible, ok := scope.find(capture.Binding)
 			if !ok || !sameKIRBinding(visible.meta, capture.Binding) {
 				return fmt.Errorf("invalid KIR executable: lambda captures unavailable binding %q", capture.Binding.Name)
 			}
@@ -1998,7 +2013,7 @@ func (executor *kirExecutor) execStmt(scope *kirExecScope, statement *KIRStmt) (
 		return kirExecFlow{value: nilVal()}, nil
 	case "assign":
 		target := statement.Target
-		binding, ok := scope.find(kirBindingIdentity(target.Binding))
+		binding, ok := scope.find(target.Binding)
 		if !ok {
 			return kirExecFlow{}, executor.fail(CatRuntime, target.Source, target.Line, target.Column, "unknown binding '%s'", target.Name)
 		}
@@ -2220,7 +2235,7 @@ func (executor *kirExecutor) evalExpr(scope *kirExecScope, expression *KIRExpr) 
 			value = Value{Kind: VFunction, Callable: identity}
 			break
 		}
-		binding, ok := scope.find(kirBindingIdentity(expression.Binding))
+		binding, ok := scope.find(expression.Binding)
 		if !ok {
 			return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "unknown name '%s'", expression.Name)
 		}
@@ -2528,7 +2543,7 @@ func (executor *kirExecutor) makeKIRClosure(function *KIRFunction, scope *kirExe
 		if capture == nil || !validKIRBinding(capture.Binding) {
 			return nilVal(), executor.fail(CatArtifact, source, line, column, "KIR lambda has invalid capture metadata")
 		}
-		binding, ok := scope.find(kirBindingIdentity(capture.Binding))
+		binding, ok := scope.find(capture.Binding)
 		if !ok || !sameKIRBinding(binding.meta, capture.Binding) {
 			return nilVal(), executor.fail(CatArtifact, source, line, column, "KIR lambda captures unavailable binding '%s'", capture.Binding.Name)
 		}
@@ -2543,7 +2558,7 @@ func (executor *kirExecutor) makeKIRClosure(function *KIRFunction, scope *kirExe
 			return nilVal(), executor.fail(CatArtifact, source, line, column, "KIR lambda has duplicate capture '%s'", capture.Binding.Name)
 		}
 		environment.names[capture.Binding.Name] = identity
-		environment.values[identity] = cell
+		environment.values[kirExecKey(capture.Binding)] = cell
 	}
 	identity := &FunctionValue{}
 	executor.closures[identity] = &kirClosure{function: function, environment: environment}

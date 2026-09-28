@@ -892,7 +892,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if len(kir) != lock.SourceCompilerKIRBytes {
 		t.Fatalf("source compiler KIR is %d bytes, bootstrap lock records %d", len(kir), lock.SourceCompilerKIRBytes)
 	}
-	t.Logf("source compiler KIR size=%d bytes; bootstrap JSON limit=%d bytes; headroom=%d bytes", len(kir), lock.SourceCompilerKIRMaxBytes, lock.SourceCompilerKIRMaxBytes-len(kir))
+	t.Logf("source compiler KIR size=%d bytes; bootstrap input limit=%d bytes; headroom=%d bytes", len(kir), lock.SourceCompilerKIRMaxBytes, lock.SourceCompilerKIRMaxBytes-len(kir))
 	verifyBootstrapHash(t, lock, verifiedHashes, "source-compiler.kir", kir)
 
 	generatedCompiler := filepath.Join(dir, "source-kir-compiler")
@@ -904,8 +904,8 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		maxWallMS = "1800000"
 		maxInstructions = "250000000"
 	}
-	bootstrapJSONLimit := fmt.Sprint(lock.SourceCompilerKIRMaxBytes)
-	runBackend := exec.Command(stage0Path, "--max-json", bootstrapJSONLimit, "--max-instructions", maxInstructions, "--max-wall-ms", maxWallMS, "run", backendPath, kirFile, generatedCompiler)
+	bootstrapKIRLimit := fmt.Sprint(lock.SourceCompilerKIRMaxBytes)
+	runBackend := exec.Command(stage0Path, "--max-artifact", bootstrapKIRLimit, "--max-json", bootstrapKIRLimit, "--max-instructions", maxInstructions, "--max-wall-ms", maxWallMS, "run", backendPath, kirFile, generatedCompiler)
 	if output, err := runBackend.CombinedOutput(); err != nil {
 		t.Fatalf("Stage 0 failed to run kir_backend.kry on source compiler KIR: %v; output: %s", err, output)
 	}

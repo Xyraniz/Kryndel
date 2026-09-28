@@ -5919,6 +5919,9 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			m.emitMoveImmediate(0)
 		}
 		return nil
+	case ExNil:
+		m.emitMoveImmediate(0)
+		return nil
 	case ExString:
 		m.emitStringAddress(e.Str)
 		return nil

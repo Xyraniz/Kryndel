@@ -470,6 +470,10 @@ func sanitize(s string) string {
 	return b.String()
 }
 
+func cBindingName(name string) string {
+	return "k_user_" + sanitize(name)
+}
+
 func (g *cgen) next() string {
 	g.tmp++
 	return fmt.Sprintf("_t%d", g.tmp)
@@ -526,7 +530,7 @@ func (g *cgen) isGlobal(name string) bool {
 func (g *cgen) emitGlobals() {
 	for _, st := range g.doc.Statements {
 		if st.Kind == "let" || st.Kind == "const" {
-			fmt.Fprintf(&g.buf, "static KValue %s;\n", sanitize(st.Name))
+			fmt.Fprintf(&g.buf, "static KValue %s;\n", cBindingName(st.Name))
 		}
 	}
 }
@@ -647,7 +651,7 @@ func (g *cgen) emitFunction(f *KIRFunction, name string, substitutions map[strin
 	g.functionSubstitution = substitutions
 	g.locals = append(g.locals, map[string]bool{})
 	if f.Receiver != "" {
-		fmt.Fprintf(&g.buf, "  KValue self = k_args[0];\n")
+		fmt.Fprintf(&g.buf, "  KValue %s = k_args[0];\n", cBindingName("self"))
 		g.locals[len(g.locals)-1]["self"] = true
 	}
 	for i, p := range f.Params {
@@ -656,9 +660,9 @@ func (g *cgen) emitFunction(f *KIRFunction, name string, substitutions map[strin
 			off = i + 1
 		}
 		if p.Default != nil {
-			fmt.Fprintf(&g.buf, "  KValue %s = (_argc > %d) ? k_args[%d] : %s;\n", sanitize(p.Name), off, off, g.expr(p.Default))
+			fmt.Fprintf(&g.buf, "  KValue %s = (_argc > %d) ? k_args[%d] : %s;\n", cBindingName(p.Name), off, off, g.expr(p.Default))
 		} else {
-			fmt.Fprintf(&g.buf, "  KValue %s = k_args[%d];\n", sanitize(p.Name), off)
+			fmt.Fprintf(&g.buf, "  KValue %s = k_args[%d];\n", cBindingName(p.Name), off)
 		}
 		g.locals[len(g.locals)-1][p.Name] = true
 	}
@@ -742,9 +746,9 @@ func (g *cgen) stmt(s *KIRStmt, indent string) {
 	switch kirStmtKind(s.Kind) {
 	case StLet, StConst:
 		if g.topLevel {
-			fmt.Fprintf(&g.buf, "%s%s = %s;\n", indent, sanitize(s.Name), g.expr(s.Init))
+			fmt.Fprintf(&g.buf, "%s%s = %s;\n", indent, cBindingName(s.Name), g.expr(s.Init))
 		} else {
-			fmt.Fprintf(&g.buf, "%sKValue %s = %s;\n", indent, sanitize(s.Name), g.expr(s.Init))
+			fmt.Fprintf(&g.buf, "%sKValue %s = %s;\n", indent, cBindingName(s.Name), g.expr(s.Init))
 			if len(g.locals) > 0 {
 				g.locals[len(g.locals)-1][s.Name] = true
 			}
@@ -754,7 +758,7 @@ func (g *cgen) stmt(s *KIRStmt, indent string) {
 			g.fail("assignment target must be a binding")
 			return
 		}
-		fmt.Fprintf(&g.buf, "%s%s = %s;\n", indent, sanitize(s.Target.Name), g.expr(s.Value))
+		fmt.Fprintf(&g.buf, "%s%s = %s;\n", indent, cBindingName(s.Target.Name), g.expr(s.Value))
 	case StExpr:
 		fmt.Fprintf(&g.buf, "%s{ KValue _e = %s; (void)_e; }\n", indent, g.expr(s.Expr))
 	case StIf:
@@ -786,7 +790,7 @@ func (g *cgen) stmt(s *KIRStmt, indent string) {
 		g.loopBases = append(g.loopBases, lb)
 		fmt.Fprintf(&g.buf, "%s  KValue %s = k_iter_items(%s);\n", indent, it, g.expr(s.Iter))
 		fmt.Fprintf(&g.buf, "%s  for (size_t %s = 0; %s < %s.u.a.len; %s++) {\n", indent, idx, idx, it, idx)
-		fmt.Fprintf(&g.buf, "%s    KValue %s = %s.u.a.items[%s];\n", indent, sanitize(s.Name), it, idx)
+		fmt.Fprintf(&g.buf, "%s    KValue %s = %s.u.a.items[%s];\n", indent, cBindingName(s.Name), it, idx)
 		g.nestedBlock(s.Body, indent+"    ")
 		fmt.Fprintf(&g.buf, "%s  }\n", indent)
 		g.loopBases = g.loopBases[:len(g.loopBases)-1]
@@ -856,7 +860,7 @@ func (g *cgen) emitMatch(s *KIRStmt, indent string) {
 			if arm.Pattern.Kind == "result" {
 				inner = "*(%s.u.res.inner)"
 			}
-			fmt.Fprintf(&g.buf, "%s    KValue %s = "+inner+";\n", indent, sanitize(arm.Pattern.Binding), scrut)
+			fmt.Fprintf(&g.buf, "%s    KValue %s = "+inner+";\n", indent, cBindingName(arm.Pattern.Binding), scrut)
 		}
 		g.block(arm.Body, indent+"    ")
 		fmt.Fprintf(&g.buf, "%s  }\n", indent)
@@ -958,7 +962,7 @@ func (g *cgen) expr(e *KIRExpr) string {
 		}
 		return fmt.Sprintf("kv_strn(%s, %d)", cString(e.String), len(e.String))
 	case ExVar:
-		return sanitize(e.Name)
+		return cBindingName(e.Name)
 	case ExEnum:
 		id, ok := g.enumID[e.EnumType]
 		if !ok {

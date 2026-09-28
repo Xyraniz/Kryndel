@@ -39,6 +39,10 @@ profile flags directly.
 
 The native Go tests cover recursive functions, `if`, `while`, mutable bindings, checked operators, homogeneous arrays, Unicode strings including embedded NUL bytes, bytes, assertions, static diagnostics, modules, enums, exhaustive options and results, bounded threads and channels, worker failure propagation, deterministic artifacts, formatter behavior, malformed input, sandbox traversal, resource limits, and REPL state. The race target exercises the worker and channel fixtures. `make fuzz-smoke` runs four real Go fuzz targets for two seconds each over the lexer, parser/checker, artifact decoder, and KIR decoder; longer local runs can use Go's `-fuzztime` flag.
 
+`kry test` runs each `*_test.kry` source under `tests/` recursively. Each file is an independent case whose top-level `assert` and `assert_eq` calls determine its result. Pass a `.kry` file to run one case or a directory to discover cases there. Results are sorted by path; failures do not stop later cases, and the command exits nonzero if any case fails or no cases are found. `kry --json test` emits one JSON document with captured stdout, per-case diagnostics, and the aggregate status.
+
+Native semantic parity runs the same `tests/conformance/native-backend-parity.kry` fixture through the interpreter and each executable backend on its native test host: C AOT and ELF-direct on Linux x64, and C AOT and PE-direct on Windows x64. Separate regressions cover backend-specific runtime errors and limits.
+
 | Area | Required coverage |
 | --- | --- |
 | Lexer | UTF-8 source, line and block comments, nested comments, escapes, malformed literals, invalid characters, and exact positions. |

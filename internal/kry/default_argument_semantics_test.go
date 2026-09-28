@@ -34,7 +34,7 @@ func TestCBackendEvaluatesDefaultWithEarlierParameter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(generated, "KValue second = (_argc > 1) ? k_args[1] : first;") {
+	if !strings.Contains(generated, "KValue k_user_second = (_argc > 1) ? k_args[1] : k_user_first;") {
 		t.Fatal("C backend did not evaluate the default after binding the earlier parameter")
 	}
 	if !strings.Contains(generated, "k_argc = 1; memcpy(k_args, _frame, sizeof(KValue)*1);") {

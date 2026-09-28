@@ -126,6 +126,14 @@ bounded implementation exists; `unsupported` means no handler is advertised
 for that backend/target. These inventories describe dispatch coverage and do
 not by themselves prove semantic parity across all input combinations.
 
+`tests/conformance/native-backend-parity.kry` is run unchanged against the
+interpreter, C AOT, Linux x64 ELF-direct, and Windows x64 PE-direct. It checks
+scalar and string output, function returns, the signed Int minimum, mutable
+values, and the `print`, `println`, and `str` capability rows. Runtime
+error edges have backend-specific differential regressions alongside this
+fixture, including bounded HTTP, Option/Result diagnostics, and PE conversion
+failures.
+
 The `KRY_CC` environment variable overrides the compiler. Successful builds
 print the selected backend and build-time toolchain dependency. Use
 `--no-external-toolchain` to make a no-compiler requirement explicit; `elf`,

@@ -187,6 +187,21 @@ println(str(false))
 `,
 		},
 		{
+			name: "str supported display types",
+			source: `fn main() -> Nil {
+    println(str(-9223372036854775807 - 1))
+    println(str(u8(255)))
+    println(str(u16(65535)))
+    println(str(u32(4294967295)))
+    println(str(u64(42)))
+    println(str(true))
+    println(str("Kryndel"))
+    println(str(nil))
+    return nil
+}
+`,
+		},
+		{
 			name:   "int string must be complete decimal",
 			source: "println(int(\"12x\"))\n",
 		},

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"debug/pe"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -29,6 +30,118 @@ func TestDirectProgramInvocation(t *testing.T) {
 	}
 	if got := run([]string{source, "unexpected"}); got != 2 {
 		t.Fatalf("direct invocation accepted extra arguments with status %d", got)
+	}
+}
+
+func TestProjectTestDiscoversSortedCasesAndCapturesOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeTestSource(t, filepath.Join(dir, "tests", "z_test.kry"), "println(\"second case output\")\nassert_eq(2 + 2, 4)\n")
+	writeTestSource(t, filepath.Join(dir, "tests", "nested", "a_test.kry"), "println(\"first case output\")\nassert(true)\n")
+	writeTestSource(t, filepath.Join(dir, "tests", "ignored.kry"), "println(\"must not run\")\n")
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+
+	output, status := captureKryStdout(t, func() int { return run([]string{"test"}) })
+	if status != 0 {
+		t.Fatalf("kry test returned %d: %s", status, output)
+	}
+	first, second := strings.Index(output, "PASS nested/a_test.kry"), strings.Index(output, "PASS z_test.kry")
+	if first < 0 || second < 0 || first >= second || !strings.Contains(output, "first case output") || !strings.Contains(output, "second case output") || strings.Contains(output, "must not run") {
+		t.Fatalf("test discovery/order/output is wrong: %q", output)
+	}
+	if !strings.Contains(output, "PASS 2 cases: 2 passed, 0 failed") {
+		t.Fatalf("missing summary: %q", output)
+	}
+}
+
+func TestProjectTestRunsExplicitFileAndReportsFailures(t *testing.T) {
+	fixture, err := filepath.Abs(filepath.Join("..", "..", "tests", "arithmetic_test.kry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureOutput, fixtureStatus := captureKryStdout(t, func() int { return run([]string{"test", fixture}) })
+	if fixtureStatus != 0 || !strings.Contains(fixtureOutput, "PASS arithmetic_test.kry") || !strings.Contains(fixtureOutput, "arithmetic fixture passed") {
+		t.Fatalf("explicit checked-in test fixture = (%d, %q)", fixtureStatus, fixtureOutput)
+	}
+
+	file := filepath.Join(t.TempDir(), "single_test.kry")
+	writeTestSource(t, file, "println(\"still executed\")\nassert_eq(1, 2)\n")
+	output, status := captureKryStdout(t, func() int { return run([]string{"test", file}) })
+	if status != 1 || !strings.Contains(output, "FAIL single_test.kry") || !strings.Contains(output, "still executed") || !strings.Contains(output, "1 cases: 0 passed, 1 failed") {
+		t.Fatalf("failing explicit test = (%d, %q)", status, output)
+	}
+}
+
+func TestProjectTestDirectoryContinuesAfterFailure(t *testing.T) {
+	dir := t.TempDir()
+	writeTestSource(t, filepath.Join(dir, "a_test.kry"), "assert_eq(1, 2)\n")
+	writeTestSource(t, filepath.Join(dir, "b_test.kry"), "println(\"later case ran\")\nassert_eq(3, 3)\n")
+	output, status := captureKryStdout(t, func() int { return run([]string{"test", dir}) })
+	if status != 1 || !strings.Contains(output, "FAIL a_test.kry") || !strings.Contains(output, "PASS b_test.kry") || !strings.Contains(output, "later case ran") || !strings.Contains(output, "2 cases: 1 passed, 1 failed") {
+		t.Fatalf("directory test run = (%d, %q)", status, output)
+	}
+}
+
+func TestProjectTestJSONIsOneResultDocument(t *testing.T) {
+	dir := t.TempDir()
+	writeTestSource(t, filepath.Join(dir, "a_test.kry"), "println(\"captured\")\nassert(true)\n")
+	writeTestSource(t, filepath.Join(dir, "b_test.kry"), "assert_eq(1, 2)\n")
+	output, status := captureKryStdout(t, func() int { return run([]string{"--json", "test", dir}) })
+	var result struct {
+		Status string `json:"status"`
+		Passed int    `json:"passed"`
+		Failed int    `json:"failed"`
+		Cases  []struct {
+			Path       string          `json:"path"`
+			Status     string          `json:"status"`
+			Output     string          `json:"output"`
+			Diagnostic *kry.Diagnostic `json:"diagnostic"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("kry test --json did not emit one valid JSON document: %v; output %q", err, output)
+	}
+	if status != 1 || result.Status != "failed" || result.Passed != 1 || result.Failed != 1 || len(result.Cases) != 2 {
+		t.Fatalf("unexpected JSON suite result/status: (%d, %#v)", status, result)
+	}
+	if result.Cases[0].Path != "a_test.kry" || result.Cases[0].Status != "passed" || result.Cases[0].Output != "captured\n" || result.Cases[1].Path != "b_test.kry" || result.Cases[1].Status != "failed" || result.Cases[1].Diagnostic == nil {
+		t.Fatalf("JSON case results are incomplete or unordered: %#v", result.Cases)
+	}
+}
+
+func TestProjectTestFailsWhenNoCasesExist(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+	output, status := captureKryStdout(t, func() int { return run([]string{"--json", "test"}) })
+	var result kryTestRun
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("empty test discovery did not emit valid JSON: %v; output %q", err, output)
+	}
+	if status != 1 || result.Status != "failed" || len(result.Cases) != 0 || len(result.Diagnostics) == 0 {
+		t.Fatalf("empty test discovery = (%d, %#v)", status, result)
+	}
+}
+
+func writeTestSource(t *testing.T, path, source string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

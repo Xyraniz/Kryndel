@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -927,14 +929,172 @@ func projectSearch(a []string) int {
 }
 func projectTest(e *kry.Engine, a []string, jsonMode bool) int {
 	if len(a) > 1 {
-		return usage("test accepts an optional source")
+		return usage("test accepts an optional .kry file or directory")
 	}
-	p := "main.kry"
+	root := filepath.Join(projectDir(), "tests")
+	paths := []string{}
+	diagnostics := []*kry.Diagnostic{}
 	if len(a) == 1 {
-		p = a[0]
+		info, err := os.Stat(a[0])
+		switch {
+		case err == nil && info.IsDir():
+			root = a[0]
+		case filepath.Ext(a[0]) == ".kry":
+			paths = append(paths, a[0])
+			root = filepath.Dir(a[0])
+		case err != nil:
+			root = a[0]
+			diagnostics = append(diagnostics, kry.Diag(kry.CatIO, nil, 1, 1, "cannot inspect test path %s: %v", filepath.ToSlash(a[0]), err))
+		default:
+			return usage("test expects a .kry file or directory")
+		}
 	}
-	_, d := e.RunPath(p)
-	return report(d, jsonMode)
+	if len(paths) == 0 && len(diagnostics) == 0 {
+		paths, diagnostics = discoverProjectTests(root)
+	}
+	if len(paths) == 0 && len(diagnostics) == 0 {
+		diagnostics = append(diagnostics, kry.Diag(kry.CatIO, nil, 1, 1, "no test cases found in %s", filepath.ToSlash(root)))
+	}
+	result := kryTestRun{Cases: make([]kryTestCaseResult, 0, len(paths)), Diagnostics: diagnostics}
+	for _, path := range paths {
+		name := testDisplayPath(root, path)
+		output, diagnostic, err := runProjectTestCase(e, path)
+		if err != nil {
+			diagnostic = kry.Diag(kry.CatIO, nil, 1, 1, "cannot capture test output: %v", err)
+		}
+		caseResult := kryTestCaseResult{Path: name, Output: output, Diagnostic: diagnostic, Status: "passed"}
+		if diagnostic != nil {
+			caseResult.Status = "failed"
+			result.Failed++
+		} else {
+			result.Passed++
+		}
+		result.Cases = append(result.Cases, caseResult)
+	}
+	if result.Failed > 0 || len(result.Diagnostics) > 0 {
+		result.Status = "failed"
+	} else {
+		result.Status = "passed"
+	}
+	if jsonMode {
+		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+			fmt.Fprintln(os.Stderr, "kry test: cannot encode results:", err)
+			return 1
+		}
+	} else {
+		for _, testCase := range result.Cases {
+			label := "PASS"
+			if testCase.Status == "failed" {
+				label = "FAIL"
+			}
+			fmt.Printf("%s %s\n", label, testCase.Path)
+			if testCase.Output != "" {
+				fmt.Fprintln(os.Stdout, "  stdout:")
+				for _, line := range strings.Split(strings.TrimSuffix(testCase.Output, "\n"), "\n") {
+					fmt.Fprintf(os.Stdout, "    %s\n", line)
+				}
+			}
+			if testCase.Diagnostic != nil {
+				fmt.Fprint(os.Stderr, testCase.Diagnostic.Format(false))
+			}
+		}
+		for _, diagnostic := range result.Diagnostics {
+			fmt.Fprint(os.Stderr, diagnostic.Format(false))
+		}
+		summary := "PASS"
+		if result.Status == "failed" {
+			summary = "FAIL"
+		}
+		fmt.Printf("%s %d cases: %d passed, %d failed", summary, len(result.Cases), result.Passed, result.Failed)
+		if len(result.Diagnostics) > 0 {
+			fmt.Printf(", %d suite diagnostic(s)", len(result.Diagnostics))
+		}
+		fmt.Println()
+	}
+	if result.Failed > 0 || len(result.Diagnostics) > 0 {
+		return 1
+	}
+	return 0
+}
+
+type kryTestCaseResult struct {
+	Path       string          `json:"path"`
+	Status     string          `json:"status"`
+	Output     string          `json:"output,omitempty"`
+	Diagnostic *kry.Diagnostic `json:"diagnostic,omitempty"`
+}
+
+type kryTestRun struct {
+	Status      string              `json:"status"`
+	Passed      int                 `json:"passed"`
+	Failed      int                 `json:"failed"`
+	Cases       []kryTestCaseResult `json:"cases"`
+	Diagnostics []*kry.Diagnostic   `json:"diagnostics,omitempty"`
+}
+
+func discoverProjectTests(root string) ([]string, []*kry.Diagnostic) {
+	paths := []string{}
+	diagnostics := []*kry.Diagnostic{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			diagnostics = append(diagnostics, kry.Diag(kry.CatIO, nil, 1, 1, "cannot inspect test path %s: %v", filepath.ToSlash(path), err))
+			return nil
+		}
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if strings.HasSuffix(entry.Name(), "_test.kry") {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	if err != nil {
+		diagnostics = append(diagnostics, kry.Diag(kry.CatIO, nil, 1, 1, "cannot discover test cases in %s: %v", filepath.ToSlash(root), err))
+	}
+	sort.Strings(paths)
+	return paths, diagnostics
+}
+
+func testDisplayPath(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
+}
+
+func runProjectTestCase(e *kry.Engine, path string) (string, *kry.Diagnostic, error) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return "", nil, err
+	}
+	type capturedOutput struct {
+		text string
+		err  error
+	}
+	readDone := make(chan capturedOutput, 1)
+	go func() {
+		data, readErr := io.ReadAll(reader)
+		_ = reader.Close()
+		readDone <- capturedOutput{text: string(data), err: readErr}
+	}()
+
+	oldStdout := os.Stdout
+	var diagnostic *kry.Diagnostic
+	func() {
+		os.Stdout = writer
+		defer func() { os.Stdout = oldStdout }()
+		_, diagnostic = e.RunPath(path)
+	}()
+	closeErr := writer.Close()
+	captured := <-readDone
+	if captured.err != nil {
+		return captured.text, diagnostic, captured.err
+	}
+	if closeErr != nil {
+		return captured.text, diagnostic, closeErr
+	}
+	return captured.text, diagnostic, nil
 }
 func projectPackage(a []string) int {
 	dir := projectDir()

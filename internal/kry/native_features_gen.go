@@ -848,6 +848,7 @@ var generatedDirectELFExprKinds = map[string]struct{}{
 	"ExIndex":  {},
 	"ExInt":    {},
 	"ExMap":    {},
+	"ExNil":    {},
 	"ExString": {},
 	"ExStruct": {},
 	"ExUnary":  {},

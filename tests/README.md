@@ -2,6 +2,8 @@
 
 Functional and security coverage lives in `internal/kry/toolchain_test.go`, a native Go suite covering the lexer, parser, checker, control flow, recursive `Copy`, modules, sandbox, artifacts, formatter, REPL/runtime, and limits. This avoids relying on Bash, GNU coreutils, Python, C, or an external interpreter to validate the project.
 
+Kryndel source-level CLI cases use the `*_test.kry` suffix and top-level `assert` or `assert_eq` calls. `kry test` discovers these files here recursively; `kry test FILE.kry` or `kry test DIRECTORY` selects a single source or another test tree.
+
 Verification commands are:
 
 ```text
