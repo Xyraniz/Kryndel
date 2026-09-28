@@ -87,8 +87,13 @@ func Parse(src *Source, lim Limits) (*Program, *Diagnostic) {
 	}
 	return prog, nil
 }
-func (p *Parser) peek() Token            { return p.Tokens[p.Pos] }
-func (p *Parser) prev() Token            { return p.Tokens[p.Pos-1] }
+func (p *Parser) peek() Token { return p.Tokens[p.Pos] }
+func (p *Parser) prev() Token {
+	if p.Pos == 0 {
+		return p.Tokens[0]
+	}
+	return p.Tokens[p.Pos-1]
+}
 func (p *Parser) check(k TokenKind) bool { return p.peek().Kind == k }
 func (p *Parser) advance() Token {
 	if p.Pos < len(p.Tokens)-1 {

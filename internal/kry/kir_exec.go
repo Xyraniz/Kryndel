@@ -614,10 +614,10 @@ func validateKIRExecBlockAtDepth(statements []*KIRStmt, scope *kirExecScope, ret
 			if statement.Kind == "const" && statement.Binding.Mutable {
 				return fmt.Errorf("invalid KIR executable: const binding '%s' is mutable", statement.Name)
 			}
-			if !kirExecTypeInScope(statement.Binding.Type, scope, document) || statement.Binding.Type != statement.Init.Type {
+			if !kirExecTypeInScope(statement.Binding.Type, scope, document) || !compatibleKIRTypes(statement.Binding.Type, statement.Init.Type) {
 				return fmt.Errorf("invalid KIR executable: declaration '%s' has incompatible executable type %q", statement.Name, statement.Binding.Type)
 			}
-			if statement.Annotation != "" && statement.Annotation != statement.Binding.Type {
+			if statement.Annotation != "" && !compatibleKIRTypes(statement.Annotation, statement.Binding.Type) {
 				return fmt.Errorf("%w: declaration annotation %q", errKIRSubsetUnsupported, statement.Annotation)
 			}
 			if scope.local(statement.Name) {
@@ -1493,6 +1493,9 @@ func kirExecType(typ string) bool {
 	}
 	if len(arguments) != want || (name != "Array" && name != "Option" && name != "Result" && name != "Set" && name != "Map") {
 		return false
+	}
+	if name == "Array" && arguments[0] == "<unknown>" {
+		return true
 	}
 	for _, argument := range arguments {
 		if !kirExecType(argument) {
@@ -2793,6 +2796,9 @@ func (executor *kirExecutor) valueMatchesType(value Value, typ string) bool {
 		case "Array":
 			if value.Kind != VArray {
 				return false
+			}
+			if arguments[0] == "<unknown>" {
+				return true
 			}
 			for _, item := range arrayValues(value) {
 				if !executor.valueMatchesType(item, arguments[0]) {

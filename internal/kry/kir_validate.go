@@ -779,7 +779,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				return err
 			}
 		}
-		if document.Version >= 3 && (statement.Kind == "let" || statement.Kind == "const") && statement.Binding.Type != statement.Init.Type {
+		if document.Version >= 3 && (statement.Kind == "let" || statement.Kind == "const") && !compatibleKIRTypes(statement.Binding.Type, statement.Init.Type) {
 			return fmt.Errorf("%s statement binding type does not match its initializer", statement.Kind)
 		}
 		for _, list := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
@@ -834,6 +834,26 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		}
 	}
 	return nil
+}
+
+func compatibleKIRTypes(binding, initializer string) bool {
+	if binding == initializer {
+		return true
+	}
+	return isKIRUnspecifiedArray(binding) && isKIRArrayType(initializer) ||
+		isKIRUnspecifiedArray(initializer) && isKIRArrayType(binding)
+}
+
+func isKIRUnspecifiedArray(encoded string) bool {
+	return encoded == "Array" || encoded == "Array[<unknown>]"
+}
+
+func isKIRArrayType(encoded string) bool {
+	if isKIRUnspecifiedArray(encoded) {
+		return true
+	}
+	spec, ok := parseKIRTypeExpression(encoded)
+	return ok && !spec.Function && spec.Name == "Array" && len(spec.Params) == 1
 }
 
 func checkKIRCount(label string, count, maximum int) error {

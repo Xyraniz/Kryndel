@@ -40,6 +40,13 @@ func TestBuiltinRegistryIsAuthoritative(t *testing.T) {
 	}
 }
 
+func TestInvalidPercentExpressionReturnsParseDiagnostic(t *testing.T) {
+	_, diagnostic := Parse(&Source{Name: "percent.kry", Text: "%"}, DefaultLimits())
+	if diagnostic == nil || diagnostic.Category != CatParse {
+		t.Fatalf("Parse(%%) diagnostic = %#v, want a parse diagnostic", diagnostic)
+	}
+}
+
 func TestRecursiveCopyTerminatesSafely(t *testing.T) {
 	node := &Type{Kind: TyStruct, Name: "Node"}
 	node.Struct = &StructDecl{Name: "Node"}

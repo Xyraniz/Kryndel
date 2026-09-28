@@ -129,6 +129,21 @@ func TestEngineRunsKIRForSourceAndKexe(t *testing.T) {
 	}
 }
 
+func TestControlFlowExampleRunsThroughCheckedKIR(t *testing.T) {
+	path := filepath.Join("..", "..", "examples", "control_flow.kry")
+	engine := NewEngine()
+	output, diagnostic := captureEngineRun(t, func() *Diagnostic {
+		_, diagnostic := engine.RunPath(path)
+		return diagnostic
+	})
+	if diagnostic != nil {
+		t.Fatalf("run control_flow.kry: %s", diagnostic.Format(false))
+	}
+	if output != "12\n[1, 2, 3]\n" {
+		t.Fatalf("control_flow.kry output = %q, want %q", output, "12\n[1, 2, 3]\n")
+	}
+}
+
 func TestEngineRunsUnsignedAndConcatenationKIRForSourceAndKexe(t *testing.T) {
 	directory := t.TempDir()
 	sourcePath := filepath.Join(directory, "unsigned.kry")
