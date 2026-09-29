@@ -747,6 +747,10 @@ func (m *directMachine) emitPEStringFromInteger(unsigned bool) error {
 // R8D. It loops over partial WriteFile results and treats invalid handles,
 // failed writes, and successful zero-byte writes as process failure.
 func (m *directMachine) emitPEWriteRDXR8() error {
+	return m.emitPEWriteRDXR8To(0xfffffff5, m.trapLabel) // STD_OUTPUT_HANDLE
+}
+
+func (m *directMachine) emitPEWriteRDXR8To(stdHandle uint32, failureLabel int) error {
 	empty := m.newLabel()
 	loop := m.newLabel()
 	failed := m.newLabel()
@@ -759,7 +763,10 @@ func (m *directMachine) emitPEWriteRDXR8() error {
 	m.code = append(m.code, 0x48, 0x89, 0x54, 0x24, 0x30)             // [rsp+48] = buffer
 	m.code = append(m.code, 0x44, 0x89, 0x44, 0x24, 0x38)             // [rsp+56] = remaining DWORD
 	m.code = append(m.code, 0x48, 0xc7, 0x44, 0x24, 0x20, 0, 0, 0, 0) // fifth argument = NULL
-	m.code = append(m.code, 0xb9, 0xf5, 0xff, 0xff, 0xff)             // STD_OUTPUT_HANDLE
+	m.code = append(m.code, 0xb9)
+	var handle [4]byte
+	binary.LittleEndian.PutUint32(handle[:], stdHandle)
+	m.code = append(m.code, handle[:]...)
 	m.emitPEImportedCall(peImportGetStdHandle)
 	m.code = append(m.code, 0x48, 0x85, 0xc0) // reject NULL
 	if err := m.emitConditionalJump(0x84, failed); err != nil {
@@ -803,7 +810,7 @@ func (m *directMachine) emitPEWriteRDXR8() error {
 		return err
 	}
 	m.code = append(m.code, 0x48, 0x83, 0xc4, 0x40)
-	if err := m.emitJump(m.trapLabel); err != nil {
+	if err := m.emitJump(failureLabel); err != nil {
 		return err
 	}
 	if err := m.bind(empty); err != nil {
@@ -5085,6 +5092,36 @@ func (m *directMachine) emitWriteRaw(text string) error {
 	binary.LittleEndian.PutUint32(m.code[len(m.code)-4:], uint32(len(text)))
 	m.dataRefs = append(m.dataRefs, machineDataRef{displacement: start + 3, instructionEnd: start + 7, dataOffset: offset})
 	return m.emitELFWriteRSIRDX()
+}
+
+func (m *directMachine) emitPEWriteStderr(text string) error {
+	if !m.windowsABI {
+		return fmt.Errorf("standard error output requires the Win64 ABI")
+	}
+	if uint64(len(text)) > uint64(^uint32(0)) {
+		return fmt.Errorf("direct PE error output exceeds WriteFile's DWORD length")
+	}
+	offset := m.addData(text)
+	start := len(m.code)
+	m.code = append(m.code, 0x48, 0x8d, 0x15, 0, 0, 0, 0) // lea rdx, [rip+text]
+	m.dataRefs = append(m.dataRefs, machineDataRef{displacement: start + 3, instructionEnd: start + 7, dataOffset: offset})
+	m.code = append(m.code, 0x41, 0xb8, 0, 0, 0, 0) // mov r8d, length
+	binary.LittleEndian.PutUint32(m.code[len(m.code)-4:], uint32(len(text)))
+	return m.emitPEWriteStderrRDXR8()
+}
+
+func (m *directMachine) emitPEWriteStderrRDXR8() error {
+	writeError := m.newLabel()
+	if err := m.emitPEWriteRDXR8To(0xfffffff4, writeError); err != nil { // STD_ERROR_HANDLE
+		return err
+	}
+	if err := m.emitExit(1); err != nil {
+		return err
+	}
+	if err := m.bind(writeError); err != nil {
+		return err
+	}
+	return m.emitExit(1)
 }
 
 func (m *directMachine) emitExit(status byte) error {

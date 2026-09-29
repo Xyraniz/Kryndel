@@ -511,7 +511,8 @@ let invalid: Int = 1 / zero
 			if diagnostic == nil || diagnostic.Category != CatRuntime || diagnostic.Message != "division by zero" || stdout != wantOutput {
 				t.Fatalf("interpreter failure differs: stdout=%q diagnostic=%#v", stdout, diagnostic)
 			}
-			if nativeOutput != stdout || nativeStderr != "" || status != 1 {
+			wantStderr := "kryndel: " + diagnostic.Message + "\n"
+			if nativeOutput != stdout || nativeStderr != wantStderr || status != 1 {
 				t.Fatalf("PE-direct failure differs: interpreter stdout=%q error=%q; PE stdout=%q stderr=%q status=%d", stdout, diagnostic.Message, nativeOutput, nativeStderr, status)
 			}
 		})

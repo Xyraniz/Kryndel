@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "source_revision": "6dbcf20531a3bf2db45414cd2afd54b4e0858bda",
+  "source_revision": "e6b389571468fc12cb5aa7e8faa7a2ffc6f62fdc",
   "target": "linux-amd64",
   "stage1_seed_path": "selfhost/bootstrap/linux-amd64/source-kir-compiler-stage1.elf",
   "host_go": "go1.27.1",
@@ -9,7 +9,7 @@
   "source_compiler_kir_max_bytes": 134217728,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
-    "stage0-host-kry-linux-amd64": "1835ad85b618040a7c7e33e23904bb345a15aab90aa54377233662cc26bd0c5b",
+    "stage0-host-kry-linux-amd64": "d78980ae13d2ea8242fefae3eb7decab6896b5dc1e0246584f9c46c3a31a578f",
     "source-compiler.kir": "fb3d1c08fde8d2ac4fe1862de76e7bfd5044f36188183f2c93b395a22e8fe57a",
     "stage1-source-kir-compiler.elf": "0868e32cfb1e415b9174ad49c378a748eb80c5be22d3c1ac4592f1dc8d6b3098",
     "source_kir_compiler.kry": "a2c73d952a6a4dbc14cd806822cc37528d46f62e0fcdda93df20aa466b1ceba5",

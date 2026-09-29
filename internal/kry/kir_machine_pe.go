@@ -86,6 +86,14 @@ func lowerDirectPEKIR(document *KIRDocument, outputLimit int64) ([]byte, error) 
 	if err := machine.emitExit(1); err != nil {
 		return nil, err
 	}
+	for _, failure := range lowerer.failures {
+		if err := machine.bind(failure.label); err != nil {
+			return nil, err
+		}
+		if err := machine.emitPEWriteStderr("kryndel: " + failure.message + "\n"); err != nil {
+			return nil, err
+		}
+	}
 	image, err := buildDirectDynamicPE(machine.code, machine.data, machine.dataRefs, machine.peImportRefs, machine.peFunctions)
 	if err != nil {
 		return nil, err
@@ -350,6 +358,23 @@ type kirPEMachine struct {
 	statementSlot map[*KIRStmt]machineSlot
 	loops         []machineLoop
 	inFunction    bool
+	failures      []kirPERuntimeFailure
+}
+
+type kirPERuntimeFailure struct {
+	label   int
+	message string
+}
+
+func (lowerer *kirPEMachine) runtimeFailureLabel(message string) int {
+	for _, failure := range lowerer.failures {
+		if failure.message == message {
+			return failure.label
+		}
+	}
+	label := lowerer.machine.newLabel()
+	lowerer.failures = append(lowerer.failures, kirPERuntimeFailure{label: label, message: message})
+	return label
 }
 
 func validateKIRDirectPE(document *KIRDocument) (*kirPEValidatedProgram, error) {
@@ -1194,7 +1219,13 @@ func (lowerer *kirPEMachine) emitBinary(expression *KIRExpr) error {
 		lowerer.machine.emitUIntMask(kirPEBits(expression.Type))
 	case "/", "%":
 		lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x85, 0xc9)
-		_ = lowerer.machine.emitConditionalJump(0x84, lowerer.machine.trapLabel)
+		zeroMessage := "division by zero"
+		if expression.Operator == "%" {
+			zeroMessage = "remainder by zero"
+		}
+		if err := lowerer.machine.emitConditionalJump(0x84, lowerer.runtimeFailureLabel(zeroMessage)); err != nil {
+			return err
+		}
 		if unsigned {
 			lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1)
 		} else {
@@ -1207,7 +1238,9 @@ func (lowerer *kirPEMachine) emitBinary(expression *KIRExpr) error {
 			_ = lowerer.machine.emitConditionalJump(0x85, safeDiv)
 			lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x83, 0xf9, 0xff)
 			_ = lowerer.machine.emitConditionalJump(0x85, safeDiv)
-			_ = lowerer.machine.emitJump(lowerer.machine.trapLabel)
+			if err := lowerer.machine.emitJump(lowerer.runtimeFailureLabel("checked integer arithmetic overflow")); err != nil {
+				return err
+			}
 			if err := lowerer.machine.bind(safeDiv); err != nil {
 				return err
 			}
