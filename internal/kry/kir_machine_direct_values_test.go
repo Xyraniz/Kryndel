@@ -711,6 +711,21 @@ func TestDirectELFKIRArrayTakeDropRejectInvalidCounts(t *testing.T) {
 	}
 }
 
+func TestDirectELFKIRArrayReverseMatchesInterpreter(t *testing.T) {
+	source := `let values: Array[Int] = [1, 2, 3, 4]
+let reversed: Array[Int] = array_reverse(values)
+println(len(reversed))
+println(unwrap_or(array_get(reversed, 0), -1))
+println(unwrap_or(array_get(reversed, 3), -1))
+let empty: Array[Int] = array_reverse(array_take(values, 0))
+println(len(empty))
+let words: Array[String] = array_reverse(["first", "last"])
+println(unwrap_or(array_get(words, 0), ""))
+println(unwrap_or(array_get(words, 1), ""))
+`
+	assertDirectKIRMatchesInterpreter(t, source, "direct-array-reverse")
+}
+
 func TestDirectELFKIRStringCharsMatchesInterpreter(t *testing.T) {
 	source := `let chars: Array[String] = string_chars("aá🙂")
 println(len(chars))

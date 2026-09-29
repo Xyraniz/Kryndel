@@ -225,8 +225,12 @@ func TestDirectPEOutputLimitCountsNewlinesAndPriorPrints(t *testing.T) {
 					t.Fatalf("generated PE execution failed: %v output=%q", runErr, out)
 				}
 			}
-			if status != test.wantStatus || string(out) != test.wantOutput {
-				t.Fatalf("PE output/status = %q/%d, want %q/%d", out, status, test.wantOutput, test.wantStatus)
+			wantOutput := test.wantOutput
+			if test.wantStatus != 0 {
+				wantOutput += "kryndel: output limit exceeded\n"
+			}
+			if status != test.wantStatus || string(out) != wantOutput {
+				t.Fatalf("PE output/status = %q/%d, want %q/%d", out, status, wantOutput, test.wantStatus)
 			}
 		})
 	}

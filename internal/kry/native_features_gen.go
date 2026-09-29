@@ -188,6 +188,7 @@ var generatedDirectELFBuiltinCases = map[string]struct{}{
 	"array_get":        {},
 	"array_indices":    {},
 	"array_push":       {},
+	"array_reverse":    {},
 	"array_set":        {},
 	"array_slice":      {},
 	"array_take":       {},

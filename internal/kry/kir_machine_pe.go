@@ -60,6 +60,7 @@ func lowerDirectPEKIR(document *KIRDocument, outputLimit int64) ([]byte, error) 
 		return nil, fmt.Errorf("direct PE function setup: %w", err)
 	}
 	lowerer := &kirPEMachine{machine: machine, program: validated, entry: entry}
+	machine.outputLimitLabel = lowerer.runtimeFailureLabel("output limit exceeded")
 	for _, function := range validated.functions {
 		if err := lowerer.collectFunctionParameters(function); err != nil {
 			return nil, fmt.Errorf("direct PE function setup: %w", err)
@@ -1137,7 +1138,7 @@ func (lowerer *kirPEMachine) emitUnsignedConversionCheck(value *KIRExpr, bits ui
 	}
 	if value.Type == "Int" {
 		lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x85, 0xc0)
-		if err := lowerer.machine.emitConditionalJump(0x88, lowerer.machine.trapLabel); err != nil {
+		if err := lowerer.machine.emitConditionalJump(0x88, lowerer.runtimeFailureLabel("Int is outside unsigned range")); err != nil {
 			return err
 		}
 		inputBits = 64
@@ -1151,7 +1152,7 @@ func (lowerer *kirPEMachine) emitUnsignedConversionCheck(value *KIRExpr, bits ui
 	binary.LittleEndian.PutUint64(encoded[:], mask)
 	lowerer.machine.code = append(lowerer.machine.code, encoded[:]...)
 	lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x85, 0xc8)
-	return lowerer.machine.emitConditionalJump(0x85, lowerer.machine.trapLabel)
+	return lowerer.machine.emitConditionalJump(0x85, lowerer.runtimeFailureLabel("value is outside unsigned range"))
 }
 
 func (lowerer *kirPEMachine) emitBinary(expression *KIRExpr) error {

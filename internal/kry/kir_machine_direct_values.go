@@ -133,6 +133,13 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr) error {
 		if _, ok := container(args[0].Type, "Array", 1); !ok {
 			return unsupported()
 		}
+	case "array_reverse":
+		if !singleArg() || expression.Type != args[0].Type {
+			return unsupported()
+		}
+		if _, ok := container(args[0].Type, "Array", 1); !ok {
+			return unsupported()
+		}
 	case "array_set":
 		if len(args) != 3 || args[0] == nil || args[1] == nil || args[2] == nil || args[1].Type != "Int" {
 			return unsupported()
@@ -695,6 +702,16 @@ func (builder *kirDirectBuilder) emitBuiltin(expression *KIRExpr) error {
 		machine.code = append(machine.code, 0x48, 0x83, 0xc4, 0x10)
 		machine.arrayRuntimeUsed = true
 		return machine.emitLabelCall(machine.arraySliceLabel)
+	case "array_reverse":
+		if len(args) != 1 {
+			return fmt.Errorf("direct KIR ELF array_reverse expects one argument")
+		}
+		if err := builder.emitExpr(args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc7)
+		machine.arrayRuntimeUsed = true
+		return machine.emitLabelCall(machine.arrayReverseLabel)
 	case "array_set":
 		if len(args) != 3 {
 			return fmt.Errorf("direct KIR ELF array_set expects three arguments")

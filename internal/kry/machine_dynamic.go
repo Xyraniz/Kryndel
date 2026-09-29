@@ -70,6 +70,7 @@ type directMachine struct {
 	u8ArrayLabel        int
 	arraySetLabel       int
 	arraySliceLabel     int
+	arrayReverseLabel   int
 	mapRemoveLabel      int
 	mapRuntimeUsed      bool
 	stringEqualUsed     bool
@@ -348,6 +349,7 @@ func newDirectMachine() *directMachine {
 	m.u8ArrayLabel = m.newLabel()
 	m.arraySetLabel = m.newLabel()
 	m.arraySliceLabel = m.newLabel()
+	m.arrayReverseLabel = m.newLabel()
 	m.mapRemoveLabel = m.newLabel()
 	m.bytesFromArrayLabel = m.newLabel()
 	m.processArgsLabel = m.newLabel()
@@ -4596,6 +4598,50 @@ func (m *directMachine) emitArraySliceRuntime() error {
 	return nil
 }
 
+func (m *directMachine) emitArrayReverseRuntime() error {
+	if err := m.bind(m.arrayReverseLabel); err != nil {
+		return err
+	}
+	done, loop := m.newLabel(), m.newLabel()
+	m.code = append(m.code,
+		0x53, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+		0x49, 0x89, 0xfc,
+		0x49, 0x8b, 0x2c, 0x24,
+		0x48, 0x89, 0xef,
+	)
+	m.arrayRuntimeUsed = true
+	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x49, 0x89, 0xc5, 0x45, 0x31, 0xf6)
+	if err := m.bind(loop); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xf0, 0x48, 0x39, 0xe8)
+	if err := m.emitConditionalJump(0x8d, done); err != nil {
+		return err
+	}
+	m.code = append(m.code,
+		0x48, 0x89, 0xe8,
+		0x48, 0xff, 0xc8,
+		0x4c, 0x29, 0xf0,
+		0x48, 0xc1, 0xe0, 0x03,
+		0x49, 0x8b, 0x54, 0x04, 0x08,
+		0x4c, 0x89, 0xf0,
+		0x48, 0xc1, 0xe0, 0x03,
+		0x49, 0x89, 0x54, 0x05, 0x08,
+		0x49, 0xff, 0xc6,
+	)
+	if err := m.emitJump(loop); err != nil {
+		return err
+	}
+	if err := m.bind(done); err != nil {
+		return err
+	}
+	m.code = append(m.code, 0x4c, 0x89, 0xe8, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5d, 0x5b, 0xc3)
+	return nil
+}
+
 func (m *directMachine) emitBytesFromArrayRuntime() error {
 	if err := m.bind(m.bytesFromArrayLabel); err != nil {
 		return err
@@ -6244,6 +6290,16 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			m.code = append(m.code, 0x48, 0x83, 0xc4, 0x10)
 			m.arrayRuntimeUsed = true
 			return m.emitLabelCall(m.arraySliceLabel)
+		case "array_reverse":
+			if len(e.Args) != 1 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray || !typeEqual(e.Type, e.Args[0].Type) {
+				return fmt.Errorf("direct ELF backend array_reverse expects Array[T]")
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x48, 0x89, 0xc7)
+			m.arrayRuntimeUsed = true
+			return m.emitLabelCall(m.arrayReverseLabel)
 		case "array_concat":
 			if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray || e.Args[1].Type == nil || e.Args[1].Type.Kind != TyArray {
 				return fmt.Errorf("direct ELF backend expects array_concat(Array[T], Array[T])")
@@ -7254,6 +7310,9 @@ func (m *directMachine) build(stmts []*Stmt) ([]byte, error) {
 			return nil, err
 		}
 		if err := m.emitArraySliceRuntime(); err != nil {
+			return nil, err
+		}
+		if err := m.emitArrayReverseRuntime(); err != nil {
 			return nil, err
 		}
 	}

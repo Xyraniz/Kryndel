@@ -216,8 +216,9 @@ println(alias)`},
 			if diagnostic == nil || diagnostic.Category != CatRuntime || diagnostic.Message != test.message || diagnostic.Source != "direct-pe-conformance.kry" {
 				t.Fatalf("interpreter diagnostic = %#v, want runtime %q at the conformance source", diagnostic, test.message)
 			}
-			if status != 1 || nativeOut != out || nativeErr != "" {
-				t.Fatalf("PE error outcome differs: interpreter output=%q diagnostic=%#v; PE output=%q stderr=%q status=%d", out, diagnostic, nativeOut, nativeErr, status)
+			wantStderr := "kryndel: " + diagnostic.Message + "\n"
+			if status != 1 || nativeOut != out || nativeErr != wantStderr {
+				t.Fatalf("PE error outcome differs: interpreter output=%q diagnostic=%#v; PE output=%q stderr=%q want stderr=%q status=%d", out, diagnostic, nativeOut, nativeErr, wantStderr, status)
 			}
 		})
 	}
@@ -236,8 +237,9 @@ println(alias)`},
 			if diagnostic == nil || diagnostic.Category != CatResource || diagnostic.Message != "output limit exceeded" {
 				t.Fatalf("interpreter output diagnostic = %#v, want resource output limit exceeded", diagnostic)
 			}
-			if status != 1 || nativeOut != out || nativeErr != "" {
-				t.Fatalf("PE output error differs: interpreter output=%q diagnostic=%#v; PE output=%q stderr=%q status=%d", out, diagnostic, nativeOut, nativeErr, status)
+			wantStderr := "kryndel: " + diagnostic.Message + "\n"
+			if status != 1 || nativeOut != out || nativeErr != wantStderr {
+				t.Fatalf("PE output error differs: interpreter output=%q diagnostic=%#v; PE output=%q stderr=%q want stderr=%q status=%d", out, diagnostic, nativeOut, nativeErr, wantStderr, status)
 			}
 		})
 	}

@@ -105,8 +105,12 @@ func TestDirectPELowersValidatedKIRWithoutAST(t *testing.T) {
 				}
 				status = exitErr.ExitCode()
 			}
-			if interpretedOutput.String() != test.wantOutput || stdout.String() != interpretedOutput.String() || stderr.Len() != 0 || status != test.wantStatus {
-				t.Fatalf("interpreter output/status=%q/%d; PE output/stderr/status=%q/%q/%d", interpretedOutput.String(), test.wantStatus, stdout.String(), stderr.String(), status)
+			wantStderr := ""
+			if test.wantDiagnostic != "" {
+				wantStderr = "kryndel: " + test.wantDiagnostic + "\n"
+			}
+			if interpretedOutput.String() != test.wantOutput || stdout.String() != interpretedOutput.String() || stderr.String() != wantStderr || status != test.wantStatus {
+				t.Fatalf("interpreter output/status=%q/%d; PE output/stderr/status=%q/%q/%d, want stderr %q", interpretedOutput.String(), test.wantStatus, stdout.String(), stderr.String(), status, wantStderr)
 			}
 		})
 	}
