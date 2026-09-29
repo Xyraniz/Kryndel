@@ -652,3 +652,22 @@ func TestDirectELFKIRArraySliceRejectsInvalidRanges(t *testing.T) {
 		})
 	}
 }
+
+func TestDirectELFKIRArraySetMatchesInterpreter(t *testing.T) {
+	source := `let values: Array[Int] = [10, 20, 30]
+let updated: Array[Int] = result_unwrap(array_set(values, 1, 99))
+println(len(updated))
+println(unwrap_or(array_get(updated, 0), -1))
+println(unwrap_or(array_get(updated, 1), -1))
+println(unwrap_or(array_get(updated, 2), -1))
+`
+	assertDirectKIRMatchesInterpreter(t, source, "direct-array-set")
+}
+
+func TestDirectELFKIRArraySetOutOfBoundsMatchesInterpreter(t *testing.T) {
+	source := `let values: Array[Int] = [10, 20, 30]
+let invalid: Array[Int] = result_unwrap(array_set(values, 3, 99))
+println(len(invalid))
+`
+	assertDirectKIRMatchesInterpreter(t, source, "direct-array-set-out-of-bounds")
+}

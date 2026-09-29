@@ -114,6 +114,15 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr) error {
 		if _, ok := container(args[0].Type, "Array", 1); !ok {
 			return unsupported()
 		}
+	case "array_set":
+		if len(args) != 3 || args[0] == nil || args[1] == nil || args[2] == nil || args[1].Type != "Int" {
+			return unsupported()
+		}
+		arrayTypes, arrayOK := container(args[0].Type, "Array", 1)
+		resultTypes, resultOK := container(expression.Type, "Result", 2)
+		if !arrayOK || args[2].Type != arrayTypes[0] || !resultOK || resultTypes[0] != args[0].Type || resultTypes[1] != "String" {
+			return unsupported()
+		}
 	case "some":
 		if !singleArg() {
 			return unsupported()
@@ -596,6 +605,24 @@ func (builder *kirDirectBuilder) emitBuiltin(expression *KIRExpr) error {
 		)
 		machine.arrayRuntimeUsed = true
 		return machine.emitLabelCall(machine.arraySliceLabel)
+	case "array_set":
+		if len(args) != 3 {
+			return fmt.Errorf("direct KIR ELF array_set expects three arguments")
+		}
+		if err := builder.emitExpr(args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		if err := builder.emitExpr(args[1]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		if err := builder.emitExpr(args[2]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc2, 0x5e, 0x5f)
+		machine.arrayRuntimeUsed = true
+		return machine.emitLabelCall(machine.arraySetLabel)
 	case "some", "ok", "err":
 		if len(args) != 1 {
 			return fmt.Errorf("direct KIR ELF %s expects one argument", expression.Name)
