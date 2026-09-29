@@ -912,6 +912,85 @@ assert_eq(is_ok(cancelled), false)
 	}
 }
 
+func TestTaskSpawnAppliesWorkerSafetyChecks(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "reject global access",
+			src: `const secret: Int = 7
+fn worker() -> Int { return secret }
+let group: TaskGroup = task_group()
+let worker_thread: Thread[Int] = task_spawn(group, "worker")
+`,
+			want: "global binding 'secret' is not available in a worker-safe function",
+		},
+		{
+			name: "reject transitive global access",
+			src: `const secret: Int = 7
+fn helper() -> Int { return secret }
+fn worker() -> Int { return helper() }
+let group: TaskGroup = task_group()
+let worker_thread: Thread[Int] = task_spawn(group, "worker")
+`,
+			want: "global binding 'secret' is not available in a worker-safe function",
+		},
+		{
+			name: "allow synchronized shared globals",
+			src: `let shared: Shared[Int] = shared_new(0)
+fn worker() -> Int { shared_write(shared, 7); return shared_read(shared) }
+let group: TaskGroup = task_group()
+let worker_thread: Thread[Int] = task_spawn(group, "worker")
+`,
+		},
+		{
+			name: "reject nested thread creation",
+			src: `fn nested() -> Int { return 1 }
+fn worker() -> Int {
+    let nested_thread: Thread[Int] = thread_spawn("nested")
+    return 0
+}
+let group: TaskGroup = task_group()
+let worker_thread: Thread[Int] = task_spawn(group, "worker")
+`,
+			want: "builtin 'thread_spawn' is not available in a worker-safe function",
+		},
+		{
+			name: "reject nested worker creation",
+			src: `fn nested() -> Int { return 1 }
+fn worker() -> Int {
+    let group: TaskGroup = task_group()
+    let nested_thread: Thread[Int] = task_spawn(group, "nested")
+    return 0
+}
+let group: TaskGroup = task_group()
+let worker_thread: Thread[Int] = task_spawn(group, "worker")
+`,
+			want: "builtin 'task_spawn' is not available in a worker-safe function",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			program, diagnostic := Parse(&Source{Name: "worker.kry", Text: tc.src}, DefaultLimits())
+			if diagnostic != nil {
+				t.Fatalf("parse: %s", diagnostic.Message)
+			}
+			_, diagnostic = Check(program, DefaultLimits())
+			if tc.want == "" {
+				if diagnostic != nil {
+					t.Fatalf("check rejected a valid worker: %s", diagnostic.Message)
+				}
+				return
+			}
+			if diagnostic == nil || !strings.Contains(diagnostic.Message, tc.want) {
+				t.Fatalf("check diagnostic = %v, want substring %q", diagnostic, tc.want)
+			}
+		})
+	}
+}
+
 func TestTailCallOptimization(t *testing.T) {
 	text := `
 fn count(n: Int, acc: Int) -> Int {

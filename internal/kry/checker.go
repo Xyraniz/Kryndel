@@ -236,8 +236,14 @@ func (c *Checker) walkExpr(e *Expr) {
 	if e == nil {
 		return
 	}
-	if e.Kind == ExCall && e.Name == "thread_spawn" && len(e.Args) == 1 && e.Args[0].Kind == ExString {
-		c.funcs[e.Args[0].Str] = true
+	if e.Kind == ExCall {
+		workerNameArg := 0
+		if e.Name == "task_spawn" {
+			workerNameArg = 1
+		}
+		if (e.Name == "thread_spawn" || e.Name == "task_spawn") && len(e.Args) > workerNameArg && e.Args[workerNameArg].Kind == ExString {
+			c.funcs[e.Args[workerNameArg].Str] = true
+		}
 	}
 	c.walkExpr(e.Left)
 	c.walkExpr(e.Right)
@@ -1467,7 +1473,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 	}
 	b, ok := c.Env.Builtins[e.Name]
 	if ok {
-		if sc.Worker && (strings.HasPrefix(b.Name, "fs_") || b.Name == "env_get" || b.Name == "thread_spawn") {
+		if sc.Worker && (strings.HasPrefix(b.Name, "fs_") || b.Name == "env_get" || b.Name == "thread_spawn" || b.Name == "task_spawn") {
 			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "builtin '%s' is not available in a worker-safe function", e.Name)
 		}
 		if len(e.Args) != b.Arity {
