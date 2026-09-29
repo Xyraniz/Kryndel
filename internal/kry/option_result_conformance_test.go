@@ -577,6 +577,56 @@ println(index)
 	assertNativeRuntimeFailureOutcome(t, format, native, interpreter, "instruction limit exceeded")
 }
 
+func TestCAOTCallDepthLimitMatchesInterpreter(t *testing.T) {
+	const source = `fn descend(value: Int) -> Int {
+    if value == 0 { return 0 }
+    let next: Int = descend(value - 1)
+    return next + 1
+}
+fn descend_impl() -> Int { return 123 }
+let unused: Int = descend_impl()
+print("before:")
+println(descend(8))
+`
+	limits := DefaultLimits()
+	limits.MaxCallDepth = 4
+	interpreter := runOptionResultInterpreter(t, source, limits)
+	if interpreter.diagnostic == nil || interpreter.diagnostic.Category != CatResource || interpreter.diagnostic.Message != "call depth limit exceeded" || interpreter.stdout != "before:" {
+		t.Fatalf("interpreter call-depth outcome = %#v, want resource failure after partial output", interpreter)
+	}
+	target, format, _, ok := nativeHostCAOTTarget()
+	if !ok {
+		t.Skip("C AOT call-depth parity requires a supported native host")
+	}
+	if !optionResultCompilerAvailable(target) {
+		t.Skipf("C AOT call-depth parity needs the compiler for %s-%s", target.OS, target.Arch)
+	}
+	native := buildAndRunOptionResultNative(t, source, target, format, limits)
+	assertNativeRuntimeFailureOutcome(t, format, native, interpreter, "call depth limit exceeded")
+}
+
+func TestCAOTTailRecursionMatchesInterpreterCallDepth(t *testing.T) {
+	const source = `fn accumulate(remaining: Int, total: Int) -> Int {
+    if remaining == 0 { return total }
+    return accumulate(remaining - 1, total + remaining)
+}
+println(accumulate(5000, 0))
+`
+	interpreter := runOptionResultInterpreter(t, source)
+	if interpreter.diagnostic != nil || interpreter.stdout != "12502500\n" {
+		t.Fatalf("interpreter tail-recursion outcome = %#v, want 12502500", interpreter)
+	}
+	target, format, _, ok := nativeHostCAOTTarget()
+	if !ok {
+		t.Skip("C AOT tail-recursion parity requires a supported native host")
+	}
+	if !optionResultCompilerAvailable(target) {
+		t.Skipf("C AOT tail-recursion parity needs the compiler for %s-%s", target.OS, target.Arch)
+	}
+	native := buildAndRunOptionResultNative(t, source, target, format)
+	assertOptionResultOutcome(t, "C AOT tail recursion", native, interpreter)
+}
+
 func assertNativeRuntimeFailureOutcome(t *testing.T, label string, got, want optionResultObservedOutcome, message string) {
 	t.Helper()
 	if got.stdout != want.stdout || got.exitStatus != 1 || !strings.Contains(got.stderr, message) {

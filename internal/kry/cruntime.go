@@ -60,6 +60,12 @@ static long long k_mem = 0;
 static long long k_max_mem = 268435456LL;
 static uint64_t k_instruction_count = 0;
 static uint64_t k_max_instructions = 5000000ULL;
+#ifdef _WIN32
+static __declspec(thread) int k_call_depth = 0;
+#else
+static _Thread_local int k_call_depth = 0;
+#endif
+static int k_max_call_depth = 1024;
 static long long k_out = 0;
 static long long k_max_out = 16777216LL;
 static long long k_max_json = 67108864LL;
@@ -118,6 +124,14 @@ struct KValue {
     } u;
     struct KValue *json_root;
 };
+
+#ifdef _WIN32
+static __declspec(thread) KValue (*k_tail_target)(void) = 0;
+static __declspec(thread) int k_tail_pending = 0;
+#else
+static _Thread_local KValue (*k_tail_target)(void) = 0;
+static _Thread_local int k_tail_pending = 0;
+#endif
 
 enum { K_NIL=0, K_INT, K_FLOAT, K_BOOL, K_STRING, K_BYTES, K_ARRAY,
        K_STRUCT, K_ENUM, K_OPTION, K_RESULT, K_MAP, K_SET, K_JSON,

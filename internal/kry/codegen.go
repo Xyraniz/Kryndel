@@ -33,6 +33,7 @@ type cgen struct {
 	enumID   map[string]int
 	// fnName maps a resolved function to its generated C symbol.
 	fnName                map[*KIRFunction]string
+	functionBodyNames     map[string]string
 	functionIndex         map[*KIRFunction]int
 	functionByTarget      map[string]*KIRFunction
 	functionsByName       map[string][]*KIRFunction
@@ -121,6 +122,7 @@ func generateCFromValidatedKIR(document *KIRDocument, limits Limits, obfuscate b
 		structID:              map[string]int{},
 		enumID:                map[string]int{},
 		fnName:                map[*KIRFunction]string{},
+		functionBodyNames:     map[string]string{},
 		functionIndex:         map[*KIRFunction]int{},
 		functionByTarget:      map[string]*KIRFunction{},
 		functionsByName:       map[string][]*KIRFunction{},
@@ -154,6 +156,7 @@ func generateCFromValidatedKIR(document *KIRDocument, limits Limits, obfuscate b
 	if err := g.planInstances(); err != nil {
 		return "", err
 	}
+	g.planFunctionBodyNames()
 	g.collectPolyHandlers()
 	g.collectGlobals()
 
@@ -539,10 +542,13 @@ func (g *cgen) emitGlobals() {
 // table and mutually recursive calls compile without ordering constraints.
 func (g *cgen) emitPrototypes() {
 	for _, f := range g.regularFunctions {
-		fmt.Fprintf(&g.buf, "static KValue %s(void);\n", g.fnName[f])
+		name := g.fnName[f]
+		fmt.Fprintf(&g.buf, "static KValue %s(void);\n", name)
+		fmt.Fprintf(&g.buf, "static KValue %s(void);\n", g.functionBodyNames[name])
 	}
 	for _, instance := range g.functionInstances {
 		fmt.Fprintf(&g.buf, "static KValue %s(void);\n", instance.symbol)
+		fmt.Fprintf(&g.buf, "static KValue %s(void);\n", g.functionBodyNames[instance.symbol])
 	}
 }
 
@@ -631,15 +637,34 @@ func (g *cgen) emitMetadata() {
 
 func (g *cgen) emitFunctions() {
 	for _, function := range g.regularFunctions {
-		g.emitFunction(function, g.fnName[function], nil)
+		name := g.fnName[function]
+		g.emitFunction(function, name, g.functionBodyNames[name], nil)
 	}
 	for _, instance := range g.functionInstances {
-		g.emitFunction(instance.function, instance.symbol, instance.substitutions)
+		g.emitFunction(instance.function, instance.symbol, g.functionBodyNames[instance.symbol], instance.substitutions)
 	}
 }
 
-func (g *cgen) emitFunction(f *KIRFunction, name string, substitutions map[string]string) {
+func (g *cgen) planFunctionBodyNames() {
+	index := 0
+	for _, function := range g.regularFunctions {
+		name := g.fnName[function]
+		g.functionBodyNames[name] = fmt.Sprintf("kry_generated_fn_body_%d", index)
+		index++
+	}
+	for _, instance := range g.functionInstances {
+		g.functionBodyNames[instance.symbol] = fmt.Sprintf("kry_generated_fn_body_%d", index)
+		index++
+	}
+}
+
+func (g *cgen) emitFunction(f *KIRFunction, name, bodyName string, substitutions map[string]string) {
 	fmt.Fprintf(&g.buf, "static KValue %s(void) {\n", name)
+	fmt.Fprintf(&g.buf, "  if (k_call_depth >= k_max_call_depth) kfail(\"call depth limit exceeded\");\n")
+	fmt.Fprintf(&g.buf, "  k_call_depth++; k_tail_pending = 0; KValue _result = %s();\n", bodyName)
+	fmt.Fprintf(&g.buf, "  while (k_tail_pending) { KValue (*_tail_next)(void) = k_tail_target; k_tail_pending = 0; _result = _tail_next(); }\n")
+	fmt.Fprintf(&g.buf, "  k_call_depth--; return _result;\n}\n")
+	fmt.Fprintf(&g.buf, "static KValue %s(void) {\n", bodyName)
 	// Parameters are passed through a global argument frame so that the
 	// generated C stays simple and recursion works without prototypes.
 	fmt.Fprintf(&g.buf, "  int _fb = k_ndefers;\n")
@@ -675,6 +700,7 @@ func (g *cgen) emitFunction(f *KIRFunction, name string, substitutions map[strin
 func (g *cgen) emitMain() {
 	g.buf.WriteString("int main(void) {\n")
 	fmt.Fprintf(&g.buf, "  k_max_instructions = %dULL;\n", g.limits.MaxInstructions)
+	fmt.Fprintf(&g.buf, "  k_max_call_depth = %d;\n", g.limits.MaxCallDepth)
 	fmt.Fprintf(&g.buf, "  k_max_json = %dLL;\n", g.limits.MaxJSONBytes)
 	fmt.Fprintf(&g.buf, "  k_max_out = %dLL;\n", g.limits.MaxOutputBytes)
 	maxMemory := g.limits.MaxMemoryBytes
@@ -830,6 +856,9 @@ func (g *cgen) emitReturn(s *KIRStmt, indent string) {
 		fmt.Fprintf(&g.buf, "%sreturn kv_nil();\n", indent)
 		return
 	}
+	if g.emitTailCallReturn(s.Return, indent) {
+		return
+	}
 	// `return expr?` where the function returns Option/Result yields the
 	// operand itself: some(x) wrapped is identical to the original Option.
 	if s.Return.Kind == "propagate" {
@@ -837,6 +866,54 @@ func (g *cgen) emitReturn(s *KIRStmt, indent string) {
 		return
 	}
 	fmt.Fprintf(&g.buf, "%sreturn %s;\n", indent, g.expr(s.Return))
+}
+
+func (g *cgen) emitTailCallReturn(expression *KIRExpr, indent string) bool {
+	if expression == nil || expression.Kind != "call" || !expression.Tail {
+		return false
+	}
+	var function *KIRFunction
+	if expression.Receiver != nil {
+		if expression.TraitName != "" {
+			var err error
+			function, err = g.traitImplementationMethod(expression, g.functionSubstitution)
+			if err != nil {
+				g.fail("%s", err)
+				return false
+			}
+		} else if strings.HasPrefix(expression.CallTarget, "function:") {
+			function = g.functionByTarget[strings.TrimPrefix(expression.CallTarget, "function:")]
+		}
+	} else if strings.HasPrefix(expression.CallTarget, "function:") {
+		function = g.functionByTarget[strings.TrimPrefix(expression.CallTarget, "function:")]
+	}
+	if function == nil {
+		return false
+	}
+	name, err := g.functionSymbolForCall(function, expression.Receiver, expression.GenericArguments)
+	if err != nil {
+		g.fail("%s", err)
+		return false
+	}
+	bodyName := g.functionBodyNames[name]
+	if bodyName == "" {
+		g.fail("C AOT has no generated body for function %q", function.Name)
+		return false
+	}
+	frame := g.next()
+	fmt.Fprintf(&g.buf, "%s{ KValue %s[K_MAX_ARGS];\n", indent, frame)
+	argumentOffset := 0
+	if expression.Receiver != nil {
+		fmt.Fprintf(&g.buf, "%s  %s[0] = %s;\n", indent, frame, g.expr(expression.Receiver))
+		argumentOffset = 1
+	}
+	for index, argument := range expression.Args {
+		fmt.Fprintf(&g.buf, "%s  %s[%d] = %s;\n", indent, frame, index+argumentOffset, g.expr(argument))
+	}
+	argumentCount := argumentOffset + len(expression.Args)
+	fmt.Fprintf(&g.buf, "%s  k_argc = %d; memcpy(k_args, %s, sizeof(KValue)*%d); k_tail_target = %s; k_tail_pending = 1; return kv_nil();\n", indent, argumentCount, frame, argumentCount, bodyName)
+	fmt.Fprintf(&g.buf, "%s}\n", indent)
+	return true
 }
 
 func (g *cgen) emitDefer(s *KIRStmt, indent string) {
@@ -1259,7 +1336,7 @@ func (g *cgen) functionCall(f *KIRFunction, receiver *KIRExpr, args []*KIRExpr, 
 		return "kv_nil()"
 	}
 	var b strings.Builder
-	b.WriteString("({ KValue _frame[K_MAX_ARGS];")
+	b.WriteString("({ if (k_call_depth >= k_max_call_depth) kfail(\"call depth limit exceeded\"); KValue _frame[K_MAX_ARGS];")
 	off := 0
 	if receiver != nil {
 		fmt.Fprintf(&b, " _frame[0] = %s;", g.expr(receiver))
