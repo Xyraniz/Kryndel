@@ -1084,7 +1084,9 @@ func (lowerer *kirPEMachine) emitExpr(expression *KIRExpr) error {
 		case "-":
 			lowerer.machine.code = append(lowerer.machine.code, 0x48, 0xf7, 0xd8)
 			if expression.Type == "Int" {
-				lowerer.machine.emitTrapOnOverflow()
+				if err := lowerer.machine.emitConditionalJump(0x80, lowerer.runtimeFailureLabel("negation overflow")); err != nil {
+					return err
+				}
 			}
 			return nil
 		case "!":
@@ -1203,19 +1205,25 @@ func (lowerer *kirPEMachine) emitBinary(expression *KIRExpr) error {
 	case "+":
 		lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x01, 0xc8)
 		if !unsigned {
-			lowerer.machine.emitTrapOnOverflow()
+			if err := lowerer.machine.emitConditionalJump(0x80, lowerer.runtimeFailureLabel("checked integer arithmetic overflow")); err != nil {
+				return err
+			}
 		}
 		lowerer.machine.emitUIntMask(kirPEBits(expression.Type))
 	case "-":
 		lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x29, 0xc8)
 		if !unsigned {
-			lowerer.machine.emitTrapOnOverflow()
+			if err := lowerer.machine.emitConditionalJump(0x80, lowerer.runtimeFailureLabel("checked integer arithmetic overflow")); err != nil {
+				return err
+			}
 		}
 		lowerer.machine.emitUIntMask(kirPEBits(expression.Type))
 	case "*":
 		lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x0f, 0xaf, 0xc1)
 		if !unsigned {
-			lowerer.machine.emitTrapOnOverflow()
+			if err := lowerer.machine.emitConditionalJump(0x80, lowerer.runtimeFailureLabel("checked integer arithmetic overflow")); err != nil {
+				return err
+			}
 		}
 		lowerer.machine.emitUIntMask(kirPEBits(expression.Type))
 	case "/", "%":
@@ -1262,7 +1270,7 @@ func (lowerer *kirPEMachine) emitBinary(expression *KIRExpr) error {
 		lowerer.machine.emitUIntMask(kirPEBits(expression.Type))
 	case "<<", ">>":
 		lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x83, 0xf9, machineBits(leftType))
-		if err := lowerer.machine.emitConditionalJump(0x83, lowerer.machine.trapLabel); err != nil {
+		if err := lowerer.machine.emitConditionalJump(0x83, lowerer.runtimeFailureLabel("shift count must be between 0 and UInt width minus one")); err != nil {
 			return err
 		}
 		if expression.Operator == "<<" {

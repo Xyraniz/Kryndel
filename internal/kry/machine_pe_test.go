@@ -307,7 +307,8 @@ func TestDirectPEUnsignedShiftOutOfRangeExitsWithFailure(t *testing.T) {
 			}
 			out, err := exec.Command(path).CombinedOutput()
 			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || len(out) != 0 {
+			wantDiagnostic := "kryndel: shift count must be between 0 and UInt width minus one\n"
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || string(out) != wantDiagnostic {
 				t.Fatalf("out-of-range shift result: err=%v output=%q", err, out)
 			}
 		})
