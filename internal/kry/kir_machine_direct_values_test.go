@@ -681,3 +681,38 @@ println(unwrap_or(array_get(chars, 2), ""))
 `
 	assertDirectKIRMatchesInterpreter(t, source, "direct-string-chars")
 }
+
+func TestDirectELFKIRSubstringMatchesInterpreter(t *testing.T) {
+	source := `let middle: String = result_unwrap(substring("aá🙂z", 1, 2))
+println(middle)
+let empty: String = result_unwrap(substring("aá🙂z", 4, 0))
+println(len(string_chars(empty)))
+`
+	assertDirectKIRMatchesInterpreter(t, source, "direct-substring")
+}
+
+func TestDirectELFKIRSubstringRejectsInvalidRanges(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		start  string
+		length string
+	}{
+		{name: "negative start", start: "-1", length: "1"},
+		{name: "negative length", start: "0", length: "-1"},
+		{name: "start after end", start: "5", length: "0"},
+		{name: "range exceeds end", start: "4", length: "1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := "let invalid: String = result_unwrap(substring(\"aá🙂z\", " + test.start + ", " + test.length + "))\n" +
+				"println(invalid)\n"
+			assertDirectKIRMatchesInterpreter(t, source, "direct-substring-invalid")
+		})
+	}
+}
+
+func TestDirectELFKIRSubstringOutOfBoundsReturnsError(t *testing.T) {
+	source := `let result: Result[String, String] = substring("aá🙂z", 4, 1)
+println(is_err(result))
+`
+	assertDirectKIRMatchesInterpreter(t, source, "direct-substring-error-value")
+}

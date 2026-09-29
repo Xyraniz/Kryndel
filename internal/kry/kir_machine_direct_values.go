@@ -80,6 +80,14 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr) error {
 		if !singleArg() || args[0].Type != "String" || expression.Type != "Array[String]" {
 			return unsupported()
 		}
+	case "substring":
+		if len(args) != 3 || args[0] == nil || args[1] == nil || args[2] == nil || args[0].Type != "String" || args[1].Type != "Int" || args[2].Type != "Int" {
+			return unsupported()
+		}
+		resultTypes, ok := container(expression.Type, "Result", 2)
+		if !ok || resultTypes[0] != "String" || resultTypes[1] != "String" {
+			return unsupported()
+		}
 	case "array_push":
 		if len(args) != 2 || args[0] == nil || args[1] == nil {
 			return unsupported()
@@ -485,6 +493,26 @@ func (builder *kirDirectBuilder) emitBuiltin(expression *KIRExpr) error {
 		machine.hostRuntimeUsed = true
 		machine.stringCharsUsed = true
 		return machine.emitLabelCall(machine.stringCharsLabel)
+	case "substring":
+		if len(args) != 3 {
+			return fmt.Errorf("direct KIR ELF substring expects three arguments")
+		}
+		if err := builder.emitExpr(args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		if err := builder.emitExpr(args[1]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		if err := builder.emitExpr(args[2]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc2, 0x5e, 0x5f)
+		machine.hostRuntimeUsed = true
+		machine.substringUsed = true
+		machine.boxRuntimeUsed = true
+		return machine.emitLabelCall(machine.substringLabel)
 	case "array_push":
 		if len(args) != 2 {
 			return fmt.Errorf("direct KIR ELF array_push expects two arguments")
