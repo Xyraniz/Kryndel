@@ -671,3 +671,13 @@ println(len(invalid))
 `
 	assertDirectKIRMatchesInterpreter(t, source, "direct-array-set-out-of-bounds")
 }
+
+func TestDirectELFKIRStringCharsMatchesInterpreter(t *testing.T) {
+	source := `let chars: Array[String] = string_chars("aá🙂")
+println(len(chars))
+println(unwrap_or(array_get(chars, 0), ""))
+println(unwrap_or(array_get(chars, 1), ""))
+println(unwrap_or(array_get(chars, 2), ""))
+`
+	assertDirectKIRMatchesInterpreter(t, source, "direct-string-chars")
+}

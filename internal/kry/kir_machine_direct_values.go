@@ -76,6 +76,10 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr) error {
 		if len(args) != 0 || expression.Type != "Array[String]" {
 			return unsupported()
 		}
+	case "string_chars":
+		if !singleArg() || args[0].Type != "String" || expression.Type != "Array[String]" {
+			return unsupported()
+		}
 	case "array_push":
 		if len(args) != 2 || args[0] == nil || args[1] == nil {
 			return unsupported()
@@ -469,6 +473,18 @@ func (builder *kirDirectBuilder) emitBuiltin(expression *KIRExpr) error {
 		machine.arrayRuntimeUsed = true
 		machine.hostRuntimeUsed = true
 		return machine.emitLabelCall(machine.processArgsLabel)
+	case "string_chars":
+		if len(args) != 1 {
+			return fmt.Errorf("direct KIR ELF string_chars expects one argument")
+		}
+		if err := builder.emitExpr(args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc7)
+		machine.arrayRuntimeUsed = true
+		machine.hostRuntimeUsed = true
+		machine.stringCharsUsed = true
+		return machine.emitLabelCall(machine.stringCharsLabel)
 	case "array_push":
 		if len(args) != 2 {
 			return fmt.Errorf("direct KIR ELF array_push expects two arguments")

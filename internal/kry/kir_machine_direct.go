@@ -178,7 +178,7 @@ func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) e
 					return err
 				}
 				switch expression.Name {
-				case "print", "println", "len", "array_push", "array_concat", "array_get", "array_indices", "array_set", "array_slice", "process_args", "some", "none", "ok", "err", "is_some", "is_none", "is_ok", "is_err", "unwrap_or", "result_unwrap", "result_error", "assert", "assert_eq", "u8", "u16", "u32", "u64", "int", "str", "contains", "starts_with", "ends_with":
+				case "print", "println", "len", "array_push", "array_concat", "array_get", "array_indices", "array_set", "array_slice", "process_args", "some", "none", "ok", "err", "is_some", "is_none", "is_ok", "is_err", "unwrap_or", "result_unwrap", "result_error", "assert", "assert_eq", "u8", "u16", "u32", "u64", "int", "str", "string_chars", "contains", "starts_with", "ends_with":
 				default:
 					return fmt.Errorf("%w: direct KIR ELF does not lower builtin %q", errKIRSubsetUnsupported, expression.Name)
 				}
