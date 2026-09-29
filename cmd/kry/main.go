@@ -252,9 +252,9 @@ func capabilitiesCmd(args []string, jsonMode bool) int {
 			return 0
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "CATEGORY\tFEATURE\tTARGET\tINTERPRETER\tC-AOT\tELF-DIRECT\tSELF-HOSTED")
+		fmt.Fprintln(w, "CATEGORY\tFEATURE\tTARGET\tINTERPRETER\tC-AOT\tELF-DIRECT\tPE-DIRECT\tSELF-HOSTED")
 		for _, row := range rows {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Category, row.Feature, row.Target, row.Interpreter, row.CAOT, row.ELFDirect, row.SelfHosted)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Category, row.Feature, row.Target, row.Interpreter, row.CAOT, row.ELFDirect, row.PEDirect, row.SelfHosted)
 		}
 		if err := w.Flush(); err != nil {
 			fmt.Fprintln(os.Stderr, "kry: cannot write language capabilities:", err)
@@ -272,9 +272,9 @@ func capabilitiesCmd(args []string, jsonMode bool) int {
 			return 0
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "BUILTIN\tTARGET\tINTERPRETER\tC-AOT\tELF-DIRECT\tSELF-HOSTED")
+		fmt.Fprintln(w, "BUILTIN\tTARGET\tINTERPRETER\tC-AOT\tELF-DIRECT\tPE-DIRECT\tSELF-HOSTED")
 		for _, row := range rows {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", row.Builtin, row.Target, row.Interpreter, row.CAOT, row.ELFDirect, row.SelfHosted)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Builtin, row.Target, row.Interpreter, row.CAOT, row.ELFDirect, row.PEDirect, row.SelfHosted)
 		}
 		if err := w.Flush(); err != nil {
 			fmt.Fprintln(os.Stderr, "kry: cannot write builtin capabilities:", err)

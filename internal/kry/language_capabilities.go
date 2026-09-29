@@ -13,6 +13,7 @@ type LanguageCapability struct {
 	Interpreter string `json:"interpreter"`
 	CAOT        string `json:"c_aot"`
 	ELFDirect   string `json:"elf_direct"`
+	PEDirect    string `json:"pe_direct"`
 	SelfHosted  string `json:"self_hosted"`
 }
 
@@ -22,6 +23,7 @@ type languageCapabilityInventory struct {
 	self     map[string]struct{}
 	caot     map[string]struct{}
 	direct   map[string]struct{}
+	peDirect map[string]struct{}
 	interp   map[string]struct{}
 }
 
@@ -30,13 +32,13 @@ type languageCapabilityInventory struct {
 // every declared native target.
 func LanguageCapabilityMatrix() []LanguageCapability {
 	inventories := []languageCapabilityInventory{
-		{category: "builtin", values: builtinNameSet(), interp: generatedInterpreterBuiltinCases, caot: generatedCAOTBuiltinCases, direct: generatedDirectELFBuiltinCases, self: generatedSelfHostedBuiltinNames},
-		{category: "expression", values: generatedLanguageExprKinds, interp: generatedInterpreterExprKinds, caot: generatedCAOTExprKinds, direct: generatedDirectELFExprKinds, self: generatedSelfHostedExprKinds},
-		{category: "statement", values: generatedLanguageStmtKinds, interp: generatedInterpreterStmtKinds, caot: generatedCAOTStmtKinds, direct: generatedDirectELFStmtKinds, self: generatedSelfHostedStmtKinds},
-		{category: "pattern", values: generatedLanguagePatternKinds, interp: generatedInterpreterPatternKinds, caot: generatedCAOTPatternKinds, direct: map[string]struct{}{}, self: map[string]struct{}{}},
-		{category: "unary_operator", values: generatedLanguageUnaryOperators, interp: generatedInterpreterUnaryOperators, caot: generatedCAOTUnaryOperators, direct: generatedDirectELFUnaryOperators, self: generatedSelfHostedUnaryOperators},
-		{category: "binary_operator", values: generatedLanguageBinaryOperators, interp: generatedInterpreterBinaryOperators, caot: generatedCAOTBinaryOperators, direct: generatedDirectELFBinaryOperators, self: generatedSelfHostedBinaryOperators},
-		{category: "type", values: generatedLanguageTypeKinds, interp: generatedLanguageTypeKinds, caot: generatedLanguageTypeKinds, direct: generatedDirectELFTypes, self: generatedSelfHostedTypes},
+		{category: "builtin", values: builtinNameSet(), interp: generatedInterpreterBuiltinCases, caot: generatedCAOTBuiltinCases, direct: generatedDirectELFBuiltinCases, peDirect: generatedDirectPEBuiltinCases, self: generatedSelfHostedBuiltinNames},
+		{category: "expression", values: generatedLanguageExprKinds, interp: generatedInterpreterExprKinds, caot: generatedCAOTExprKinds, direct: generatedDirectELFExprKinds, peDirect: generatedDirectPEExprKinds, self: generatedSelfHostedExprKinds},
+		{category: "statement", values: generatedLanguageStmtKinds, interp: generatedInterpreterStmtKinds, caot: generatedCAOTStmtKinds, direct: generatedDirectELFStmtKinds, peDirect: generatedDirectPEStmtKinds, self: generatedSelfHostedStmtKinds},
+		{category: "pattern", values: generatedLanguagePatternKinds, interp: generatedInterpreterPatternKinds, caot: generatedCAOTPatternKinds, direct: map[string]struct{}{}, peDirect: generatedDirectPEPatternKinds, self: map[string]struct{}{}},
+		{category: "unary_operator", values: generatedLanguageUnaryOperators, interp: generatedInterpreterUnaryOperators, caot: generatedCAOTUnaryOperators, direct: generatedDirectELFUnaryOperators, peDirect: generatedDirectPEUnaryOperators, self: generatedSelfHostedUnaryOperators},
+		{category: "binary_operator", values: generatedLanguageBinaryOperators, interp: generatedInterpreterBinaryOperators, caot: generatedCAOTBinaryOperators, direct: generatedDirectELFBinaryOperators, peDirect: generatedDirectPEBinaryOperators, self: generatedSelfHostedBinaryOperators},
+		{category: "type", values: generatedLanguageTypeKinds, interp: generatedLanguageTypeKinds, caot: generatedLanguageTypeKinds, direct: generatedDirectELFTypes, peDirect: generatedDirectPETypes, self: generatedSelfHostedTypes},
 	}
 	rowCount := 0
 	for _, inventory := range inventories {
@@ -53,6 +55,7 @@ func LanguageCapabilityMatrix() []LanguageCapability {
 					Interpreter: inventoryStatus(inventory.interp, feature, true),
 					CAOT:        languageBackendStatus(inventory, feature, "c-aot", target.target),
 					ELFDirect:   languageBackendStatus(inventory, feature, "elf-direct", target.target),
+					PEDirect:    languageBackendStatus(inventory, feature, "pe-direct", target.target),
 					SelfHosted:  languageBackendStatus(inventory, feature, "self-hosted", target.target),
 				})
 			}
@@ -105,6 +108,16 @@ func languageBackendStatus(inventory languageCapabilityInventory, feature, backe
 		if _, ok := inventory.direct[feature]; ok {
 			return "partial"
 		}
+	case "pe-direct":
+		if nativeOutputTargetReason("pe-direct", target) != "" {
+			return "unsupported"
+		}
+		if inventory.category == "builtin" {
+			return nativeBuiltinBackendStatus(feature, "pe-direct", target)
+		}
+		if _, ok := inventory.peDirect[feature]; ok {
+			return "partial"
+		}
 	case "self-hosted":
 		if target.OS != "linux" || target.Arch != "amd64" {
 			return "unsupported"
@@ -123,21 +136,21 @@ func nativeLanguageItemStatus(category, feature, format string, target NativeTar
 	var inventory languageCapabilityInventory
 	switch category {
 	case "expression":
-		inventory = languageCapabilityInventory{category: category, caot: generatedCAOTExprKinds, direct: generatedDirectELFExprKinds}
+		inventory = languageCapabilityInventory{category: category, caot: generatedCAOTExprKinds, direct: generatedDirectELFExprKinds, peDirect: generatedDirectPEExprKinds}
 	case "statement":
-		inventory = languageCapabilityInventory{category: category, caot: generatedCAOTStmtKinds, direct: generatedDirectELFStmtKinds}
+		inventory = languageCapabilityInventory{category: category, caot: generatedCAOTStmtKinds, direct: generatedDirectELFStmtKinds, peDirect: generatedDirectPEStmtKinds}
 	case "pattern":
-		inventory = languageCapabilityInventory{category: category, caot: generatedCAOTPatternKinds}
+		inventory = languageCapabilityInventory{category: category, caot: generatedCAOTPatternKinds, peDirect: generatedDirectPEPatternKinds}
 	case "unary_operator":
-		inventory = languageCapabilityInventory{category: category, caot: generatedCAOTUnaryOperators, direct: generatedDirectELFUnaryOperators}
+		inventory = languageCapabilityInventory{category: category, caot: generatedCAOTUnaryOperators, direct: generatedDirectELFUnaryOperators, peDirect: generatedDirectPEUnaryOperators}
 	case "binary_operator":
-		inventory = languageCapabilityInventory{category: category, caot: generatedCAOTBinaryOperators, direct: generatedDirectELFBinaryOperators}
+		inventory = languageCapabilityInventory{category: category, caot: generatedCAOTBinaryOperators, direct: generatedDirectELFBinaryOperators, peDirect: generatedDirectPEBinaryOperators}
 	case "type":
-		inventory = languageCapabilityInventory{category: category, caot: generatedLanguageTypeKinds, direct: generatedDirectELFTypes}
+		inventory = languageCapabilityInventory{category: category, caot: generatedLanguageTypeKinds, direct: generatedDirectELFTypes, peDirect: generatedDirectPETypes}
 	default:
 		return "unsupported"
 	}
-	if format == "elf-direct" {
+	if format == "elf-direct" || format == "pe-direct" {
 		return languageBackendStatus(inventory, feature, format, target)
 	}
 	if nativeOutputTargetReason(format, target) != "" {

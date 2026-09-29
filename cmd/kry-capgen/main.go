@@ -27,10 +27,59 @@ func main() {
 	// directMachine.emitExpr's builtin switch.
 	directELF = append(directELF, "print", "println")
 	sort.Strings(directELF)
-	directPE, err := stringCases("machine_pe.go", "validateDirectPEExpr")
+	directPETargets, err := stringSwitchCases("kir_machine_pe.go", "validateKIRDirectPEExpr", "CallTarget")
 	if err != nil {
 		fail(err)
 	}
+	directPE := make([]string, 0, len(directPETargets))
+	for _, target := range directPETargets {
+		if strings.HasPrefix(target, "builtin:") {
+			directPE = append(directPE, strings.TrimPrefix(target, "builtin:"))
+		}
+	}
+	directPEExprKinds, err := kirLanguageKinds("kir_machine_pe.go", "validateKIRDirectPEExpr", "Kind", map[string]string{
+		"int": "ExInt", "float": "ExFloat", "bool": "ExBool", "string": "ExString", "var": "ExVar",
+		"nil": "ExNil", "unary": "ExUnary", "binary": "ExBinary", "call": "ExCall",
+	})
+	if err != nil {
+		fail(err)
+	}
+	directPEStaticExprKinds, err := kirLanguageKinds("kir_machine_pe.go", "directPEStaticKIRValue", "Kind", map[string]string{
+		"int": "ExInt", "float": "ExFloat", "bool": "ExBool", "string": "ExString", "var": "ExVar", "nil": "ExNil", "binary": "ExBinary", "call": "ExCall",
+	})
+	if err != nil {
+		fail(err)
+	}
+	directPEExprKinds = append(directPEExprKinds, directPEStaticExprKinds...)
+	sort.Strings(directPEExprKinds)
+	directPEExprKinds = unique(directPEExprKinds)
+	directPEStmtKinds, err := kirLanguageKinds("kir_machine_pe.go", "validateKIRDirectPEStatements", "Kind", map[string]string{
+		"let": "StLet", "const": "StConst", "assign": "StAssign", "expr": "StExpr",
+		"if": "StIf", "while": "StWhile", "break": "StBreak", "continue": "StContinue", "return": "StReturn",
+	})
+	if err != nil {
+		fail(err)
+	}
+	directPEUnaryOperators, err := kirOperatorCases("kir_machine_pe.go", "validateKIRDirectPEExpr", "unary")
+	if err != nil {
+		fail(err)
+	}
+	directPEBinaryOperators, err := kirOperatorCases("kir_machine_pe.go", "validateKIRDirectPEExpr", "binary")
+	if err != nil {
+		fail(err)
+	}
+	directPETypeNames, err := stringSwitchCases("machine_pe.go", "directPETypeName", "name")
+	if err != nil {
+		fail(err)
+	}
+	directPETypes := []string{"TyFloat", "TyNil"}
+	for _, name := range directPETypeNames {
+		if kind := languageTypeForSourceName(name); kind != "" {
+			directPETypes = append(directPETypes, kind)
+		}
+	}
+	sort.Strings(directPETypes)
+	directPETypes = unique(directPETypes)
 	interpreter, err := stringCases("runtime.go", "evalBuiltin")
 	if err != nil {
 		fail(err)
@@ -107,6 +156,21 @@ func main() {
 	fmt.Fprintln(&out, "var generatedDirectPEBuiltinCases = map[string]struct{}{")
 	writeCases(&out, directPE)
 	fmt.Fprintln(&out, "}")
+	for _, inventory := range []struct {
+		name   string
+		values []string
+	}{
+		{"generatedDirectPEExprKinds", directPEExprKinds},
+		{"generatedDirectPEStmtKinds", directPEStmtKinds},
+		{"generatedDirectPEPatternKinds", nil},
+		{"generatedDirectPEUnaryOperators", directPEUnaryOperators},
+		{"generatedDirectPEBinaryOperators", directPEBinaryOperators},
+		{"generatedDirectPETypes", directPETypes},
+	} {
+		fmt.Fprintf(&out, "var %s = map[string]struct{}{\n", inventory.name)
+		writeCases(&out, inventory.values)
+		fmt.Fprintln(&out, "}")
+	}
 	fmt.Fprintln(&out, "var generatedInterpreterBuiltinCases = map[string]struct{}{")
 	writeCases(&out, interpreter)
 	fmt.Fprintln(&out, "}")
@@ -465,6 +529,9 @@ func operatorKind(value string) string {
 }
 
 func languageTypeForSourceName(name string) string {
+	if strings.HasPrefix(name, "UInt") {
+		return "TyUInt"
+	}
 	return map[string]string{
 		"Int": "TyInt", "UInt": "TyUInt", "Bool": "TyBool", "String": "TyString", "Bytes": "TyBytes",
 		"Array": "TyArray", "Option": "TyOption", "Result": "TyResult", "Map": "TyMap", "Json": "TyJSON",
@@ -511,14 +578,18 @@ func selfHostedBuiltinNames(sourcePath, registryPath string) ([]string, error) {
 }
 
 func stringCases(filename, functionName string) ([]string, error) {
+	return stringSwitchCases(filename, functionName, "Name")
+}
+
+func stringSwitchCases(filename, functionName, selector string) ([]string, error) {
 	f, err := parser.ParseFile(token.NewFileSet(), filename, nil, parser.AllErrors)
 	if err != nil {
 		return nil, err
 	}
 	var function *ast.FuncDecl
-	for _, decl := range f.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == functionName {
-			function = fn
+	for _, declaration := range f.Decls {
+		if candidate, ok := declaration.(*ast.FuncDecl); ok && candidate.Name.Name == functionName {
+			function = candidate
 			break
 		}
 	}
@@ -527,27 +598,30 @@ func stringCases(filename, functionName string) ([]string, error) {
 	}
 	seen := map[string]bool{}
 	ast.Inspect(function.Body, func(node ast.Node) bool {
-		sw, ok := node.(*ast.SwitchStmt)
+		switchStmt, ok := node.(*ast.SwitchStmt)
 		if !ok {
 			return true
 		}
-		tag, ok := sw.Tag.(*ast.SelectorExpr)
-		if !ok || tag.Sel.Name != "Name" {
+		matches := false
+		switch tag := switchStmt.Tag.(type) {
+		case *ast.SelectorExpr:
+			matches = tag.Sel.Name == selector
+		case *ast.Ident:
+			matches = tag.Name == selector
+		}
+		if !matches {
 			return true
 		}
-		for _, raw := range sw.Body.List {
-			clause, ok := raw.(*ast.CaseClause)
-			if !ok {
-				continue
-			}
-			for _, expr := range clause.List {
-				literal, ok := expr.(*ast.BasicLit)
+		for _, raw := range switchStmt.Body.List {
+			clause := raw.(*ast.CaseClause)
+			for _, expression := range clause.List {
+				literal, ok := expression.(*ast.BasicLit)
 				if !ok || literal.Kind != token.STRING {
 					continue
 				}
-				name, err := strconv.Unquote(literal.Value)
+				value, err := strconv.Unquote(literal.Value)
 				if err == nil {
-					seen[name] = true
+					seen[value] = true
 				}
 			}
 		}
@@ -559,6 +633,110 @@ func stringCases(filename, functionName string) ([]string, error) {
 	}
 	sort.Strings(values)
 	return values, nil
+}
+
+func kirLanguageKinds(filename, functionName, selector string, names map[string]string) ([]string, error) {
+	values, err := stringSwitchCases(filename, functionName, selector)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		name, ok := names[value]
+		if !ok {
+			return nil, fmt.Errorf("unmapped KIR %s kind %q in %s.%s", selector, value, filename, functionName)
+		}
+		if name != "" {
+			result = append(result, name)
+		}
+	}
+	return result, nil
+}
+
+func kirOperatorCases(filename, functionName, kind string) ([]string, error) {
+	f, err := parser.ParseFile(token.NewFileSet(), filename, nil, parser.AllErrors)
+	if err != nil {
+		return nil, err
+	}
+	var function *ast.FuncDecl
+	for _, declaration := range f.Decls {
+		if candidate, ok := declaration.(*ast.FuncDecl); ok && candidate.Name.Name == functionName {
+			function = candidate
+			break
+		}
+	}
+	if function == nil {
+		return nil, fmt.Errorf("function %s not found in %s", functionName, filename)
+	}
+	seen := map[string]bool{}
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		outer, ok := node.(*ast.SwitchStmt)
+		if !ok {
+			return true
+		}
+		tag, ok := outer.Tag.(*ast.SelectorExpr)
+		if !ok || tag.Sel.Name != "Kind" {
+			return true
+		}
+		for _, raw := range outer.Body.List {
+			clause := raw.(*ast.CaseClause)
+			matches := false
+			for _, expression := range clause.List {
+				literal, ok := expression.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					continue
+				}
+				value, err := strconv.Unquote(literal.Value)
+				matches = matches || err == nil && value == kind
+			}
+			if !matches {
+				continue
+			}
+			ast.Inspect(clause, func(inner ast.Node) bool {
+				switchStmt, ok := inner.(*ast.SwitchStmt)
+				if !ok {
+					return true
+				}
+				operatorTag, ok := switchStmt.Tag.(*ast.SelectorExpr)
+				if !ok || operatorTag.Sel.Name != "Operator" {
+					return true
+				}
+				for _, operatorRaw := range switchStmt.Body.List {
+					operatorClause := operatorRaw.(*ast.CaseClause)
+					for _, expression := range operatorClause.List {
+						literal, ok := expression.(*ast.BasicLit)
+						if !ok || literal.Kind != token.STRING {
+							continue
+						}
+						value, err := strconv.Unquote(literal.Value)
+						if err == nil {
+							if name := operatorKind(value); name != "" {
+								seen[name] = true
+							}
+						}
+					}
+				}
+				return false
+			})
+		}
+		return true
+	})
+	values := make([]string, 0, len(seen))
+	for value := range seen {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values, nil
+}
+
+func unique(values []string) []string {
+	result := values[:0]
+	for index, value := range values {
+		if index == 0 || value != values[index-1] {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func writeCases(out *bytes.Buffer, values []string) {

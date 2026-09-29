@@ -581,6 +581,7 @@ func TestLanguageCapabilitiesCommandWritesJSONMatrix(t *testing.T) {
 		`"category":"type"`, `"feature":"TyChannel"`,
 		`"category":"builtin"`, `"feature":"websocket_connect"`,
 		`"target":"linux-x64"`, `"elf_direct":"partial"`,
+		`"target":"windows-x64"`, `"pe_direct":"partial"`,
 	} {
 		if !strings.Contains(string(output), fragment) {
 			t.Fatalf("language capability JSON omitted %s: %s", fragment, output[:min(len(output), 1500)])

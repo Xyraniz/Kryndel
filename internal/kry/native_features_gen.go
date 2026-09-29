@@ -233,6 +233,63 @@ var generatedDirectPEBuiltinCases = map[string]struct{}{
 	"u64":     {},
 	"u8":      {},
 }
+var generatedDirectPEExprKinds = map[string]struct{}{
+	"ExBinary": {},
+	"ExBool":   {},
+	"ExCall":   {},
+	"ExFloat":  {},
+	"ExInt":    {},
+	"ExNil":    {},
+	"ExString": {},
+	"ExUnary":  {},
+	"ExVar":    {},
+}
+var generatedDirectPEStmtKinds = map[string]struct{}{
+	"StAssign":   {},
+	"StBreak":    {},
+	"StConst":    {},
+	"StContinue": {},
+	"StExpr":     {},
+	"StIf":       {},
+	"StLet":      {},
+	"StReturn":   {},
+	"StWhile":    {},
+}
+var generatedDirectPEPatternKinds = map[string]struct{}{}
+var generatedDirectPEUnaryOperators = map[string]struct{}{
+	"BANG":   {},
+	"BITNOT": {},
+	"MINUS":  {},
+	"PLUS":   {},
+}
+var generatedDirectPEBinaryOperators = map[string]struct{}{
+	"AND":     {},
+	"BITAND":  {},
+	"BITXOR":  {},
+	"EQEQ":    {},
+	"GEQ":     {},
+	"GREATER": {},
+	"LEQ":     {},
+	"LESS":    {},
+	"MINUS":   {},
+	"NEQ":     {},
+	"OR":      {},
+	"PERCENT": {},
+	"PIPE":    {},
+	"PLUS":    {},
+	"SHL":     {},
+	"SHR":     {},
+	"SLASH":   {},
+	"STAR":    {},
+}
+var generatedDirectPETypes = map[string]struct{}{
+	"TyBool":   {},
+	"TyFloat":  {},
+	"TyInt":    {},
+	"TyNil":    {},
+	"TyString": {},
+	"TyUInt":   {},
+}
 var generatedInterpreterBuiltinCases = map[string]struct{}{
 	"abs":                                  {},
 	"actor_channel":                        {},

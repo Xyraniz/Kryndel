@@ -131,13 +131,15 @@ func TestInspectNativeMachO(t *testing.T) {
 
 func TestGeneratedBuiltinCapabilitiesMatchBackendDispatch(t *testing.T) {
 	cases := []struct {
-		file string
-		fn   string
-		want map[string]struct{}
+		file     string
+		fn       string
+		selector string
+		prefix   string
+		want     map[string]struct{}
 	}{
-		{file: "codegen.go", fn: "builtinCall", want: generatedCAOTBuiltinCases},
-		{file: "machine_dynamic.go", fn: "emitExpr", want: generatedDirectELFBuiltinCases},
-		{file: "machine_pe.go", fn: "validateDirectPEExpr", want: generatedDirectPEBuiltinCases},
+		{file: "codegen.go", fn: "builtinCall", selector: "Name", want: generatedCAOTBuiltinCases},
+		{file: "machine_dynamic.go", fn: "emitExpr", selector: "Name", want: generatedDirectELFBuiltinCases},
+		{file: "kir_machine_pe.go", fn: "validateKIRDirectPEExpr", selector: "CallTarget", prefix: "builtin:", want: generatedDirectPEBuiltinCases},
 	}
 	for _, tc := range cases {
 		t.Run(tc.fn, func(t *testing.T) {
@@ -161,8 +163,14 @@ func TestGeneratedBuiltinCapabilitiesMatchBackendDispatch(t *testing.T) {
 				if !ok {
 					return true
 				}
-				tag, ok := switchStmt.Tag.(*ast.SelectorExpr)
-				if !ok || tag.Sel.Name != "Name" {
+				tagName := ""
+				switch tag := switchStmt.Tag.(type) {
+				case *ast.SelectorExpr:
+					tagName = tag.Sel.Name
+				case *ast.Ident:
+					tagName = tag.Name
+				}
+				if tagName != tc.selector {
 					return true
 				}
 				for _, rawClause := range switchStmt.Body.List {
@@ -174,6 +182,12 @@ func TestGeneratedBuiltinCapabilitiesMatchBackendDispatch(t *testing.T) {
 						}
 						name, err := strconv.Unquote(literal.Value)
 						if err == nil {
+							if tc.prefix != "" {
+								if !strings.HasPrefix(name, tc.prefix) {
+									continue
+								}
+								name = strings.TrimPrefix(name, tc.prefix)
+							}
 							actual[name] = true
 						}
 					}
@@ -322,7 +336,7 @@ func TestLanguageCapabilityMatrixCoversGeneratedItemsAndTargets(t *testing.T) {
 		if _, duplicate := lookup[key]; duplicate {
 			t.Fatalf("duplicate language capability row %s", key)
 		}
-		if row.Interpreter == "" || row.CAOT == "" || row.ELFDirect == "" || row.SelfHosted == "" {
+		if row.Interpreter == "" || row.CAOT == "" || row.ELFDirect == "" || row.PEDirect == "" || row.SelfHosted == "" {
 			t.Fatalf("capability row has an empty backend state: %#v", row)
 		}
 		lookup[key] = row
@@ -353,6 +367,22 @@ func TestLanguageCapabilityMatrixCoversGeneratedItemsAndTargets(t *testing.T) {
 	}
 	if row := lookup["expression/ExFloat/darwin-arm64"]; row.CAOT != "supported" || row.ELFDirect != "unsupported" {
 		t.Errorf("unexpected Darwin ARM64 float expression capability: %#v", row)
+	}
+	for key, want := range map[string]string{
+		"expression/ExInt/windows-x64":      "partial",
+		"expression/ExFloat/windows-x64":    "partial",
+		"expression/ExNil/windows-x64":      "partial",
+		"type/TyFloat/windows-x64":          "partial",
+		"statement/StMatch/windows-x64":     "unsupported",
+		"unary_operator/BITNOT/windows-x64": "partial",
+		"binary_operator/SHL/windows-x64":   "partial",
+		"type/TyUInt/windows-x64":           "partial",
+		"type/TyInt/linux-x64":              "unsupported",
+		"builtin/u64/windows-x64":           "supported",
+	} {
+		if got := lookup[key].PEDirect; got != want {
+			t.Errorf("%s PE-direct capability = %q, want %q", key, got, want)
+		}
 	}
 }
 
@@ -404,6 +434,14 @@ func TestNativeBuildPreflightsGeneratedSyntaxCapabilities(t *testing.T) {
 	_, err := BuildDirectELF(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
 	if err == nil || !strings.Contains(err.Error(), `statement "StUnsafe" is not listed as supported by the elf-direct backend`) {
 		t.Fatalf("direct ELF should reject unsupported statements during capability preflight, got %v", err)
+	}
+}
+
+func TestDirectPERejectsUnsupportedFloatFeatureClearly(t *testing.T) {
+	p, c := testProgram(t, "fn value() -> Float { return 1.5 }\nprintln(value())\n")
+	_, err := BuildDirectPE(p, c, NativeTarget{OS: "windows", Arch: "amd64"})
+	if err == nil || !strings.Contains(err.Error(), "direct PE dynamic subset") || !strings.Contains(err.Error(), "return type Float") {
+		t.Fatalf("direct PE should clearly reject dynamic Float values, got %v", err)
 	}
 }
 

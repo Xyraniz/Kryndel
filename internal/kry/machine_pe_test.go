@@ -137,6 +137,8 @@ func TestDirectPEBuiltinDifferentialConformance(t *testing.T) {
 		name   string
 		source string
 	}{
+		{name: "static float output", source: "println(1.5)"},
+		{name: "static nil output", source: "println(nil)"},
 		{name: "print", source: `print("text")`},
 		{name: "println", source: "println(\"text\")\nprintln(-7)\nprintln(true)\nprintln(false)\nprintln(u8(255))"},
 		{name: "u8", source: "println(u8(0))\nprintln(u8(255))"},

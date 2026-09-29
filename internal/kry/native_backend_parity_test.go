@@ -15,6 +15,18 @@ func TestNativeBackendParityFixture(t *testing.T) {
 	}
 	source := string(sourceBytes)
 	wantOutput := "integer=42\n-9223372036854775808\ntrue\nfalse\nfirst\nsecond\n"
+	program, checker := parseCheckOptionResult(t, source)
+	kir, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := DecodeKIR(kir, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateKIRDirectELFValueSubset(document); err != nil {
+		t.Fatalf("shared parity fixture must use the KIR direct-ELF lowering: %v", err)
+	}
 
 	interpreter := runOptionResultInterpreter(t, source)
 	assertOptionResultOutcome(t, "interpreter parity fixture", interpreter, optionResultObservedOutcome{stdout: wantOutput})
