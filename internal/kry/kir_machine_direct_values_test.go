@@ -545,3 +545,78 @@ func assertDirectKIRMatchesInterpreter(t *testing.T, source, artifactName string
 		t.Fatalf("direct KIR ELF stdout/stderr/status = %q/%q/%d (run error %v), want AST %q/%q/%d", stdout.String(), stderr.String(), status, runErr, astOutput.String(), wantStderr, wantStatus)
 	}
 }
+
+func TestDirectELFKIRProcessArgsMatchesInterpreter(t *testing.T) {
+	source := `let args: Array[String] = process_args()
+println(len(args))
+for argument in args { println(argument) }
+`
+	program, checker := testProgram(t, source)
+	kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := DecodeKIR(kirBytes, checker.Env.Lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateKIRDirectELFValueSubset(document); err != nil {
+		t.Fatalf("direct KIR preflight rejected process_args: %v", err)
+	}
+	if err := validateKIRExecSubset(document); !errors.Is(err, errKIRSubsetUnsupported) || !strings.Contains(err.Error(), "host effect") {
+		t.Fatalf("KIR executor unexpectedly accepted process_args: %v", err)
+	}
+	image, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatalf("direct ELF KIR lowering rejected process_args: %v", err)
+	}
+	if _, err := InspectNative(image); err != nil {
+		t.Fatalf("process_args produced an invalid ELF image: %v", err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("generated ELF execution is verified on Linux/amd64 hosts")
+	}
+
+	path := filepath.Join(t.TempDir(), "direct-process-args")
+	if err := os.WriteFile(path, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		arguments []string
+	}{
+		{name: "empty", arguments: nil},
+		{name: "spaces and UTF-8", arguments: []string{"alpha", "two words", "á"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			arguments := test.arguments
+			interpreter, diagnostic := NewRuntimeWithArgs(program, checker, checker.Env.Lim, Sandbox{}, arguments)
+			if diagnostic != nil {
+				t.Fatal(diagnostic)
+			}
+			var expected bytes.Buffer
+			interpreter.output = &expected
+			wantDiagnostic := interpreter.run()
+
+			command := exec.Command(path, arguments...)
+			var stdout, stderr bytes.Buffer
+			command.Stdout, command.Stderr = &stdout, &stderr
+			runErr := command.Run()
+			status := 0
+			if runErr != nil {
+				var exitErr *exec.ExitError
+				if !errors.As(runErr, &exitErr) {
+					t.Fatalf("generated ELF failed: %v", runErr)
+				}
+				status = exitErr.ExitCode()
+			}
+			wantStatus, wantStderr := 0, ""
+			if wantDiagnostic != nil {
+				wantStatus, wantStderr = 1, wantDiagnostic.Format(false)
+			}
+			if stdout.String() != expected.String() || stderr.String() != wantStderr || status != wantStatus {
+				t.Fatalf("direct ELF stdout/stderr/status = %q/%q/%d, want %q/%q/%d", stdout.String(), stderr.String(), status, expected.String(), wantStderr, wantStatus)
+			}
+		})
+	}
+}

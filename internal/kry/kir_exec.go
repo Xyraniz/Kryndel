@@ -23,11 +23,12 @@ type kirExecBinding struct {
 }
 
 type kirExecScope struct {
-	parent *kirExecScope
-	names  map[string]string
-	values map[kirExecBindingKey]*kirExecBinding
-	defers [][]*KIRStmt
-	types  map[string]string
+	parent           *kirExecScope
+	names            map[string]string
+	values           map[kirExecBindingKey]*kirExecBinding
+	defers           [][]*KIRStmt
+	types            map[string]string
+	allowProcessArgs bool
 }
 
 type kirExecBindingKey struct {
@@ -44,7 +45,7 @@ func kirExecKey(binding *KIRBinding) kirExecBindingKey {
 }
 
 func newKIRExecScope(parent *kirExecScope) *kirExecScope {
-	return &kirExecScope{parent: parent, names: map[string]string{}, values: map[kirExecBindingKey]*kirExecBinding{}}
+	return &kirExecScope{parent: parent, names: map[string]string{}, values: map[kirExecBindingKey]*kirExecBinding{}, allowProcessArgs: parent != nil && parent.allowProcessArgs}
 }
 
 func (scope *kirExecScope) find(binding *KIRBinding) (*kirExecBinding, bool) {
@@ -375,10 +376,10 @@ func (executor *kirExecutor) instantiateKIRType(encoded string) string {
 // scalar type and lexical-binding invariants used below, including branches
 // that execution may not visit.
 func validateKIRExecSubset(document *KIRDocument) error {
-	return validateKIRExecSubsetWithFunctions(document, kirExecFunctions(document))
+	return validateKIRExecSubsetWithFunctions(document, kirExecFunctions(document), false)
 }
 
-func validateKIRExecSubsetWithFunctions(document *KIRDocument, functions map[string]*KIRFunction) error {
+func validateKIRExecSubsetWithFunctions(document *KIRDocument, functions map[string]*KIRFunction, allowProcessArgs bool) error {
 	if document.Version < 3 || document.Version > KIRVersion {
 		return fmt.Errorf("%w: KIR v3 or newer resolved bindings are required", errKIRSubsetUnsupported)
 	}
@@ -424,6 +425,7 @@ func validateKIRExecSubsetWithFunctions(document *KIRDocument, functions map[str
 		}
 	}
 	root := newKIRExecScope(nil)
+	root.allowProcessArgs = allowProcessArgs
 	if err := validateKIRExecBlock(document.Statements, root, "", functions, document); err != nil {
 		return err
 	}
@@ -1395,7 +1397,7 @@ func validateKIRExecExpr(expression *KIRExpr, scope *kirExecScope, allowOutput b
 		if expression.Name == "str" && expression.Type != "String" {
 			return fmt.Errorf("invalid KIR executable: str call has invalid result type")
 		}
-		if !kirExecBuiltinSupported(builtin) {
+		if !kirExecBuiltinSupported(builtin) && !(scope.allowProcessArgs && builtin.Name == "process_args") {
 			return fmt.Errorf("%w: builtin %q has host effect %q outside the KIR executor capability boundary", errKIRSubsetUnsupported, expression.Name, builtin.Effects)
 		}
 	case "lambda":

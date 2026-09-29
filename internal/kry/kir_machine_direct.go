@@ -44,6 +44,7 @@ type kirDirectBuilder struct {
 	callSiteFrames   []StackFrame
 	callSiteTable    int
 	callSiteTableSet bool
+	processArgsUsed  bool
 	entryFunction    *KIRFunction
 	currentFunction  *kirDirectFunction
 	loops            []machineLoop
@@ -75,7 +76,7 @@ func validateKIRDirectELFValueSubset(document *KIRDocument) error {
 // decoded KIR only. It first applies the executor's semantic checks, then
 // narrows execution to operations for which the direct machine emits code.
 func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) error {
-	if err := validateKIRExecSubset(document); err != nil {
+	if err := validateKIRExecSubsetWithFunctions(document, kirExecFunctions(document), true); err != nil {
 		return err
 	}
 	functionMap := kirExecFunctions(document)
@@ -177,7 +178,7 @@ func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) e
 					return err
 				}
 				switch expression.Name {
-				case "print", "println", "len", "array_push", "array_concat", "array_get", "array_indices", "some", "none", "ok", "err", "is_some", "is_none", "is_ok", "is_err", "unwrap_or", "result_unwrap", "result_error", "assert", "assert_eq", "u8", "u16", "u32", "u64", "int", "str", "contains", "starts_with", "ends_with":
+				case "print", "println", "len", "array_push", "array_concat", "array_get", "array_indices", "process_args", "some", "none", "ok", "err", "is_some", "is_none", "is_ok", "is_err", "unwrap_or", "result_unwrap", "result_error", "assert", "assert_eq", "u8", "u16", "u32", "u64", "int", "str", "contains", "starts_with", "ends_with":
 				default:
 					return fmt.Errorf("%w: direct KIR ELF does not lower builtin %q", errKIRSubsetUnsupported, expression.Name)
 				}
@@ -549,7 +550,7 @@ func (builder *kirDirectBuilder) build() ([]byte, error) {
 		}
 	}
 	if machine.hostRuntimeUsed {
-		if machine.intToStringUsed || machine.intFromStringUsed || machine.stringCharsUsed || machine.substringUsed {
+		if machine.intToStringUsed || machine.intFromStringUsed || machine.stringCharsUsed || machine.substringUsed || builder.processArgsUsed {
 			if err := machine.emitStringAllocRuntime(); err != nil {
 				return nil, err
 			}
@@ -571,6 +572,11 @@ func (builder *kirDirectBuilder) build() ([]byte, error) {
 		}
 		if machine.intFromStringUsed {
 			if err := machine.emitIntFromStringRuntime(); err != nil {
+				return nil, err
+			}
+		}
+		if builder.processArgsUsed {
+			if err := machine.emitProcessArgsRuntime(); err != nil {
 				return nil, err
 			}
 		}
