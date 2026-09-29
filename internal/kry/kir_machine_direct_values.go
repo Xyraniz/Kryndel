@@ -107,6 +107,13 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr) error {
 		if _, ok := container(args[0].Type, "Array", 1); !ok || expression.Type != "Array[Int]" {
 			return unsupported()
 		}
+	case "array_slice":
+		if len(args) != 3 || args[0] == nil || args[1] == nil || args[2] == nil || args[1].Type != "Int" || args[2].Type != "Int" || expression.Type != args[0].Type {
+			return unsupported()
+		}
+		if _, ok := container(args[0].Type, "Array", 1); !ok {
+			return unsupported()
+		}
 	case "some":
 		if !singleArg() {
 			return unsupported()
@@ -543,6 +550,52 @@ func (builder *kirDirectBuilder) emitBuiltin(expression *KIRExpr) error {
 		}
 		machine.code = append(machine.code, 0x58, 0x48, 0x83, 0xc4, 0x08)
 		return nil
+	case "array_slice":
+		if len(args) != 3 {
+			return fmt.Errorf("direct KIR ELF array_slice expects three arguments")
+		}
+		for index := 0; index < 2; index++ {
+			if err := builder.emitExpr(args[index]); err != nil {
+				return err
+			}
+			machine.code = append(machine.code, 0x50)
+		}
+		if err := builder.emitExpr(args[2]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		failure := builder.diag(expression, CatRuntime, "array slice range is out of bounds")
+		machine.code = append(machine.code, 0x48, 0x83, 0x3c, 0x24, 0x00)
+		if err := machine.emitConditionalJump(0x88, failure); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x83, 0x7c, 0x24, 0x08, 0x00)
+		if err := machine.emitConditionalJump(0x88, failure); err != nil {
+			return err
+		}
+		machine.code = append(machine.code,
+			0x48, 0x8b, 0x44, 0x24, 0x10,
+			0x48, 0x8b, 0x08,
+			0x48, 0x39, 0x4c, 0x24, 0x08,
+		)
+		if err := machine.emitConditionalJump(0x87, failure); err != nil {
+			return err
+		}
+		machine.code = append(machine.code,
+			0x48, 0x2b, 0x4c, 0x24, 0x08,
+			0x48, 0x39, 0x0c, 0x24,
+		)
+		if err := machine.emitConditionalJump(0x87, failure); err != nil {
+			return err
+		}
+		machine.code = append(machine.code,
+			0x48, 0x8b, 0x7c, 0x24, 0x10,
+			0x48, 0x8b, 0x74, 0x24, 0x08,
+			0x48, 0x8b, 0x14, 0x24,
+			0x48, 0x83, 0xc4, 0x18,
+		)
+		machine.arrayRuntimeUsed = true
+		return machine.emitLabelCall(machine.arraySliceLabel)
 	case "some", "ok", "err":
 		if len(args) != 1 {
 			return fmt.Errorf("direct KIR ELF %s expects one argument", expression.Name)

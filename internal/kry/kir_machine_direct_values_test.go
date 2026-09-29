@@ -620,3 +620,35 @@ for argument in args { println(argument) }
 		})
 	}
 }
+
+func TestDirectELFKIRArraySliceMatchesInterpreter(t *testing.T) {
+	source := `let values: Array[Int] = [10, 20, 30, 40]
+let middle: Array[Int] = array_slice(values, 1, 2)
+println(len(middle))
+println(unwrap_or(array_get(middle, 0), -1))
+println(unwrap_or(array_get(middle, 1), -1))
+let empty: Array[Int] = array_slice(values, 4, 0)
+println(len(empty))
+`
+	assertDirectKIRMatchesInterpreter(t, source, "direct-array-slice")
+}
+
+func TestDirectELFKIRArraySliceRejectsInvalidRanges(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		start  string
+		length string
+	}{
+		{name: "negative start", start: "-1", length: "0"},
+		{name: "negative length", start: "0", length: "-1"},
+		{name: "start after end", start: "5", length: "0"},
+		{name: "range exceeds end", start: "4", length: "1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := "let values: Array[Int] = [10, 20, 30, 40]\n" +
+				"let invalid: Array[Int] = array_slice(values, " + test.start + ", " + test.length + ")\n" +
+				"println(len(invalid))\n"
+			assertDirectKIRMatchesInterpreter(t, source, "direct-array-slice-invalid")
+		})
+	}
+}
