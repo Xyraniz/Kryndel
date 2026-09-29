@@ -13,6 +13,8 @@ The categories are `lex`, `parse`, `type-mismatch`, `runtime`, `artifact`, `cli`
 
 `check` and `build` report lexical, parse, module, and static errors before any user expression is evaluated. `run` reports the same preflight errors and then runtime failures such as checked integer overflow, division by zero, invalid UTF-8, failed assertions, and out-of-bounds indexing. Artifact failures are reported before payload parsing.
 
+An incomplete enum match lists the variants that are still missing. A call that matches no overload lists the visible candidate signatures in a stable order; private candidates are omitted.
+
 | Exit code | Meaning |
 | ---: | --- |
 | `0` | The requested operation completed successfully. |

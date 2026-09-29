@@ -66,7 +66,7 @@ counter.read(true)
 	if diagnostic != nil {
 		t.Fatal(diagnostic.Message)
 	}
-	if _, diagnostic = Check(p, DefaultLimits()); diagnostic == nil || !strings.Contains(diagnostic.Message, "no overload of method 'read'") {
+	if _, diagnostic = Check(p, DefaultLimits()); diagnostic == nil || !strings.Contains(diagnostic.Message, "no overload of method 'read'") || !strings.Contains(diagnostic.Message, "Counter.read(Int) -> Int") || !strings.Contains(diagnostic.Message, "Counter.read(String) -> Int") {
 		t.Fatalf("expected no-matching-method-overload diagnostic, got %#v", diagnostic)
 	}
 }

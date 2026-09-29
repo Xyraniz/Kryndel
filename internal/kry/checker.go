@@ -2,6 +2,7 @@ package kry
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -811,7 +812,11 @@ func (c *Checker) checkStmt(sc *Scope, s *Stmt, rt *Type, loop int, inFn bool) F
 			if t.Kind == TyResult {
 				label = "Result"
 			}
-			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "non-exhaustive match for %s", label)
+			message := fmt.Sprintf("non-exhaustive match for %s", label)
+			if missing := missingEnumVariants(t, s); len(missing) > 0 {
+				message += "; missing variants: " + strings.Join(missing, ", ")
+			}
+			c.Err = Diag(CatType, s.Tok.Source, s.Tok.Line, s.Tok.Column, "%s", message)
 			return Flow{HasError: true}
 		}
 		all := true
@@ -854,6 +859,28 @@ func patternBinding(t *Type, p Pattern) *Type {
 		}
 	}
 	return nil
+}
+
+func missingEnumVariants(t *Type, s *Stmt) []string {
+	if t == nil || t.Kind != TyEnum || t.Enum == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(s.Arms))
+	for _, arm := range s.Arms {
+		if arm.Pattern.Kind == PatWildcard {
+			return nil
+		}
+		if arm.Pattern.Kind == PatEnum {
+			seen[arm.Pattern.Variant] = true
+		}
+	}
+	var missing []string
+	for _, variant := range t.Enum.Variants {
+		if !seen[variant] {
+			missing = append(missing, variant)
+		}
+	}
+	return missing
 }
 func (c *Checker) exhaustive(t *Type, s *Stmt) bool {
 	for _, a := range s.Arms {
@@ -967,7 +994,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 					if expected != nil && expected.Kind != TyFunction {
 						d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "function '%s' is a value of function type, not %s", e.Name, expected)
 					} else {
-						d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "function '%s' has no overload matching the expected function type", e.Name)
+						d = Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "function '%s' has no overload matching the expected function type; candidates: %s", e.Name, formatOverloadCandidates(visible))
 					}
 				}
 				if d == nil {
@@ -1409,6 +1436,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown method '%s' for %s", e.Name, rt)
 		}
 		visible := false
+		visibleCandidates := make([]*Function, 0, len(candidates))
 		var matched *Function
 		var matchedType *Type
 		for _, candidate := range candidates {
@@ -1416,6 +1444,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				continue
 			}
 			visible = true
+			visibleCandidates = append(visibleCandidates, candidate)
 			if returnType, ok := c.matchFunctionCall(sc, e, candidate, expected, rt); ok {
 				if matched != nil {
 					return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "ambiguous call to method '%s': multiple overloads match", e.Name)
@@ -1427,7 +1456,7 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown method '%s' for %s", e.Name, rt)
 		}
 		if matched == nil {
-			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of method '%s' matches the argument types", e.Name)
+			return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of method '%s' matches the argument types; candidates: %s", e.Name, formatOverloadCandidates(visibleCandidates))
 		}
 		e.Function = matched
 		if matched.Receiver == nil {
@@ -1454,11 +1483,13 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "unknown function '%s'", e.Name)
 	}
 	visible := false
+	visibleCandidates := make([]*Function, 0, len(candidates))
 	var matched *Function
 	var matchedType *Type
 	for _, f := range candidates {
 		if f.Public || f.VisibilityScope == sc.VisibilityScope {
 			visible = true
+			visibleCandidates = append(visibleCandidates, f)
 			if rt, ok := c.matchFunctionCall(sc, e, f, expected, nil); ok {
 				if matched != nil {
 					return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "ambiguous call to '%s': multiple overloads match", e.Name)
@@ -1475,7 +1506,42 @@ func (c *Checker) checkCall(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 		e.Definition = matched.NameToken
 		return matchedType, nil
 	}
-	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of '%s' matches the argument types", e.Name)
+	return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "no overload of '%s' matches the argument types; candidates: %s", e.Name, formatOverloadCandidates(visibleCandidates))
+}
+
+func formatOverloadCandidates(functions []*Function) string {
+	seen := make(map[string]bool, len(functions))
+	var signatures []string
+	for _, function := range functions {
+		if function == nil {
+			continue
+		}
+		name := function.Name
+		if function.Receiver != nil {
+			name = TypeSpecString(function.Receiver) + "." + name
+		}
+		if len(function.TypeParams) > 0 {
+			parameters := make([]string, len(function.TypeParams))
+			for i, parameter := range function.TypeParams {
+				parameters[i] = parameter.Name
+				if parameter.Constraint != "" {
+					parameters[i] += ": " + parameter.Constraint
+				}
+			}
+			name += "<" + strings.Join(parameters, ", ") + ">"
+		}
+		arguments := make([]string, len(function.Params))
+		for i, parameter := range function.Params {
+			arguments[i] = TypeSpecString(parameter.Type)
+		}
+		signature := name + "(" + strings.Join(arguments, ", ") + ") -> " + TypeSpecString(function.Return)
+		if !seen[signature] {
+			seen[signature] = true
+			signatures = append(signatures, signature)
+		}
+	}
+	sort.Strings(signatures)
+	return strings.Join(signatures, "; ")
 }
 
 func (c *Checker) methodsForReceiver(receiver *Type, name string) []*Function {
