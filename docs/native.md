@@ -167,7 +167,8 @@ integrated builtins are added to the native support matrix only when the
 generated C runtime has an implementation for the selected target; until then
 they are rejected with a categorized diagnostic instead of silently degrading.
 Output is never mislabeled as native merely because a file has a native-looking
-suffix.
+suffix. ELF-direct samples its wall-clock deadline every 64 KIR steps while
+checking the instruction limit on each step.
 
 C AOT JSON support includes `json_parse`, `json_stringify`, `json_kind`,
 `json_object_get`, `json_array_len`, `json_array_get`, `json_string`,

@@ -10,6 +10,8 @@ import (
 const maxKIRDirectFrameBytes = 1 << 20
 const maxKIRDirectNodes = 20_000
 
+const directELFWallTimeCheckInterval = 64
+
 type kirDirectDiagnosticSite struct {
 	label      int
 	diagnostic *Diagnostic
@@ -494,6 +496,7 @@ func (builder *kirDirectBuilder) build() ([]byte, error) {
 	builder.emitZeroDynamicCallState()
 	builder.emitZeroSlot(builder.instructionSlot)
 	if builder.limits.MaxWallTimeMS > 0 {
+		builder.emitContextQword(0xf0, directELFWallTimeCheckInterval) // countdown at [r15-16]
 		builder.emitClockRead(builder.deadlineSecSlot)
 		builder.emitDeadlineAdd(builder.limits.MaxWallTimeMS)
 	}
@@ -830,7 +833,19 @@ func (builder *kirDirectBuilder) emitStep(source string, line, column int) error
 	}
 	machine.code = append(machine.code, 0x49, 0xff, 0x47, 0xf8) // inc qword [r15-8]
 	if builder.limits.MaxWallTimeMS != 0 {
-		return builder.emitTimeCheck(source, line, column)
+		if builder.limits.MaxWallTimeMS < 0 {
+			return builder.emitTimeCheck(source, line, column)
+		}
+		clockCheck := machine.newLabel()
+		machine.code = append(machine.code, 0x49, 0xff, 0x4f, 0xf0)           // dec qword [r15-16]
+		if err := machine.emitConditionalJump(0x85, clockCheck); err != nil { // jnz
+			return err
+		}
+		builder.emitContextQword(0xf0, directELFWallTimeCheckInterval)
+		if err := builder.emitTimeCheck(source, line, column); err != nil {
+			return err
+		}
+		return machine.bind(clockCheck)
 	}
 	return nil
 }
