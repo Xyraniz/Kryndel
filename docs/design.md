@@ -42,7 +42,7 @@ The stable syntax is `let`, `let mut`, `fn`, `if`, `else`, `while`, `return`, `b
 
 ## Performance
 
-The current performance claim is limited to a small Go toolchain with checked execution and deterministic startup behavior. The runtime executes a checked, bounded intermediate representation; no Kryndel program-level native-code performance claim is made. Benchmarks should measure startup, integer loops, function calls, collections, source checking, and artifact replay separately.
+`BenchmarkNativeBackendCorpus` keeps a repeatable process-level comparison for scalar loops/function calls and array reductions. It compiles native artifacts before timing, verifies equal output, and includes each process launch; the interpreter case also includes source checking. `BenchmarkInterpreterPhases` measures lexing, parsing, checking, and runtime separately. Run the corpus with `go test ./internal/kry -run '^$' -bench '^BenchmarkNativeBackendCorpus$' -benchmem -count=5 -v`. These local cases guide optimization but do not establish a general native-performance claim.
 
 ## Stability rule
 

@@ -518,6 +518,27 @@ let invalid: Int = 1 / zero
 	}
 }
 
+func TestCAOTCheckedIntegerOverflowMatchesInterpreter(t *testing.T) {
+	const source = `print("before:")
+println(9223372036854775807 + 1)
+`
+	interpreter := runOptionResultInterpreter(t, source)
+	if interpreter.diagnostic == nil || interpreter.diagnostic.Category != CatRuntime || interpreter.diagnostic.Message != "checked integer arithmetic overflow" {
+		t.Fatalf("unexpected interpreter failure: %#v", interpreter.diagnostic)
+	}
+	interpreter.exitStatus = 1
+
+	target, format, _, ok := nativeHostCAOTTarget()
+	if !ok {
+		t.Skip("C AOT overflow parity requires a supported native host")
+	}
+	if !optionResultCompilerAvailable(target) {
+		t.Skipf("C AOT overflow parity needs the compiler for %s-%s", target.OS, target.Arch)
+	}
+	native := buildAndRunOptionResultNative(t, source, target, format)
+	assertNativeRuntimeFailureOutcome(t, format, native, interpreter, "checked integer arithmetic overflow")
+}
+
 func assertNativeRuntimeFailureOutcome(t *testing.T, label string, got, want optionResultObservedOutcome, message string) {
 	t.Helper()
 	if got.stdout != want.stdout || got.exitStatus != 1 || !strings.Contains(got.stderr, message) {

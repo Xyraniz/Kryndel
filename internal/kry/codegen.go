@@ -1108,32 +1108,66 @@ func (g *cgen) unary(e *KIRExpr) string {
 func (g *cgen) binary(e *KIRExpr) string {
 	l := g.expr(e.Left)
 	r := g.expr(e.Right)
+	intOperands := e.Left != nil && e.Right != nil && e.Left.Type == "Int" && e.Right.Type == "Int"
 	switch e.Operator {
 	case "&&":
 		return fmt.Sprintf("k_and(%s, %s)", l, r)
 	case "||":
 		return fmt.Sprintf("k_or(%s, %s)", l, r)
 	case "==":
+		if intOperands {
+			return fmt.Sprintf("kv_bool((%s).u.i == (%s).u.i)", l, r)
+		}
 		return fmt.Sprintf("k_eq(%s, %s)", l, r)
 	case "!=":
+		if intOperands {
+			return fmt.Sprintf("kv_bool((%s).u.i != (%s).u.i)", l, r)
+		}
 		return fmt.Sprintf("k_neq(%s, %s)", l, r)
 	case "+":
+		if e.Type == "Int" {
+			return fmt.Sprintf("kv_int(k_add_i((%s).u.i, (%s).u.i))", l, r)
+		}
 		return fmt.Sprintf("k_add(%s, %s)", l, r)
 	case "-":
+		if e.Type == "Int" {
+			return fmt.Sprintf("kv_int(k_sub_i((%s).u.i, (%s).u.i))", l, r)
+		}
 		return fmt.Sprintf("k_sub(%s, %s)", l, r)
 	case "*":
+		if e.Type == "Int" {
+			return fmt.Sprintf("kv_int(k_mul_i((%s).u.i, (%s).u.i))", l, r)
+		}
 		return fmt.Sprintf("k_mul(%s, %s)", l, r)
 	case "/":
+		if e.Type == "Int" {
+			return fmt.Sprintf("kv_int(k_div_i((%s).u.i, (%s).u.i))", l, r)
+		}
 		return fmt.Sprintf("k_div(%s, %s)", l, r)
 	case "%":
+		if e.Type == "Int" {
+			return fmt.Sprintf("kv_int(k_rem_i((%s).u.i, (%s).u.i))", l, r)
+		}
 		return fmt.Sprintf("k_rem(%s, %s)", l, r)
 	case "<":
+		if intOperands {
+			return fmt.Sprintf("kv_bool((%s).u.i < (%s).u.i)", l, r)
+		}
 		return fmt.Sprintf("k_lt(%s, %s)", l, r)
 	case "<=":
+		if intOperands {
+			return fmt.Sprintf("kv_bool((%s).u.i <= (%s).u.i)", l, r)
+		}
 		return fmt.Sprintf("k_le(%s, %s)", l, r)
 	case ">":
+		if intOperands {
+			return fmt.Sprintf("kv_bool((%s).u.i > (%s).u.i)", l, r)
+		}
 		return fmt.Sprintf("k_gt(%s, %s)", l, r)
 	case ">=":
+		if intOperands {
+			return fmt.Sprintf("kv_bool((%s).u.i >= (%s).u.i)", l, r)
+		}
 		return fmt.Sprintf("k_ge(%s, %s)", l, r)
 	}
 	g.fail("unsupported binary operator")

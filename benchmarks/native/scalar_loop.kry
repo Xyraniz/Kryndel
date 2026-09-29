@@ -1,0 +1,13 @@
+fn transform(value: Int) -> Int {
+    return value * 3 + 1
+}
+
+fn main() -> Nil {
+    let mut index: Int = 0
+    let mut total: Int = 0
+    while index < 200000 {
+        total = total + transform(index)
+        index = index + 1
+    }
+    println(total)
+}
