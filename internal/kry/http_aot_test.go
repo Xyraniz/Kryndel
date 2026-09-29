@@ -28,7 +28,7 @@ func runHTTPInterpreterWithRuntimeLimits(t *testing.T, source string, limits Lim
 	if diagnostic != nil {
 		return "", diagnostic
 	}
-	runtimeValue, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+	runtimeValue, diagnostic := NewRuntime(program, checker, limits, Sandbox{})
 	if diagnostic != nil {
 		return "", diagnostic
 	}
@@ -202,11 +202,11 @@ func TestCAOTHTTPRequestLimitAndTimeoutMatchInterpreter(t *testing.T) {
 		limits.MaxWallTimeMS = 120
 		source := fmt.Sprintf("fn main() -> Nil { println(http_request(\"GET\", %q, \"\")); return nil }\n", server.URL+"/slow")
 		interpreted, diagnostic := runHTTPInterpreterWithRuntimeLimits(t, source, limits)
-		if diagnostic != nil || !strings.Contains(strings.ToLower(interpreted), "timeout") && !strings.Contains(strings.ToLower(interpreted), "deadline exceeded") {
+		if diagnostic == nil || diagnostic.Category != CatResource || diagnostic.Message != "wall-clock execution limit exceeded" || !strings.Contains(strings.ToLower(interpreted), "timeout") && !strings.Contains(strings.ToLower(interpreted), "deadline exceeded") {
 			t.Fatalf("interpreter timeout output = %q, diagnostic=%v", interpreted, diagnostic)
 		}
 		native, status, err := buildAndRunHTTPCAOT(t, source, limits)
-		if err != nil || status != 0 || !strings.Contains(strings.ToLower(native), "timeout") {
+		if err != nil || status != 1 || !strings.Contains(native, "wall-clock execution limit exceeded") {
 			t.Fatalf("C AOT timeout output = %q, status=%d, err=%v", native, status, err)
 		}
 	})

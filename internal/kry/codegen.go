@@ -711,9 +711,6 @@ func (g *cgen) emitMain() {
 	fmt.Fprintf(&g.buf, "  k_max_tcp_receive = %dLL;\n", g.limits.MaxSourceBytes)
 	fmt.Fprintf(&g.buf, "  k_max_array_elements = %dLL;\n", g.limits.MaxArrayElements)
 	wallMS := g.limits.MaxWallTimeMS
-	if wallMS <= 0 {
-		wallMS = DefaultLimits().MaxWallTimeMS
-	}
 	fmt.Fprintf(&g.buf, "  k_max_wall_ms = %dLL;\n", wallMS)
 	g.buf.WriteString("  k_structs = k_structs_data;\n")
 	g.buf.WriteString("  k_enums = k_enums_data;\n")
@@ -721,6 +718,7 @@ func (g *cgen) emitMain() {
 	g.buf.WriteString("  k_poly_fns = k_poly_fns_data;\n")
 	g.buf.WriteString("  k_poly_nfns = k_poly_nfns_data;\n")
 	g.buf.WriteString("  if (setjmp(k_jmp)) { k_sqlite_cleanup(); k_tcp_cleanup(); fflush(stdout); fprintf(stderr, \"kryndel: %s\\n\", k_errbuf); return 1; }\n")
+	g.buf.WriteString("  k_runtime_deadline_ms = k_max_wall_ms > 0 ? k_tcp_deadline_after(k_tcp_now_ms(), (unsigned long long)k_max_wall_ms) : 0ULL;\n")
 	g.buf.WriteString("  int _fb = k_ndefers;\n")
 	g.fnBase = "_fb"
 	g.deferBases = nil
@@ -731,7 +729,7 @@ func (g *cgen) emitMain() {
 	if len(g.doc.Statements) == 0 {
 		if functions := g.functionsByName["main"]; len(functions) == 1 {
 			f := functions[0]
-			fmt.Fprintf(&g.buf, "  { k_argc = 0; k_args[0] = kv_nil(); KValue _r = %s(); (void)_r; }\n", g.fnName[f])
+			fmt.Fprintf(&g.buf, "  { k_argc = 0; k_args[0] = kv_nil(); KValue _r = %s(); (void)_r; k_check_wall_time(); }\n", g.fnName[f])
 		}
 	}
 	g.buf.WriteString("  while (k_ndefers > _fb) k_defers[--k_ndefers]();\n")
@@ -839,6 +837,9 @@ func (g *cgen) stmt(s *KIRStmt, indent string) {
 		g.nestedBlock(s.Body, indent)
 	default:
 		g.fail("unsupported statement kind %q", s.Kind)
+	}
+	if g.topLevel {
+		fmt.Fprintf(&g.buf, "%sk_check_wall_time();\n", indent)
 	}
 }
 

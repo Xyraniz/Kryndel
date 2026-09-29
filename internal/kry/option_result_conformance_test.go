@@ -577,6 +577,52 @@ println(index)
 	assertNativeRuntimeFailureOutcome(t, format, native, interpreter, "instruction limit exceeded")
 }
 
+func TestCAOTWallClockLimitMatchesInterpreter(t *testing.T) {
+	const source = `print("before:")
+let mut index: Int = 0
+while index < 5000000 {
+    index = index + 1
+}
+println(index)
+`
+	limits := DefaultLimits()
+	limits.MaxWallTimeMS = 20
+	interpreter := runOptionResultInterpreter(t, source, limits)
+	if interpreter.diagnostic == nil || interpreter.diagnostic.Category != CatResource || interpreter.diagnostic.Message != "wall-clock execution limit exceeded" || interpreter.stdout != "before:" {
+		t.Fatalf("interpreter wall-time outcome = %#v, want resource failure after partial output", interpreter)
+	}
+	target, format, _, ok := nativeHostCAOTTarget()
+	if !ok {
+		t.Skip("C AOT wall-time parity requires a supported native host")
+	}
+	if !optionResultCompilerAvailable(target) {
+		t.Skipf("C AOT wall-time parity needs the compiler for %s-%s", target.OS, target.Arch)
+	}
+	native := buildAndRunOptionResultNative(t, source, target, format, limits)
+	assertNativeRuntimeFailureOutcome(t, format, native, interpreter, "wall-clock execution limit exceeded")
+}
+
+func TestCAOTZeroWallClockLimitDisablesExecutionDeadline(t *testing.T) {
+	const source = `let waited: Result[Nil, String] = sleep_ms(30)
+println(is_ok(waited))
+`
+	limits := DefaultLimits()
+	limits.MaxWallTimeMS = 0
+	interpreter := runOptionResultInterpreter(t, source, limits)
+	if interpreter.diagnostic != nil || interpreter.stdout != "true\n" {
+		t.Fatalf("interpreter disabled-wall-time outcome = %#v, want true", interpreter)
+	}
+	target, format, _, ok := nativeHostCAOTTarget()
+	if !ok {
+		t.Skip("C AOT zero wall-time parity requires a supported native host")
+	}
+	if !optionResultCompilerAvailable(target) {
+		t.Skipf("C AOT zero wall-time parity needs the compiler for %s-%s", target.OS, target.Arch)
+	}
+	native := buildAndRunOptionResultNative(t, source, target, format, limits)
+	assertOptionResultOutcome(t, "C AOT zero wall-time limit", native, interpreter)
+}
+
 func TestCAOTCallDepthLimitMatchesInterpreter(t *testing.T) {
 	const source = `fn descend(value: Int) -> Int {
     if value == 0 { return 0 }

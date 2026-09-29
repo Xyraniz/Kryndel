@@ -364,14 +364,15 @@ func TestCAOTTCPReceiveTimeoutMatchesInterpreter(t *testing.T) {
 }`, port)
 	}
 	peer := func(net.Conn) error { time.Sleep(500 * time.Millisecond); return nil }
-	interpreted, interpStatus := runTCPProgramWithOperationAndRuntimeLimitsAndPeer(t, source, limits, false, peer)
-	native, nativeStatus := runTCPProgramWithOperationAndRuntimeLimitsAndPeer(t, source, limits, true, peer)
-	if interpStatus != 0 || nativeStatus != 0 || !strings.Contains(strings.ToLower(interpreted), "i/o timeout") || !strings.Contains(strings.ToLower(native), "i/o timeout") {
+	interpreted, interpStatus := runTCPProgramWithLimitsAndPeer(t, source, limits, false, peer)
+	native, nativeStatus := runTCPProgramWithLimitsAndPeer(t, source, limits, true, peer)
+	normalizedNative := strings.ReplaceAll(native, "\r\n", "\n")
+	if interpStatus != nativeStatus || interpStatus != 1 || !strings.Contains(strings.ToLower(interpreted), "i/o timeout") || !strings.Contains(strings.ToLower(normalizedNative), "i/o timeout") || !strings.HasSuffix(interpreted, "kryndel: wall-clock execution limit exceeded\n") || !strings.HasSuffix(normalizedNative, "kryndel: wall-clock execution limit exceeded\n") {
 		t.Fatalf("TCP receive timeout differs:\ninterpreter (%d): %q\nC AOT (%d): %q", interpStatus, interpreted, nativeStatus, native)
 	}
 }
 
-func runTCPProgramWithOperationAndRuntimeLimitsAndPeer(t *testing.T, source func(int) string, operationLimits Limits, native bool, serve func(net.Conn) error) (string, int) {
+func runTCPProgramWithLimitsAndPeer(t *testing.T, source func(int) string, limits Limits, native bool, serve func(net.Conn) error) (string, int) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -392,7 +393,7 @@ func runTCPProgramWithOperationAndRuntimeLimitsAndPeer(t *testing.T, source func
 	}()
 	text := source(listener.Addr().(*net.TCPAddr).Port)
 	if native {
-		output, status, runErr := buildAndRunTCPNativeWithLimits(t, text, operationLimits)
+		output, status, runErr := buildAndRunTCPNativeWithLimits(t, text, limits)
 		if runErr != nil {
 			t.Fatalf("native TCP program failed to build or run: %v", runErr)
 		}
@@ -406,9 +407,7 @@ func runTCPProgramWithOperationAndRuntimeLimitsAndPeer(t *testing.T, source func
 		}
 		return output, status
 	}
-	runtimeLimits := operationLimits
-	runtimeLimits.MaxWallTimeMS = 5_000
-	output, diagnostic := runTCPInterpreterWithOperationAndRuntimeLimits(t, text, operationLimits, runtimeLimits)
+	output, diagnostic := runTCPInterpreterWithLimits(t, text, limits)
 	select {
 	case err := <-done:
 		if err != nil {
@@ -524,26 +523,37 @@ int main(void) {
 }
 
 func extractCFunction(source, signature string) (string, error) {
-	start := strings.Index(source, signature)
-	if start < 0 {
-		return "", fmt.Errorf("C source does not contain function %q", signature)
-	}
-	open := strings.IndexByte(source[start:], '{')
-	if open < 0 {
-		return "", fmt.Errorf("C function %q has no body", signature)
-	}
-	bodyStart := start + open
-	depth := 0
-	for i := bodyStart; i < len(source); i++ {
-		switch source[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return source[start : i+1], nil
+	searchFrom := 0
+	for {
+		start := strings.Index(source[searchFrom:], signature)
+		if start < 0 {
+			return "", fmt.Errorf("C source does not contain function %q", signature)
+		}
+		start += searchFrom
+		afterSignature := start + len(signature)
+		remainder := source[afterSignature:]
+		open := strings.IndexByte(remainder, '{')
+		semicolon := strings.IndexByte(remainder, ';')
+		if semicolon >= 0 && (open < 0 || semicolon < open) {
+			searchFrom = afterSignature + semicolon + 1
+			continue
+		}
+		if open < 0 {
+			return "", fmt.Errorf("C function %q has no body", signature)
+		}
+		bodyStart := afterSignature + open
+		depth := 0
+		for i := bodyStart; i < len(source); i++ {
+			switch source[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					return source[start : i+1], nil
+				}
 			}
 		}
+		return "", fmt.Errorf("C function %q has an unterminated body", signature)
 	}
-	return "", fmt.Errorf("C function %q has an unterminated body", signature)
 }

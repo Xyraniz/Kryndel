@@ -70,18 +70,28 @@ static long long k_out = 0;
 static long long k_max_out = 16777216LL;
 static long long k_max_json = 67108864LL;
 static long long k_max_wall_ms = 0;
+static unsigned long long k_runtime_deadline_ms = 0;
 static long long k_max_tcp_receive = 0;
 static long long k_max_array_elements = 1000000LL;
 static void k_sqlite_cleanup(void);
+static unsigned long long k_tcp_now_ms(void);
+static unsigned long long k_tcp_deadline_after(unsigned long long now, unsigned long long duration);
 
 static void kfail(const char *msg) {
     snprintf(k_errbuf, sizeof(k_errbuf), "%s", msg);
     longjmp(k_jmp, 1);
 }
 
+static inline void k_check_wall_time(void) {
+    if (k_max_wall_ms < 0 || (k_runtime_deadline_ms && k_tcp_now_ms() >= k_runtime_deadline_ms))
+        kfail("wall-clock execution limit exceeded");
+}
+
 static inline void k_step(void) {
     if (k_instruction_count >= k_max_instructions) kfail("instruction limit exceeded");
     k_instruction_count++;
+    if (k_max_wall_ms < 0 || (k_runtime_deadline_ms && (k_instruction_count & 255ULL) == 0))
+        k_check_wall_time();
 }
 
 static void *kalloc(size_t n) {
@@ -2013,6 +2023,15 @@ static KValue k_fs_temp_file(KValue prefix) {
 static KValue k_sleep(KValue ms) {
     long long m = ms.u.i;
     if (m < 0) return kv_res(0, kv_cstr("sleep duration must be non-negative"));
+    if (k_runtime_deadline_ms) {
+        unsigned long long now=k_tcp_now_ms();
+        if (now>=k_runtime_deadline_ms) return kv_res(0,kv_cstr("sleep cancelled"));
+        unsigned long long remaining=k_runtime_deadline_ms-now;
+        if ((unsigned long long)m>=remaining) {
+            k_sleep_ms((long long)remaining);
+            return kv_res(0,kv_cstr("sleep cancelled"));
+        }
+    }
     k_sleep_ms(m);
     return kv_res(1, kv_nil());
 }
@@ -2509,8 +2528,10 @@ static int k_tcp_set_blocking(KSocketFD fd, int blocking) {
 #endif
 }
 static unsigned long long k_tcp_operation_deadline(void) {
-    long long timeout=k_max_wall_ms>0?k_max_wall_ms:30000;
-    return k_tcp_deadline_after(k_tcp_now_ms(),(unsigned long long)timeout);
+    long long timeout=k_max_wall_ms>0?k_max_wall_ms:10000;
+    unsigned long long deadline=k_tcp_deadline_after(k_tcp_now_ms(),(unsigned long long)timeout);
+    if (k_runtime_deadline_ms && k_runtime_deadline_ms<deadline) deadline=k_runtime_deadline_ms;
+    return deadline;
 }
 static void k_tcp_set_timeout_error(void) {
 #ifdef _WIN32
