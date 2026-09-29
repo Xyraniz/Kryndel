@@ -672,6 +672,45 @@ println(len(invalid))
 	assertDirectKIRMatchesInterpreter(t, source, "direct-array-set-out-of-bounds")
 }
 
+func TestDirectELFKIRArrayTakeDropMatchInterpreter(t *testing.T) {
+	source := `let values: Array[Int] = [1, 2, 3, 4]
+let takeNone: Array[Int] = array_take(values, 0)
+let takeAll: Array[Int] = array_take(values, 4)
+let takeSome: Array[Int] = array_take(values, 2)
+let dropNone: Array[Int] = array_drop(values, 0)
+let dropAll: Array[Int] = array_drop(values, 4)
+let dropSome: Array[Int] = array_drop(values, 2)
+println(len(takeNone))
+println(unwrap_or(array_get(takeAll, 3), -1))
+println(unwrap_or(array_get(takeSome, 1), -1))
+println(unwrap_or(array_get(dropNone, 0), -1))
+println(len(dropAll))
+println(unwrap_or(array_get(dropSome, 0), -1))
+let words: Array[String] = ["a", "b"]
+println(unwrap_or(array_get(array_take(words, 1), 0), ""))
+println(unwrap_or(array_get(array_drop(words, 1), 0), ""))
+`
+	assertDirectKIRMatchesInterpreter(t, source, "direct-array-take-drop")
+}
+
+func TestDirectELFKIRArrayTakeDropRejectInvalidCounts(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		builtin string
+		count   string
+	}{
+		{name: "take negative", builtin: "array_take", count: "-1"},
+		{name: "take too large", builtin: "array_take", count: "4"},
+		{name: "drop negative", builtin: "array_drop", count: "-1"},
+		{name: "drop too large", builtin: "array_drop", count: "4"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := "let invalid: Array[Int] = " + test.builtin + "([1, 2, 3], " + test.count + ")\nprintln(len(invalid))\n"
+			assertDirectKIRMatchesInterpreter(t, source, "direct-array-take-drop-error")
+		})
+	}
+}
+
 func TestDirectELFKIRStringCharsMatchesInterpreter(t *testing.T) {
 	source := `let chars: Array[String] = string_chars("aá🙂")
 println(len(chars))

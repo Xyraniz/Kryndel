@@ -184,11 +184,13 @@ var generatedCAOTBuiltinCases = map[string]struct{}{
 }
 var generatedDirectELFBuiltinCases = map[string]struct{}{
 	"array_concat":     {},
+	"array_drop":       {},
 	"array_get":        {},
 	"array_indices":    {},
 	"array_push":       {},
 	"array_set":        {},
 	"array_slice":      {},
+	"array_take":       {},
 	"assert":           {},
 	"assert_eq":        {},
 	"bytes":            {},

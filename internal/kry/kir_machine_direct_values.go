@@ -126,6 +126,13 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr) error {
 		if _, ok := container(args[0].Type, "Array", 1); !ok {
 			return unsupported()
 		}
+	case "array_take", "array_drop":
+		if len(args) != 2 || args[0] == nil || args[1] == nil || args[1].Type != "Int" || expression.Type != args[0].Type {
+			return unsupported()
+		}
+		if _, ok := container(args[0].Type, "Array", 1); !ok {
+			return unsupported()
+		}
 	case "array_set":
 		if len(args) != 3 || args[0] == nil || args[1] == nil || args[2] == nil || args[1].Type != "Int" {
 			return unsupported()
@@ -647,6 +654,45 @@ func (builder *kirDirectBuilder) emitBuiltin(expression *KIRExpr) error {
 			0x48, 0x8b, 0x14, 0x24,
 			0x48, 0x83, 0xc4, 0x18,
 		)
+		machine.arrayRuntimeUsed = true
+		return machine.emitLabelCall(machine.arraySliceLabel)
+	case "array_take", "array_drop":
+		if len(args) != 2 {
+			return fmt.Errorf("direct KIR ELF %s expects two arguments", expression.Name)
+		}
+		if err := builder.emitExpr(args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		if err := builder.emitExpr(args[1]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		failure := builder.diag(expression, CatRuntime, "array_take/array_drop count out of range")
+		machine.code = append(machine.code, 0x48, 0x83, 0x3c, 0x24, 0x00)
+		if err := machine.emitConditionalJump(0x8c, failure); err != nil {
+			return err
+		}
+		machine.code = append(machine.code,
+			0x48, 0x8b, 0x44, 0x24, 0x08,
+			0x48, 0x8b, 0x08,
+			0x48, 0x39, 0x0c, 0x24,
+		)
+		if err := machine.emitConditionalJump(0x8f, failure); err != nil {
+			return err
+		}
+		if expression.Name == "array_take" {
+			machine.code = append(machine.code, 0x48, 0x8b, 0x7c, 0x24, 0x08, 0x31, 0xf6, 0x48, 0x8b, 0x14, 0x24)
+		} else {
+			machine.code = append(machine.code,
+				0x48, 0x8b, 0x7c, 0x24, 0x08,
+				0x48, 0x8b, 0x34, 0x24,
+				0x48, 0x8b, 0x07,
+				0x48, 0x2b, 0x04, 0x24,
+				0x48, 0x89, 0xc2,
+			)
+		}
+		machine.code = append(machine.code, 0x48, 0x83, 0xc4, 0x10)
 		machine.arrayRuntimeUsed = true
 		return machine.emitLabelCall(machine.arraySliceLabel)
 	case "array_set":

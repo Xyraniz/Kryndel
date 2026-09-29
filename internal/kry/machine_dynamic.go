@@ -6218,6 +6218,32 @@ func (m *directMachine) emitExpr(e *Expr) error {
 			m.code = append(m.code, 0x48, 0x89, 0xc2, 0x5e, 0x5f) // rdx=length, rsi=start, rdi=array
 			m.arrayRuntimeUsed = true
 			return m.emitLabelCall(m.arraySliceLabel)
+		case "array_take", "array_drop":
+			if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray || e.Args[1].Type == nil || e.Args[1].Type.Kind != TyInt {
+				return fmt.Errorf("direct ELF backend %s expects Array[T] and Int", e.Name)
+			}
+			if err := m.emitExpr(e.Args[0]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if err := m.emitExpr(e.Args[1]); err != nil {
+				return err
+			}
+			m.code = append(m.code, 0x50)
+			if e.Name == "array_take" {
+				m.code = append(m.code, 0x48, 0x8b, 0x7c, 0x24, 0x08, 0x31, 0xf6, 0x48, 0x8b, 0x14, 0x24)
+			} else {
+				m.code = append(m.code,
+					0x48, 0x8b, 0x7c, 0x24, 0x08,
+					0x48, 0x8b, 0x34, 0x24,
+					0x48, 0x8b, 0x07,
+					0x48, 0x2b, 0x04, 0x24,
+					0x48, 0x89, 0xc2,
+				)
+			}
+			m.code = append(m.code, 0x48, 0x83, 0xc4, 0x10)
+			m.arrayRuntimeUsed = true
+			return m.emitLabelCall(m.arraySliceLabel)
 		case "array_concat":
 			if len(e.Args) != 2 || e.Args[0].Type == nil || e.Args[0].Type.Kind != TyArray || e.Args[1].Type == nil || e.Args[1].Type.Kind != TyArray {
 				return fmt.Errorf("direct ELF backend expects array_concat(Array[T], Array[T])")
