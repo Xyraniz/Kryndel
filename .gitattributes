@@ -1,4 +1,5 @@
 *.sh text eol=lf
 *.bash text eol=lf
 *.kry text eol=lf
+*.go text eol=lf
 packages/** text eol=lf

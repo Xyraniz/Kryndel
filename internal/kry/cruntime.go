@@ -511,6 +511,16 @@ static KValue k_to_int(KValue v) {
     }
     kfail("int conversion is unsupported"); return kv_nil();
 }
+static KValue k_to_uint(KValue v, int bits) {
+    unsigned long long n;
+    if (v.tag==K_UINT) n=v.u.u64;
+    else if (v.tag==K_INT) {
+        if (v.u.i<0) kfail("Int is outside unsigned range");
+        n=(unsigned long long)v.u.i;
+    } else { kfail("unsigned conversion is unsupported"); return kv_nil(); }
+    if (bits<64 && n>=1ULL<<bits) kfail("value is outside unsigned range");
+    return kv_uint64(n);
+}
 static KValue k_to_float(KValue v) {
     if (v.tag==K_FLOAT) { if(!isfinite(v.u.f)) kfail("Float must be finite"); return v; }
     if (v.tag==K_INT) { double z=(double)v.u.i; if(!isfinite(z)) kfail("conversion produced non-finite Float"); return kv_float(z); }

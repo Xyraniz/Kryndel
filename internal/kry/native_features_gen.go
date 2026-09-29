@@ -175,6 +175,10 @@ var generatedCAOTBuiltinCases = map[string]struct{}{
 	"thread_spawn":                {},
 	"trim":                        {},
 	"trunc":                       {},
+	"u16":                         {},
+	"u32":                         {},
+	"u64":                         {},
+	"u8":                          {},
 	"unwrap_or":                   {},
 	"yield_now":                   {},
 }

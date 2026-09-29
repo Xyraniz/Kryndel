@@ -321,6 +321,11 @@ func TestBuiltinCapabilityMatrixListsEveryBackendAndTarget(t *testing.T) {
 		if row := lookup[name+"/windows-x64"]; row.PEDirect != "supported" {
 			t.Errorf("%s PE-direct capability = %q, want supported: %#v", name, row.PEDirect, row)
 		}
+		for _, target := range []string{"linux-x64", "windows-x64"} {
+			if row := lookup[name+"/"+target]; row.CAOT != "supported" {
+				t.Errorf("%s C AOT capability on %s = %q, want supported: %#v", name, target, row.CAOT, row)
+			}
+		}
 	}
 }
 

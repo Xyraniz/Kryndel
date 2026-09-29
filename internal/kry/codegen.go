@@ -1272,6 +1272,9 @@ func (g *cgen) builtinCall(e *KIRExpr, b Builtin) string {
 		return fmt.Sprintf("k_array_join(%s, %s)", arg(0), arg(1))
 	case "int":
 		return fmt.Sprintf("k_to_int(%s)", arg(0))
+	case "u8", "u16", "u32", "u64":
+		bits := map[string]int{"u8": 8, "u16": 16, "u32": 32, "u64": 64}[b.Name]
+		return fmt.Sprintf("k_to_uint(%s, %d)", arg(0), bits)
 	case "float":
 		return fmt.Sprintf("k_to_float(%s)", arg(0))
 	case "str":

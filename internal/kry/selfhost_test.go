@@ -186,6 +186,36 @@ func verifyBootstrapSourceRevision(t *testing.T, root string, lock bootstrapLock
 	}
 }
 
+func buildLockedLinuxAMD64Stage0(t *testing.T, projectRoot string) (string, []byte) {
+	t.Helper()
+	stage0Path := filepath.Join(t.TempDir(), "kry")
+	build := exec.Command("go", "build", "-buildvcs=false", "-trimpath", "-ldflags=-s -w", "-o", stage0Path, "./cmd/kry")
+	build.Dir = projectRoot
+	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build Linux amd64 Stage 0 host compiler: %v; output: %s", err, output)
+	}
+	binary, err := os.ReadFile(stage0Path)
+	if err != nil {
+		t.Fatalf("read Linux amd64 Stage 0 host compiler: %v", err)
+	}
+	return stage0Path, binary
+}
+
+func TestStage0LinuxAMD64BuildMatchesBootstrapLockOnEveryHost(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectRoot := filepath.Clean(filepath.Join(root, "..", ".."))
+	lock := loadBootstrapLock(t, filepath.Join(projectRoot, "selfhost", "bootstrap.lock.json"))
+	if runtime.Version() != lock.HostGo {
+		t.Skipf("locked Stage 0 hash requires %s; this compatibility run uses %s", lock.HostGo, runtime.Version())
+	}
+	_, binary := buildLockedLinuxAMD64Stage0(t, projectRoot)
+	verifyBootstrapHash(t, lock, make(map[string]bool), "stage0-host-kry-linux-amd64", binary)
+}
+
 func TestStage1KryndelBackendMatchesDirectELFOracle(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {
@@ -834,17 +864,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if lock.Stage0Build != stage0Build {
 		t.Fatalf("bootstrap lock stage0_build=%q, want %q", lock.Stage0Build, stage0Build)
 	}
-	stage0Path := filepath.Join(t.TempDir(), "kry")
-	buildStage0 := exec.Command("go", "build", "-buildvcs=false", "-trimpath", "-ldflags=-s -w", "-o", stage0Path, "./cmd/kry")
-	buildStage0.Dir = filepath.Clean(filepath.Join(root, "..", ".."))
-	buildStage0.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if output, err := buildStage0.CombinedOutput(); err != nil {
-		t.Fatalf("build locked Stage 0 host compiler: %v; output: %s", err, output)
-	}
-	stage0Binary, err := os.ReadFile(stage0Path)
-	if err != nil {
-		t.Fatalf("read built Stage 0 host compiler: %v", err)
-	}
+	stage0Path, stage0Binary := buildLockedLinuxAMD64Stage0(t, filepath.Clean(filepath.Join(root, "..", "..")))
 	verifyBootstrapHash(t, lock, verifiedHashes, "stage0-host-kry-linux-amd64", stage0Binary)
 	if err := os.Chmod(stage0Path, 0o700); err != nil {
 		t.Fatal(err)
