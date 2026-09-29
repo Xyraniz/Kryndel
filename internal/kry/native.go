@@ -376,7 +376,7 @@ func compileC(src string, target NativeTarget) ([]byte, error) {
 		ext = ".exe"
 	}
 	out := filepath.Join(dir, "program"+ext)
-	args := []string{"-O2", "-std=c11", "-w", "-o", out, cpath, "-lm"}
+	args := []string{"-O3", "-std=c11", "-w", "-o", out, cpath, "-lm"}
 	if compiler.wsl {
 		args[len(args)-2] = wslPath(cpath)
 		args[4] = wslPath(out)

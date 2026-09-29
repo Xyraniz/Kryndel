@@ -520,24 +520,28 @@ let invalid: Int = 1 / zero
 }
 
 func TestCAOTCheckedIntegerOverflowMatchesInterpreter(t *testing.T) {
-	const source = `print("before:")
-println(9223372036854775807 + 1)
-`
-	interpreter := runOptionResultInterpreter(t, source)
-	if interpreter.diagnostic == nil || interpreter.diagnostic.Category != CatRuntime || interpreter.diagnostic.Message != "checked integer arithmetic overflow" {
-		t.Fatalf("unexpected interpreter failure: %#v", interpreter.diagnostic)
-	}
-	interpreter.exitStatus = 1
+	for _, test := range []struct{ name, source string }{
+		{name: "addition", source: "print(\"before:\")\nprintln(9223372036854775807 + 1)\n"},
+		{name: "multiplication", source: "print(\"before:\")\nprintln(3037000500 * 3037000500)\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			interpreter := runOptionResultInterpreter(t, test.source)
+			if interpreter.diagnostic == nil || interpreter.diagnostic.Category != CatRuntime || interpreter.diagnostic.Message != "checked integer arithmetic overflow" {
+				t.Fatalf("unexpected interpreter failure: %#v", interpreter.diagnostic)
+			}
+			interpreter.exitStatus = 1
 
-	target, format, _, ok := nativeHostCAOTTarget()
-	if !ok {
-		t.Skip("C AOT overflow parity requires a supported native host")
+			target, format, _, ok := nativeHostCAOTTarget()
+			if !ok {
+				t.Skip("C AOT overflow parity requires a supported native host")
+			}
+			if !optionResultCompilerAvailable(target) {
+				t.Skipf("C AOT overflow parity needs the compiler for %s-%s", target.OS, target.Arch)
+			}
+			native := buildAndRunOptionResultNative(t, test.source, target, format)
+			assertNativeRuntimeFailureOutcome(t, format, native, interpreter, "checked integer arithmetic overflow")
+		})
 	}
-	if !optionResultCompilerAvailable(target) {
-		t.Skipf("C AOT overflow parity needs the compiler for %s-%s", target.OS, target.Arch)
-	}
-	native := buildAndRunOptionResultNative(t, source, target, format)
-	assertNativeRuntimeFailureOutcome(t, format, native, interpreter, "checked integer arithmetic overflow")
 }
 
 func assertNativeRuntimeFailureOutcome(t *testing.T, label string, got, want optionResultObservedOutcome, message string) {

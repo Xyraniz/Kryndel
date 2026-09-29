@@ -345,10 +345,8 @@ static long long k_sub_i(long long a, long long b) {
     return a-b;
 }
 static long long k_mul_i(long long a, long long b) {
-    if (a==0||b==0) return 0;
-    if ((a==LLONG_MIN&&b==-1)||(b==LLONG_MIN&&a==-1)) kfail("checked integer arithmetic overflow");
-    long long z=a*b;
-    if (z/b!=a) kfail("checked integer arithmetic overflow");
+    long long z;
+    if (__builtin_mul_overflow(a,b,&z)) kfail("checked integer arithmetic overflow");
     return z;
 }
 static long long k_div_i(long long a, long long b) {
