@@ -674,6 +674,7 @@ func (g *cgen) emitFunction(f *KIRFunction, name string, substitutions map[strin
 
 func (g *cgen) emitMain() {
 	g.buf.WriteString("int main(void) {\n")
+	fmt.Fprintf(&g.buf, "  k_max_instructions = %dULL;\n", g.limits.MaxInstructions)
 	fmt.Fprintf(&g.buf, "  k_max_json = %dLL;\n", g.limits.MaxJSONBytes)
 	fmt.Fprintf(&g.buf, "  k_max_out = %dLL;\n", g.limits.MaxOutputBytes)
 	maxMemory := g.limits.MaxMemoryBytes
@@ -743,6 +744,7 @@ func (g *cgen) stmt(s *KIRStmt, indent string) {
 	if s == nil {
 		return
 	}
+	fmt.Fprintf(&g.buf, "%sk_step();\n", indent)
 	switch kirStmtKind(s.Kind) {
 	case StLet, StConst:
 		if g.topLevel {

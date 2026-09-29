@@ -58,6 +58,8 @@ static jmp_buf k_jmp;
 static char k_errbuf[512];
 static long long k_mem = 0;
 static long long k_max_mem = 268435456LL;
+static uint64_t k_instruction_count = 0;
+static uint64_t k_max_instructions = 5000000ULL;
 static long long k_out = 0;
 static long long k_max_out = 16777216LL;
 static long long k_max_json = 67108864LL;
@@ -69,6 +71,11 @@ static void k_sqlite_cleanup(void);
 static void kfail(const char *msg) {
     snprintf(k_errbuf, sizeof(k_errbuf), "%s", msg);
     longjmp(k_jmp, 1);
+}
+
+static inline void k_step(void) {
+    if (k_instruction_count >= k_max_instructions) kfail("instruction limit exceeded");
+    k_instruction_count++;
 }
 
 static void *kalloc(size_t n) {

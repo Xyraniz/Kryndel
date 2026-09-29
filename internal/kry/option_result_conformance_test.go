@@ -320,23 +320,31 @@ func optionResultBuiltinStatus(builtin, target, backend string) string {
 	return ""
 }
 
-func parseCheckOptionResult(t *testing.T, source string) (*Program, *Checker) {
+func parseCheckOptionResult(t *testing.T, source string, limits ...Limits) (*Program, *Checker) {
 	t.Helper()
-	program, diagnostic := Parse(&Source{Name: optionResultConformanceSourceName, Text: source}, DefaultLimits())
+	limit := DefaultLimits()
+	if len(limits) > 0 {
+		limit = limits[0]
+	}
+	program, diagnostic := Parse(&Source{Name: optionResultConformanceSourceName, Text: source}, limit)
 	if diagnostic != nil {
 		t.Fatalf("parse failed: %s", diagnostic.Format(false))
 	}
-	checker, diagnostic := Check(program, DefaultLimits())
+	checker, diagnostic := Check(program, limit)
 	if diagnostic != nil {
 		t.Fatalf("check failed: %s", diagnostic.Format(false))
 	}
 	return program, checker
 }
 
-func runOptionResultInterpreter(t *testing.T, source string) optionResultObservedOutcome {
+func runOptionResultInterpreter(t *testing.T, source string, limits ...Limits) optionResultObservedOutcome {
 	t.Helper()
-	program, checker := parseCheckOptionResult(t, source)
-	runtimeValue, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+	limit := DefaultLimits()
+	if len(limits) > 0 {
+		limit = limits[0]
+	}
+	program, checker := parseCheckOptionResult(t, source, limit)
+	runtimeValue, diagnostic := NewRuntime(program, checker, limit, Sandbox{})
 	if diagnostic != nil {
 		t.Fatalf("runtime creation failed: %s", diagnostic.Format(false))
 	}
@@ -387,9 +395,9 @@ func ioReadAllAndClose(file *os.File) (string, error) {
 	return string(data), nil
 }
 
-func buildAndRunOptionResultNative(t *testing.T, source string, target NativeTarget, format string) optionResultObservedOutcome {
+func buildAndRunOptionResultNative(t *testing.T, source string, target NativeTarget, format string, limits ...Limits) optionResultObservedOutcome {
 	t.Helper()
-	program, checker := parseCheckOptionResult(t, source)
+	program, checker := parseCheckOptionResult(t, source, limits...)
 	data, err := BuildNative(program, checker, target, format)
 	if err != nil {
 		t.Fatalf("C AOT build failed: %v", err)
@@ -542,6 +550,31 @@ func TestCAOTCheckedIntegerOverflowMatchesInterpreter(t *testing.T) {
 			assertNativeRuntimeFailureOutcome(t, format, native, interpreter, "checked integer arithmetic overflow")
 		})
 	}
+}
+
+func TestCAOTInstructionLimitMatchesInterpreter(t *testing.T) {
+	const source = `print("before:")
+let mut index: Int = 0
+while index < 500 {
+    index = index + 1
+}
+println(index)
+`
+	limits := DefaultLimits()
+	limits.MaxInstructions = 100
+	interpreter := runOptionResultInterpreter(t, source, limits)
+	if interpreter.diagnostic == nil || interpreter.diagnostic.Category != CatResource || interpreter.diagnostic.Message != "instruction limit exceeded" || interpreter.stdout != "before:" {
+		t.Fatalf("interpreter instruction-limit outcome = %#v, want resource failure after partial output", interpreter)
+	}
+	target, format, _, ok := nativeHostCAOTTarget()
+	if !ok {
+		t.Skip("C AOT instruction-limit parity requires a supported native host")
+	}
+	if !optionResultCompilerAvailable(target) {
+		t.Skipf("C AOT instruction-limit parity needs the compiler for %s-%s", target.OS, target.Arch)
+	}
+	native := buildAndRunOptionResultNative(t, source, target, format, limits)
+	assertNativeRuntimeFailureOutcome(t, format, native, interpreter, "instruction limit exceeded")
 }
 
 func assertNativeRuntimeFailureOutcome(t *testing.T, label string, got, want optionResultObservedOutcome, message string) {
