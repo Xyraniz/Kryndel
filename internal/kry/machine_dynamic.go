@@ -647,6 +647,7 @@ const (
 	peImportExitProcess
 	peImportGetProcessHeap
 	peImportHeapAlloc
+	peImportGetTickCount64
 )
 
 // emitPEImportedCall emits a RIP-relative indirect call through the PE IAT.

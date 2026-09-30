@@ -121,7 +121,7 @@ func TestDirectPELowersValidatedKIRWithoutAST(t *testing.T) {
 			// Ensure this backend boundary cannot accidentally fall back to the
 			// source AST or checker after KIR has been emitted.
 			program, checker = nil, nil
-			imageBytes, err := lowerDirectPEKIR(document, limits.MaxOutputBytes)
+			imageBytes, err := lowerDirectPEKIR(document, limits)
 			if err != nil {
 				t.Fatalf("KIR-to-PE lowering failed: %v", err)
 			}
@@ -176,7 +176,7 @@ func TestDirectPEKIRUnsupportedDiagnosticsDoNotNeedAST(t *testing.T) {
 		t.Fatal(err)
 	}
 	program, checker = nil, nil
-	_, err = lowerDirectPEKIR(document, limits.MaxOutputBytes)
+	_, err = lowerDirectPEKIR(document, limits)
 	if err == nil || !strings.Contains(err.Error(), "direct PE dynamic subset") || !strings.Contains(err.Error(), "String comparison is not supported by the direct PE runtime") {
 		t.Fatalf("KIR unsupported diagnostic = %v", err)
 	}

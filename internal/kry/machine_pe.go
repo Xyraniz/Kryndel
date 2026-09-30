@@ -47,7 +47,7 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("direct PE backend rejected KIR: %w", err)
 	}
-	return lowerDirectPEKIR(document, limits.MaxOutputBytes)
+	return lowerDirectPEKIR(document, limits)
 }
 
 // validateDirectPEProgram prevents Linux syscalls or non-Win64 calling
@@ -329,21 +329,56 @@ func pePut16(data []byte, at int, value uint16) { binary.LittleEndian.PutUint16(
 func pePut32(data []byte, at int, value uint32) { binary.LittleEndian.PutUint32(data[at:], value) }
 func pePut64(data []byte, at int, value uint64) { binary.LittleEndian.PutUint64(data[at:], value) }
 
-func buildDirectStaticPE(output []byte, gui bool, outputLimit int64) ([]byte, error) {
-	if uint64(len(output)) > math.MaxUint32 {
-		return nil, fmt.Errorf("direct PE output exceeds WriteFile's DWORD length")
+func buildDirectStaticPE(output [][]byte, gui bool, limits Limits) ([]byte, error) {
+	var outputLength uint64
+	for _, chunk := range output {
+		if uint64(len(chunk)) > math.MaxUint32-outputLength {
+			return nil, fmt.Errorf("direct PE output exceeds WriteFile's DWORD length")
+		}
+		outputLength += uint64(len(chunk))
 	}
 	machine := newDirectMachine()
 	machine.windowsABI = true
-	machine.outputLimit = outputLimit
+	machine.outputLimit = limits.MaxOutputBytes
 	machine.outputLimitSet = true
 	// The entry frame gives the shared WriteFile loop aligned scratch space and
 	// a standard Win64 unwindable prolog.
 	machine.code = append(machine.code, 0x55, 0x48, 0x89, 0xe5)
 	machine.code = append(machine.code, 0x48, 0x81, 0xec, 0x40, 0, 0, 0)
 	machine.emitOutputCounterInit(8)
-	if err := machine.emitWrite(string(output)); err != nil {
+	wallFailure := -1
+	if limits.MaxWallTimeMS != 0 {
+		wallFailure = machine.newLabel()
+	}
+	emitPEWallClockStart(machine, limits.MaxWallTimeMS)
+	if err := emitPEWallClockCheck(machine, limits.MaxWallTimeMS, wallFailure); err != nil {
 		return nil, err
+	}
+	if limits.MaxWallTimeMS == 0 {
+		var combined []byte
+		for _, chunk := range output {
+			combined = append(combined, chunk...)
+		}
+		if err := machine.emitWrite(string(combined)); err != nil {
+			return nil, err
+		}
+	} else {
+		for _, chunk := range output {
+			if err := emitPEWallClockCheck(machine, limits.MaxWallTimeMS, wallFailure); err != nil {
+				return nil, err
+			}
+			if len(chunk) != 0 {
+				if err := machine.emitWrite(string(chunk)); err != nil {
+					return nil, err
+				}
+			}
+			if err := emitPEWallClockCheck(machine, limits.MaxWallTimeMS, wallFailure); err != nil {
+				return nil, err
+			}
+		}
+		if err := emitPEWallClockCheck(machine, limits.MaxWallTimeMS, wallFailure); err != nil {
+			return nil, err
+		}
 	}
 	if err := machine.emitJump(machine.endLabel); err != nil {
 		return nil, err
@@ -361,6 +396,14 @@ func buildDirectStaticPE(output []byte, gui bool, outputLimit int64) ([]byte, er
 	if err := machine.emitExit(1); err != nil {
 		return nil, err
 	}
+	if wallFailure >= 0 {
+		if err := machine.bind(wallFailure); err != nil {
+			return nil, err
+		}
+		if err := machine.emitPEWriteStderr("kryndel: wall-clock execution limit exceeded\n"); err != nil {
+			return nil, err
+		}
+	}
 	image, err := buildDirectDynamicPE(machine.code, machine.data, machine.dataRefs, machine.peImportRefs, machine.peFunctions)
 	if err != nil {
 		return nil, err
@@ -371,10 +414,9 @@ func buildDirectStaticPE(output []byte, gui bool, outputLimit int64) ([]byte, er
 	return image, nil
 }
 
-// The .idata section contains one import descriptor, a null descriptor,
-// ILT/IAT entries, and three hint/name records.
-func peImportData(idataRVA uint32) (data []byte, iat [5]uint32) {
-	names := [...]string{"GetStdHandle", "WriteFile", "ExitProcess", "GetProcessHeap", "HeapAlloc"}
+// The .idata section contains the descriptor, ILT/IAT entries, and import names.
+func peImportData(idataRVA uint32) (data []byte, iat [6]uint32) {
+	names := [...]string{"GetStdHandle", "WriteFile", "ExitProcess", "GetProcessHeap", "HeapAlloc", "GetTickCount64"}
 	data = make([]byte, 40)
 	dllName := uint32(len(data))
 	data = append(data, "KERNEL32.dll\x00"...)

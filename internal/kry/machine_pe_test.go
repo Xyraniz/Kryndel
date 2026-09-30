@@ -499,3 +499,43 @@ func TestDirectPELargeStaticOutputKeepsSectionsDistinct(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectPEWallClockLimitMatchesInterpreter(t *testing.T) {
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("PE-direct wall-clock execution requires native Windows amd64")
+	}
+
+	t.Run("static output honors an expired limit", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.MaxWallTimeMS = -1
+		interpreted, diagnostic, native, stderr, status := runDirectPEBuiltinOutcome(t, `println("after")`, limits)
+		if diagnostic == nil || diagnostic.Category != CatResource || diagnostic.Message != "wall-clock execution limit exceeded" || interpreted != "" {
+			t.Fatalf("interpreter outcome = output %q, diagnostic %#v", interpreted, diagnostic)
+		}
+		if native != "" || strings.ReplaceAll(stderr, "\r\n", "\n") != "kryndel: wall-clock execution limit exceeded\n" || status != 1 {
+			t.Fatalf("PE static outcome = stdout %q stderr %q status %d", native, stderr, status)
+		}
+	})
+
+	t.Run("dynamic loop stops at the deadline", func(t *testing.T) {
+		const source = `fn next(value: Int) -> Int { return value + 1 }
+fn main() -> Nil {
+    print("before:")
+    let mut index: Int = 0
+    while index < 50000000 {
+        index = next(index)
+    }
+    println(index)
+    return nil
+}`
+		limits := DefaultLimits()
+		limits.MaxWallTimeMS = 100
+		interpreted, diagnostic, native, stderr, status := runDirectPEBuiltinOutcome(t, source, limits)
+		if diagnostic == nil || diagnostic.Category != CatResource || diagnostic.Message != "wall-clock execution limit exceeded" || interpreted != "before:" {
+			t.Fatalf("interpreter outcome = output %q, diagnostic %#v", interpreted, diagnostic)
+		}
+		if native != "before:" || strings.ReplaceAll(stderr, "\r\n", "\n") != "kryndel: wall-clock execution limit exceeded\n" || status != 1 {
+			t.Fatalf("PE dynamic outcome = stdout %q stderr %q status %d", native, stderr, status)
+		}
+	})
+}

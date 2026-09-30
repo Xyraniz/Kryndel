@@ -31,13 +31,13 @@ type kirPEValidatedProgram struct {
 // lowerDirectPEKIR accepts only a decoded, validated KIR document. The PE
 // traversal and storage model are KIR-native; directMachine is used only as a
 // Win64 instruction/label/data writer.
-func lowerDirectPEKIR(document *KIRDocument, outputLimit int64) ([]byte, error) {
+func lowerDirectPEKIR(document *KIRDocument, limits Limits) ([]byte, error) {
 	if err := validateKIRDirectPEFunctionValues(document); err != nil {
 		return nil, err
 	}
-	output, staticErr := directStaticOutputKIR(document, outputLimit)
+	output, staticErr := directStaticOutputKIR(document, limits.MaxOutputBytes)
 	if staticErr == nil {
-		return buildDirectStaticPE(output, document.Target.GUI, outputLimit)
+		return buildDirectStaticPE(output, document.Target.GUI, limits)
 	}
 	validated, err := validateKIRDirectPE(document)
 	if err != nil {
@@ -45,7 +45,7 @@ func lowerDirectPEKIR(document *KIRDocument, outputLimit int64) ([]byte, error) 
 	}
 	machine := newDirectMachine()
 	machine.windowsABI = true
-	machine.outputLimit = outputLimit
+	machine.outputLimit = limits.MaxOutputBytes
 	machine.outputLimitSet = true
 	for _, function := range validated.functions {
 		function.label = machine.newLabel()
@@ -59,7 +59,7 @@ func lowerDirectPEKIR(document *KIRDocument, outputLimit int64) ([]byte, error) 
 	if err := collectKIRPEFunctions(validated.functions); err != nil {
 		return nil, fmt.Errorf("direct PE function setup: %w", err)
 	}
-	lowerer := &kirPEMachine{machine: machine, program: validated, entry: entry}
+	lowerer := &kirPEMachine{machine: machine, program: validated, entry: entry, maxWallTimeMS: limits.MaxWallTimeMS}
 	machine.outputLimitLabel = lowerer.runtimeFailureLabel("output limit exceeded")
 	for _, function := range validated.functions {
 		if err := lowerer.collectFunctionParameters(function); err != nil {
@@ -194,7 +194,7 @@ func kirPEExprUsesFunctionValue(expression *KIRExpr) bool {
 	return expression.Lambda != nil && kirPEStmtsUseFunctionValue(expression.Lambda.Body)
 }
 
-func directStaticOutputKIR(document *KIRDocument, outputLimit int64) ([]byte, error) {
+func directStaticOutputKIR(document *KIRDocument, outputLimit int64) ([][]byte, error) {
 	if document == nil {
 		return nil, fmt.Errorf("missing validated KIR document")
 	}
@@ -228,7 +228,8 @@ func directStaticOutputKIR(document *KIRDocument, outputLimit int64) ([]byte, er
 		}
 	}
 	environment := map[string]Value{}
-	output := make([]byte, 0)
+	var output [][]byte
+	var outputBytes int64
 	for _, statement := range statements {
 		if statement == nil {
 			continue
@@ -243,6 +244,7 @@ func directStaticOutputKIR(document *KIRDocument, outputLimit int64) ([]byte, er
 				return nil, fmt.Errorf("direct PE backend requires a compile-time value for '%s'", statement.Name)
 			}
 			environment[statement.Name] = value
+			output = append(output, nil)
 		case "expr":
 			if statement.Expr == nil || statement.Expr.Kind != "call" || statement.Expr.Receiver != nil || (statement.Expr.CallTarget != "builtin:print" && statement.Expr.CallTarget != "builtin:println") || len(statement.Expr.Args) != 1 {
 				return nil, fmt.Errorf("direct PE backend supports only print/println of static values")
@@ -255,11 +257,13 @@ func directStaticOutputKIR(document *KIRDocument, outputLimit int64) ([]byte, er
 			if statement.Expr.CallTarget == "builtin:println" {
 				text += "\n"
 			}
-			output = append(output, []byte(text)...)
+			chunk := []byte(text)
+			output = append(output, chunk)
+			outputBytes += int64(len(chunk))
 		default:
 			return nil, fmt.Errorf("direct PE backend does not support statement kind %s", statement.Kind)
 		}
-		if int64(len(output)) > outputLimit {
+		if outputBytes > outputLimit {
 			return nil, errDirectOutputLimit
 		}
 	}
@@ -359,12 +363,43 @@ type kirPEMachine struct {
 	statementSlot map[*KIRStmt]machineSlot
 	loops         []machineLoop
 	inFunction    bool
+	maxWallTimeMS int64
 	failures      []kirPERuntimeFailure
 }
 
 type kirPERuntimeFailure struct {
 	label   int
 	message string
+}
+
+func emitPEWallClockStart(machine *directMachine, maxWallTimeMS int64) {
+	if maxWallTimeMS > 0 {
+		machine.emitPEImportedCall(peImportGetTickCount64)
+		machine.code = append(machine.code, 0x49, 0x89, 0xc6)
+	}
+}
+
+func emitPEWallClockCheck(machine *directMachine, maxWallTimeMS int64, failureLabel int) error {
+	if maxWallTimeMS == 0 {
+		return nil
+	}
+	if maxWallTimeMS < 0 {
+		return machine.emitJump(failureLabel)
+	}
+	machine.emitPEImportedCall(peImportGetTickCount64)
+	machine.code = append(machine.code, 0x4c, 0x29, 0xf0, 0x48, 0xb9)
+	var limit [8]byte
+	binary.LittleEndian.PutUint64(limit[:], uint64(maxWallTimeMS))
+	machine.code = append(machine.code, limit[:]...)
+	machine.code = append(machine.code, 0x48, 0x39, 0xc8)
+	return machine.emitConditionalJump(0x83, failureLabel)
+}
+
+func (lowerer *kirPEMachine) emitWallClockCheck() error {
+	if lowerer.maxWallTimeMS == 0 {
+		return nil
+	}
+	return emitPEWallClockCheck(lowerer.machine, lowerer.maxWallTimeMS, lowerer.runtimeFailureLabel("wall-clock execution limit exceeded"))
 }
 
 func (lowerer *kirPEMachine) runtimeFailureLabel(message string) int {
@@ -762,8 +797,17 @@ func (lowerer *kirPEMachine) emitEntry() error {
 	lowerer.scopes = []map[kirPEBindingID]machineSlot{{}}
 	lowerer.statementSlot = map[*KIRStmt]machineSlot{}
 	lowerer.loops = nil
-	if err := lowerer.emitStatements(lowerer.program.entry); err != nil {
+	emitPEWallClockStart(machine, lowerer.maxWallTimeMS)
+	if err := lowerer.emitWallClockCheck(); err != nil {
 		return err
+	}
+	if err := lowerer.emitStatements(lowerer.program.entry, lowerer.program.main == nil); err != nil {
+		return err
+	}
+	if lowerer.program.main != nil {
+		if err := lowerer.emitWallClockCheck(); err != nil {
+			return err
+		}
 	}
 	if err := machine.emitJump(machine.endLabel); err != nil {
 		return err
@@ -801,7 +845,7 @@ func (lowerer *kirPEMachine) emitFunctions() error {
 				return fmt.Errorf("function '%s': %w", function.function.Name, err)
 			}
 		}
-		if err := lowerer.emitStatements(function.function.Body); err != nil {
+		if err := lowerer.emitStatements(function.function.Body, false); err != nil {
 			return fmt.Errorf("function '%s': %w", function.function.Name, err)
 		}
 		machine.emitFunctionEpilog()
@@ -830,15 +874,18 @@ func (lowerer *kirPEMachine) lookupSlot(binding *KIRBinding) (machineSlot, bool)
 
 func (lowerer *kirPEMachine) emitScopedStatements(statements []*KIRStmt) error {
 	lowerer.scopes = append(lowerer.scopes, map[kirPEBindingID]machineSlot{})
-	err := lowerer.emitStatements(statements)
+	err := lowerer.emitStatements(statements, false)
 	lowerer.scopes = lowerer.scopes[:len(lowerer.scopes)-1]
 	return err
 }
 
-func (lowerer *kirPEMachine) emitStatements(statements []*KIRStmt) error {
+func (lowerer *kirPEMachine) emitStatements(statements []*KIRStmt, topLevel bool) error {
 	for _, statement := range statements {
 		if statement == nil {
 			return fmt.Errorf("direct PE lowering encountered missing statement metadata")
+		}
+		if err := lowerer.emitWallClockCheck(); err != nil {
+			return err
 		}
 		switch statement.Kind {
 		case "let", "const":
@@ -946,6 +993,11 @@ func (lowerer *kirPEMachine) emitStatements(statements []*KIRStmt) error {
 			}
 		default:
 			return fmt.Errorf("direct PE lowering does not support statement kind %s", statement.Kind)
+		}
+		if topLevel && statement.Kind != "return" {
+			if err := lowerer.emitWallClockCheck(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
