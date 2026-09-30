@@ -1,6 +1,7 @@
 package kry
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -49,16 +50,125 @@ println(prefix + str(40 + 2))
 	if err != nil {
 		t.Fatal(err)
 	}
-	document, err := DecodeKIR(kir, c.Env.Lim)
+	mir, err := DecodeMIR(kir, c.Env.Lim)
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := directStaticKIROutput(document, c.Env.Lim.MaxOutputBytes)
+	if mir.hasSourceContext {
+		t.Fatal("decoded MIR unexpectedly retained source context")
+	}
+	output, err := directStaticKIROutput(mir, c.Env.Lim.MaxOutputBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(output) != "typed 42\n" {
 		t.Fatalf("KIR static output = %q", output)
+	}
+}
+
+func TestDirectELFStaticAndDynamicLoweringUsesDecodedMIR(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		want   string
+		static bool
+	}{
+		{
+			name:   "static output",
+			source: "let prefix: String = \"typed \"\nprintln(prefix + str(40 + 2))\n",
+			want:   "typed 42\n",
+			static: true,
+		},
+		{
+			name: "dynamic control flow",
+			source: `let mut index: Int = 0
+while index < 2 {
+    println(index)
+    index = index + 1
+}
+`,
+			want: "0\n1\n",
+		},
+		{
+			name: "struct values and array for loop",
+			source: `struct Pair {
+    left: Int,
+    right: Int,
+}
+fn make_pair() -> Pair { return Pair{left: 20, right: 22} }
+fn sum(values: Array[Int]) -> Int {
+    let mut total: Int = 0
+    for value in array_indices(values) { total = total + value }
+    return total
+}
+fn main() -> Nil {
+    let pair: Pair = make_pair()
+    println(pair.left + pair.right + sum([1, 2, 3, 4]))
+    return nil
+}
+`,
+			want: "48\n",
+		},
+		{
+			name: "empty map insertion lookup and removal",
+			source: `fn main() -> Nil {
+    let empty: Map[String, String] = {}
+    assert_eq(map_contains_key(empty, "a"), false)
+    let values: Map[String, String] = map_insert(empty, "a", "one")
+    let changed: Map[String, String] = map_insert(values, "b", "two")
+    let replaced: Map[String, String] = map_insert(changed, "a", "uno")
+    let removed: Map[String, String] = map_remove(replaced, "b")
+    println(unwrap_or(map_get(removed, "a"), "missing"))
+    println(unwrap_or(map_get(removed, "b"), "gone"))
+    return nil
+}
+`,
+			want: "uno\ngone\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			compiled, err := CompileMIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := compiled.MarshalKIR()
+			if err != nil {
+				t.Fatal(err)
+			}
+			mir, err := DecodeMIR(encoded, checker.Env.Lim)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mir.hasSourceContext {
+				t.Fatal("decoded MIR unexpectedly retained source context")
+			}
+			image, err := buildDirectELFFromMIR(mir)
+			if err != nil {
+				t.Fatalf("direct ELF MIR lowering failed: %v", err)
+			}
+			if _, err := InspectNative(image); err != nil {
+				t.Fatalf("direct ELF output is invalid: %v", err)
+			}
+			if test.static && !bytes.Equal(image, emitELF64WriteExit([]byte(test.want))) {
+				t.Fatal("static ELF path did not emit the output directly from decoded MIR")
+			}
+			if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+				return
+			}
+			path := filepath.Join(t.TempDir(), "decoded-mir-program")
+			if err := os.WriteFile(path, image, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command(path).CombinedOutput()
+			if err != nil {
+				t.Fatalf("decoded MIR ELF failed to execute: %v; output=%q", err, output)
+			}
+			if string(output) != test.want {
+				t.Fatalf("decoded MIR ELF output = %q, want %q", output, test.want)
+			}
+		})
 	}
 }
 
@@ -278,11 +388,11 @@ func assertKIRDirectSubsetUnsupported(t *testing.T, program *Program, checker *C
 	if err != nil {
 		t.Fatal(err)
 	}
-	document, err := DecodeKIR(kirBytes, checker.Env.Lim)
+	mir, err := DecodeMIR(kirBytes, checker.Env.Lim)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = validateKIRDirectELFSubset(document)
+	err = validateKIRDirectELFSubset(mir)
 	if !errors.Is(err, errKIRSubsetUnsupported) || !strings.Contains(err.Error(), wantMessage) {
 		t.Fatalf("direct KIR preflight error = %v, want unsupported sentinel containing %q", err, wantMessage)
 	}

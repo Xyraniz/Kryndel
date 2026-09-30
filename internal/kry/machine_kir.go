@@ -4,7 +4,11 @@ import "fmt"
 
 // directStaticKIROutput compiles the constant-output ELF subset from the
 // checked KIR document. Unsupported nodes are left to the dynamic backend.
-func directStaticKIROutput(document *KIRDocument, maxOutputBytes int64) ([]byte, error) {
+func directStaticKIROutput(mir *ValidatedMIR, maxOutputBytes int64) ([]byte, error) {
+	document, err := validatedMIRDocument(mir)
+	if err != nil {
+		return nil, err
+	}
 	if document == nil {
 		return nil, fmt.Errorf("missing KIR document")
 	}

@@ -1,0 +1,11 @@
+fn main() -> Nil {
+    println("")
+    println("x")
+    println("abc")
+    println("a\nb")
+    println("quote: \"")
+    println("slash: \\")
+    println("cr:\r")
+    println("lf:\n")
+    println("tab:\t")
+}

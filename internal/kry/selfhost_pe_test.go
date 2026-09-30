@@ -1010,8 +1010,12 @@ fn main() -> Nil {
 	if d != nil {
 		t.Fatal(d.Message)
 	}
-	if err := r.run(); err != nil {
-		t.Fatalf("selfhost source compiler failed: %v", err)
+	if diagnostic := r.run(); diagnostic != nil {
+		instructions := uint64(0)
+		if r.Ctx != nil {
+			instructions = r.Ctx.Instructions
+		}
+		t.Fatalf("selfhost source compiler failed at %s:%d:%d after %d/%d instructions: %s", diagnostic.Source, diagnostic.Line, diagnostic.Column, instructions, limits.MaxInstructions, diagnostic.Message)
 	}
 	image, err := os.ReadFile(outputPath)
 	if err != nil {

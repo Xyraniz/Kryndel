@@ -9,7 +9,7 @@ import (
 )
 
 // cgen translates a checked Kryndel program into C source that links against
-// the embedded runtime in cruntime.go. The generated C is compiled by the host
+// the embedded runtime in internal/cruntime. The generated C is compiled by the host
 // C compiler (gcc/clang) or a cross compiler (x86_64-w64-mingw32-gcc) to
 // produce real, runnable PE/ELF executables.
 //
@@ -97,22 +97,18 @@ func generateC(p *Program, c *Checker, obfuscate bool) (string, error) {
 	if p == nil || c == nil || c.Env == nil {
 		return "", fmt.Errorf("missing checked program")
 	}
-	limits := c.Env.Lim
-	data, err := EmitKIR(p, c, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
+	mir, err := CompileMIR(p, c, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
 	if err != nil {
-		return "", fmt.Errorf("emit KIR for C AOT: %w", err)
+		return "", fmt.Errorf("compile MIR for C AOT: %w", err)
 	}
-	document, err := DecodeKIR(data, limits)
-	if err != nil {
-		return "", fmt.Errorf("validate KIR for C AOT: %w", err)
-	}
-	return generateCFromValidatedKIR(document, limits, obfuscate)
+	return generateCFromValidatedKIR(mir, mir.limits, obfuscate)
 }
 
-func generateCFromValidatedKIR(document *KIRDocument, limits Limits, obfuscate bool) (string, error) {
-	if document == nil {
-		return "", fmt.Errorf("missing KIR document")
+func generateCFromValidatedKIR(mir *ValidatedMIR, limits Limits, obfuscate bool) (string, error) {
+	if mir == nil || mir.document == nil {
+		return "", fmt.Errorf("missing validated MIR")
 	}
+	document := mir.document
 	if kirDocumentUsesFunctionValues(document) {
 		return "", fmt.Errorf("C backend does not support function values or closures; use the interpreter")
 	}
@@ -581,11 +577,7 @@ func (g *cgen) emitPolyTable() {
 }
 
 func (g *cgen) emitRuntime() {
-	g.buf.WriteString(cRuntimePrelude)
-	g.buf.WriteString(cRuntimeDisplay)
-	g.buf.WriteString(cRuntimeBuiltins)
-	g.buf.WriteString(cRuntimeExtra)
-	g.buf.WriteString(cRuntimeCrypto)
+	g.buf.WriteString(cRuntimeSource())
 	g.buf.WriteString("\n/* ---- generated program ------------------------------------------------ */\n")
 }
 

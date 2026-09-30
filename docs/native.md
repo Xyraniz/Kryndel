@@ -9,7 +9,7 @@ make
 ./tools/kry run examples/fibonacci.kry
 ```
 
-Kryndel exposes three distinct products. `kry run` interprets source on the portable Go runtime. `kry build --format=kexe` writes a portable `KRYNATIVE6` bundle containing checked source files and canonical typed KIR; it is not a machine-code executable. The loader validates the KIR and requires it to match the KIR regenerated from the embedded sources. `kry build --format=elf-direct` emits Linux amd64 machine code directly for its explicitly supported subset. The native AOT formats (`elf`, `exe`, `pe`, and `macho`) use the generated-C backend. On a Windows amd64 target, `kry build --format=exe --no-external-toolchain` selects the C-free `pe-direct` machine backend; `--format=pe-direct` requests it explicitly. This backend has an explicit bounded language subset and fails on unsupported constructs. C AOT accepts Linux amd64/arm64, Windows amd64, and Darwin amd64/arm64 targets; Mach-O builds require a matching native macOS host. `--format=c` emits C source without invoking a compiler. To compile a supported Windows PE with the Kryndel-authored compiler rather than the Go direct backend, run `bash scripts/build-selfhost-pe.sh SOURCE.kry [OUTPUT.exe]` from Linux amd64 or WSL; this invokes the checked-in Stage 1 ELF directly, without Go, C, an assembler, or a linker.
+Kryndel exposes three distinct products. `kry run` checks source and enters the portable Go runtime through validated `ValidatedMIR`. `kry build --format=kexe` writes a portable `KRYNATIVE6` bundle containing checked source files and canonical typed KIR; it is not a machine-code executable. The loader validates the KIR and requires it to match the KIR regenerated from the embedded sources. `kry build --format=elf-direct` lowers its supported KIR subset directly to Linux amd64 machine code and rejects unsupported constructs before emission; there is no AST fallback. The native AOT formats (`elf`, `exe`, `pe`, and `macho`) use the generated-C backend. On a Windows amd64 target, `kry build --format=exe --no-external-toolchain` selects the C-free `pe-direct` machine backend; `--format=pe-direct` requests it explicitly. This backend has an explicit bounded language subset and fails on unsupported constructs. C AOT accepts Linux amd64/arm64, Windows amd64, and Darwin amd64/arm64 targets; Mach-O builds require a matching native macOS host. `--format=c` emits C source without invoking a compiler. To compile a supported Windows PE with the Kryndel-authored compiler rather than the Go direct backend, run `bash scripts/build-selfhost-pe.sh SOURCE.kry [OUTPUT.exe]` from Linux amd64 or WSL; this invokes the checked-in Stage 1 ELF directly, without Go, C, an assembler, or a linker.
 
 The executable does not require C, Python, Rust, Node.js, or an equivalent runtime to execute interpreted Kryndel programs. Building the Go toolchain requires Go and the modules listed in `go.mod`; Go builds include those dependencies in the resulting executable. Windows webcam capture additionally uses the external `ffmpeg` executable. Host integrations that need Go libraries or platform frameworks are rejected by native backends with their builtin name instead of embedding or invoking the VM.
 
@@ -78,9 +78,10 @@ The reader also accepts KRYNATIVE5 version 5, KRYNATIVE4 version 4, and legacy K
 ## Native binary formats
 
 `internal/kry/native.go` produces real, runnable executables through a C-based
-ahead-of-time backend. The checked program is lowered to C by
-`internal/kry/codegen.go`, linked against the embedded runtime in
-`internal/kry/cruntime.go`, and compiled by the host C toolchain:
+ahead-of-time backend. Validated MIR is lowered to C by
+`internal/kry/codegen.go`, linked against the ordered runtime fragments from
+the independent leaf package `internal/cruntime`, and compiled by the host C
+toolchain:
 
 | Target | Compiler | Output |
 | --- | --- | --- |

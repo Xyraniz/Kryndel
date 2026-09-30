@@ -148,15 +148,57 @@ func directKIRTypeSupported(encoded string, document *KIRDocument) bool {
 		return true
 	}
 	name, arguments, composite, ok := splitDirectKIRType(encoded)
-	if !ok || !composite {
+	if !ok {
 		return false
+	}
+	if !composite {
+		return directKIRStruct(document, name) != nil
 	}
 	switch name {
 	case "Array", "Option":
 		return len(arguments) == 1 && directKIRTypeSupported(arguments[0], document)
 	case "Result":
 		return len(arguments) == 2 && directKIRTypeSupported(arguments[0], document) && directKIRTypeSupported(arguments[1], document)
+	case "Map":
+		return len(arguments) == 2 && directKIRTypeSupported(arguments[0], document) && directKIRTypeSupported(arguments[1], document)
 	default:
 		return false
 	}
+}
+
+func directKIRMapKeyKind(encoded string) (uint64, bool) {
+	if encoded == "String" {
+		return 1, true
+	}
+	switch encoded {
+	case "Int", "UInt8", "UInt16", "UInt32", "UInt64", "Bool":
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+func directKIRStruct(document *KIRDocument, name string) *KIRStruct {
+	if document == nil || name == "" {
+		return nil
+	}
+	for _, structure := range document.Structs {
+		if structure != nil && structure.Name == name && len(structure.TypeParams) == 0 {
+			return structure
+		}
+	}
+	return nil
+}
+
+func directKIRStructField(document *KIRDocument, encodedType, name string) (*KIRField, int, bool) {
+	structure := directKIRStruct(document, encodedType)
+	if structure == nil {
+		return nil, -1, false
+	}
+	for index, field := range structure.Fields {
+		if field != nil && field.Name == name {
+			return field, index, true
+		}
+	}
+	return nil, -1, false
 }

@@ -3,8 +3,11 @@ package kry
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -13,8 +16,11 @@ import (
 var errKIRSubsetUnsupported = fmt.Errorf("KIR executor does not support this program")
 
 type kirExecResult struct {
-	Output     []byte
-	Diagnostic *Diagnostic
+	Output       []byte
+	Diagnostic   *Diagnostic
+	Context      *ExecContext
+	Global       *kirExecScope
+	DebugStopped bool
 }
 
 type kirExecBinding struct {
@@ -29,6 +35,7 @@ type kirExecScope struct {
 	defers           [][]*KIRStmt
 	types            map[string]string
 	allowProcessArgs bool
+	workerBase       *kirExecScope
 }
 
 type kirExecBindingKey struct {
@@ -45,17 +52,26 @@ func kirExecKey(binding *KIRBinding) kirExecBindingKey {
 }
 
 func newKIRExecScope(parent *kirExecScope) *kirExecScope {
-	return &kirExecScope{parent: parent, names: map[string]string{}, values: map[kirExecBindingKey]*kirExecBinding{}, allowProcessArgs: parent != nil && parent.allowProcessArgs}
+	scope := &kirExecScope{parent: parent, names: map[string]string{}, values: map[kirExecBindingKey]*kirExecBinding{}, allowProcessArgs: parent != nil && parent.allowProcessArgs}
+	if parent != nil {
+		scope.workerBase = parent.workerBase
+	}
+	return scope
 }
 
 func (scope *kirExecScope) find(binding *KIRBinding) (*kirExecBinding, bool) {
+	value, _, ok := scope.findScope(binding)
+	return value, ok
+}
+
+func (scope *kirExecScope) findScope(binding *KIRBinding) (*kirExecBinding, *kirExecScope, bool) {
 	key := kirExecKey(binding)
 	for current := scope; current != nil; current = current.parent {
 		if value, ok := current.values[key]; ok {
-			return value, true
+			return value, current, true
 		}
 	}
-	return nil, false
+	return nil, nil, false
 }
 
 func (scope *kirExecScope) local(name string) bool { return scope.names[name] != "" }
@@ -67,6 +83,24 @@ func (scope *kirExecScope) typeParameter(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func (scope *kirExecScope) workerLocalBinding(bindingScope *kirExecScope) bool {
+	if scope == nil || scope.workerBase == nil {
+		return false
+	}
+	for current := scope; current != nil; current = current.parent {
+		if current == scope.workerBase.parent {
+			return false
+		}
+		if current == bindingScope {
+			return true
+		}
+		if current == scope.workerBase {
+			return false
+		}
+	}
+	return false
 }
 
 func (scope *kirExecScope) define(binding *KIRBinding, value Value) error {
@@ -115,26 +149,51 @@ type kirExecTailCall struct {
 }
 
 type kirExecutor struct {
-	limits      Limits
-	context     *ExecContext
-	document    *KIRDocument
-	sources     map[string]*Source
-	output      []byte
-	functions   map[string]*KIRFunction
-	closures    map[*FunctionValue]*kirClosure
-	structs     map[string]*StructDecl
-	enums       map[string]*EnumDecl
-	types       map[string]*Type
-	builtins    *Runtime
-	global      *kirExecScope
-	propagated  *Value
-	returnTypes []string
-	typeArgs    []map[string]string
+	limits       Limits
+	context      *ExecContext
+	document     *KIRDocument
+	sources      map[string]*Source
+	output       []byte
+	functions    map[string]*KIRFunction
+	closures     map[*FunctionValue]*kirClosure
+	closureMu    *sync.RWMutex
+	structs      map[string]*StructDecl
+	enums        map[string]*EnumDecl
+	types        map[string]*Type
+	builtins     *Runtime
+	global       *kirExecScope
+	propagated   *Value
+	returnTypes  []string
+	typeArgs     []map[string]string
+	outputWriter io.Writer
+	outputMu     *sync.Mutex
+	debugger     *Debugger
+	debugStopped bool
+	callFrames   []StackFrame
+}
+
+type kirExecOptions struct {
+	sandbox   Sandbox
+	args      []string
+	context   *ExecContext
+	output    io.Writer
+	repl      bool
+	debugger  *Debugger
+	global    *kirExecScope
+	allowArgs bool
+	runtime   *Runtime
 }
 
 // executeKIRSubset runs the bounded executable KIR slice directly. Callers
 // must pass a decoded document; this function repeats structural validation
 // because it is also the boundary used by native code generation.
+func executeValidatedMIR(mir *ValidatedMIR, limits Limits, sources map[string]*Source, sandbox ...Sandbox) (kirExecResult, error) {
+	if mir == nil || mir.document == nil {
+		return kirExecResult{}, fmt.Errorf("invalid MIR executable: missing validated document")
+	}
+	return executeKIRSubset(mir.document, limits, sources, sandbox...)
+}
+
 func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*Source, sandbox ...Sandbox) (kirExecResult, error) {
 	if document == nil {
 		return kirExecResult{}, fmt.Errorf("invalid KIR executable: missing document")
@@ -148,7 +207,6 @@ func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*
 	if err := validateKIRDocument(document, limits); err != nil {
 		return kirExecResult{}, fmt.Errorf("invalid KIR executable: %w", err)
 	}
-	functions := kirExecFunctions(document)
 	if err := validateKIRExecSubset(document); err != nil {
 		return kirExecResult{}, err
 	}
@@ -156,48 +214,137 @@ func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*
 	if len(sandbox) == 1 {
 		executionSandbox = sandbox[0]
 	}
+	return executeKIRWithOptions(document, limits, sources, kirExecOptions{sandbox: executionSandbox})
+}
 
-	var ctx context.Context
+// executeMIRRuntime drives the production interpreter from the validated KIR
+// graph. It accepts runtime lifecycle inputs without creating a frontend AST.
+func executeMIRRuntime(mir *ValidatedMIR, limits Limits, sources map[string]*Source, sandbox Sandbox, args []string, context *ExecContext, output io.Writer, repl bool, debugger *Debugger, global *kirExecScope, runtime *Runtime) (kirExecResult, error) {
+	if mir == nil || mir.document == nil {
+		return kirExecResult{}, fmt.Errorf("invalid MIR executable: missing validated document")
+	}
+	if context == nil || context.Ctx == nil {
+		return kirExecResult{}, fmt.Errorf("invalid MIR executable: missing runtime context")
+	}
+	return executeKIRWithOptions(mir.document, limits, sources, kirExecOptions{sandbox: sandbox, args: args, context: context, output: output, repl: repl, debugger: debugger, global: global, allowArgs: true, runtime: runtime})
+}
+
+func executeKIRWithOptions(document *KIRDocument, limits Limits, sources map[string]*Source, options kirExecOptions) (kirExecResult, error) {
+	if document == nil {
+		return kirExecResult{}, fmt.Errorf("invalid KIR executable: missing document")
+	}
+	if document.Format != KIRFormat || document.Version < 3 || document.Version > KIRVersion {
+		return kirExecResult{}, fmt.Errorf("invalid KIR executable: unsupported format or version")
+	}
+	if err := validateKIRDocument(document, limits); err != nil {
+		return kirExecResult{}, fmt.Errorf("invalid KIR executable: %w", err)
+	}
+	functions := kirExecFunctions(document)
+	if err := validateKIRExecSubsetWithFunctions(document, functions, options.allowArgs); err != nil {
+		return kirExecResult{}, err
+	}
 	var cancel context.CancelFunc
-	if limits.MaxWallTimeMS > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(limits.MaxWallTimeMS)*time.Millisecond)
-	} else {
-		ctx, cancel = context.WithCancel(context.Background())
+	execContext := options.context
+	if execContext == nil {
+		var ctx context.Context
+		if limits.MaxWallTimeMS > 0 {
+			ctx, cancel = context.WithTimeout(context.Background(), time.Duration(limits.MaxWallTimeMS)*time.Millisecond)
+		} else {
+			ctx, cancel = context.WithCancel(context.Background())
+		}
+		execContext = &ExecContext{Ctx: ctx, Cancel: cancel, Lim: limits}
 	}
-	defer cancel()
-	executor := &kirExecutor{
-		limits:    limits,
-		context:   &ExecContext{Ctx: ctx, Cancel: cancel, Lim: limits},
-		document:  document,
-		sources:   sources,
-		functions: functions,
-		closures:  make(map[*FunctionValue]*kirClosure),
-		structs:   make(map[string]*StructDecl, len(document.Structs)),
-		enums:     make(map[string]*EnumDecl, len(document.Enums)),
-		types:     make(map[string]*Type),
+	if options.context == nil {
+		defer cancel()
 	}
+	outputMu := &sync.Mutex{}
+	if options.runtime != nil {
+		outputMu = &options.runtime.kirOutputMu
+	}
+	executor := (*kirExecutor)(nil)
+	if options.runtime != nil {
+		executor = options.runtime.kirExecutor
+	}
+	if executor == nil {
+		executor = &kirExecutor{
+			closures:  make(map[*FunctionValue]*kirClosure),
+			closureMu: &sync.RWMutex{},
+			structs:   make(map[string]*StructDecl, len(document.Structs)),
+			enums:     make(map[string]*EnumDecl, len(document.Enums)),
+			types:     make(map[string]*Type),
+		}
+	}
+	if executor.closures == nil {
+		executor.closures = make(map[*FunctionValue]*kirClosure)
+	}
+	if executor.closureMu == nil {
+		executor.closureMu = &sync.RWMutex{}
+	}
+	if executor.structs == nil {
+		executor.structs = make(map[string]*StructDecl, len(document.Structs))
+	}
+	if executor.enums == nil {
+		executor.enums = make(map[string]*EnumDecl, len(document.Enums))
+	}
+	if executor.types == nil {
+		executor.types = make(map[string]*Type)
+	}
+	executor.limits = limits
+	executor.context = execContext
+	executor.document = document
+	executor.sources = sources
+	executor.functions = functions
+	executor.output = nil
+	executor.outputWriter = options.output
+	executor.outputMu = outputMu
+	executor.debugger = options.debugger
+	executor.debugStopped = false
+	executor.propagated = nil
+	executor.returnTypes = nil
+	executor.typeArgs = nil
+	executor.callFrames = nil
 	if err := executor.initializeKIRTypes(document); err != nil {
 		return kirExecResult{}, err
 	}
-	executor.initializeKIRBuiltins(document, executionSandbox)
-	scope := newKIRExecScope(nil)
+	if options.runtime != nil {
+		options.runtime.kirExecutor = executor
+		executor.builtins = options.runtime
+		executor.builtins.Ctx = execContext
+		executor.builtins.Lim = limits
+		executor.builtins.Sandbox = options.sandbox
+		executor.builtins.Args = append([]string(nil), options.args...)
+	} else {
+		executor.initializeKIRBuiltins(document, options.sandbox)
+		executor.builtins.Args = append([]string(nil), options.args...)
+	}
+	scope := options.global
+	if scope == nil {
+		scope = newKIRExecScope(nil)
+	}
+	scope.allowProcessArgs = options.allowArgs
 	executor.global = scope
 	var diagnostic *Diagnostic
 	if len(document.Statements) != 0 {
-		_, diagnostic = executor.execBlock(scope, document.Statements, true)
+		_, diagnostic = executor.execBlock(scope, document.Statements, true, options.repl)
 	} else if main, target := kirExecEntryFunction(document, functions); main != nil {
 		call := &KIRExpr{Kind: "call", Name: "main", Source: main.Source, Line: main.Line, Column: main.Column, Type: main.Return, CallTarget: "function:" + target}
 		if executor.context.Calls >= limits.MaxCallDepth {
 			diagnostic = executor.fail(CatResource, call.Source, call.Line, call.Column, "call depth limit exceeded")
 		} else {
-			_, diagnostic = executor.invokeKIR(call, main, scope, nil, nil)
+			var value Value
+			value, diagnostic = executor.invokeKIR(call, main, scope, nil, nil)
 			if diagnostic == nil {
 				diagnostic = executor.context.contextFailure(executor.source(main.Source), main.Line, main.Column)
 			}
+			if diagnostic == nil && value.Kind == VResult && !value.OK {
+				diagnostic = executor.fail(CatRuntime, main.Source, main.Line, main.Column, "main returned error: %s", executor.displayValue(*value.Inner))
+			}
 		}
 	}
-	diagnostic = executor.builtins.cleanup(diagnostic)
-	return kirExecResult{Output: append([]byte(nil), executor.output...), Diagnostic: diagnostic}, nil
+	if options.runtime == nil {
+		diagnostic = executor.builtins.cleanup(diagnostic)
+	}
+	return kirExecResult{Output: append([]byte(nil), executor.output...), Diagnostic: diagnostic, Context: execContext, Global: scope, DebugStopped: executor.debugStopped}, nil
 }
 
 func kirExecFunctions(document *KIRDocument) map[string]*KIRFunction {
@@ -221,6 +368,15 @@ func kirExecFunctions(document *KIRDocument) map[string]*KIRFunction {
 	return functions
 }
 
+func kirExecRequiredParams(parameters []*KIRParam) int {
+	for index, parameter := range parameters {
+		if parameter != nil && parameter.Default != nil {
+			return index
+		}
+	}
+	return len(parameters)
+}
+
 func (executor *kirExecutor) functionNamed(name string) *KIRFunction {
 	var found *KIRFunction
 	for _, function := range executor.functions {
@@ -232,6 +388,19 @@ func (executor *kirExecutor) functionNamed(name string) *KIRFunction {
 		}
 	}
 	return found
+}
+
+func (executor *kirExecutor) registerKIRClosure(identity *FunctionValue, closure *kirClosure) {
+	executor.closureMu.Lock()
+	executor.closures[identity] = closure
+	executor.closureMu.Unlock()
+}
+
+func (executor *kirExecutor) findKIRClosure(identity *FunctionValue) *kirClosure {
+	executor.closureMu.RLock()
+	closure := executor.closures[identity]
+	executor.closureMu.RUnlock()
+	return closure
 }
 
 func kirExecEntryFunction(document *KIRDocument, functions map[string]*KIRFunction) (*KIRFunction, string) {
@@ -286,15 +455,10 @@ func (executor *kirExecutor) invokeKIR(call *KIRExpr, function *KIRFunction, env
 		} else if receiver != nil {
 			return nilVal(), executor.fail(CatArtifact, call.Source, call.Line, call.Column, "KIR function call unexpectedly has a receiver")
 		}
-		if len(arguments) != len(function.Params) {
+		if len(arguments) < kirExecRequiredParams(function.Params) || len(arguments) > len(function.Params) {
 			return nilVal(), executor.fail(CatArtifact, call.Source, call.Line, call.Column, "KIR function call has %d arguments for %d parameters", len(arguments), len(function.Params))
 		}
 		child := newKIRExecScope(environment)
-		for i, parameter := range function.Params {
-			if err := child.define(parameter.Binding, arguments[i]); err != nil {
-				return nilVal(), executor.fail(CatArtifact, call.Source, call.Line, call.Column, "%s", err)
-			}
-		}
 		if function.Receiver != "" {
 			binding, valid := kirExecSelfBinding(function)
 			if !valid || receiver == nil {
@@ -308,8 +472,27 @@ func (executor *kirExecutor) invokeKIR(call *KIRExpr, function *KIRFunction, env
 		} else if receiver != nil {
 			return nilVal(), executor.fail(CatArtifact, call.Source, call.Line, call.Column, "KIR function call unexpectedly has a receiver")
 		}
+		for i, parameter := range function.Params {
+			var argument Value
+			if i < len(arguments) {
+				argument = arguments[i]
+			} else if parameter.Default != nil {
+				var diagnostic *Diagnostic
+				argument, diagnostic = executor.evalExpr(child, parameter.Default)
+				if diagnostic != nil {
+					return nilVal(), diagnostic
+				}
+			} else {
+				return nilVal(), executor.fail(CatArtifact, call.Source, call.Line, call.Column, "KIR function call omits required parameter %q", parameter.Name)
+			}
+			if err := child.define(parameter.Binding, argument); err != nil {
+				return nilVal(), executor.fail(CatArtifact, call.Source, call.Line, call.Column, "%s", err)
+			}
+		}
 		executor.returnTypes = append(executor.returnTypes, function.Return)
+		executor.callFrames = append(executor.callFrames, StackFrame{Function: function.Name, Source: call.Source, Line: call.Line, Column: call.Column})
 		flow, diagnostic := executor.execBlock(child, function.Body, false)
+		executor.callFrames = executor.callFrames[:len(executor.callFrames)-1]
 		executor.returnTypes = executor.returnTypes[:len(executor.returnTypes)-1]
 		if diagnostic != nil {
 			diagnostic.Stack = append(diagnostic.Stack, StackFrame{Function: function.Name, Source: call.Source, Line: call.Line, Column: call.Column})
@@ -412,16 +595,19 @@ func validateKIRExecSubsetWithFunctions(document *KIRDocument, functions map[str
 		if main == nil || main.Name != "main" {
 			return fmt.Errorf("%w: programs without top-level statements require a unique main()", errKIRSubsetUnsupported)
 		}
-		if main.Return != "Nil" || len(main.Params) != 0 {
-			return fmt.Errorf("%w: main must be a zero-argument function returning Nil", errKIRSubsetUnsupported)
+		if (main.Return != "Nil" && main.Return != "Result[Nil, String]") || len(main.Params) != 0 {
+			return fmt.Errorf("%w: main must be a zero-argument function returning Nil or Result[Nil, String]", errKIRSubsetUnsupported)
 		}
 	}
 	for _, function := range document.Functions {
 		if function == nil {
 			return fmt.Errorf("invalid KIR executable: function list contains a missing node")
 		}
-		if function.Worker || function.Unsafe || len(function.Captures) != 0 {
-			return fmt.Errorf("%w: workers, unsafe functions, and top-level captures are outside the KIR function/closure subset", errKIRSubsetUnsupported)
+		if function.Unsafe || len(function.Captures) != 0 {
+			return fmt.Errorf("%w: unsafe functions and top-level captures are outside the KIR function/closure subset", errKIRSubsetUnsupported)
+		}
+		if function.Worker && (function.Receiver != "" || function.Trait != "" || len(function.TypeParams) != 0 || len(function.Params) != 0) {
+			return fmt.Errorf("%w: workers must be non-generic zero-argument top-level functions", errKIRSubsetUnsupported)
 		}
 	}
 	root := newKIRExecScope(nil)
@@ -431,6 +617,9 @@ func validateKIRExecSubsetWithFunctions(document *KIRDocument, functions map[str
 	}
 	for _, function := range document.Functions {
 		functionScope := newKIRExecScope(root)
+		if function.Worker {
+			functionScope.workerBase = functionScope
+		}
 		functionScope.types = make(map[string]string, len(function.TypeParams))
 		if function.Receiver != "" {
 			receiverStruct, receiverParameters, ok := kirExecStructType(document, function.Receiver)
@@ -476,8 +665,16 @@ func validateKIRExecSubsetWithFunctions(document *KIRDocument, functions map[str
 			return fmt.Errorf("%w: function %q return type %q", errKIRSubsetUnsupported, function.Name, function.Return)
 		}
 		for _, parameter := range function.Params {
-			if parameter == nil || parameter.Default != nil || !kirExecTypeInScope(parameter.Type, functionScope, document) {
-				return fmt.Errorf("%w: function %q has a default or unsupported parameter type", errKIRSubsetUnsupported, function.Name)
+			if parameter == nil || !kirExecTypeInScope(parameter.Type, functionScope, document) {
+				return fmt.Errorf("%w: function %q has an unsupported parameter type", errKIRSubsetUnsupported, function.Name)
+			}
+			if parameter.Default != nil {
+				if err := validateKIRExecExpr(parameter.Default, functionScope, false, functions, document); err != nil {
+					return fmt.Errorf("invalid KIR executable: function %q default for %q: %w", function.Name, parameter.Name, err)
+				}
+				if parameter.Default.Type != parameter.Type {
+					return fmt.Errorf("invalid KIR executable: function %q default for %q has type %q, want %q", function.Name, parameter.Name, parameter.Default.Type, parameter.Type)
+				}
 			}
 			if err := functionScope.define(parameter.Binding, nilVal()); err != nil {
 				return fmt.Errorf("invalid KIR executable: function %q: %w", function.Name, err)
@@ -732,9 +929,6 @@ func validateKIRExecBlockAtDepth(statements []*KIRStmt, scope *kirExecScope, ret
 				if statement.Return.Type != returnType && !kirExecPropagationMatches(statement.Return, returnType) {
 					return fmt.Errorf("invalid KIR executable: return has type %q, want %q", statement.Return.Type, returnType)
 				}
-				if returnType == "Nil" && statement.Return.Kind != "nil" {
-					return fmt.Errorf("invalid KIR executable: Nil function must return nil")
-				}
 			} else if returnType != "Nil" {
 				return fmt.Errorf("invalid KIR executable: bare return cannot satisfy result type %q", returnType)
 			}
@@ -973,18 +1167,28 @@ func kirExecPropagationMatches(expression *KIRExpr, returnType string) bool {
 }
 
 func kirExecBuiltinSupported(builtin Builtin) bool {
+	if builtin.Name == "process_args" {
+		return false
+	}
 	if isSandboxAwareFilesystemBuiltin(builtin.Name) {
 		return true
 	}
-	switch builtin.Name {
-	case "sqlite_open", "sqlite_exec", "sqlite_query", "sqlite_close":
-		return true
-	}
 	switch builtin.Effects {
-	case "pure", "diagnostic", "collections", "json", "crypto":
+	case "pure", "diagnostic", "collections", "json", "crypto", "filesystem", "fs", "environment", "process", "network", "windows", "graphics", "discord", "database", "ffi", "random", "time", "actor", "shared", "concurrency":
 		return true
 	case "io":
 		return builtin.Name == "print" || builtin.Name == "println"
+	case "thread":
+		return true
+	case "async":
+		switch builtin.Name {
+		case "await", "await_timeout", "yield_now", "sleep_ms":
+			return true
+		default:
+			return false
+		}
+	case "dispatch":
+		return builtin.Name == "poly_register" || builtin.Name == "poly_reorder" || builtin.Name == "poly_dispatch"
 	default:
 		return false
 	}
@@ -1030,9 +1234,14 @@ func validateKIRExecExpr(expression *KIRExpr, scope *kirExecScope, allowOutput b
 		if !validKIRBinding(expression.Binding) {
 			return fmt.Errorf("invalid KIR executable: variable has no local binding")
 		}
-		binding, ok := scope.find(expression.Binding)
+		binding, bindingScope, ok := scope.findScope(expression.Binding)
 		if !ok || !sameKIRBinding(binding.meta, expression.Binding) {
 			return fmt.Errorf("invalid KIR executable: variable '%s' references an undeclared binding", expression.Name)
+		}
+		if scope.workerBase != nil {
+			if !scope.workerLocalBinding(bindingScope) && !kirExecWorkerSharedType(binding.meta.Type) {
+				return fmt.Errorf("%w: worker captures non-shared global %q", errKIRSubsetUnsupported, binding.meta.Name)
+			}
 		}
 		if expression.Type != binding.meta.Type {
 			return fmt.Errorf("invalid KIR executable: variable '%s' has a mismatched type", expression.Name)
@@ -1295,7 +1504,7 @@ func validateKIRExecExpr(expression *KIRExpr, scope *kirExecScope, allowOutput b
 		}
 		if prefix == "function" {
 			function := functions[target]
-			if function == nil || function.Name != expression.Name || len(expression.Args) != len(function.Params) {
+			if function == nil || function.Name != expression.Name || len(expression.Args) < kirExecRequiredParams(function.Params) || len(expression.Args) > len(function.Params) {
 				return fmt.Errorf("invalid KIR executable: direct function call has a mismatched target or signature")
 			}
 			if (function.Receiver != "") != (expression.Receiver != nil) {
@@ -1391,14 +1600,39 @@ func validateKIRExecExpr(expression *KIRExpr, scope *kirExecScope, allowOutput b
 		if expression.BuiltinID != builtin.ID {
 			return fmt.Errorf("invalid KIR executable: builtin call has an unknown or mismatched id")
 		}
+		if scope.workerBase != nil && (isSandboxAwareFilesystemBuiltin(expression.Name) || strings.HasPrefix(expression.Name, "fs_") || expression.Name == "env_get" || expression.Name == "thread_spawn" || expression.Name == "task_spawn") {
+			return fmt.Errorf("%w: builtin %q is unavailable in a worker", errKIRSubsetUnsupported, expression.Name)
+		}
 		if (expression.Name == "print" || expression.Name == "println") && expression.Type != "Nil" {
 			return fmt.Errorf("invalid KIR executable: output builtin has a non-Nil type")
 		}
 		if expression.Name == "str" && expression.Type != "String" {
 			return fmt.Errorf("invalid KIR executable: str call has invalid result type")
 		}
-		if !kirExecBuiltinSupported(builtin) && !(scope.allowProcessArgs && builtin.Name == "process_args") {
+		if !kirExecBuiltinSupported(builtin) && !(scope.allowProcessArgs && builtin.Name == "process_args") && builtin.Name != "thread_spawn" && builtin.Name != "task_spawn" {
 			return fmt.Errorf("%w: builtin %q has host effect %q outside the KIR executor capability boundary", errKIRSubsetUnsupported, expression.Name, builtin.Effects)
+		}
+		if expression.Name == "thread_spawn" || expression.Name == "task_spawn" {
+			nameIndex := 0
+			if expression.Name == "task_spawn" {
+				nameIndex = 1
+			}
+			nameArgument := expression.Args[nameIndex]
+			if nameArgument.Kind != "string" {
+				return fmt.Errorf("%w: worker spawn requires a literal function name", errKIRSubsetUnsupported)
+			}
+			var worker *KIRFunction
+			for _, candidate := range document.Functions {
+				if candidate != nil && candidate.Name == nameArgument.String {
+					if worker != nil {
+						return fmt.Errorf("%w: worker name %q is overloaded", errKIRSubsetUnsupported, nameArgument.String)
+					}
+					worker = candidate
+				}
+			}
+			if worker == nil || !worker.Worker || len(worker.Params) != 0 || worker.Receiver != "" || worker.Trait != "" || len(worker.TypeParams) != 0 || expression.Type != "Thread["+worker.Return+"]" {
+				return fmt.Errorf("invalid KIR executable: worker spawn target or result type does not match")
+			}
 		}
 	case "lambda":
 		function := expression.Lambda
@@ -1409,13 +1643,17 @@ func validateKIRExecExpr(expression *KIRExpr, scope *kirExecScope, allowOutput b
 			return fmt.Errorf("invalid KIR executable: lambda type does not match its signature")
 		}
 		captureScope := newKIRExecScope(nil)
+		captureScope.workerBase = scope.workerBase
 		for _, capture := range function.Captures {
 			if capture == nil || !validKIRBinding(capture.Binding) {
 				return fmt.Errorf("invalid KIR executable: lambda has invalid capture metadata")
 			}
-			visible, ok := scope.find(capture.Binding)
+			visible, visibleScope, ok := scope.findScope(capture.Binding)
 			if !ok || !sameKIRBinding(visible.meta, capture.Binding) {
 				return fmt.Errorf("invalid KIR executable: lambda captures unavailable binding %q", capture.Binding.Name)
+			}
+			if scope.workerBase != nil && !scope.workerLocalBinding(visibleScope) && !kirExecWorkerSharedType(visible.meta.Type) {
+				return fmt.Errorf("%w: worker lambda captures non-shared global %q", errKIRSubsetUnsupported, visible.meta.Name)
 			}
 			if err := captureScope.define(capture.Binding, nilVal()); err != nil {
 				return fmt.Errorf("invalid KIR executable: lambda capture: %w", err)
@@ -1471,7 +1709,7 @@ func kirExecType(typ string) bool {
 	if kirExecScalarType(typ) {
 		return true
 	}
-	if typ == "Bytes" || typ == "Json" || typ == "SQLite" {
+	if typ == "Bytes" || typ == "Json" || kirExecOpaqueType(typ) {
 		return true
 	}
 	if parameters, result, ok := parseKIRFunctionType(typ); ok {
@@ -1493,7 +1731,7 @@ func kirExecType(typ string) bool {
 	if name == "Map" || name == "Result" {
 		want = 2
 	}
-	if len(arguments) != want || (name != "Array" && name != "Option" && name != "Result" && name != "Set" && name != "Map") {
+	if len(arguments) != want || !kirExecContainerTypeName(name) {
 		return false
 	}
 	if name == "Array" && arguments[0] == "<unknown>" {
@@ -1505,6 +1743,29 @@ func kirExecType(typ string) bool {
 		}
 	}
 	return true
+}
+
+func kirExecContainerTypeName(name string) bool {
+	switch name {
+	case "Array", "Option", "Result", "Set", "Map", "Channel", "Thread", "Actor", "Shared":
+		return true
+	default:
+		return false
+	}
+}
+
+func kirExecOpaqueType(name string) bool {
+	switch name {
+	case "SQLite", "WebSocket", "Regex", "Random", "TcpSocket", "TcpListener", "UdpSocket", "FFILibrary", "FFISymbol", "FFIBuffer", "TaskGroup":
+		return true
+	default:
+		return false
+	}
+}
+
+func kirExecWorkerSharedType(encoded string) bool {
+	name, arguments, ok := parseKIRContainerType(encoded)
+	return ok && len(arguments) == 1 && (name == "Channel" || name == "Shared")
 }
 
 func parseKIRContainerType(encoded string) (string, []string, bool) {
@@ -1586,7 +1847,7 @@ func kirExecTypeInScope(encoded string, scope *kirExecScope, document *KIRDocume
 	if name == "Map" || name == "Result" {
 		want = 2
 	}
-	if len(arguments) == want && (name == "Array" || name == "Option" || name == "Result" || name == "Set" || name == "Map") {
+	if len(arguments) == want && kirExecContainerTypeName(name) {
 		for _, argument := range arguments {
 			if !kirExecTypeInScope(argument, scope, document) {
 				return false
@@ -1791,20 +2052,41 @@ func kirExecTypeSatisfiesConstraint(encoded, constraint string, scope *kirExecSc
 
 func (executor *kirExecutor) initializeKIRTypes(document *KIRDocument) error {
 	for _, declaration := range document.Structs {
-		structDecl := &StructDecl{Name: declaration.Name, TypeParams: make([]TypeParam, 0, len(declaration.TypeParams))}
+		structDecl := executor.structs[declaration.Name]
+		if structDecl == nil {
+			structDecl = &StructDecl{Name: declaration.Name}
+			executor.structs[declaration.Name] = structDecl
+		}
+		structDecl.TypeParams = make([]TypeParam, 0, len(declaration.TypeParams))
+		structDecl.Fields = nil
 		for _, parameter := range declaration.TypeParams {
 			structDecl.TypeParams = append(structDecl.TypeParams, TypeParam{Name: parameter.Name, Constraint: parameter.Constraint})
 		}
-		typ := &Type{Kind: TyStruct, Name: declaration.Name, Struct: structDecl}
+		typ := executor.types[declaration.Name]
+		if typ == nil || typ.Kind != TyStruct || typ.Struct != structDecl {
+			typ = &Type{Kind: TyStruct, Name: declaration.Name, Struct: structDecl}
+		} else {
+			typ.Name = declaration.Name
+			typ.Struct = structDecl
+		}
 		structDecl.Type = typ
-		executor.structs[declaration.Name] = structDecl
 		executor.types[declaration.Name] = typ
 	}
 	for _, declaration := range document.Enums {
-		enumDecl := &EnumDecl{Name: declaration.Name, Variants: append([]string(nil), declaration.Variants...)}
-		typ := &Type{Kind: TyEnum, Name: declaration.Name, Enum: enumDecl}
+		enumDecl := executor.enums[declaration.Name]
+		if enumDecl == nil {
+			enumDecl = &EnumDecl{Name: declaration.Name}
+			executor.enums[declaration.Name] = enumDecl
+		}
+		enumDecl.Variants = append(enumDecl.Variants[:0], declaration.Variants...)
+		typ := executor.types[declaration.Name]
+		if typ == nil || typ.Kind != TyEnum || typ.Enum != enumDecl {
+			typ = &Type{Kind: TyEnum, Name: declaration.Name, Enum: enumDecl}
+		} else {
+			typ.Name = declaration.Name
+			typ.Enum = enumDecl
+		}
 		enumDecl.Type = typ
-		executor.enums[declaration.Name] = enumDecl
 		executor.types[declaration.Name] = typ
 	}
 	for _, declaration := range document.Structs {
@@ -1861,6 +2143,26 @@ func (executor *kirExecutor) resolveKIRTypeWithTypeParameters(encoded string, ty
 		return TJSON, true
 	case "SQLite":
 		return &Type{Kind: TySQLite, Name: "SQLite"}, true
+	case "WebSocket":
+		return &Type{Kind: TyWebSocket, Name: "WebSocket"}, true
+	case "Regex":
+		return &Type{Kind: TyRegex, Name: "Regex"}, true
+	case "Random":
+		return &Type{Kind: TyRandom, Name: "Random"}, true
+	case "TcpSocket":
+		return &Type{Kind: TyTCPSocket, Name: "TcpSocket"}, true
+	case "TcpListener":
+		return &Type{Kind: TyTCPListener, Name: "TcpListener"}, true
+	case "UdpSocket":
+		return &Type{Kind: TyUDPSocket, Name: "UdpSocket"}, true
+	case "FFILibrary":
+		return &Type{Kind: TyFFILibrary, Name: "FFILibrary"}, true
+	case "FFISymbol":
+		return &Type{Kind: TyFFISymbol, Name: "FFISymbol"}, true
+	case "FFIBuffer":
+		return &Type{Kind: TyFFIBuffer, Name: "FFIBuffer"}, true
+	case "TaskGroup":
+		return TTaskGroup, true
 	}
 	if parameters, result, ok := parseKIRFunctionType(encoded); ok {
 		params := make([]*Type, len(parameters))
@@ -1899,6 +2201,14 @@ func (executor *kirExecutor) resolveKIRTypeWithTypeParameters(encoded string, ty
 		return MapOf(parsed[0], parsed[1]), true
 	case "Set":
 		return SetOf(parsed[0]), true
+	case "Channel":
+		return Chan(parsed[0]), true
+	case "Thread":
+		return TypeThread(parsed[0]), true
+	case "Actor":
+		return ActorOf(parsed[0]), true
+	case "Shared":
+		return SharedOf(parsed[0]), true
 	}
 	if declaration := executor.structs[name]; declaration != nil && len(declaration.TypeParams) == len(parsed) {
 		for i, parameter := range declaration.TypeParams {
@@ -1914,8 +2224,86 @@ func (executor *kirExecutor) resolveKIRTypeWithTypeParameters(encoded string, ty
 type kirExecOutputWriter struct{ executor *kirExecutor }
 
 func (writer kirExecOutputWriter) Write(output []byte) (int, error) {
-	writer.executor.output = append(writer.executor.output, output...)
+	if diagnostic := writer.executor.emitOutput(string(output), "", 1, 1); diagnostic != nil {
+		return 0, fmt.Errorf("%s", diagnostic.Message)
+	}
 	return len(output), nil
+}
+
+func (executor *kirExecutor) emitOutput(output, source string, line, column int) *Diagnostic {
+	if executor.outputMu != nil {
+		executor.outputMu.Lock()
+		defer executor.outputMu.Unlock()
+	}
+	if int64(len(output)) > executor.limits.MaxOutputBytes-executor.context.Output {
+		return executor.fail(CatResource, source, line, column, "output limit exceeded")
+	}
+	if executor.outputWriter != nil {
+		written, err := io.WriteString(executor.outputWriter, output)
+		if err != nil || written != len(output) {
+			return executor.fail(CatIO, source, line, column, "stream failure")
+		}
+	}
+	executor.output = append(executor.output, output...)
+	executor.context.Output += int64(len(output))
+	return nil
+}
+
+func (executor *kirExecutor) debugKIRStatement(scope *kirExecScope, statement *KIRStmt) bool {
+	if executor.debugger == nil || executor.debugger.ShouldPause == nil || executor.debugger.OnPause == nil {
+		return true
+	}
+	sourceName := statement.Source
+	if sourceName == "" {
+		sourceName = "<input>"
+	}
+	function := "<module>"
+	if count := len(executor.callFrames); count != 0 {
+		function = executor.callFrames[count-1].Function
+	}
+	location := DebugLocation{Source: sourceName, Line: statement.Line, Column: statement.Column, Function: function, Depth: executor.context.Calls}
+	if statement.Return != nil && statement.Return.Kind == "call" && statement.Return.Tail {
+		location.TailCall = true
+	}
+	if !executor.debugger.ShouldPause(location) {
+		return true
+	}
+	state := DebugState{DebugLocation: location}
+	if source := executor.source(statement.Source); source != nil {
+		lines := strings.Split(source.Text, "\n")
+		if location.Line > 0 && location.Line <= len(lines) {
+			state.LineText = strings.TrimSuffix(lines[location.Line-1], "\r")
+		}
+	}
+	if len(executor.callFrames) == 0 {
+		state.Stack = []StackFrame{{Function: function, Source: sourceName, Line: location.Line, Column: location.Column}}
+	} else {
+		state.Stack = make([]StackFrame, 0, len(executor.callFrames))
+		for i := len(executor.callFrames) - 1; i >= 0; i-- {
+			state.Stack = append(state.Stack, executor.callFrames[i])
+		}
+		state.Stack[0].Source, state.Stack[0].Line, state.Stack[0].Column = sourceName, location.Line, location.Column
+	}
+	seen := make(map[string]struct{})
+	for current := scope; current != nil; current = current.parent {
+		for _, binding := range current.values {
+			if binding == nil || binding.meta == nil {
+				continue
+			}
+			name := binding.meta.Name
+			if _, shadowed := seen[name]; shadowed {
+				continue
+			}
+			seen[name] = struct{}{}
+			state.Variables = append(state.Variables, DebugVariable{Name: name, Value: display(binding.value), Mutable: binding.meta.Mutable})
+		}
+	}
+	sort.Slice(state.Variables, func(i, j int) bool { return state.Variables[i].Name < state.Variables[j].Name })
+	if executor.debugger.OnPause(state) {
+		return true
+	}
+	executor.debugStopped = true
+	return false
 }
 
 func (executor *kirExecutor) initializeKIRBuiltins(document *KIRDocument, sandbox Sandbox) {
@@ -1966,15 +2354,25 @@ func (executor *kirExecutor) step(source string, line, column int) *Diagnostic {
 	return executor.context.step(executor.source(source), line, column)
 }
 
-func (executor *kirExecutor) execBlock(scope *kirExecScope, statements []*KIRStmt, topLevel bool) (kirExecFlow, *Diagnostic) {
+func (executor *kirExecutor) execBlock(scope *kirExecScope, statements []*KIRStmt, topLevel bool, replMode ...bool) (kirExecFlow, *Diagnostic) {
 	flow := kirExecFlow{value: nilVal()}
 	var resultDiagnostic *Diagnostic
+	repl := len(replMode) != 0 && replMode[0]
 	for _, statement := range statements {
+		if !executor.debugKIRStatement(scope, statement) {
+			resultDiagnostic = executor.fail(CatCLI, statement.Source, statement.Line, statement.Column, "execution stopped by debugger")
+			break
+		}
 		if diagnostic := executor.step(statement.Source, statement.Line, statement.Column); diagnostic != nil {
 			resultDiagnostic = diagnostic
 			break
 		}
 		statementFlow, diagnostic := executor.execStmt(scope, statement)
+		if repl && diagnostic == nil && statement.Kind == "expr" && statement.Expr != nil {
+			if statementFlow.value.Kind != VNil {
+				diagnostic = executor.emitOutput(executor.displayValue(statementFlow.value)+"\n", statement.Source, statement.Line, statement.Column)
+			}
+		}
 		if diagnostic != nil {
 			resultDiagnostic = diagnostic
 			break
@@ -2035,11 +2433,11 @@ func (executor *kirExecutor) execStmt(scope *kirExecScope, statement *KIRStmt) (
 		binding.value = cloneValue(value)
 		return kirExecFlow{value: nilVal()}, nil
 	case "expr":
-		_, diagnostic := executor.evalExpr(scope, statement.Expr)
+		value, diagnostic := executor.evalExpr(scope, statement.Expr)
 		if propagated := executor.takeKIRPropagated(); propagated != nil {
 			return kirExecFlow{value: *propagated, returned: true}, nil
 		}
-		return kirExecFlow{value: nilVal()}, diagnostic
+		return kirExecFlow{value: value}, diagnostic
 	case "if":
 		condition, diagnostic := executor.evalExpr(scope, statement.Cond)
 		if propagated := executor.takeKIRPropagated(); propagated != nil {
@@ -2236,7 +2634,7 @@ func (executor *kirExecutor) evalExpr(scope *kirExecScope, expression *KIRExpr) 
 				return nilVal(), diagnostic
 			}
 			identity := &FunctionValue{}
-			executor.closures[identity] = &kirClosure{function: function, environment: executor.global}
+			executor.registerKIRClosure(identity, &kirClosure{function: function, environment: executor.global})
 			value = Value{Kind: VFunction, Callable: identity}
 			break
 		}
@@ -2566,7 +2964,7 @@ func (executor *kirExecutor) makeKIRClosure(function *KIRFunction, scope *kirExe
 		environment.values[kirExecKey(capture.Binding)] = cell
 	}
 	identity := &FunctionValue{}
-	executor.closures[identity] = &kirClosure{function: function, environment: environment}
+	executor.registerKIRClosure(identity, &kirClosure{function: function, environment: environment})
 	return Value{Kind: VFunction, Callable: identity}, nil
 }
 
@@ -2579,7 +2977,7 @@ func (executor *kirExecutor) resolveKIRCall(scope *kirExecScope, expression *KIR
 		if value.Kind != VFunction || value.Callable == nil {
 			return nil, nil, false, executor.fail(CatRuntime, expression.Callee.Source, expression.Callee.Line, expression.Callee.Column, "value is not callable")
 		}
-		closure := executor.closures[value.Callable]
+		closure := executor.findKIRClosure(value.Callable)
 		if closure == nil || closure.function == nil {
 			return nil, nil, false, executor.fail(CatArtifact, expression.Callee.Source, expression.Callee.Line, expression.Callee.Column, "KIR function value has no executor closure")
 		}
@@ -2659,7 +3057,7 @@ func (executor *kirExecutor) evalKIRCall(scope *kirExecScope, expression *KIRExp
 			return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "KIR builtin %q passed validation without an executable implementation", expression.Name)
 		}
 		metadata, exists := Builtins()[expression.Name]
-		if !exists || !kirExecBuiltinSupported(metadata) {
+		if !exists || (!kirExecBuiltinSupported(metadata) && !(scope.allowProcessArgs && expression.Name == "process_args")) {
 			return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "KIR builtin %q passed validation without an executable implementation", expression.Name)
 		}
 		if !executor.builtins.Sandbox.allowsBuiltin(metadata) {
@@ -2675,6 +3073,14 @@ func (executor *kirExecutor) evalKIRCall(scope *kirExecScope, expression *KIRExp
 		if expression.Name == "str" && len(arguments) == 1 {
 			return stringVal(executor.displayValue(arguments[0])), nil
 		}
+		switch expression.Name {
+		case "poly_register", "poly_reorder", "poly_dispatch":
+			return executor.evalKIRDispatch(expression, arguments)
+		case "thread_spawn":
+			return executor.spawnKIRWorker(expression, arguments[0].S)
+		case "task_spawn":
+			return executor.spawnKIRTask(expression, arguments)
+		}
 		if expression.Name == "print" || expression.Name == "println" {
 			if len(arguments) != 1 {
 				return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "KIR output builtin has invalid arity")
@@ -2683,11 +3089,9 @@ func (executor *kirExecutor) evalKIRCall(scope *kirExecScope, expression *KIRExp
 			if expression.Name == "println" {
 				text += "\n"
 			}
-			if int64(len(text)) > executor.limits.MaxOutputBytes-int64(len(executor.output)) {
-				return nilVal(), executor.fail(CatResource, expression.Source, expression.Line, expression.Column, "output limit exceeded")
+			if diagnostic := executor.emitOutput(text, expression.Source, expression.Line, expression.Column); diagnostic != nil {
+				return nilVal(), diagnostic
 			}
-			executor.output = append(executor.output, text...)
-			executor.context.Output = int64(len(executor.output))
 			return nilVal(), nil
 		}
 		call := &Expr{Kind: ExCall, Name: expression.Name, Tok: Token{Source: executor.source(expression.Source), Line: expression.Line, Column: expression.Column}}
@@ -2720,6 +3124,151 @@ func (executor *kirExecutor) evalKIRCall(scope *kirExecScope, expression *KIRExp
 		environment = executor.global
 	}
 	return executor.invokeKIR(invokeCall, function, environment, receiver, arguments)
+}
+
+func (executor *kirExecutor) targetForKIRFunction(function *KIRFunction) string {
+	for target, candidate := range executor.functions {
+		if candidate == function {
+			return target
+		}
+	}
+	return ""
+}
+
+func (executor *kirExecutor) evalKIRDispatch(expression *KIRExpr, arguments []Value) (Value, *Diagnostic) {
+	if executor.builtins == nil {
+		return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "KIR dispatch builtin has no runtime state")
+	}
+	bad := func(message string) (Value, *Diagnostic) { return resVal(false, stringVal(message)), nil }
+	switch expression.Name {
+	case "poly_register":
+		slot, handler, priority := arguments[0].S, arguments[1].S, arguments[2].I
+		function := executor.functionNamed(handler)
+		if function == nil || function.Receiver != "" || function.Worker || len(function.TypeParams) != 0 || len(function.Params) != 1 || function.Params[0] == nil || function.Params[0].Type != "String" || function.Return != "String" {
+			return bad("handler must be a top-level fn(String) -> String")
+		}
+		if !executor.builtins.registerDispatchEntry(slot, handler, priority) {
+			return bad("handler already registered in slot")
+		}
+		return resVal(true, nilVal()), nil
+	case "poly_reorder":
+		slot, handler, before := arguments[0].S, arguments[1].S, arguments[2].S
+		if !executor.builtins.reorderDispatchEntry(slot, handler, before) {
+			return bad("both handlers must already be registered and distinct")
+		}
+		return resVal(true, nilVal()), nil
+	case "poly_dispatch":
+		handler, ok := executor.builtins.firstDispatchHandler(arguments[0].S)
+		if !ok {
+			return bad("dispatch slot has no registered handlers")
+		}
+		function := executor.functionNamed(handler)
+		target := executor.targetForKIRFunction(function)
+		if function == nil || target == "" {
+			return bad("registered handler is unavailable")
+		}
+		call := &KIRExpr{Kind: "call", Name: function.Name, Source: expression.Source, Line: expression.Line, Column: expression.Column, Type: function.Return, CallTarget: "function:" + target}
+		value, diagnostic := executor.invokeKIR(call, function, executor.global, nil, []Value{arguments[1]})
+		if diagnostic != nil {
+			return bad(diagnostic.Message)
+		}
+		return resVal(true, value), nil
+	default:
+		return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "unknown KIR dispatch builtin %q", expression.Name)
+	}
+}
+
+func (executor *kirExecutor) spawnKIRTask(expression *KIRExpr, arguments []Value) (Value, *Diagnostic) {
+	if len(arguments) != 2 || arguments[0].Group == nil {
+		return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "invalid task group")
+	}
+	group := arguments[0].Group
+	group.mu.Lock()
+	cancelled := group.cancelled
+	group.mu.Unlock()
+	if cancelled {
+		return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "task group is cancelled")
+	}
+	thread, diagnostic := executor.spawnKIRWorker(expression, arguments[1].S)
+	if diagnostic != nil {
+		return nilVal(), diagnostic
+	}
+	group.mu.Lock()
+	group.threads = append(group.threads, thread.Th)
+	group.mu.Unlock()
+	return thread, nil
+}
+
+func (executor *kirExecutor) spawnKIRWorker(expression *KIRExpr, name string) (Value, *Diagnostic) {
+	function := executor.functionNamed(name)
+	if function == nil || !function.Worker || function.Receiver != "" || len(function.Params) != 0 {
+		return nilVal(), executor.fail(CatRuntime, expression.Source, expression.Line, expression.Column, "thread worker '%s' must be a zero-argument worker function", name)
+	}
+	runtime := executor.builtins
+	if runtime == nil {
+		return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "KIR worker has no runtime lifecycle state")
+	}
+	if len(runtime.Threads) >= executor.limits.MaxWorkers {
+		return nilVal(), executor.fail(CatResource, expression.Source, expression.Line, expression.Column, "worker limit exceeded")
+	}
+	workerContext, cancel := context.WithCancel(runtime.Ctx.Ctx)
+	thread := &Thread{Done: make(chan struct{}), Cancel: cancel}
+	runtime.Threads = append(runtime.Threads, thread)
+	global := newKIRExecScope(nil)
+	for _, binding := range executor.global.values {
+		if binding == nil || binding.meta == nil || !kirExecWorkerSharedType(binding.meta.Type) {
+			continue
+		}
+		if err := global.define(binding.meta, binding.value); err != nil {
+			cancel()
+			return nilVal(), executor.fail(CatArtifact, expression.Source, expression.Line, expression.Column, "cannot capture worker binding: %s", err)
+		}
+	}
+	go func() {
+		defer close(thread.Done)
+		defer cancel()
+		ctx := &ExecContext{Ctx: workerContext, Cancel: cancel, Lim: executor.limits}
+		worker := &kirExecutor{
+			limits: executor.limits, context: ctx, document: executor.document, sources: executor.sources,
+			functions: executor.functions, closures: make(map[*FunctionValue]*kirClosure), closureMu: &sync.RWMutex{},
+			structs: executor.structs, enums: executor.enums, types: executor.types,
+			outputWriter: kirExecOutputWriter{executor: executor},
+		}
+		worker.global = global
+		worker.initializeKIRBuiltins(executor.document, runtime.Sandbox)
+		worker.builtins.Args = append([]string(nil), runtime.Args...)
+		worker.builtins.Ctx = ctx
+		worker.builtins.Worker = true
+		worker.builtins.Channels = append([]*Channel(nil), runtime.Channels...)
+		worker.builtins.Threads = append([]*Thread(nil), runtime.Threads...)
+		worker.builtins.sharedDispatchMu, worker.builtins.Dispatch = runtime.dispatchStateForWorker()
+		worker.builtins.discordRates = runtime.discordRates
+		worker.builtins.discordCache = runtime.discordCache
+		worker.builtins.discordAPIBaseURL = runtime.discordAPIBaseURL
+		worker.builtins.discordGateway = runtime.discordGateway
+		call := &KIRExpr{Kind: "call", Name: function.Name, Source: expression.Source, Line: expression.Line, Column: expression.Column, Type: function.Return, CallTarget: "function:" + executor.targetForKIRFunction(function)}
+		value, diagnostic := worker.invokeKIR(call, function, global, nil, nil)
+		if diagnostic == nil {
+			diagnostic = ctx.contextFailure(worker.source(expression.Source), expression.Line, expression.Column)
+		}
+		diagnostic = worker.builtins.closeResources(diagnostic)
+		if diagnostic == nil {
+			executor.closureMu.Lock()
+			for identity, closure := range worker.closures {
+				executor.closures[identity] = closure
+			}
+			executor.closureMu.Unlock()
+		}
+		thread.mu.Lock()
+		if diagnostic != nil {
+			thread.Diag = diagnostic
+			thread.Result = nilVal()
+		} else {
+			thread.Result = cloneValue(value)
+		}
+		thread.mu.Unlock()
+	}()
+	return Value{Kind: VThread, Th: thread}, nil
 }
 
 func (executor *kirExecutor) evalKIRTailCall(scope *kirExecScope, expression *KIRExpr) (kirExecFlow, *Diagnostic) {
@@ -2771,6 +3320,10 @@ func (executor *kirExecutor) evalKIRTailCall(scope *kirExecScope, expression *KI
 }
 
 func (executor *kirExecutor) valueMatchesType(value Value, typ string) bool {
+	// KIR's semantic preflight validates every expression and binding type.
+	// At runtime we only verify the outer representation of returned values;
+	// recursively scanning each element makes repeated generic array returns
+	// quadratic for collection-heavy programs without adding type safety.
 	typ = executor.instantiateKIRType(typ)
 	if kirValueMatchesScalarType(value, typ) {
 		return true
@@ -2781,53 +3334,55 @@ func (executor *kirExecutor) valueMatchesType(value Value, typ string) bool {
 	if typ == "Json" {
 		return value.Kind == VJSON
 	}
-	if typ == "SQLite" {
+	switch typ {
+	case "SQLite":
 		return value.Kind == VSQLite && value.SQLite != nil
+	case "WebSocket":
+		return value.Kind == VWebSocket && value.WS != nil
+	case "Regex":
+		return value.Kind == VRegex && value.Regex != nil
+	case "Random":
+		return value.Kind == VRandom && value.Random != nil
+	case "TcpSocket":
+		return value.Kind == VTCP && value.TCP != nil
+	case "TcpListener":
+		return value.Kind == VTCPListener && value.TCPList != nil
+	case "UdpSocket":
+		return value.Kind == VUDP && value.UDP != nil
+	case "FFILibrary":
+		return value.Kind == VFFILibrary && value.FFILib != nil
+	case "FFISymbol":
+		return value.Kind == VFFISymbol && value.FFISym != nil
+	case "FFIBuffer":
+		return value.Kind == VFFIBuffer && value.FFIBuf != nil
+	case "TaskGroup":
+		return value.Kind == VTaskGroup && value.Group != nil
 	}
 	if parameters, result, ok := parseKIRFunctionType(typ); ok {
 		_, _ = parameters, result
 		if value.Kind != VFunction || value.Callable == nil {
 			return false
 		}
-		closure := executor.closures[value.Callable]
+		closure := executor.findKIRClosure(value.Callable)
 		return closure != nil && closure.function != nil && kirExecFunctionType(closure.function) == typ
 	}
 	name, arguments, ok := parseKIRContainerType(typ)
 	if ok {
 		switch name {
 		case "Array":
-			if value.Kind != VArray {
-				return false
-			}
-			if arguments[0] == "<unknown>" {
-				return true
-			}
-			for _, item := range arrayValues(value) {
-				if !executor.valueMatchesType(item, arguments[0]) {
-					return false
-				}
-			}
-			return true
+			return value.Kind == VArray
 		case "Set":
-			if value.Kind != VSet {
-				return false
-			}
-			for _, item := range value.Set {
-				if !executor.valueMatchesType(item, arguments[0]) {
-					return false
-				}
-			}
-			return true
+			return value.Kind == VSet
 		case "Map":
-			if value.Kind != VMap {
-				return false
-			}
-			for _, entry := range value.Map {
-				if !executor.valueMatchesType(entry.Key, arguments[0]) || !executor.valueMatchesType(entry.Value, arguments[1]) {
-					return false
-				}
-			}
-			return true
+			return value.Kind == VMap
+		case "Channel":
+			return value.Kind == VChannel && value.Ch != nil
+		case "Thread":
+			return value.Kind == VThread && value.Th != nil
+		case "Actor":
+			return value.Kind == VActor && value.Actor != nil
+		case "Shared":
+			return value.Kind == VShared && value.Shared != nil
 		case "Option":
 			return value.Kind == VOption && (!value.Present || value.Inner != nil && executor.valueMatchesType(*value.Inner, arguments[0]))
 		case "Result":
@@ -2854,7 +3409,7 @@ func (executor *kirExecutor) valueMatchesType(value Value, typ string) bool {
 
 func (executor *kirExecutor) displayValue(value Value) string {
 	if value.Kind == VFunction && value.Callable != nil {
-		if closure := executor.closures[value.Callable]; closure != nil && closure.function != nil {
+		if closure := executor.findKIRClosure(value.Callable); closure != nil && closure.function != nil {
 			return "<function " + closure.function.Name + ">"
 		}
 	}

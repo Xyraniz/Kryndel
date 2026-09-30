@@ -1,0 +1,63 @@
+import "dynamic_backend"
+
+fn malformed_document(target_os: String) -> String {
+    let mut os_json: String = "\"linux\""
+    if target_os == "windows" { os_json = "\"windows\"" }
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":[{\"kind\":\"expr\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"expr\":{\"kind\":\"int\",\"type\":\"Int\",\"int\":1}}]}"
+}
+
+fn dangling_function_document(target_os: String) -> String {
+    let mut os_json: String = "\"linux\""
+    if target_os == "windows" { os_json = "\"windows\"" }
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":[{\"kind\":\"expr\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"expr\":{\"kind\":\"call\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Nil\",\"const\":null,\"name\":\"ghost\",\"call_target\":\"function:ghost\",\"args\":[]}}]}"
+}
+
+fn function_call_document(target_os: String, args: String, result_type: String) -> String {
+    let mut os_json: String = "\"linux\""
+    if target_os == "windows" { os_json = "\"windows\"" }
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[{\"name\":\"f\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"public\":false,\"worker\":false,\"unsafe\":false,\"trait\":\"\",\"module\":\"\",\"receiver\":null,\"return\":\"Int\",\"type_params\":[],\"params\":[{\"name\":\"x\",\"type\":\"Int\",\"default\":null,\"binding\":{\"name\":\"x\",\"type\":\"Int\",\"mutable\":false,\"source\":\"bad.kry\",\"line\":1,\"column\":1}}],\"captures\":[],\"body\":[]}],\"statements\":[{\"kind\":\"expr\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"expr\":{\"kind\":\"call\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + result_type + "\",\"const\":null,\"name\":\"f\",\"call_target\":\"function:f\",\"args\":" + args + "}}]}"
+}
+
+fn malformed_pattern_document(target_os: String) -> String {
+    let mut os_json: String = "\"linux\""
+    if target_os == "windows" { os_json = "\"windows\"" }
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[{\"name\":\"E\",\"public\":false,\"module\":\"\",\"variants\":[\"A\"]}],\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":[{\"kind\":\"match\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"scrutinee\":{\"kind\":\"enum\",\"source\":\"bad.kry\",\"line\":1,\"column\":7,\"type\":\"E\",\"enum_type\":\"E\",\"enum_variant\":\"A\"},\"arms\":[{\"pattern\":{\"kind\":\"enum\",\"type\":\"E\",\"variant\":\"A\",\"binding\":\"\"},\"body\":[]}]}]}"
+}
+
+fn unexpected_statement_child_document(target_os: String) -> String {
+    let mut os_json: String = "\"linux\""
+    if target_os == "windows" { os_json = "\"windows\"" }
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":[{\"kind\":\"break\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"expr\":{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"int\":1}}]}"
+}
+
+fn unknown_expression_field_document(target_os: String) -> String {
+    let mut os_json: String = "\"linux\""
+    if target_os == "windows" { os_json = "\"windows\"" }
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":[{\"kind\":\"expr\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"expr\":{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"int\":1,\"unexpected\":true}}]}"
+}
+
+fn rejected_before_lowering(document_text: String) -> Bool {
+    let parsed: Result[Json, String] = json_parse(document_text)
+    if is_err(parsed) { return false }
+    let compiled: Result[Bytes, String] = compile_document(result_unwrap(parsed))
+    if is_ok(compiled) { return false }
+    return starts_with(unwrap_or(result_error(compiled), ""), "KIR validation failed:")
+}
+
+fn main() -> Nil {
+    assert_eq(rejected_before_lowering(malformed_document("linux")), true)
+    assert_eq(rejected_before_lowering(malformed_document("windows")), true)
+    assert_eq(rejected_before_lowering(dangling_function_document("linux")), true)
+    assert_eq(rejected_before_lowering(dangling_function_document("windows")), true)
+    assert_eq(rejected_before_lowering(malformed_pattern_document("linux")), true)
+    assert_eq(rejected_before_lowering(malformed_pattern_document("windows")), true)
+    assert_eq(rejected_before_lowering(unexpected_statement_child_document("linux")), true)
+    assert_eq(rejected_before_lowering(unexpected_statement_child_document("windows")), true)
+    assert_eq(rejected_before_lowering(unknown_expression_field_document("linux")), true)
+    assert_eq(rejected_before_lowering(unknown_expression_field_document("windows")), true)
+    assert_eq(rejected_before_lowering(function_call_document("linux", "[]", "Int")), true)
+    assert_eq(rejected_before_lowering(function_call_document("windows", "[]", "Int")), true)
+    assert_eq(rejected_before_lowering(function_call_document("linux", "[{\"kind\":\"string\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"String\",\"string\":\"wrong\"}]", "Int")), true)
+    assert_eq(rejected_before_lowering(function_call_document("windows", "[{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"int\":1}]", "String")), true)
+    return nil
+}

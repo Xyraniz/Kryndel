@@ -349,7 +349,7 @@ func (s *Server) analysis(uri string) (document, *kry.Program, *kry.Checker, *kr
 	if d != nil {
 		return doc, prog, nil, d
 	}
-	if _, d = kry.ValidateIR(prog, kry.DefaultLimits()); d != nil {
+	if d = kry.ValidateASTLimits(prog, kry.DefaultLimits()); d != nil {
 		return doc, prog, checker, d
 	}
 	return doc, prog, checker, nil

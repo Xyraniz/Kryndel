@@ -20,11 +20,11 @@ func TestNativeBackendParityFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document, err := DecodeKIR(kir, DefaultLimits())
+	mir, err := DecodeMIR(kir, DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateKIRDirectELFValueSubset(document); err != nil {
+	if err := validateKIRDirectELFValueSubset(mir); err != nil {
 		t.Fatalf("shared parity fixture must use the KIR direct-ELF lowering: %v", err)
 	}
 

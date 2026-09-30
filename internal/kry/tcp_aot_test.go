@@ -232,6 +232,9 @@ func TestCAOTTCPConnectionRefusalHasComparableError(t *testing.T) {
 	if err != nil || status != 0 {
 		t.Fatalf("native connection-refusal case failed: status=%d err=%v output=%q", status, err, native)
 	}
+	if native != interpreted {
+		t.Errorf("interpreter and C AOT TCP refusal diagnostics differ:\ninterpreter: %q\nC AOT: %q", interpreted, native)
+	}
 	for name, output := range map[string]string{"interpreter": interpreted, "C AOT": native} {
 		if !strings.Contains(strings.ToLower(output), "refused") {
 			t.Errorf("%s connection error is not comparable to connection refused: %q", name, output)

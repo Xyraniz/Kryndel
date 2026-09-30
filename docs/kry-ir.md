@@ -2,48 +2,53 @@
 
 KIR (`kry-ir`) is the stable interchange format between the checked Kryndel frontend and compiler backends. `kry emit file.kry --format=kry-ir` writes one canonical UTF-8 JSON document followed by a newline.
 
-KIR v5 is a typed serialization of the checked AST, but is not yet the shared
-execution IR for the whole compiler. `Engine.RunPathWithArgs` executes the
-validated scalar KIR subset; other valid programs fall back to the checked AST
-only when the subset validator returns its explicit unsupported sentinel. KIR
-runtime diagnostics and malformed KIR do not trigger a retry, and output from
-the supported subset is written before its diagnostic. `DebugPath` remains on
-the AST route for breakpoints and local-variable inspection. The C generator
-still consumes AST and checker state. The direct ELF backend now decodes KIR and
-lowers an explicitly bounded subset to x86-64 instructions that calculate
-values and run branches and loops inside the generated executable. That slice
-covers scalar `Int`, `Bool`, `String`, and `Nil` bindings, assignments, integer
-arithmetic and comparisons, Boolean logic, String equality, `if`/`while`, and
-`print`/`println` of `Int`, `Bool`, or `String`. Its runtime enforces
-instruction, wall-time, and output limits and writes source-mapped runtime
-diagnostics to stderr before exiting with status 1. It accepts KIR v3 through v5 programs
-with top-level statements or one plain zero-argument `main() -> Nil` function;
-imports, user functions, Float, `str`, and dynamic String concatenation are
-outside this direct KIR lowering. Other constructs may still use the existing
-direct backend when that backend supports their semantics. This machine-code
-lowerer targets Linux amd64, accepts at most 20,000 KIR nodes, and reserves at
-most 1 MiB for language-local stack slots; ordinary decoder and artifact limits
-also apply.
+KIR v5 is both the canonical interchange tree and the schema for an opaque,
+in-memory `ValidatedMIR`. `CompileMIR` constructs and validates it from the
+checked frontend, including immutable source-text and visibility sidecars for
+diagnostics. C AOT, PE-direct, direct ELF, `RunPath`, and `DebugPath` all enter
+through this value without an in-process JSON round trip. `EmitKIR` serializes
+the same document for artifacts and external consumers.
 
-The separate Go KIR executor runs the Engine's bounded typed slice and serves
-as a semantic oracle for the differential tests and the native subset
-validator; it does not precompute the native executable's output. It executes
-the supported filesystem and dotenv builtins, plus SQLite, through the shared
-runtime builtin evaluator. The Engine passes the same sandbox and limits used
-by the AST interpreter; filesystem calls remain confined to the restricted
-root, SQLite remains unavailable there, and open SQLite handles are closed at
-execution end with the same leak diagnostic as the interpreter. KIR admits
-these host operations by builtin name, so an unknown builtin cannot inherit
-support from its effect category alone. `DecodeKIR` checks the wire structure
-and resource bounds, while subset validation additionally checks types and
-resolved lexical bindings. Neither replaces the source checker or proves
-semantics for arbitrary KIR. The self-hosted KIR backend accepts a narrower
-language subset and rejects unsupported constructs.
-The self-hosted KIR backend accepts a narrower language subset and rejects
-unsupported constructs.
+The original checked source AST is no longer a production lowering input. The
+Engine interpreter evaluates the validated KIR document directly and keeps
+globals, closures, and runtime lifecycle state in a persistent KIR executor.
+Direct ELF lowers its bounded native subset from KIR and rejects unsupported
+forms without falling back to an AST-derived model. `DecodeMIR` can be executed
+by the interpreter or consumed by native lowerers without source or visibility
+sidecars. KIR retains source names and coordinates for diagnostics, but decoded
+KIR cannot provide source excerpts. The direct ELF KIR subset lowers to x86-64
+instructions that calculate values and run branches and loops inside the
+generated executable. Its core scalar slice covers `Int`, `Bool`, `String`,
+and `Nil` bindings, assignments, integer arithmetic and comparisons, Boolean logic,
+String equality, `if`/`while`, and scalar `print`/`println`. A wider direct KIR
+value slice also supports bounded non-capturing function calls, immutable
+arrays, structs, and tagged `Option`/`Result` values, with tested control flow
+and runtime operations. Its runtime enforces
+instruction, wall-time, and output limits and writes source-mapped runtime
+diagnostics to stderr before exiting with status 1. The scalar subset accepts
+KIR v3 through v5 with top-level statements or one plain zero-argument
+`main() -> Nil`; the wider subset has its own checked KIR shape and runtime
+limits. Float, closures, and other unimplemented KIR forms are rejected by the
+direct KIR lowerers. The builder targets Linux amd64 and caps traversal at
+20,000 KIR nodes and language-local stack storage at 1 MiB; ordinary decoder
+and artifact limits also apply.
+
+The Go KIR executor backs the production interpreter and also provides bounded
+direct KIR execution for differential tests and native subset validation; it
+does not precompute native executable output. Supported host builtins use the
+shared runtime implementation with the same sandbox and limits as source
+execution. Filesystem calls remain confined to the restricted root, SQLite
+remains unavailable there, and open SQLite handles are closed at execution
+end with the same leak diagnostic as the interpreter. Builtin support is
+checked explicitly; an unknown builtin cannot inherit support from its effect
+category alone. `DecodeKIR` checks the wire structure and resource bounds,
+while executor validation additionally checks supported types and resolved
+lexical bindings. Neither replaces the source checker or proves semantics for
+arbitrary KIR. The self-hosted KIR backend accepts a narrower language subset
+and rejects unsupported constructs.
 See the [language specification](language-spec.md) for source semantics and
 the [architecture status](architecture.md#intermediate-representation-status)
-for the planned common intermediate representation.
+for the shared MIR boundary and target-specific support limits.
 
 The top-level contract is:
 
@@ -97,4 +102,4 @@ The encoder uses ordered structs and source order, not Go maps, so identical che
 
 The interpreter exposes JSON as a validated value plus typed field, array, string, integer, unsigned-integer, float, boolean, and null accessors. A compiler written in Kryndel can therefore traverse this document without a Go helper. LLVM output is not advertised yet: the former placeholder emitted a constant-returning function and has been removed rather than treated as a compiler backend.
 
-The repository's self-hosted slices are `selfhost/elf_backend.kry`, `selfhost/dynamic_backend.kry`, and `selfhost/source_kir_compiler.kry`. The latter lexes and parses the scalar function/source subset, including `pub fn`, `break`/`continue`, multiline array literals/indexing and generic `Option[...]`/`Result[...]` annotations with nested payloads, plus opaque `Json`/`Map[...]` ABI values and their checked constructor, predicate, unwrap, and error-projection calls. It still emits the narrower KIR v2 subset, which the Go decoder reads for backward compatibility; function values and closures are outside that self-hosted slice. The dynamic backend consumes the KIR v2 subset, lowers stack-backed Int/Bool/UInt state, static String objects represented by pointers, immutable qword-backed Array objects, tagged pointer-like Option/Result objects, assignments, checked signed and wrapping unsigned arithmetic, comparisons, `if`/`else`, `while`, loop control, function calls using up to six SysV AMD64 registers and pointer/scalar returns in `RAX`, scalar/Array/Option/Result/Json/Map function-local declarations, static and dynamic Boolean/integer/String output, dynamic String concatenation and Array/Option/Result allocation through direct Linux `mmap` runtimes, Array bounds checks, `array_get` Option construction, relative x86-64 branches, RIP-relative data references, and ELF64 headers using only Kryndel arrays and `UInt16/32/64`. `array_set` applies checked immutable patches after emission. Tested Linux amd64 runtime slices cover bounded JSON parsing and kind checks, object lookup, array length/index access, and string/bool/signed/unsigned scalar accessors, plus `Map[String, Int]` initialization, lookup, membership, insertion, and removal. The Go direct backend is the byte-level oracle for the Option/Result, source-array, loop-control, and opaque-ABI parity stages; JSON and Map runtime fixtures separately execute generated ELF files. Broader Map key/value types and untested JSON accessors remain outside the verified runtime boundary. Other dynamic String operations, Set/resource values, unsupported array builtins, non-array heap values, and non-Linux targets are rejected explicitly.
+The repository's self-hosted slices are `selfhost/elf_backend.kry`, `selfhost/dynamic_backend.kry`, and `selfhost/source_kir_compiler.kry`. The latter lexes and parses the scalar function/source subset, including `pub fn`, `break`/`continue`, multiline array literals/indexing and generic `Option[...]`/`Result[...]` annotations with nested payloads, plus opaque `Json`/`Map[...]` ABI values and their checked constructor, predicate, unwrap, and error-projection calls. The source compiler emits KIR v5 for its bounded frontend subset; function values and closures remain outside that subset. The dynamic backend validates the document before handing it to its existing KIR-subset lowerer. That lowerer handles stack-backed Int/Bool/UInt state, static String objects represented by pointers, immutable qword-backed Array objects, tagged pointer-like Option/Result objects, assignments, checked signed and wrapping unsigned arithmetic, comparisons, `if`/`else`, `while`, loop control, function calls using up to six SysV AMD64 registers and pointer/scalar returns in `RAX`, scalar/Array/Option/Result/Json/Map function-local declarations, static and dynamic Boolean/integer/String output, dynamic String concatenation and Array/Option/Result allocation through direct Linux `mmap` runtimes, Array bounds checks, `array_get` Option construction, relative x86-64 branches, RIP-relative data references, and ELF64 headers using only Kryndel arrays and `UInt16/32/64`. `array_set` applies checked immutable patches after emission. Tested Linux amd64 runtime slices cover bounded JSON parsing and kind checks, object lookup, array length/index access, and string/bool/signed/unsigned scalar accessors, plus `Map[String, Int]` initialization, lookup, membership, insertion, and removal. The Go direct backend is the byte-level oracle for the Option/Result, source-array, loop-control, and opaque-ABI parity stages; JSON and Map runtime fixtures separately execute generated ELF files. Broader Map key/value types and untested JSON accessors remain outside the verified runtime boundary. Other dynamic String operations, Set/resource values, unsupported array builtins, non-array heap values, and non-Linux targets are rejected explicitly.

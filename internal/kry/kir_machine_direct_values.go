@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-func validateDirectKIRBuiltinCall(expression *KIRExpr) error {
+func validateDirectKIRBuiltinCall(expression *KIRExpr, document *KIRDocument) error {
 	if expression == nil {
 		return fmt.Errorf("invalid KIR executable: nil direct builtin")
 	}
@@ -30,7 +30,7 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr) error {
 	singleArg := func() bool { return len(args) == 1 && args[0] != nil }
 	if len(args) > 0 {
 		for _, argument := range args {
-			if argument == nil || !directKIRTypeSupported(argument.Type, nil) {
+			if argument == nil || !directKIRTypeSupported(argument.Type, document) {
 				return unsupported()
 			}
 		}
@@ -149,6 +149,36 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr) error {
 		if !arrayOK || args[2].Type != arrayTypes[0] || !resultOK || resultTypes[0] != args[0].Type || resultTypes[1] != "String" {
 			return unsupported()
 		}
+	case "map_get", "map_contains_key", "map_insert", "map_remove":
+		if len(args) < 2 || args[0] == nil {
+			return unsupported()
+		}
+		mapTypes, ok := directKIRMapType(args[0].Type)
+		if !ok || args[1] == nil || args[1].Type != mapTypes[0] {
+			return unsupported()
+		}
+		if _, ok := directKIRMapKeyKind(mapTypes[0]); !ok {
+			return unsupported()
+		}
+		switch expression.Name {
+		case "map_get":
+			resultTypes, resultOK := container(expression.Type, "Option", 1)
+			if len(args) != 2 || !resultOK || resultTypes[0] != mapTypes[1] {
+				return unsupported()
+			}
+		case "map_contains_key":
+			if len(args) != 2 || expression.Type != "Bool" {
+				return unsupported()
+			}
+		case "map_insert":
+			if len(args) != 3 || args[2] == nil || args[2].Type != mapTypes[1] || expression.Type != args[0].Type {
+				return unsupported()
+			}
+		case "map_remove":
+			if len(args) != 2 || expression.Type != args[0].Type {
+				return unsupported()
+			}
+		}
 	case "some":
 		if !singleArg() {
 			return unsupported()
@@ -241,8 +271,17 @@ func directKIRBinarySupported(expression *KIRExpr) bool {
 		return false
 	}
 	left, right := expression.Left.Type, expression.Right.Type
+	if expression.Operator == "<<" || expression.Operator == ">>" {
+		return strings.HasPrefix(left, "UInt") && right == "Int" && expression.Type == left
+	}
 	if left != right {
 		return false
+	}
+	if expression.Operator == "+" {
+		name, arguments, composite := parseKIRContainerType(left)
+		if composite && name == "Array" && len(arguments) == 1 && expression.Type == left {
+			return true
+		}
 	}
 	switch expression.Operator {
 	case "&&", "||":
@@ -269,6 +308,156 @@ func directKIRBinarySupported(expression *KIRExpr) bool {
 	default:
 		return false
 	}
+}
+
+func (builder *kirDirectBuilder) emitMapLiteral(expression *KIRExpr) error {
+	mapTypes, ok := directKIRMapType(expression.Type)
+	if !ok || len(expression.MapKeys) != len(expression.Values) {
+		return fmt.Errorf("invalid KIR executable: map literal has invalid type or entry counts")
+	}
+	machine := builder.machine
+	machine.emitMoveImmediate(uint64(len(expression.MapKeys) * 2))
+	machine.arrayRuntimeUsed = true
+	machine.mapRuntimeUsed = true
+	if err := machine.emitArrayAllocCall(); err != nil {
+		return err
+	}
+	machine.code = append(machine.code, 0x50) // keep map pointer while evaluating entries
+	for index, key := range expression.MapKeys {
+		value := expression.Values[index]
+		if key == nil || value == nil || key.Type != mapTypes[0] || value.Type != mapTypes[1] {
+			return fmt.Errorf("invalid KIR executable: map literal entry does not match %q", expression.Type)
+		}
+		if err := builder.emitExpr(key); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50) // key
+		if err := builder.emitExpr(value); err != nil {
+			return err
+		}
+		machine.code = append(machine.code,
+			0x49, 0x89, 0xc0, // r8=value
+			0x58,                   // rax=key
+			0x48, 0x8b, 0x0c, 0x24, // rcx=map
+			0x48, 0xba,
+		)
+		var offset [8]byte
+		binary.LittleEndian.PutUint64(offset[:], uint64(8+index*16))
+		machine.code = append(machine.code, offset[:]...)
+		machine.code = append(machine.code,
+			0x48, 0x01, 0xca, // rdx += map
+			0x48, 0x89, 0x02, // map[key]
+			0x48, 0x83, 0xc2, 0x08,
+			0x4c, 0x89, 0x02, // map[value]
+		)
+	}
+	machine.code = append(machine.code, 0x58)
+	return nil
+}
+
+func (builder *kirDirectBuilder) emitMapBuiltin(expression *KIRExpr) error {
+	if expression == nil || len(expression.Args) < 2 || expression.Args[0] == nil {
+		return fmt.Errorf("invalid KIR executable: direct map builtin has missing arguments")
+	}
+	mapTypes, ok := directKIRMapType(expression.Args[0].Type)
+	if !ok {
+		return fmt.Errorf("invalid KIR executable: direct map builtin has a non-Map argument")
+	}
+	keyKind, ok := directKIRMapKeyKind(mapTypes[0])
+	if !ok {
+		return fmt.Errorf("direct KIR ELF does not lower map keys of type %q", mapTypes[0])
+	}
+	machine := builder.machine
+	machine.mapRuntimeUsed = true
+	switch expression.Name {
+	case "map_get", "map_contains_key":
+		if len(expression.Args) != 2 || expression.Args[1] == nil {
+			return fmt.Errorf("direct KIR ELF %s expects a map and key", expression.Name)
+		}
+		if err := builder.emitExpr(expression.Args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		if err := builder.emitExpr(expression.Args[1]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc6, 0x5f) // rsi=key; rdi=map
+		builder.emitMapKeyKind(keyKind)
+		if err := machine.emitLabelCall(machine.mapFindLabel); err != nil {
+			return err
+		}
+		if expression.Name == "map_contains_key" {
+			machine.code = append(machine.code, 0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x48, 0x0f, 0xb6, 0xc0)
+			return nil
+		}
+		none, done := machine.newLabel(), machine.newLabel()
+		machine.code = append(machine.code, 0x48, 0x85, 0xc0)
+		if err := machine.emitConditionalJump(0x84, none); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x8b, 0x00)
+		if err := machine.emitBoxCall(1); err != nil {
+			return err
+		}
+		if err := machine.emitJump(done); err != nil {
+			return err
+		}
+		if err := machine.bind(none); err != nil {
+			return err
+		}
+		machine.emitMoveImmediate(0)
+		return machine.bind(done)
+	case "map_insert":
+		if len(expression.Args) != 3 || expression.Args[1] == nil || expression.Args[2] == nil {
+			return fmt.Errorf("direct KIR ELF map_insert expects a map, key, and value")
+		}
+		if err := builder.emitExpr(expression.Args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		if err := builder.emitExpr(expression.Args[1]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		if err := builder.emitExpr(expression.Args[2]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc1, 0x5e, 0x5f) // rcx=value, rsi=key, rdi=map
+		builder.emitMapKeyKind(keyKind)
+		machine.arrayRuntimeUsed = true
+		return machine.emitLabelCall(machine.mapInsertLabel)
+	case "map_remove":
+		if len(expression.Args) != 2 || expression.Args[1] == nil {
+			return fmt.Errorf("direct KIR ELF map_remove expects a map and key")
+		}
+		if err := builder.emitExpr(expression.Args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		if err := builder.emitExpr(expression.Args[1]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc6, 0x5f) // rsi=key; rdi=map
+		builder.emitMapKeyKind(keyKind)
+		machine.arrayRuntimeUsed = true
+		machine.boxRuntimeUsed = true
+		if err := machine.emitLabelCall(machine.mapRemoveLabel); err != nil {
+			return err
+		}
+		// The shared dynamic-machine helper boxes its result. KIR's static
+		// Map[K,V] value is the array payload, so discard the box wrapper.
+		machine.code = append(machine.code, 0x48, 0x8b, 0x40, 0x08)
+		return nil
+	default:
+		return fmt.Errorf("direct KIR ELF does not lower map builtin %q", expression.Name)
+	}
+}
+
+func (builder *kirDirectBuilder) emitMapKeyKind(kind uint64) {
+	builder.machine.code = append(builder.machine.code, 0x48, 0xba)
+	var immediate [8]byte
+	binary.LittleEndian.PutUint64(immediate[:], kind)
+	builder.machine.code = append(builder.machine.code, immediate[:]...)
 }
 
 func (builder *kirDirectBuilder) emitArrayLiteral(expression *KIRExpr) error {
@@ -317,6 +506,52 @@ func (builder *kirDirectBuilder) emitArrayIndex(expression *KIRExpr) error {
 		return err
 	}
 	machine.code = append(machine.code, 0x48, 0x8b, 0x44, 0xc8, 0x08)
+	return nil
+}
+
+func (builder *kirDirectBuilder) emitStructLiteral(expression *KIRExpr) error {
+	structure := directKIRStruct(builder.document, expression.StructName)
+	if structure == nil || len(expression.Fields) != len(expression.Values) || len(expression.Fields) != len(structure.Fields) {
+		return fmt.Errorf("invalid KIR executable: struct %q literal has invalid metadata", expression.StructName)
+	}
+	if err := builder.machine.emitStructAllocCall(len(structure.Fields)); err != nil {
+		return err
+	}
+	builder.machine.code = append(builder.machine.code, 0x50) // retain object while evaluating fields
+	for valueIndex, name := range expression.Fields {
+		field, fieldIndex, ok := directKIRStructField(builder.document, expression.StructName, name)
+		value := expression.Values[valueIndex]
+		if !ok || value == nil || value.Type != field.Type {
+			return fmt.Errorf("invalid KIR executable: struct %q literal has invalid field %q", expression.StructName, name)
+		}
+		if err := builder.emitExpr(value); err != nil {
+			return err
+		}
+		builder.machine.code = append(builder.machine.code, 0x49, 0x89, 0xc0, 0x48, 0x8b, 0x0c, 0x24, 0x48, 0xba)
+		var offset [8]byte
+		binary.LittleEndian.PutUint64(offset[:], uint64((fieldIndex+1)*8))
+		builder.machine.code = append(builder.machine.code, offset[:]...)
+		builder.machine.code = append(builder.machine.code, 0x48, 0x01, 0xca, 0x4c, 0x89, 0x02)
+	}
+	builder.machine.code = append(builder.machine.code, 0x58) // return object pointer
+	return nil
+}
+
+func (builder *kirDirectBuilder) emitStructField(expression *KIRExpr) error {
+	if expression == nil || expression.Base == nil {
+		return fmt.Errorf("invalid KIR executable: direct struct field access has no base")
+	}
+	field, index, ok := directKIRStructField(builder.document, expression.Base.Type, expression.Field)
+	if !ok || field.Type != expression.Type {
+		return fmt.Errorf("invalid KIR executable: direct struct field %q is not in %q", expression.Field, expression.Base.Type)
+	}
+	if err := builder.emitExpr(expression.Base); err != nil {
+		return err
+	}
+	builder.machine.code = append(builder.machine.code, 0x48, 0x8b, 0x80)
+	var offset [4]byte
+	binary.LittleEndian.PutUint32(offset[:], uint32((index+1)*8))
+	builder.machine.code = append(builder.machine.code, offset[:]...)
 	return nil
 }
 
@@ -730,6 +965,8 @@ func (builder *kirDirectBuilder) emitBuiltin(expression *KIRExpr) error {
 		machine.code = append(machine.code, 0x48, 0x89, 0xc2, 0x5e, 0x5f)
 		machine.arrayRuntimeUsed = true
 		return machine.emitLabelCall(machine.arraySetLabel)
+	case "map_get", "map_contains_key", "map_insert", "map_remove":
+		return builder.emitMapBuiltin(expression)
 	case "some", "ok", "err":
 		if len(args) != 1 {
 			return fmt.Errorf("direct KIR ELF %s expects one argument", expression.Name)

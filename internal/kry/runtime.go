@@ -840,6 +840,9 @@ type DispatchEntry struct {
 type Runtime struct {
 	Prog              *Program
 	Checker           *Checker
+	mir               *ValidatedMIR
+	kirScope          *kirExecScope
+	kirExecutor       *kirExecutor
 	output            io.Writer
 	Funcs             map[string]*Function
 	Args              []string
@@ -850,11 +853,14 @@ type Runtime struct {
 	Channels          []*Channel
 	Threads           []*Thread
 	Dispatch          map[string][]DispatchEntry
+	dispatchMu        sync.RWMutex
+	sharedDispatchMu  *sync.RWMutex
 	nextTimerID       int64
 	Worker            bool
 	propagated        *Value
 	shutdownOnce      sync.Once
 	resourceMu        sync.Mutex
+	kirOutputMu       sync.Mutex
 	resources         []runtimeResource
 	discordRates      *discordRateLimiter
 	discordCache      *discordObjectCache
@@ -872,6 +878,85 @@ type runtimeResource struct {
 	column    int
 	isClosed  func() bool
 	closeFunc func() error
+}
+
+func (r *Runtime) dispatchLock() *sync.RWMutex {
+	if r.sharedDispatchMu != nil {
+		return r.sharedDispatchMu
+	}
+	return &r.dispatchMu
+}
+
+func (r *Runtime) registerDispatchEntry(slot, handler string, priority int64) bool {
+	lock := r.dispatchLock()
+	lock.Lock()
+	defer lock.Unlock()
+	if r.Dispatch == nil {
+		r.Dispatch = make(map[string][]DispatchEntry)
+	}
+	entries := r.Dispatch[slot]
+	for _, entry := range entries {
+		if entry.Handler == handler {
+			return false
+		}
+	}
+	entries = append(entries, DispatchEntry{Handler: handler, Priority: priority})
+	for i := len(entries) - 1; i > 0 && entries[i].Priority > entries[i-1].Priority; i-- {
+		entries[i], entries[i-1] = entries[i-1], entries[i]
+	}
+	r.Dispatch[slot] = entries
+	return true
+}
+
+func (r *Runtime) reorderDispatchEntry(slot, handler, before string) bool {
+	lock := r.dispatchLock()
+	lock.Lock()
+	defer lock.Unlock()
+	entries := r.Dispatch[slot]
+	from, target := -1, -1
+	for i, entry := range entries {
+		if entry.Handler == handler {
+			from = i
+		}
+		if entry.Handler == before {
+			target = i
+		}
+	}
+	if from < 0 || target < 0 || handler == before {
+		return false
+	}
+	entry := entries[from]
+	entries = append(entries[:from], entries[from+1:]...)
+	if from < target {
+		target--
+	}
+	entries = append(entries, DispatchEntry{})
+	copy(entries[target+1:], entries[target:])
+	entries[target] = entry
+	r.Dispatch[slot] = entries
+	return true
+}
+
+func (r *Runtime) firstDispatchHandler(slot string) (string, bool) {
+	lock := r.dispatchLock()
+	lock.RLock()
+	defer lock.RUnlock()
+	entries := r.Dispatch[slot]
+	if len(entries) == 0 {
+		return "", false
+	}
+	return entries[0].Handler, true
+}
+
+func (r *Runtime) dispatchStateForWorker() (*sync.RWMutex, map[string][]DispatchEntry) {
+	lock := r.dispatchLock()
+	lock.Lock()
+	if r.Dispatch == nil {
+		r.Dispatch = make(map[string][]DispatchEntry)
+	}
+	dispatch := r.Dispatch
+	lock.Unlock()
+	return lock, dispatch
 }
 
 func (r *Runtime) trackResource(e *Expr, name string, isClosed func() bool, closeFunc func() error) {
@@ -947,6 +1032,48 @@ func NewRuntime(prog *Program, c *Checker, lim Limits, sb Sandbox) (*Runtime, *D
 }
 
 func NewRuntimeWithArgs(prog *Program, c *Checker, lim Limits, sb Sandbox, args []string) (*Runtime, *Diagnostic) {
+	if prog == nil || c == nil {
+		return nil, Diag(CatArtifact, nil, 1, 1, "missing checked program for interpreter MIR")
+	}
+	mir, err := CompileMIR(prog, c, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
+	if err != nil {
+		return nil, Diag(CatArtifact, prog.Source, 1, 1, "cannot compile interpreter MIR: %v", err)
+	}
+	return newRuntimeFromMIR(mir, lim, sb, args)
+}
+
+func newRuntimeFromMIR(mir *ValidatedMIR, lim Limits, sb Sandbox, args []string) (*Runtime, *Diagnostic) {
+	if mir == nil || mir.document == nil {
+		return nil, Diag(CatArtifact, nil, 1, 1, "cannot prepare interpreter from missing validated MIR")
+	}
+	if err := validateKIRDocument(mir.document, lim); err != nil {
+		return nil, Diag(CatArtifact, mir.sources[mir.document.Source], 1, 1, "cannot prepare interpreter from invalid validated MIR: %v", err)
+	}
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if lim.MaxWallTimeMS == 0 {
+		ctx, cancel = context.WithCancel(context.Background())
+	} else {
+		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
+	}
+	source := mir.sources[mir.document.Source]
+	if source == nil && mir.document.Source != "" {
+		source = &Source{Name: mir.document.Source}
+	}
+	// Keep only diagnostic metadata on the compatibility shell. Runtime
+	// execution below reads the validated KIR document directly.
+	program := &Program{Source: source}
+	runtime := &Runtime{
+		Prog: program, mir: mir, Args: append([]string(nil), args...), Global: newRunScope(nil),
+		Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim},
+		Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(),
+		discordCache: newDiscordObjectCache(10_000, 30*time.Minute), discordAPIBaseURL: discordAPIBase,
+		discordGateway: newDiscordGatewayState(),
+	}
+	return runtime, nil
+}
+
+func newRuntimeFromProgram(prog *Program, c *Checker, lim Limits, sb Sandbox, args []string) (*Runtime, *Diagnostic) {
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if lim.MaxWallTimeMS == 0 {
@@ -1030,6 +1157,9 @@ func (r *Runtime) run() (result *Diagnostic) {
 			result = nil
 		}
 	}()
+	if r.mir != nil {
+		return r.runValidatedMIR(false)
+	}
 	for _, s := range r.Prog.Statements {
 		if r.debugger != nil && !r.debugStatement(r.Global, s) {
 			return nil
@@ -1079,6 +1209,35 @@ func (r *Runtime) run() (result *Diagnostic) {
 		}
 	}
 	return nil
+}
+
+func (r *Runtime) runValidatedMIR(repl bool) *Diagnostic {
+	writer := r.output
+	if writer == nil {
+		writer = os.Stdout
+	}
+	result, err := executeMIRRuntime(r.mir, r.Lim, r.mir.sources, r.Sandbox, r.Args, r.Ctx, writer, repl, r.debugger, r.kirScope, r)
+	if err != nil {
+		if r.debugAbort != nil {
+			return nil
+		}
+		return Diag(CatArtifact, r.Prog.Source, 1, 1, "cannot execute validated MIR directly: %v", err)
+	}
+	r.Ctx = result.Context
+	if result.Global != nil {
+		r.kirScope = result.Global
+		r.Global.Values = make(map[string]RunBinding, len(result.Global.values))
+		for _, binding := range result.Global.values {
+			if binding != nil && binding.meta != nil {
+				r.Global.Values[binding.meta.Name] = RunBinding{Value: cloneValue(binding.value), Mutable: binding.meta.Mutable}
+			}
+		}
+	}
+	if result.DebugStopped {
+		r.debugAbort = Diag(CatCLI, r.Prog.Source, 1, 1, "execution stopped by debugger")
+		return nil
+	}
+	return result.Diagnostic
 }
 func (r *Runtime) cleanup(prior *Diagnostic) *Diagnostic {
 	r.shutdownOnce.Do(func() {
@@ -2063,49 +2222,22 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if f == nil || f.Receiver != nil || len(f.Params) != 1 || mustResolve(r.Checker.Env, f.Params[0].Type).Kind != TyString || mustResolve(r.Checker.Env, f.Return).Kind != TyString {
 			return resVal(false, stringVal("handler must be a top-level fn(String) -> String")), nil
 		}
-		entries := r.Dispatch[slot]
-		for _, entry := range entries {
-			if entry.Handler == handler {
-				return resVal(false, stringVal("handler already registered in slot")), nil
-			}
+		if !r.registerDispatchEntry(slot, handler, priority) {
+			return resVal(false, stringVal("handler already registered in slot")), nil
 		}
-		entries = append(entries, DispatchEntry{Handler: handler, Priority: priority})
-		for i := len(entries) - 1; i > 0 && entries[i].Priority > entries[i-1].Priority; i-- {
-			entries[i], entries[i-1] = entries[i-1], entries[i]
-		}
-		r.Dispatch[slot] = entries
 		return resVal(true, nilVal()), nil
 	case "poly_reorder":
 		slot, handler, before := a[0].S, a[1].S, a[2].S
-		entries := r.Dispatch[slot]
-		from, target := -1, -1
-		for i, entry := range entries {
-			if entry.Handler == handler {
-				from = i
-			}
-			if entry.Handler == before {
-				target = i
-			}
-		}
-		if from < 0 || target < 0 || handler == before {
+		if !r.reorderDispatchEntry(slot, handler, before) {
 			return resVal(false, stringVal("both handlers must already be registered and distinct")), nil
 		}
-		entry := entries[from]
-		entries = append(entries[:from], entries[from+1:]...)
-		if from < target {
-			target--
-		}
-		entries = append(entries, DispatchEntry{})
-		copy(entries[target+1:], entries[target:])
-		entries[target] = entry
-		r.Dispatch[slot] = entries
 		return resVal(true, nilVal()), nil
 	case "poly_dispatch":
-		entries := r.Dispatch[a[0].S]
-		if len(entries) == 0 {
+		handler, ok := r.firstDispatchHandler(a[0].S)
+		if !ok {
 			return resVal(false, stringVal("dispatch slot has no registered handlers")), nil
 		}
-		f := r.Funcs[entries[0].Handler]
+		f := r.Funcs[handler]
 		value, d := r.invokeFunction(e, f, r.Global, nil, []Value{a[1]})
 		if d != nil {
 			return resVal(false, stringVal(d.Message)), nil
@@ -4504,7 +4636,8 @@ func (r *Runtime) spawn(e *Expr, name string) (Value, *Diagnostic) {
 	}
 	go func() {
 		defer close(t.Done)
-		wr := &Runtime{Prog: r.Prog, Checker: r.Checker, Funcs: r.Funcs, Global: newRunScope(nil), Lim: r.Lim, Sandbox: r.Sandbox, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: r.Lim}, Channels: channelsSnapshot, Threads: threadsSnapshot, Worker: true, discordRates: r.discordRates, discordCache: r.discordCache, discordAPIBaseURL: r.discordAPIBaseURL, discordGateway: r.discordGateway}
+		dispatchMu, dispatch := r.dispatchStateForWorker()
+		wr := &Runtime{Prog: r.Prog, Checker: r.Checker, Funcs: r.Funcs, Global: newRunScope(nil), Lim: r.Lim, Sandbox: r.Sandbox, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: r.Lim}, Channels: channelsSnapshot, Threads: threadsSnapshot, Dispatch: dispatch, sharedDispatchMu: dispatchMu, Worker: true, discordRates: r.discordRates, discordCache: r.discordCache, discordAPIBaseURL: r.discordAPIBaseURL, discordGateway: r.discordGateway}
 		wr.Worker = true
 		for n, v := range channelSnapshot {
 			_ = wr.Global.define(n, v, false)
@@ -4576,6 +4709,9 @@ func (r *Runtime) joinTimeout(e *Expr, t *Thread, ms int64) (Value, *Diagnostic)
 // The CLI rebuilds the checked declaration prefix for each snippet, so failed snippets
 // never mutate the persistent definition set.
 func (r *Runtime) RunForREPL() *Diagnostic {
+	if r.mir != nil {
+		return r.runValidatedMIR(true)
+	}
 	for _, s := range r.Prog.Statements {
 		if d := r.Ctx.step(s.Tok.Source, s.Tok.Line, s.Tok.Column); d != nil {
 			return d

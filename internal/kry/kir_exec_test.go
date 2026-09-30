@@ -28,7 +28,7 @@ func compareKIRExecutionWithRuntimeAndSandbox(t *testing.T, source string, limit
 		t.Fatal(diagnostic)
 	}
 	var astOutput bytes.Buffer
-	astRuntime, diagnostic := NewRuntime(program, checker, limits, sandbox)
+	astRuntime, diagnostic := newRuntimeFromProgram(program, checker, limits, sandbox, nil)
 	if diagnostic != nil {
 		t.Fatal(diagnostic)
 	}
@@ -100,6 +100,75 @@ println(relay("generic"))
 	}
 	if want := "42\ngeneric\n"; string(result.Output) != want {
 		t.Fatalf("output = %q, want %q", result.Output, want)
+	}
+}
+
+func TestKIRExecutorMatchesRuntimeForPolyDispatch(t *testing.T) {
+	source := `
+fn prefix(value: String) -> String { return "prefix:" + value }
+fn suffix(value: String) -> String { return value + ":suffix" }
+let first: Result[Nil, String] = poly_register("format", "prefix", 10)
+let second: Result[Nil, String] = poly_register("format", "suffix", 5)
+let moved: Result[Nil, String] = poly_reorder("format", "suffix", "prefix")
+println(result_unwrap(poly_dispatch("format", "value")))
+`
+	_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	if want := "value:suffix\n"; string(result.Output) != want {
+		t.Fatalf("poly dispatch output = %q, want %q", result.Output, want)
+	}
+}
+
+func TestKIRExecutorMatchesRuntimeForWorkerSharedCaptures(t *testing.T) {
+	source := `
+let shared: Shared[Array[Int]] = shared_new([3, 5, 8])
+fn values() -> Array[Int] { return shared_read(shared) }
+let thread: Thread[Array[Int]] = thread_spawn("values")
+println(thread_join(thread))
+`
+	_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	if want := "[3, 5, 8]\n"; string(result.Output) != want {
+		t.Fatalf("worker output = %q, want %q", result.Output, want)
+	}
+}
+
+func TestKIRExecutorWorkerDispatchIsSynchronized(t *testing.T) {
+	source := `
+fn first(value: String) -> String { return "first:" + value }
+fn second(value: String) -> String { return "second:" + value }
+fn dispatch_worker() -> Int {
+    let registered: Result[Nil, String] = poly_register("slot", "third", 20)
+    let mut count: Int = 0
+    while count < 10000 {
+        let result: Result[String, String] = poly_dispatch("slot", "value")
+        count = count + 1
+    }
+    return count
+}
+fn third(value: String) -> String { return "third:" + value }
+let first_registered: Result[Nil, String] = poly_register("slot", "first", 10)
+let second_registered: Result[Nil, String] = poly_register("slot", "second", 5)
+let worker: Thread[Int] = thread_spawn("dispatch_worker")
+let mut index: Int = 0
+while index < 10000 {
+    let reordered: Result[Nil, String] = poly_reorder("slot", "first", "second")
+    let reordered_back: Result[Nil, String] = poly_reorder("slot", "second", "first")
+    index = index + 1
+}
+println(thread_join(worker))
+println(result_unwrap(poly_dispatch("slot", "value")))
+`
+	_, _, result, diagnostic := compareKIRExecutionWithRuntime(t, source, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	if want := "10000\nthird:value\n"; string(result.Output) != want {
+		t.Fatalf("worker dispatch output = %q, want %q", result.Output, want)
 	}
 }
 
@@ -339,7 +408,7 @@ println(twice(choose(21)))
 	if diagnostic != nil {
 		t.Fatal(diagnostic)
 	}
-	astRuntime, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+	astRuntime, diagnostic := newRuntimeFromProgram(program, checker, DefaultLimits(), Sandbox{}, nil)
 	if diagnostic != nil {
 		t.Fatal(diagnostic)
 	}
@@ -1047,7 +1116,7 @@ func TestKIRExecutorAcceptsDecodedKIRV3(t *testing.T) {
 		t.Fatalf("KIR v3 execution failed: %v", err)
 	}
 	var astOutput bytes.Buffer
-	astRuntime, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+	astRuntime, diagnostic := newRuntimeFromProgram(program, checker, DefaultLimits(), Sandbox{}, nil)
 	if diagnostic != nil {
 		t.Fatal(diagnostic)
 	}
@@ -1108,7 +1177,7 @@ if i == 3 { println("done") }
 				t.Fatal("generated ELF embeds the complete output instead of lowering KIR control flow for runtime execution")
 			}
 			var astOutput bytes.Buffer
-			astRuntime, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+			astRuntime, diagnostic := newRuntimeFromProgram(program, checker, DefaultLimits(), Sandbox{}, nil)
 			if diagnostic != nil {
 				t.Fatal(diagnostic)
 			}
@@ -1192,11 +1261,11 @@ println(2)
 			if err != nil {
 				t.Fatal(err)
 			}
-			document, err := DecodeKIR(encoded, DefaultLimits())
+			mir, err := DecodeMIR(encoded, DefaultLimits())
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = validateKIRDirectELFSubset(document)
+			err = validateKIRDirectELFSubset(mir)
 			if !errors.Is(err, errKIRSubsetUnsupported) || !strings.Contains(err.Error(), test.wantMessage) {
 				t.Fatalf("direct KIR ELF validation error = %v, want explicit unsupported error containing %q", err, test.wantMessage)
 			}

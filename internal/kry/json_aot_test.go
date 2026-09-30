@@ -219,11 +219,7 @@ func TestCAOTJSONInvalidUTF8StringMatchesInterpreter(t *testing.T) {
 	}
 	cSource := strings.Join([]string{
 		"#define _XOPEN_SOURCE 700",
-		cRuntimePrelude,
-		cRuntimeDisplay,
-		cRuntimeBuiltins,
-		cRuntimeExtra,
-		cRuntimeCrypto,
+		cRuntimeSource(),
 		`int main(void) {
     static const char raw_json[] = {'"', (char)0xff, '"'};
     KValue parsed = k_json_parse(kv_strn(raw_json, sizeof(raw_json)));

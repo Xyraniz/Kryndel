@@ -190,9 +190,6 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 	if err != nil {
 		return nil, err
 	}
-	if err := validateFunctionValueSupport(p, backend.Name); err != nil {
-		return nil, err
-	}
 	if noExternalToolchain && backend.RequiresExternalToolchain {
 		suggestion := "--format=elf-direct or --format=pe-direct"
 		if format == "macho" {
@@ -221,15 +218,17 @@ func BuildNativeWithPolicyOpts(p *Program, c *Checker, target NativeTarget, form
 	if err := validateNativeOutputTarget(format, target); err != nil {
 		return nil, err
 	}
-	if err := validateNativeFeatureSupport(p, c, format, target); err != nil {
+	mir, err := CompileMIR(p, c, target)
+	if err != nil {
 		return nil, err
 	}
-	var src string
-	if obfuscate {
-		src, err = GenerateCObfuscated(p, c)
-	} else {
-		src, err = GenerateC(p, c)
+	if err := validateMIRFunctionValueSupport(mir, backend.Name); err != nil {
+		return nil, err
 	}
+	if err := validateMIRNativeFeatureSupport(mir, format, target); err != nil {
+		return nil, err
+	}
+	src, err := generateCFromValidatedKIR(mir, mir.limits, obfuscate)
 	if err != nil {
 		return nil, err
 	}

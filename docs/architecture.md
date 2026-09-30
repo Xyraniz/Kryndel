@@ -8,7 +8,8 @@ UTF-8 source
     -> parser and AST
     -> module resolver
     -> static type checker annotating the AST
-    -> interpreter, C code generator, or direct ELF lowering
+    -> validated in-memory MIR/KIR
+    -> interpreter or target backend
     -> bounded runtime or emitted artifact
     -> output, diagnostics, or versioned KRYNATIVE6 bundle
 ```
@@ -21,7 +22,8 @@ UTF-8 source
 | Parser | Expressions, bindings, functions, modules, data declarations, blocks, and patterns. | Native AST. |
 | Type checker | Type inference, annotations, complete-argument multiple dispatch, constrained function and user-struct generics, static trait bounds and method resolution, receiver/method substitutions, privacy, operators, mutability, returns, conditions, exhaustiveness, and constant folding. | Native type model and source locations. |
 | Module resolver | Relative source lookup, public exports, cycle detection, and traversal rejection. | Explicit filesystem paths only. |
-| Runtime | Interprets the checked AST and folded primitive values; provides lexical scopes, first-class function values and closures, mutable capture cells, indirect calls, tail-call trampolines, recursion, collections, UTF-8, options, results, control flow, channels, synchronized `Shared[T]` cells, actor mailboxes, structured `TaskGroup` workers, safepoints, and budgets. | Go standard library, `internal/platform` for camera/display capture, and modules listed in `go.mod` for host integrations. |
+| Runtime | Evaluates validated KIR directly with lexical scopes, first-class function values and closures, mutable capture cells, indirect calls, tail-call trampolines, recursion, collections, UTF-8, options, results, control flow, channels, synchronized `Shared[T]` cells, actor mailboxes, structured `TaskGroup` workers, safepoints, and budgets. | Go standard library, `internal/platform` for camera/display capture, and modules listed in `go.mod` for host integrations. |
+| Generated C runtime | Supplies ordered C source fragments for value formatting, display, arithmetic, equality, builtins, collections, and host integrations. | Independent leaf package `internal/cruntime`; Go standard library only. |
 | Platform integrations | Bounded camera frame capture and display enumeration/screenshot encoding behind byte-oriented APIs. | Target-specific camera implementations, screenshot/webcam libraries, or FFmpeg on Windows camera capture. |
 | Artifact reader/writer | Versioned KRYNATIVE6 metadata, package visibility scopes, deterministic source bundle, checked KIR payload, SHA-256 hashes, atomic writes, and strict replay validation; reads KRYNATIVE3 through KRYNATIVE5. | Go binary/file APIs. |
 | CLI and language server | `check`, `run`, `build`, `fmt`, `lsp`, `repl`, `doctor`, `version`, and help. | Explicit command-line and filesystem inputs; LSP messages over standard input/output. |
@@ -44,46 +46,47 @@ Lexical scopes are represented by parent-linked environments. A declaration is l
 
 ## Artifact format
 
-`build` accepts a source file, validates it, and writes a deterministic KRYNATIVE6 bundle with a fixed magic, format/compiler/language/target metadata, exact payload length, an ordered `<root>` plus imported source entries, package visibility scopes, a SHA-256 hash for every source, and canonical typed KIR with its own hash. The KIR uses the host-independent `portable/any` target, while native outputs keep their explicit OS and architecture. The reader rejects incompatible metadata, truncated or oversized fields, duplicate or unsafe paths, invalid hashes, trailing bytes, invalid KIR, and any embedded source that fails the ordinary lexer, parser, module, or checker pipeline. It regenerates KIR from the checked source graph using the embedded target and requires byte-for-byte agreement with the embedded IR, so the artifact cannot pair one checked representation with different source. Building the same source twice produces identical bytes. KRYNATIVE3 through KRYNATIVE5 artifacts remain readable; KRYNATIVE3 is interpreted as language version 1.0.0. `emit --format=kry-ir` exposes the checked program through deterministic KIR v5 JSON; the decoder accepts KIR v1 through v4 for legacy documents without later schema additions. For `--format=elf --target=linux-x64`, the native path still emits the explicitly documented C-backed AOT subset; the direct machine-code replacement is not claimed until bootstrap parity tests exist.
+`build` accepts a source file, validates it, and writes a deterministic KRYNATIVE6 bundle with a fixed magic, format/compiler/language/target metadata, exact payload length, an ordered `<root>` plus imported source entries, package visibility scopes, a SHA-256 hash for every source, and canonical typed KIR with its own hash. The KIR uses the host-independent `portable/any` target, while native outputs keep their explicit OS and architecture. The reader rejects incompatible metadata, truncated or oversized fields, duplicate or unsafe paths, invalid hashes, trailing bytes, invalid KIR, and any embedded source that fails the ordinary lexer, parser, module, or checker pipeline. It regenerates KIR from the checked source graph using the embedded target and requires byte-for-byte agreement with the embedded IR, so the artifact cannot pair one checked representation with different source. Building the same source twice produces identical bytes. KRYNATIVE3 through KRYNATIVE5 artifacts remain readable; KRYNATIVE3 is interpreted as language version 1.0.0. `emit --format=kry-ir` exposes the checked program through deterministic KIR v5 JSON; the decoder accepts KIR v1 through v5. `--format=elf` uses the generated-C AOT backend, while `--format=elf-direct` lowers its supported KIR subset to Linux amd64 machine code and rejects unsupported constructs before emitting an executable.
 
 ## Intermediate representation status
 
-The checker currently stores resolved expression types and call targets on AST
-nodes. The interpreter and C generator execute or lower that checked AST. For
-direct ELF, the bounded KIR scalar slice is now lowered to actual x86-64 instructions:
-the executable evaluates scalar expressions and runs `if`/`while` at runtime,
-with source-mapped diagnostics and instruction, wall-time, and output limits.
-It covers `Int`, `Bool`, `String`, and `Nil` scalar bindings, integer
-arithmetic/comparison, Boolean logic, String equality, assignments,
-`print`/`println` of `Int`/`Bool`/`String`, and a plain top-level program or
-single zero-argument `main() -> Nil`. Float, imports, additional user
-functions, `str`, dynamic String concatenation, and other KIR nodes remain
-outside this KIR-native slice; supported programs outside it may still use the
-existing AST-backed direct path. This lowerer targets Linux amd64, caps its
-accepted KIR traversal at 20,000 nodes and language-local stack storage at
-1 MiB, and also observes the decoder and artifact size limits.
+`CompileMIR` converts the checker-annotated source tree into an opaque,
+validated `ValidatedMIR`. It checks that the supplied checker belongs to that
+tree, validates the KIR structure and resource bounds, and snapshots source
+text and package visibility as diagnostic sidecars. `EmitKIR` serializes the
+same document for interchange and portable artifacts; ordinary in-process
+lowering does not encode and decode JSON to cross this boundary.
 
-KIR v5 records generic declarations and instantiation metadata, first-class
-function values and lexical captures, trait declarations and static implementation
-targets, trait-bound method calls, and function source locations. It still
-remains a typed serialization rather than the single internal representation
-shared by the interpreter and every backend. `Engine.RunPathWithArgs` executes
-the validated scalar KIR subset directly; when that subset validator returns
-its explicit unsupported sentinel, the engine runs the checked AST instead.
-Malformed KIR and runtime diagnostics never trigger an AST retry, and any
-output produced before a runtime diagnostic is written first. `DebugPath` stays
-on the AST path so breakpoints, scopes, and locals remain available. The Go KIR
-executor also serves as the semantic oracle for differential tests and subset
-validation; it does not run or precompute direct ELF programs.
-The `ValidatedIR` in `internal/kry/ir.go` currently records a bounded traversal
-and is not an executable lowering. KIR decoding checks the wire structure, and
-the native subset validator separately checks accepted types and bindings;
-neither makes arbitrary KIR a replacement for the source checker. Semantic
-parity still depends on tests between implementations.
+All production run and native-build entrypoints begin from `ValidatedMIR`. C
+AOT, direct ELF, direct PE, and the interpreter consume its typed KIR document.
+The interpreter keeps its runtime state in a persistent KIR executor,
+including across REPL snippets; it no longer projects KIR back into an
+AST-shaped `interpreterProgram`. Direct ELF and PE lower their supported KIR
+subsets and reject unsupported constructs without an AST-derived fallback.
+The checked source AST is not a production lowering input. The same KIR
+executor also provides bounded direct KIR execution for differential tests.
 
-The planned compiler boundary is `source -> AST -> typed HIR -> validated
-MIR/KIR -> interpreter or target backend`. Resolution and overload selection
-must be recorded in that typed representation. Backend feature checks must run
-against the selected target before any output bytes are emitted. This remains
-work in progress; KIR v5's current limits are listed in the
+`DecodeMIR` validates the portable KIR document without source-text and package
+visibility sidecars. The interpreter and native lowerers can consume that same
+context-free value directly. KIR carries source names and coordinates, so
+runtime diagnostics retain file, line, and column; decoded documents do not
+provide source excerpts. Artifact loading additionally checks the embedded
+source graph and recompiles the MIR before accepting the bundle.
+`ValidateASTLimits` only counts source-tree resource use before lowering; it is
+not a second instruction representation.
+
+KIR v5 retains checked types, resolved call targets, generic declarations and
+instantiations, function values and captures, trait implementation targets,
+source locations, and target metadata. Direct ELF's KIR slices cover scalar
+bindings, arithmetic and comparisons, Boolean logic, String equality,
+assignments, branches and loops, plus bounded function, immutable array,
+struct, and `Option`/`Result` paths. Direct PE also lowers its supported subset
+from KIR. The direct machine backends target Linux amd64 and Windows amd64,
+respectively, and do not imply support for every valid KIR node.
+
+The source checker remains the semantic authority for source programs. KIR
+decoding validates the wire contract and structural invariants; it does not
+independently rerun source overload resolution. Target feature checks now walk
+validated KIR against the selected target before output bytes are emitted.
+Backend support limits and KIR version history are tracked in the
 [KIR reference](kry-ir.md).

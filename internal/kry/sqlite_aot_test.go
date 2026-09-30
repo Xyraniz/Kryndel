@@ -15,7 +15,7 @@ func TestSQLiteCRuntimeDynamicLoaderHarness(t *testing.T) {
 		t.Skip("SQLite C harness requires Linux or Windows amd64")
 	}
 	target := NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH}
-	source := cRuntimePrelude + cRuntimeDisplay + cRuntimeBuiltins + cRuntimeExtra + cRuntimeCrypto + `
+	source := cRuntimeSource() + `
 int main(void) {
     if (setjmp(k_jmp)) {
         printf("close error:%s\n", k_errbuf);

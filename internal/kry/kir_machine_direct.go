@@ -61,21 +61,41 @@ type kirDirectBuilder struct {
 // validateKIRDirectELFSubset retains the scalar-only KIR preflight used by
 // compatibility checks. BuildDirectELF dispatches through the wider value
 // subset below, whose operations have executable interpreter-parity fixtures.
-func validateKIRDirectELFSubset(document *KIRDocument) error {
+// The validated value is the only accepted entry point; internal walkers
+// receive its document only after this boundary.
+func validateKIRDirectELFSubset(mir *ValidatedMIR) error {
+	document, err := validatedMIRDocument(mir)
+	if err != nil {
+		return err
+	}
 	if err := directKIRLegacySubsetRejection(document); err != nil {
 		return err
 	}
 	return validateKIRDirectELFSubsetMode(document, false)
 }
 
-func validateKIRDirectELFValueSubset(document *KIRDocument) error {
+func validateKIRDirectELFValueSubset(mir *ValidatedMIR) error {
+	document, err := validatedMIRDocument(mir)
+	if err != nil {
+		return err
+	}
 	return validateKIRDirectELFSubsetMode(document, true)
+}
+
+func validatedMIRDocument(mir *ValidatedMIR) (*KIRDocument, error) {
+	if mir == nil || mir.document == nil {
+		return nil, fmt.Errorf("direct ELF backend requires validated MIR")
+	}
+	return mir.document, nil
 }
 
 // validateKIRDirectELFSubsetMode proves the accepted native slice using
 // decoded KIR only. It first applies the executor's semantic checks, then
 // narrows execution to operations for which the direct machine emits code.
 func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) error {
+	if err := rejectKIRDirectOmittedDefaults(document); err != nil {
+		return err
+	}
 	if err := validateKIRExecSubsetWithFunctions(document, kirExecFunctions(document), true); err != nil {
 		return err
 	}
@@ -130,6 +150,13 @@ func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) e
 			if expression.Kind != "call" || !supportValues || !ok || function == nil || function.Name != expression.Name || function == entryFunction || expression.Receiver != nil || len(expression.GenericArguments) != 0 || expression.TraitName != "" {
 				return fmt.Errorf("%w: direct KIR ELF call target %q is not a supported helper function", errKIRSubsetUnsupported, expression.CallTarget)
 			}
+			if len(expression.Args) < len(function.Params) {
+				for _, parameter := range function.Params[len(expression.Args):] {
+					if parameter != nil && parameter.Default != nil {
+						return fmt.Errorf("%w: direct KIR ELF function %q does not support omitted default arguments", errKIRSubsetUnsupported, function.Name)
+					}
+				}
+			}
 			if len(expression.Args) != len(function.Params) || len(expression.Args) > 6 || expression.Type != function.Return {
 				return fmt.Errorf("invalid KIR executable: direct call to %q has an unsupported signature", expression.Name)
 			}
@@ -164,7 +191,33 @@ func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) e
 			}
 		} else {
 			switch expression.Kind {
-			case "int", "bool", "string", "nil", "var", "unary", "binary", "array", "index":
+			case "int", "bool", "string", "nil", "var", "unary", "binary", "array", "map", "index", "field":
+				if expression.Kind == "field" {
+					if expression.Base == nil {
+						return fmt.Errorf("invalid KIR executable: direct struct field access has no base")
+					}
+					field, _, ok := directKIRStructField(document, expression.Base.Type, expression.Field)
+					if !ok || field.Type != expression.Type || !directKIRTypeSupported(field.Type, document) {
+						return fmt.Errorf("%w: direct KIR ELF does not lower field %q on type %q", errKIRSubsetUnsupported, expression.Field, expression.Base.Type)
+					}
+				}
+			case "struct":
+				structure := directKIRStruct(document, expression.StructName)
+				if structure == nil || expression.Type != expression.StructName || expression.StructType != expression.StructName || len(expression.GenericArguments) != 0 {
+					return fmt.Errorf("%w: direct KIR ELF supports only non-generic struct literals", errKIRSubsetUnsupported)
+				}
+				if len(expression.Fields) != len(expression.Values) || len(expression.Fields) != len(structure.Fields) {
+					return fmt.Errorf("invalid KIR executable: struct %q literal has mismatched fields", expression.StructName)
+				}
+				seen := make(map[string]bool, len(expression.Fields))
+				for index, name := range expression.Fields {
+					field, _, ok := directKIRStructField(document, expression.StructName, name)
+					value := expression.Values[index]
+					if !ok || value == nil || seen[name] || value.Type != field.Type {
+						return fmt.Errorf("invalid KIR executable: struct %q literal has invalid field %q", expression.StructName, name)
+					}
+					seen[name] = true
+				}
 			case "call":
 				if functionCall {
 					// The signature and target are checked above; argument expressions
@@ -174,11 +227,11 @@ func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) e
 				if expression.Receiver != nil || expression.CallTarget != "builtin:"+expression.Name {
 					return fmt.Errorf("%w: direct KIR ELF only lowers builtin calls with resolved targets", errKIRSubsetUnsupported)
 				}
-				if err := validateDirectKIRBuiltinCall(expression); err != nil {
+				if err := validateDirectKIRBuiltinCall(expression, document); err != nil {
 					return err
 				}
 				switch expression.Name {
-				case "print", "println", "len", "array_push", "array_concat", "array_get", "array_indices", "array_set", "array_slice", "array_take", "array_drop", "array_reverse", "process_args", "some", "none", "ok", "err", "is_some", "is_none", "is_ok", "is_err", "unwrap_or", "result_unwrap", "result_error", "assert", "assert_eq", "u8", "u16", "u32", "u64", "int", "str", "string_chars", "substring", "contains", "starts_with", "ends_with":
+				case "print", "println", "len", "array_push", "array_concat", "array_get", "array_indices", "array_set", "array_slice", "array_take", "array_drop", "array_reverse", "map_get", "map_contains_key", "map_insert", "map_remove", "process_args", "some", "none", "ok", "err", "is_some", "is_none", "is_ok", "is_err", "unwrap_or", "result_unwrap", "result_error", "assert", "assert_eq", "u8", "u16", "u32", "u64", "int", "str", "string_chars", "substring", "contains", "starts_with", "ends_with":
 				default:
 					return fmt.Errorf("%w: direct KIR ELF does not lower builtin %q", errKIRSubsetUnsupported, expression.Name)
 				}
@@ -206,6 +259,24 @@ func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) e
 			for _, item := range expression.Items {
 				if item == nil || !directKIRTypeSupported(item.Type, document) || item.Type != arrayTypes[0] {
 					return fmt.Errorf("%w: direct KIR ELF array item has unsupported type", errKIRSubsetUnsupported)
+				}
+			}
+		}
+		if supportValues && expression.Kind == "map" {
+			mapTypes, ok := directKIRMapType(expression.Type)
+			if !ok || !directKIRTypeSupported(expression.Type, document) {
+				return fmt.Errorf("invalid KIR executable: direct map expression has type %q", expression.Type)
+			}
+			if _, ok := directKIRMapKeyKind(mapTypes[0]); !ok {
+				return fmt.Errorf("%w: direct KIR ELF map keys of type %q are unsupported", errKIRSubsetUnsupported, mapTypes[0])
+			}
+			if len(expression.MapKeys) != len(expression.Values) {
+				return fmt.Errorf("invalid KIR executable: direct map literal has mismatched key/value counts")
+			}
+			for index, key := range expression.MapKeys {
+				value := expression.Values[index]
+				if key == nil || value == nil || key.Type != mapTypes[0] || value.Type != mapTypes[1] {
+					return fmt.Errorf("invalid KIR executable: direct map literal entry does not match %q", expression.Type)
 				}
 			}
 		}
@@ -346,8 +417,87 @@ func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) e
 	return nil
 }
 
-func buildDirectKIRELF(document *KIRDocument, limits Limits, sources map[string]*Source) ([]byte, error) {
-	if err := validateKIRDirectELFValueSubset(document); err != nil {
+func rejectKIRDirectOmittedDefaults(document *KIRDocument) error {
+	functions := kirExecFunctions(document)
+	var visitExpr func(*KIRExpr) error
+	var visitStatements func([]*KIRStmt) error
+	visitExpr = func(expression *KIRExpr) error {
+		if expression == nil {
+			return nil
+		}
+		if expression.Kind == "call" && strings.HasPrefix(expression.CallTarget, "function:") {
+			target := strings.TrimPrefix(expression.CallTarget, "function:")
+			if function := functions[target]; function != nil && len(expression.Args) < len(function.Params) {
+				for _, parameter := range function.Params[len(expression.Args):] {
+					if parameter != nil && parameter.Default != nil {
+						return fmt.Errorf("%w: direct KIR ELF function %q does not support omitted default arguments", errKIRSubsetUnsupported, function.Name)
+					}
+				}
+			}
+		}
+		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
+			if err := visitExpr(child); err != nil {
+				return err
+			}
+		}
+		for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
+			for _, child := range list {
+				if err := visitExpr(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	visitStatements = func(statements []*KIRStmt) error {
+		for _, statement := range statements {
+			if statement == nil {
+				continue
+			}
+			for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
+				if err := visitExpr(expression); err != nil {
+					return err
+				}
+			}
+			for _, block := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
+				if err := visitStatements(block); err != nil {
+					return err
+				}
+			}
+			for _, arm := range statement.Arms {
+				if arm != nil {
+					if err := visitStatements(arm.Body); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if err := visitStatements(document.Statements); err != nil {
+		return err
+	}
+	for _, function := range document.Functions {
+		if function != nil {
+			if err := visitStatements(function.Body); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func directKIRMapType(encoded string) ([]string, bool) {
+	name, arguments, composite := parseKIRContainerType(encoded)
+	return arguments, composite && name == "Map" && len(arguments) == 2
+}
+
+func buildDirectKIRELF(mir *ValidatedMIR, limits Limits, sources map[string]*Source) ([]byte, error) {
+	if mir == nil || mir.document == nil {
+		return nil, fmt.Errorf("direct ELF backend requires validated MIR")
+	}
+	document := mir.document
+	if err := validateKIRDirectELFValueSubset(mir); err != nil {
 		return nil, err
 	}
 	builder := &kirDirectBuilder{
@@ -582,7 +732,20 @@ func (builder *kirDirectBuilder) build() ([]byte, error) {
 			}
 		}
 	}
-	if machine.stringEqualUsed {
+	if machine.mapRuntimeUsed {
+		if err := machine.emitStringEqualRuntime(); err != nil {
+			return nil, err
+		}
+		if err := machine.emitMapFindRuntime(); err != nil {
+			return nil, err
+		}
+		if err := machine.emitMapInsertRuntime(); err != nil {
+			return nil, err
+		}
+		if err := machine.emitMapRemoveRuntime(); err != nil {
+			return nil, err
+		}
+	} else if machine.stringEqualUsed {
 		if err := machine.emitStringEqualRuntime(); err != nil {
 			return nil, err
 		}
@@ -1294,8 +1457,14 @@ func (builder *kirDirectBuilder) emitExpr(expression *KIRExpr) error {
 		machine.emitStringAddress(expression.String)
 	case "nil":
 		machine.emitMoveImmediate(0)
+	case "struct":
+		return builder.emitStructLiteral(expression)
+	case "field":
+		return builder.emitStructField(expression)
 	case "array":
 		return builder.emitArrayLiteral(expression)
+	case "map":
+		return builder.emitMapLiteral(expression)
 	case "index":
 		return builder.emitArrayIndex(expression)
 	case "var":
@@ -1386,6 +1555,12 @@ func (builder *kirDirectBuilder) emitBinary(expression *KIRExpr) error {
 		return err
 	}
 	machine.code = append(machine.code, 0x48, 0x89, 0xc1, 0x58) // rcx=right, rax=left
+	if operator == "+" {
+		name, arguments, composite := parseKIRContainerType(expression.Left.Type)
+		if composite && name == "Array" && len(arguments) == 1 && expression.Right.Type == expression.Left.Type && expression.Type == expression.Left.Type {
+			return machine.emitArrayConcatCall()
+		}
+	}
 	if expression.Left.Type == "String" {
 		if operator == "+" {
 			return machine.emitStringConcatCall()
@@ -1446,6 +1621,23 @@ func (builder *kirDirectBuilder) emitBinary(expression *KIRExpr) error {
 		if operator == "%" {
 			machine.code = append(machine.code, 0x48, 0x89, 0xd0)
 		}
+		return nil
+	case "<<", ">>":
+		shiftType, err := builder.machineType(expression.Left.Type)
+		if err != nil {
+			return err
+		}
+		bits := machineBits(shiftType)
+		machine.code = append(machine.code, 0x48, 0x83, 0xf9, bits) // reject negative and out-of-width counts
+		if err := machine.emitConditionalJump(0x83, machine.trapLabel); err != nil {
+			return err
+		}
+		if operator == "<<" {
+			machine.code = append(machine.code, 0x48, 0xd3, 0xe0)
+		} else {
+			machine.code = append(machine.code, 0x48, 0xd3, 0xe8)
+		}
+		machine.emitUIntMask(bits)
 		return nil
 	default:
 		return fmt.Errorf("direct KIR ELF does not support binary operator %q", operator)

@@ -114,7 +114,7 @@ func TestDirectPELowersValidatedKIRWithoutAST(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			document, err := DecodeKIR(encoded, limits)
+			document, err := DecodeMIR(encoded, limits)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -171,7 +171,7 @@ func TestDirectPEKIRUnsupportedDiagnosticsDoNotNeedAST(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document, err := DecodeKIR(encoded, limits)
+	document, err := DecodeMIR(encoded, limits)
 	if err != nil {
 		t.Fatal(err)
 	}

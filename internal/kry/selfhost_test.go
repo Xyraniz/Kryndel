@@ -1174,6 +1174,127 @@ fn mode_name(mode: Mode) -> String {
 	t.Logf("stage3 second-level compiler rebuilt itself byte-for-byte; sha256=%x", sha256.Sum256(thirdCompilerELF))
 }
 
+func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	compilerPath := filepath.Join(root, "..", "..", "selfhost", "source_kir_compiler.kry")
+	compiler, diagnostic := LoadProgram(compilerPath, DefaultLimits(), "")
+	if diagnostic != nil {
+		t.Fatalf("load self-hosted compiler: %s", diagnostic.Message)
+	}
+	checker, diagnostic := Check(compiler, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("check self-hosted compiler: %s", diagnostic.Message)
+	}
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "main.kry")
+	const source = "fn increment(value: Int) -> Int {\n" +
+		"  let mut next = value\n" +
+		"  next = next + 1\n" +
+		"  return next\n" +
+		"}\n" +
+		"fn main() -> Nil {\n" +
+		"  for item in [increment(2)] {\n" +
+		"    println(item)\n" +
+		"  }\n" +
+		"}\n"
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kirPath := filepath.Join(dir, "main.kir")
+	r, diagnostic := NewRuntimeWithArgs(compiler, checker, DefaultLimits(), Sandbox{}, []string{"--emit-kir", sourcePath, kirPath})
+	if diagnostic != nil {
+		t.Fatalf("create self-hosted compiler runtime: %s", diagnostic.Message)
+	}
+	if diagnostic := r.run(); diagnostic != nil {
+		t.Fatalf("self-hosted compiler KIR emission failed: %s", diagnostic.Message)
+	}
+	data, err := os.ReadFile(kirPath)
+	if err != nil {
+		t.Fatalf("read self-hosted KIR: %v", err)
+	}
+	mir, err := DecodeMIR(data, DefaultLimits())
+	if err != nil {
+		t.Fatalf("DecodeMIR rejected self-hosted KIR: %v", err)
+	}
+	document := mir.document
+	if document.Version != KIRVersion {
+		t.Fatalf("self-hosted KIR version = %d, want %d", document.Version, KIRVersion)
+	}
+	if len(document.Functions) != 2 {
+		t.Fatalf("self-hosted KIR has %d functions, want 2", len(document.Functions))
+	}
+	var increment, main *KIRFunction
+	for _, function := range document.Functions {
+		if strings.HasSuffix(function.Name, "increment") {
+			increment = function
+		}
+		if function.Name == "main" {
+			main = function
+		}
+	}
+	if increment == nil || main == nil {
+		t.Fatalf("self-hosted KIR is missing expected functions: %#v", document.Functions)
+	}
+	if increment.Source != sourcePath || increment.Line != 1 || increment.Column != 1 {
+		t.Fatalf("increment source location = %s:%d:%d, want %s:1:1", increment.Source, increment.Line, increment.Column, sourcePath)
+	}
+	if len(increment.Params) != 1 || increment.Params[0].Binding == nil {
+		t.Fatalf("increment parameter has no resolved binding: %#v", increment.Params)
+	}
+	parameterBinding := increment.Params[0].Binding
+	if parameterBinding.Name != "value" || parameterBinding.Type != "Int" || parameterBinding.Mutable || parameterBinding.Source != sourcePath || parameterBinding.Line != 1 || parameterBinding.Column != 14 {
+		t.Fatalf("increment parameter binding metadata is incorrect: %#v", parameterBinding)
+	}
+	if main.Line != 6 || main.Column != 1 {
+		t.Fatalf("main source location = %s:%d:%d, want %s:6:1", main.Source, main.Line, main.Column, sourcePath)
+	}
+	if len(main.Body) != 1 || main.Body[0].Kind != "for" || main.Body[0].Binding == nil {
+		t.Fatalf("main loop has no resolved declaration binding: %#v", main.Body)
+	}
+	loopBinding := main.Body[0].Binding
+	if loopBinding.Name != "item" || loopBinding.Type != "Int" || loopBinding.Mutable || loopBinding.Source != sourcePath || loopBinding.Line != 7 || loopBinding.Column != 7 {
+		t.Fatalf("loop binding metadata is incorrect: %#v", loopBinding)
+	}
+	fixtures := []string{
+		"source_dynamic_stage3.kry",
+		"source_scalar_functions_stage5.kry",
+		"source_option_result_stage8.kry",
+		"source_nested_generics_stage10.kry",
+		"source_loop_control_stage11.kry",
+		"source_public_function_stage12.kry",
+		"source_opaque_abi_stage13.kry",
+		"source_enum_match_stage38.kry",
+		"windows_ffi_propagation_stage39.kry",
+	}
+	for _, fixtureName := range fixtures {
+		t.Run(fixtureName, func(t *testing.T) {
+			fixturePath := filepath.Join(root, "..", "..", "selfhost", "fixtures", fixtureName)
+			fixtureKIRPath := filepath.Join(t.TempDir(), "fixture.kir")
+			runtime, diagnostic := NewRuntimeWithArgs(compiler, checker, DefaultLimits(), Sandbox{}, []string{"--emit-kir", fixturePath, fixtureKIRPath})
+			if diagnostic != nil {
+				t.Fatalf("create self-hosted compiler runtime: %s", diagnostic.Message)
+			}
+			if diagnostic := runtime.run(); diagnostic != nil {
+				t.Fatalf("self-hosted KIR emission failed: %s", diagnostic.Message)
+			}
+			fixtureKIR, err := os.ReadFile(fixtureKIRPath)
+			if err != nil {
+				t.Fatalf("read self-hosted KIR: %v", err)
+			}
+			decoded, err := DecodeMIR(fixtureKIR, DefaultLimits())
+			if err != nil {
+				t.Fatalf("DecodeMIR rejected self-hosted KIR: %v", err)
+			}
+			if decoded.document.Version != KIRVersion {
+				t.Fatalf("self-hosted KIR version = %d, want %d", decoded.document.Version, KIRVersion)
+			}
+		})
+	}
+}
+
 func TestStage3SourceKIRCompilerMatchesDirectELFOracle(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {
@@ -1216,6 +1337,72 @@ func TestStage3SourceKIRCompilerMatchesDirectELFOracle(t *testing.T) {
 	}
 	assertNativeArtifact(t, got, "stage3 source KIR self-hosted output")
 	assertNativeArtifact(t, want, "stage3 source KIR direct ELF oracle")
+}
+
+func TestStage3SourceKIRCompilerTextRangeBoundaries(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "fixtures", "source_text_ranges_stage4.kry")
+	compiler := filepath.Join(root, "..", "..", "selfhost", "source_kir_compiler.kry")
+	fixtureProgram, d := LoadProgram(fixture, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	fixtureChecker, d := Check(fixtureProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerProgram, d := LoadProgram(compiler, DefaultLimits(), "")
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	compilerChecker, d := Check(compilerProgram, DefaultLimits())
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "source-text-ranges-stage4")
+	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, DefaultLimits(), Sandbox{}, []string{fixture, outputPath})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("stage4 source text-range compiler failed: %s", d.Message)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := BuildDirectELF(fixtureProgram, fixtureChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLinuxAMD64ELF(t, got, "stage4 source text-range self-hosted output")
+	assertLinuxAMD64ELF(t, want, "stage4 source text-range direct ELF oracle")
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		selfhostPath := filepath.Join(dir, "source-text-ranges-selfhost.run")
+		oraclePath := filepath.Join(dir, "source-text-ranges-oracle.run")
+		if err := os.WriteFile(selfhostPath, got, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(oraclePath, want, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		gotOutput, err := exec.Command(selfhostPath).Output()
+		if err != nil {
+			t.Fatalf("self-hosted text-range ELF failed: %v", err)
+		}
+		wantOutput, err := exec.Command(oraclePath).Output()
+		if err != nil {
+			t.Fatalf("direct text-range ELF failed: %v", err)
+		}
+		wantText := "\nx\nabc\na\nb\nquote: \"\nslash: \\\ncr:\r\nlf:\n\ntab:\t\n"
+		if string(gotOutput) != wantText || !bytes.Equal(gotOutput, wantOutput) {
+			t.Fatalf("text-range output = %q, direct ELF = %q; want %q", gotOutput, wantOutput, wantText)
+		}
+	}
 }
 
 func TestStage3SourceKIRCompilerRejectsUnsupportedSyntax(t *testing.T) {

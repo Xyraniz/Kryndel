@@ -1,168 +1,182 @@
 package kry
 
-type OpCode uint8
+import "fmt"
 
-const (
-	OpExpr OpCode = iota
-	OpLet
-	OpAssign
-	OpIf
-	OpWhile
-	OpReturn
-	OpBreak
-	OpContinue
-	OpMatch
-	OpFunction
-)
-
-type Instruction struct {
-	Op           OpCode
-	Source       *Source
-	Line, Column int
-	Depth        int
-}
-type ValidatedIR struct {
-	Instructions []Instruction
-	MaxDepth     int
+// ValidatedMIR is the single in-memory lowering input for the interpreter and
+// native backends. It is created from checked source or decoded from validated
+// KIR; callers cannot construct or mutate it through the public Go API. The
+// source-compiled form also carries immutable source-text and package
+// visibility sidecars. Decoded KIR retains source names and coordinates for
+// diagnostics but does not include source text or those sidecars.
+//
+// The canonical JSON KIR document remains the interchange and artifact format.
+// Keeping this wrapper separate makes the validation boundary explicit and
+// avoids serializing and decoding the document between in-process compiler
+// stages.
+type ValidatedMIR struct {
+	document         *KIRDocument
+	limits           Limits
+	sources          map[string]*Source
+	visibilityScopes map[string]string
+	hasSourceContext bool
 }
 
-func CompileIR(p *Program, lim Limits) (*ValidatedIR, *Diagnostic) {
-	if p == nil {
-		return nil, Diag(CatCLI, nil, 1, 1, "missing program")
+// CompileMIR lowers one successfully checked program to the canonical
+// in-memory representation and validates its structural invariants before
+// any interpreter or target backend can consume it.
+func CompileMIR(program *Program, checker *Checker, target NativeTarget) (*ValidatedMIR, error) {
+	if program == nil || checker == nil || checker.Env == nil {
+		return nil, fmt.Errorf("missing checked program")
 	}
-	ir := &ValidatedIR{}
+	if checker.Prog != program {
+		return nil, fmt.Errorf("checker does not describe the supplied program")
+	}
+	if diagnostic := ValidateASTLimits(program, checker.Lim); diagnostic != nil {
+		return nil, fmt.Errorf("%s", diagnostic.Message)
+	}
+	document, err := buildKIRDocument(program, checker, target)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateKIRDocument(document, checker.Lim); err != nil {
+		return nil, fmt.Errorf("invalid lowered MIR: %w", err)
+	}
+	paths := newKIRPathNames(program)
+	sources := make(map[string]*Source, len(program.Sources)+1)
+	visibilityScopes := make(map[string]string, len(program.Sources)+1)
+	addSource := func(source *Source) {
+		if source == nil {
+			return
+		}
+		name := paths.source(source)
+		scope := source.VisibilityScope
+		if scope == "" {
+			scope = sourceVisibilityScope(source)
+		}
+		scope = paths.name(scope)
+		// Keep diagnostics and package visibility as immutable MIR sidecars.
+		// Retaining Source pointers here would let later mutations to the
+		// frontend tree change the meaning of an already-validated MIR value.
+		sources[name] = &Source{Name: name, Text: source.Text, VisibilityScope: scope}
+		visibilityScopes[name] = scope
+	}
+	addSource(program.Source)
+	for _, source := range program.Sources {
+		addSource(source)
+	}
+	return &ValidatedMIR{document: document, limits: checker.Lim, sources: sources, visibilityScopes: visibilityScopes, hasSourceContext: true}, nil
+}
+
+// ValidateASTLimits bounds the checked source tree before it is lowered to
+// MIR. This is resource accounting only; it does not create an alternate IR.
+func ValidateASTLimits(program *Program, limits Limits) *Diagnostic {
+	if program == nil {
+		return Diag(CatCLI, nil, 1, 1, "missing program")
+	}
+
+	var visited uint64
 	var limitFailure string
-	add := func(op OpCode, t Token, d int) {
-		if ir == nil {
-			return
+	add := func(depth int) bool {
+		if limitFailure != "" {
+			return false
 		}
-		if uint64(len(ir.Instructions)) >= lim.MaxInstructions {
+		if visited >= limits.MaxInstructions {
 			limitFailure = "IR instruction limit exceeded"
-			ir = nil
-			return
+			return false
 		}
-		if d > lim.MaxNesting {
+		if depth > limits.MaxNesting {
 			limitFailure = "IR nesting limit exceeded"
-			ir = nil
-			return
+			return false
 		}
-		ir.Instructions = append(ir.Instructions, Instruction{Op: op, Source: t.Source, Line: t.Line, Column: t.Column, Depth: d})
-		if d > ir.MaxDepth {
-			ir.MaxDepth = d
-		}
+		visited++
+		return true
 	}
-	var ex func(*Expr, int)
-	var st func(*Stmt, int)
-	ex = func(e *Expr, d int) {
-		if ir == nil || e == nil {
+	var visitExpr func(*Expr, int)
+	var visitStmt func(*Stmt, int)
+	visitExpr = func(expression *Expr, depth int) {
+		if expression == nil || limitFailure != "" || !add(depth) {
 			return
 		}
-		add(OpExpr, e.Tok, d)
-		ex(e.Left, d+1)
-		ex(e.Right, d+1)
-		ex(e.Operand, d+1)
-		ex(e.Base, d+1)
-		for _, x := range e.Args {
-			ex(x, d+1)
+		for _, child := range []*Expr{expression.Left, expression.Right, expression.Operand, expression.Base} {
+			visitExpr(child, depth+1)
 		}
-		for _, x := range e.Items {
-			ex(x, d+1)
+		for _, list := range [][]*Expr{expression.Args, expression.Items, expression.Values, expression.MapKeys} {
+			for _, child := range list {
+				visitExpr(child, depth+1)
+			}
 		}
-		for _, x := range e.Values {
-			ex(x, d+1)
+		for _, child := range []*Expr{expression.Receiver, expression.Callee} {
+			visitExpr(child, depth+1)
 		}
-		for _, x := range e.MapKeys {
-			ex(x, d+1)
-		}
-		ex(e.Receiver, d+1)
-		ex(e.Callee, d+1)
-		if e.Lambda != nil {
-			add(OpFunction, e.Lambda.Tok, d+1)
-			for _, statement := range e.Lambda.Body {
-				st(statement, d+2)
+		if expression.Lambda != nil && add(depth+1) {
+			for _, statement := range expression.Lambda.Body {
+				visitStmt(statement, depth+2)
 			}
 		}
 	}
-	st = func(s *Stmt, d int) {
-		if ir == nil || s == nil {
+	visitStmt = func(statement *Stmt, depth int) {
+		if statement == nil || limitFailure != "" {
 			return
 		}
-		op := OpExpr
-		switch s.Kind {
+		switch statement.Kind {
 		case StLet, StConst:
-			op = OpLet
-			ex(s.Init, d+1)
+			visitExpr(statement.Init, depth+1)
 		case StAssign:
-			op = OpAssign
-			ex(s.Target, d+1)
-			ex(s.Value, d+1)
+			visitExpr(statement.Target, depth+1)
+			visitExpr(statement.Value, depth+1)
 		case StIf:
-			op = OpIf
-			ex(s.Cond, d+1)
-			for _, x := range s.Then {
-				st(x, d+1)
+			visitExpr(statement.Cond, depth+1)
+			for _, child := range statement.Then {
+				visitStmt(child, depth+1)
 			}
-			for _, x := range s.Else {
-				st(x, d+1)
+			for _, child := range statement.Else {
+				visitStmt(child, depth+1)
 			}
 		case StWhile:
-			op = OpWhile
-			ex(s.Cond, d+1)
-			for _, x := range s.Body {
-				st(x, d+1)
+			visitExpr(statement.Cond, depth+1)
+			for _, child := range statement.Body {
+				visitStmt(child, depth+1)
 			}
 		case StFor:
-			op = OpWhile
-			ex(s.Iter, d+1)
-			for _, x := range s.Body {
-				st(x, d+1)
+			visitExpr(statement.Iter, depth+1)
+			for _, child := range statement.Body {
+				visitStmt(child, depth+1)
 			}
 		case StDefer, StUnsafe:
-			op = OpExpr
-			for _, x := range s.Body {
-				st(x, d+1)
+			for _, child := range statement.Body {
+				visitStmt(child, depth+1)
 			}
 		case StReturn:
-			op = OpReturn
-			ex(s.Return, d+1)
-		case StBreak:
-			op = OpBreak
-		case StContinue:
-			op = OpContinue
+			visitExpr(statement.Return, depth+1)
 		case StMatch:
-			op = OpMatch
-			ex(s.Scrutinee, d+1)
-			for _, a := range s.Arms {
-				for _, x := range a.Body {
-					st(x, d+1)
+			visitExpr(statement.Scrutinee, depth+1)
+			for _, arm := range statement.Arms {
+				for _, child := range arm.Body {
+					visitStmt(child, depth+1)
 				}
 			}
 		case StExpr:
-			ex(s.Expr, d+1)
+			visitExpr(statement.Expr, depth+1)
 		}
-		add(op, s.Tok, d)
+		add(depth)
 	}
-	for _, f := range p.Functions {
-		add(OpFunction, f.Tok, 0)
-		for _, s := range f.Body {
-			st(s, 1)
+
+	for _, function := range program.Functions {
+		if function == nil {
+			continue
+		}
+		if !add(0) {
+			break
+		}
+		for _, statement := range function.Body {
+			visitStmt(statement, 1)
 		}
 	}
-	for _, s := range p.Statements {
-		st(s, 0)
+	for _, statement := range program.Statements {
+		visitStmt(statement, 0)
 	}
-	if ir == nil {
-		return nil, Diag(CatResource, p.Source, 1, 1, "%s", limitFailure)
+	if limitFailure != "" {
+		return Diag(CatResource, program.Source, 1, 1, "%s", limitFailure)
 	}
-	return ir, nil
-}
-func ValidateIR(p *Program, lim Limits) (*ValidatedIR, *Diagnostic) {
-	ir, d := CompileIR(p, lim)
-	if d != nil {
-		return nil, d
-	}
-	if len(ir.Instructions) == 0 && len(p.Statements) == 0 && len(p.Functions) == 0 {
-		return ir, nil
-	}
-	return ir, nil
+	return nil
 }

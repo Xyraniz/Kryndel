@@ -4,10 +4,13 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -200,6 +203,9 @@ func tcpConnect(host string, port int64, timeout time.Duration) (*tcpSocketHandl
 	}
 	conn, err := (&net.Dialer{Timeout: timeout}).Dial("tcp", net.JoinHostPort(host, strconv.FormatInt(port, 10)))
 	if err != nil {
+		if errors.Is(err, syscall.ECONNREFUSED) || runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(10061)) {
+			return nil, fmt.Errorf("dial tcp %s: connect: connection refused", net.JoinHostPort(host, strconv.FormatInt(port, 10)))
+		}
 		return nil, err
 	}
 	return &tcpSocketHandle{conn: conn}, nil

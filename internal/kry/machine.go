@@ -15,12 +15,9 @@ const (
 	elfCodeOffset        = elfHeaderLen + elfProgramLen
 )
 
-// BuildDirectELF emits a small, dependency-free ELF64 executable directly.
-// The bounded scalar/control-flow slice is lowered from decoded KIR into
-// runtime x86-64 instructions. Other programs continue through the existing
-// static or AST-backed dynamic emitters, which support additional constructs
-// including SysV AMD64 function calls and the immutable qword-array ABI.
-// Every path rejects unsupported semantics before returning executable bytes.
+// BuildDirectELF emits a dependency-free ELF64 executable directly from
+// validated MIR. Every lowering path rejects unsupported semantics before
+// returning executable bytes.
 func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	if target.OS != "linux" || target.Arch != "amd64" {
 		return nil, fmt.Errorf("direct ELF backend currently supports only linux-amd64")
@@ -28,43 +25,48 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 	if p == nil || c == nil {
 		return nil, fmt.Errorf("missing checked program")
 	}
-	if err := validateFunctionValueSupport(p, "elf-direct"); err != nil {
-		return nil, err
-	}
-	if err := validateNativeFeatureSupport(p, c, "elf-direct", target); err != nil {
-		return nil, err
-	}
-	// Force every direct backend build through the public interchange format.
-	// This catches schema drift before the machine emitter is allowed to run.
-	kir, err := EmitKIR(p, c, target)
+	// Lower once through the same validated in-memory representation used by
+	// the other native backends. The wire format remains available for artifacts
+	// and cross-process interchange, not as an in-process validation detour.
+	mir, err := CompileMIR(p, c, target)
 	if err != nil {
 		return nil, err
 	}
-	document, err := DecodeKIR(kir, c.Env.Lim)
+	return buildDirectELFFromMIR(mir)
+}
+
+// buildDirectELFFromMIR is the production ELF lowering boundary. It accepts
+// source-compiled or wire-decoded ValidatedMIR and never materializes an AST.
+func buildDirectELFFromMIR(mir *ValidatedMIR) ([]byte, error) {
+	document, err := validatedMIRDocument(mir)
 	if err != nil {
-		return nil, fmt.Errorf("direct backend rejected KIR: %w", err)
+		return nil, err
 	}
-	if err := validateKIRDirectELFValueSubset(document); err == nil {
-		return buildDirectKIRELF(document, c.Env.Lim, kirSourceMap(p))
-	} else if !errors.Is(err, errKIRSubsetUnsupported) {
-		return nil, fmt.Errorf("direct backend rejected KIR: %w", err)
+	if err := validateMIRFunctionValueSupport(mir, "elf-direct"); err != nil {
+		return nil, err
 	}
-	output, err := directStaticKIROutput(document, c.Env.Lim.MaxOutputBytes)
-	if err == nil {
-		return emitELF64WriteExit(output), nil
+	target := NativeTarget{OS: document.Target.OS, Arch: document.Target.Arch, GUI: document.Target.GUI}
+	if err := validateMIRNativeFeatureSupport(mir, "elf-direct", target); err != nil {
+		return nil, err
 	}
-	if !errors.Is(err, errDirectOutputLimit) {
-		if legacyOutput, legacyErr := directStaticOutput(p, c); legacyErr == nil {
-			return emitELF64WriteExit(legacyOutput), nil
-		} else {
-			err = legacyErr
+	output, staticErr := directStaticKIROutput(mir, mir.limits.MaxOutputBytes)
+	if staticErr == nil {
+		image := emitELF64WriteExit(output)
+		if limit := mir.limits.MaxArtifactBytes; limit > 0 && len(image) > limit {
+			return nil, fmt.Errorf("direct ELF exceeds configured artifact limit")
 		}
+		return image, nil
 	}
-	stmts, stmtErr := directDynamicStatements(p)
-	if stmtErr == nil && (errors.Is(err, errDirectOutputLimit) || directHasDynamicControl(stmts) || directHasArrayFeatures(stmts) || directHasStructuredFeatures(stmts) || directHasUserFunctions(p)) {
-		return buildDirectDynamicELF(p, c)
+	subsetErr := validateKIRDirectELFValueSubset(mir)
+	if subsetErr == nil {
+		return buildDirectKIRELF(mir, mir.limits, mir.sources)
+	} else if !errors.Is(subsetErr, errKIRSubsetUnsupported) {
+		return nil, fmt.Errorf("direct backend rejected KIR: %w", subsetErr)
 	}
-	return nil, err
+	if errors.Is(staticErr, errDirectOutputLimit) {
+		return nil, staticErr
+	}
+	return nil, subsetErr
 }
 
 func directStaticOutput(p *Program, c *Checker) ([]byte, error) {

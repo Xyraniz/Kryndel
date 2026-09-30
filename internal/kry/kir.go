@@ -233,10 +233,18 @@ type KIRValue struct {
 	OK       bool        `json:"ok"`
 }
 
-// EmitKIR serializes a checked program into deterministic KIR v5 JSON. The
-// checker is required so the format cannot accidentally become an untyped
-// source transport when a caller forgets to validate first.
+// EmitKIR serializes the validated in-memory representation into deterministic
+// KIR v5 JSON. Source compilation and in-process lowerers share CompileMIR and
+// do not need a JSON encode/decode round trip.
 func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
+	mir, err := CompileMIR(p, c, target)
+	if err != nil {
+		return nil, err
+	}
+	return mir.MarshalKIR()
+}
+
+func buildKIRDocument(p *Program, c *Checker, target NativeTarget) (*KIRDocument, error) {
 	if p == nil || c == nil || c.Env == nil {
 		return nil, fmt.Errorf("missing checked program")
 	}
@@ -299,7 +307,16 @@ func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	for _, x := range p.Statements {
 		d.Statements = append(d.Statements, kirStmt(x, c, functionTargets, paths))
 	}
-	data, err := json.MarshalIndent(d, "", "  ")
+	return d, nil
+}
+
+// MarshalKIR encodes a validated representation using the deterministic wire
+// format used by `emit` and portable artifacts.
+func (mir *ValidatedMIR) MarshalKIR() ([]byte, error) {
+	if mir == nil || mir.document == nil {
+		return nil, fmt.Errorf("missing validated MIR")
+	}
+	data, err := json.MarshalIndent(mir.document, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode KIR: %w", err)
 	}
@@ -557,4 +574,17 @@ func DecodeKIR(data []byte, lim Limits) (*KIRDocument, error) {
 		return nil, fmt.Errorf("invalid KIR: %w", err)
 	}
 	return &d, nil
+}
+
+// DecodeMIR constructs a validated, context-free in-memory representation
+// from the interchange document. The interpreter and native lowerers consume
+// this same typed document directly. KIR preserves source names and coordinates
+// for diagnostics; source text and package visibility sidecars are not part of
+// its portable wire format.
+func DecodeMIR(data []byte, lim Limits) (*ValidatedMIR, error) {
+	document, err := DecodeKIR(data, lim)
+	if err != nil {
+		return nil, err
+	}
+	return &ValidatedMIR{document: document, limits: lim}, nil
 }

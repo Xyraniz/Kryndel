@@ -38,18 +38,14 @@ println(State::Ready)
 	if diagnostic != nil {
 		t.Fatalf("check failed: %s", diagnostic.Message)
 	}
-	encoded, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	mir, err := CompileMIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
 	if err != nil {
-		t.Fatalf("KIR emission failed: %v", err)
-	}
-	document, err := DecodeKIR(encoded, DefaultLimits())
-	if err != nil {
-		t.Fatalf("KIR validation failed: %v", err)
+		t.Fatalf("MIR compilation failed: %v", err)
 	}
 	program, checker = nil, nil
-	generated, err := generateCFromValidatedKIR(document, DefaultLimits(), false)
+	generated, err := generateCFromValidatedKIR(mir, DefaultLimits(), false)
 	if err != nil {
-		t.Fatalf("KIR C lowering failed: %v", err)
+		t.Fatalf("MIR C lowering failed: %v", err)
 	}
 	for _, want := range []string{"Box[Int]", "State", "kfn_identity_g", "kfn_show_", "kv_enum("} {
 		if !strings.Contains(generated, want) {

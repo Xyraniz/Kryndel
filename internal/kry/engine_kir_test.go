@@ -46,7 +46,7 @@ func runASTPath(t *testing.T, engine *Engine, path string, args []string) (strin
 	if diagnostic != nil {
 		t.Fatal(diagnostic.Message)
 	}
-	runtime, diagnostic := NewRuntimeWithArgs(program, checker, engine.Limits, Sandbox{Root: engine.RestrictedRoot, Restricted: engine.RestrictedRoot != ""}, args)
+	runtime, diagnostic := newRuntimeFromProgram(program, checker, engine.Limits, Sandbox{Root: engine.RestrictedRoot, Restricted: engine.RestrictedRoot != ""}, args)
 	if diagnostic != nil {
 		t.Fatal(diagnostic.Message)
 	}
@@ -56,6 +56,30 @@ func runASTPath(t *testing.T, engine *Engine, path string, args []string) (strin
 	return output.String(), diagnostic
 }
 
+func TestInterpreterLowersOnlyFromValidatedMIR(t *testing.T) {
+	engine := NewEngine()
+	for _, relative := range []string{
+		"../../examples/control_flow.kry",
+		"../../examples/fibonacci.kry",
+		"../../examples/typed_data.kry",
+		"../../examples/collections.kry",
+		"../../examples/module_demo.kry",
+		"../../examples/runtime_polymorphism.kry",
+	} {
+		t.Run(filepath.Base(relative), func(t *testing.T) {
+			path := filepath.Join("..", "..", "examples", filepath.Base(relative))
+			astOutput, astDiagnostic := runASTPath(t, engine, path, []string{"argument"})
+			mirOutput, mirDiagnostic := captureEngineRun(t, func() *Diagnostic {
+				_, diagnostic := engine.RunPathWithArgs(path, []string{"argument"})
+				return diagnostic
+			})
+			if !reflect.DeepEqual(mirDiagnostic, astDiagnostic) || mirOutput != astOutput {
+				t.Fatalf("MIR interpreter = output %q, diagnostic %#v; AST oracle = output %q, diagnostic %#v", mirOutput, mirDiagnostic, astOutput, astDiagnostic)
+			}
+		})
+	}
+}
+
 func runEngineKIRDocument(t *testing.T, engine *Engine, path string) kirExecResult {
 	t.Helper()
 	program, checker, document, diagnostic := engine.checkPathWithKIR(path)
@@ -63,17 +87,14 @@ func runEngineKIRDocument(t *testing.T, engine *Engine, path string) kirExecResu
 		t.Fatal(diagnostic.Message)
 	}
 	if document == nil {
-		kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
-		if err != nil {
-			t.Fatal(err)
-		}
-		document, err = DecodeKIR(kirBytes, engine.Limits)
+		var err error
+		document, err = CompileMIR(program, checker, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 	sandbox := Sandbox{Root: engine.RestrictedRoot, Restricted: engine.RestrictedRoot != ""}
-	result, err := executeKIRSubset(document, engine.Limits, kirSourceMap(program), sandbox)
+	result, err := executeValidatedMIR(document, engine.Limits, kirSourceMap(program), sandbox)
 	if err != nil {
 		t.Fatalf("Engine KIR document did not execute directly: %v", err)
 	}
@@ -175,16 +196,13 @@ func TestEngineRunsUnsignedAndConcatenationKIRForSourceAndKexe(t *testing.T) {
 				t.Fatal(diagnostic.Message)
 			}
 			if document == nil {
-				kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
-				if err != nil {
-					t.Fatal(err)
-				}
-				document, err = DecodeKIR(kirBytes, engine.Limits)
+				var err error
+				document, err = CompileMIR(program, checker, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
-			if _, err := executeKIRSubset(document, engine.Limits, kirSourceMap(program)); err != nil {
+			if _, err := executeValidatedMIR(document, engine.Limits, kirSourceMap(program)); err != nil {
 				t.Fatalf("source/artifact KIR fell outside the executable subset: %v", err)
 			}
 			wantOutput, wantDiagnostic := runASTPath(t, engine, path, nil)

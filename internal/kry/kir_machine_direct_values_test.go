@@ -451,10 +451,11 @@ func TestDirectKIRPreflightRejectsAlteredUnsignedCastType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document, err := DecodeKIR(kirBytes, checker.Env.Lim)
+	mir, err := DecodeMIR(kirBytes, checker.Env.Lim)
 	if err != nil {
 		t.Fatal(err)
 	}
+	document := mir.document
 	if len(document.Statements) != 1 || document.Statements[0].Expr == nil || len(document.Statements[0].Expr.Args) != 1 {
 		t.Fatal("test KIR has no expected println(u8(...)) call")
 	}
@@ -463,7 +464,7 @@ func TestDirectKIRPreflightRejectsAlteredUnsignedCastType(t *testing.T) {
 		t.Fatal("test KIR has no expected u8(...) expression")
 	}
 	cast.Type = "UInt16"
-	err = validateKIRDirectELFValueSubset(document)
+	err = validateKIRDirectELFValueSubset(mir)
 	if !errors.Is(err, errKIRSubsetUnsupported) || !strings.Contains(err.Error(), `builtin "u8"`) {
 		t.Fatalf("altered u8 return type should be rejected by direct lowering preflight, got %v", err)
 	}
@@ -486,7 +487,11 @@ func assertDirectKIRMatchesInterpreter(t *testing.T, source, artifactName string
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateKIRDirectELFValueSubset(document); err != nil {
+	mir, err := DecodeMIR(kirBytes, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateKIRDirectELFValueSubset(mir); err != nil {
 		t.Fatalf("direct KIR value preflight rejected a supported test: %v", err)
 	}
 	image, err := BuildDirectELF(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
@@ -560,7 +565,11 @@ for argument in args { println(argument) }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateKIRDirectELFValueSubset(document); err != nil {
+	mir, err := DecodeMIR(kirBytes, checker.Env.Lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateKIRDirectELFValueSubset(mir); err != nil {
 		t.Fatalf("direct KIR preflight rejected process_args: %v", err)
 	}
 	if err := validateKIRExecSubset(document); !errors.Is(err, errKIRSubsetUnsupported) || !strings.Contains(err.Error(), "host effect") {
