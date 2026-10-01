@@ -4713,32 +4713,8 @@ func (r *Runtime) joinTimeout(e *Expr, t *Thread, ms int64) (Value, *Diagnostic)
 // The CLI rebuilds the checked declaration prefix for each snippet, so failed snippets
 // never mutate the persistent definition set.
 func (r *Runtime) RunForREPL() *Diagnostic {
-	if r.mir != nil {
-		return r.runValidatedMIR(true)
+	if r == nil || r.mir == nil {
+		return Diag(CatArtifact, nil, 0, 0, "REPL execution requires validated MIR")
 	}
-	for _, s := range r.Prog.Statements {
-		if d := r.Ctx.step(s.Tok.Source, s.Tok.Line, s.Tok.Column); d != nil {
-			return d
-		}
-		if s.Kind == StExpr {
-			v, d := r.evalExpr(r.Global, s.Expr)
-			if d != nil {
-				return d
-			}
-			if v.Kind != VNil {
-				if d := r.printValue(nil, v, true); d != nil {
-					return d
-				}
-			}
-			continue
-		}
-		x := r.execStmt(r.Global, s)
-		if x.Diag != nil {
-			return x.Diag
-		}
-		if x.Code != evalNormal {
-			return Diag(CatRuntime, s.Tok.Source, s.Tok.Line, s.Tok.Column, "control flow escaped REPL")
-		}
-	}
-	return nil
+	return r.runValidatedMIR(true)
 }

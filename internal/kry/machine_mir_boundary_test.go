@@ -1,6 +1,7 @@
 package kry
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -48,6 +49,7 @@ func TestProductionLoweringEntrypointsUseValidatedMIR(t *testing.T) {
 	}
 
 	checkCalls("runtime.go", "NewRuntimeWithArgs", "CompileMIR", "newRuntimeFromMIR")
+	checkCalls("runtime.go", "RunForREPL", "runValidatedMIR")
 	checkCalls("engine.go", "RunPathWithArgs", "CompileMIR", "newRuntimeFromMIR")
 	checkCalls("engine.go", "DebugPathWithArgs", "CompileMIR", "newRuntimeFromMIR")
 	checkCalls("machine.go", "BuildDirectELF", "CompileMIR", "buildDirectELFFromMIR")
@@ -95,6 +97,40 @@ func TestNativeMachineLowerersDoNotAcceptSourceAST(t *testing.T) {
 				return true
 			})
 		}
+	}
+}
+
+func TestRunForREPLRequiresValidatedMIR(t *testing.T) {
+	program, checker := testProgram(t, "let visible = 42")
+	runtime, diagnostic := newRuntimeFromProgram(program, checker, DefaultLimits(), Sandbox{}, nil)
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	diagnostic = runtime.RunForREPL()
+	if diagnostic == nil {
+		t.Fatal("RunForREPL without validated MIR should fail closed")
+	}
+	if diagnostic.Category != CatArtifact || diagnostic.Message != "REPL execution requires validated MIR" {
+		t.Fatalf("RunForREPL without validated MIR returned %#v", diagnostic)
+	}
+	if _, exists := runtime.Global.get("visible"); exists {
+		t.Fatal("RunForREPL executed the AST fallback despite missing MIR")
+	}
+}
+
+func TestRunForREPLExecutesValidatedMIR(t *testing.T) {
+	program, checker := testProgram(t, "40 + 2")
+	runtime, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+	if diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	var output bytes.Buffer
+	runtime.output = &output
+	if diagnostic := runtime.RunForREPL(); diagnostic != nil {
+		t.Fatal(diagnostic)
+	}
+	if output.String() != "42\n" {
+		t.Fatalf("RunForREPL output = %q, want 42 followed by a newline", output.String())
 	}
 }
 
