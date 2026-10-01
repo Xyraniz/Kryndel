@@ -99,6 +99,9 @@ func lowerDirectPEKIR(mir *ValidatedMIR, limits Limits) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if err := machine.validateLabelReferences(); err != nil {
+		return nil, err
+	}
 	image, err := buildDirectDynamicPE(machine.code, machine.data, machine.dataRefs, machine.peImportRefs, machine.peFunctions)
 	if err != nil {
 		return nil, err

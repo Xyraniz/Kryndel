@@ -28,7 +28,7 @@ func loadSelfhostFFIFrontend(t *testing.T) selfhostFFIFrontend {
 	// In this test-only copy, return the parsed KIR document instead of invoking
 	// the dynamic backend. FFI parsing/serialization can then be tested before
 	// backend lowering, which does not implement these builtins yet.
-	const backendCall = "    let lowered: Result[Bytes, String] = compile_document(result_unwrap(document))\n    return lowered"
+	const backendCall = "    return compile_generated_document(result_unwrap(document))"
 	const rawKIRReturn = "    return ok(string_to_bytes(json_stringify(result_unwrap(document))))"
 	frontendSource := strings.ReplaceAll(string(source), "\r\n", "\n")
 	if count := strings.Count(frontendSource, backendCall); count != 1 {
@@ -40,7 +40,7 @@ func loadSelfhostFFIFrontend(t *testing.T) selfhostFFIFrontend {
 	if err := os.WriteFile(filepath.Join(modulesDir, "source_kir_compiler.kry"), []byte(frontendSource), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, module := range []string{"dynamic_backend.kry", "elf_backend.kry", "pe_backend.kry"} {
+	for _, module := range []string{"dynamic_backend.kry", "elf_backend.kry", "pe_backend.kry", "validated_kir.kry"} {
 		contents, err := os.ReadFile(filepath.Join(selfhostDir, module))
 		if err != nil {
 			t.Fatal(err)

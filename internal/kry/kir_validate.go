@@ -489,7 +489,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 					if name != expression.Name || expression.TraitName != "" {
 						return fmt.Errorf("call expression name does not match its target")
 					}
-					builtin, ok := Builtins()[name]
+					builtin, ok := lookupBuiltin(name)
 					if !ok {
 						return fmt.Errorf("call references unknown builtin %q", name)
 					}

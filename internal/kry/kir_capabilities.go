@@ -209,6 +209,15 @@ func validateMIRNativeFeatureSupport(mir *ValidatedMIR, format string, target Na
 			return nil
 		}
 		generics := kirFunctionTypeParameters(function)
+		if function.Receiver != "" {
+			if receiver, _, ok := kirExecStructType(document, function.Receiver); ok {
+				for _, parameter := range receiver.TypeParams {
+					if parameter != nil && parameter.Name != "" {
+						generics[parameter.Name] = struct{}{}
+					}
+				}
+			}
+		}
 		for _, parameter := range function.Params {
 			if parameter == nil {
 				continue

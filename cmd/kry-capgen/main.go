@@ -19,14 +19,50 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	directELF, err := stringCases("machine_dynamic.go", "emitExpr")
+	directELF, err := stringCases("kir_machine_direct_values.go", "emitBuiltin")
 	if err != nil {
 		fail(err)
 	}
-	// Print calls are lowered by emitStatements/emitStaticOutput rather than
-	// directMachine.emitExpr's builtin switch.
-	directELF = append(directELF, "print", "println")
-	sort.Strings(directELF)
+
+	directELFExprKinds, err := kirLanguageKinds("kir_machine_direct.go", "emitExpr", "Kind", map[string]string{
+		"int": "ExInt", "bool": "ExBool", "string": "ExString", "nil": "ExNil", "struct": "ExStruct",
+		"field": "ExField", "array": "ExArray", "map": "ExMap", "index": "ExIndex", "var": "ExVar",
+		"unary": "ExUnary", "binary": "ExBinary", "call": "ExCall",
+	})
+	if err != nil {
+		fail(err)
+	}
+	directELFStmtKinds, err := kirLanguageKinds("kir_machine_direct.go", "emitStmt", "Kind", map[string]string{
+		"let": "StLet", "const": "StConst", "assign": "StAssign", "expr": "StExpr", "if": "StIf",
+		"while": "StWhile", "for": "StFor", "break": "StBreak", "continue": "StContinue", "return": "StReturn",
+	})
+	if err != nil {
+		fail(err)
+	}
+	directELFUnaryOperators, err := kirOperatorCases("kir_machine_direct.go", "emitExpr", "unary")
+	if err != nil {
+		fail(err)
+	}
+	directELFBinaryOperators, err := kirBinaryOperatorCases("kir_machine_direct.go", "emitBinary")
+	if err != nil {
+		fail(err)
+	}
+	directELFPrimitiveTypes, err := stringSwitchCases("kir_machine_types.go", "directKIRTypeSupported", "encoded")
+	if err != nil {
+		fail(err)
+	}
+	directELFContainerTypes, err := stringSwitchCases("kir_machine_types.go", "directKIRTypeSupported", "name")
+	if err != nil {
+		fail(err)
+	}
+	directELFTypes := []string{"TyStruct"}
+	for _, name := range append(directELFPrimitiveTypes, directELFContainerTypes...) {
+		if kind := languageTypeForSourceName(name); kind != "" {
+			directELFTypes = append(directELFTypes, kind)
+		}
+	}
+	sort.Strings(directELFTypes)
+	directELFTypes = unique(directELFTypes)
 	directPETargets, err := stringSwitchCases("kir_machine_pe.go", "validateKIRDirectPEExpr", "CallTarget")
 	if err != nil {
 		fail(err)
@@ -130,11 +166,6 @@ func main() {
 		{"generatedInterpreterPatternKinds", "runtime.go", "matchPattern", "Kind", "Pat"},
 		{"generatedInterpreterUnaryOperators", "runtime.go", "evalExpr", "Op", "@OP"},
 		{"generatedInterpreterBinaryOperators", "runtime.go", "evalBinary", "Op", "@OP"},
-		{"generatedDirectELFExprKinds", "machine_dynamic.go", "emitExpr", "Kind", "Ex"},
-		{"generatedDirectELFStmtKinds", "machine_dynamic.go", "emitStatements", "Kind", "St"},
-		{"generatedDirectELFUnaryOperators", "machine_dynamic.go", "emitExpr", "Op", "@OP"},
-		{"generatedDirectELFBinaryOperators", "machine_dynamic.go", "emitBinary", "Op", "@OP"},
-		{"generatedDirectELFTypes", "machine_dynamic.go", "machineValueTypeSupported", "Kind", "Ty"},
 	}
 	generatedCases := make(map[string][]string, len(caseInventories))
 	for _, inventory := range caseInventories {
@@ -160,6 +191,11 @@ func main() {
 		name   string
 		values []string
 	}{
+		{"generatedDirectELFExprKinds", directELFExprKinds},
+		{"generatedDirectELFStmtKinds", directELFStmtKinds},
+		{"generatedDirectELFUnaryOperators", directELFUnaryOperators},
+		{"generatedDirectELFBinaryOperators", directELFBinaryOperators},
+		{"generatedDirectELFTypes", directELFTypes},
 		{"generatedDirectPEExprKinds", directPEExprKinds},
 		{"generatedDirectPEStmtKinds", directPEStmtKinds},
 		{"generatedDirectPEPatternKinds", nil},
@@ -534,7 +570,7 @@ func languageTypeForSourceName(name string) string {
 	}
 	return map[string]string{
 		"Int": "TyInt", "UInt": "TyUInt", "Bool": "TyBool", "String": "TyString", "Bytes": "TyBytes",
-		"Array": "TyArray", "Option": "TyOption", "Result": "TyResult", "Map": "TyMap", "Json": "TyJSON",
+		"Array": "TyArray", "Option": "TyOption", "Result": "TyResult", "Map": "TyMap", "Json": "TyJSON", "Nil": "TyNil",
 	}[name]
 }
 
@@ -718,6 +754,89 @@ func kirOperatorCases(filename, functionName, kind string) ([]string, error) {
 				}
 				return false
 			})
+		}
+		return true
+	})
+	values := make([]string, 0, len(seen))
+	for value := range seen {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values, nil
+}
+
+func kirBinaryOperatorCases(filename, functionName string) ([]string, error) {
+	f, err := parser.ParseFile(token.NewFileSet(), filename, nil, parser.AllErrors)
+	if err != nil {
+		return nil, err
+	}
+	var function *ast.FuncDecl
+	for _, declaration := range f.Decls {
+		if candidate, ok := declaration.(*ast.FuncDecl); ok && candidate.Name.Name == functionName {
+			function = candidate
+			break
+		}
+	}
+	if function == nil {
+		return nil, fmt.Errorf("function %s not found in %s", functionName, filename)
+	}
+	seen := map[string]bool{}
+	add := func(expression ast.Expr) {
+		literal, ok := expression.(*ast.BasicLit)
+		if !ok || literal.Kind != token.STRING {
+			return
+		}
+		operator, err := strconv.Unquote(literal.Value)
+		if err != nil {
+			return
+		}
+		kind := operatorKind(operator)
+		if kind == "" {
+			return
+		}
+		seen[kind] = true
+	}
+	isOperator := func(expression ast.Expr) bool {
+		switch value := expression.(type) {
+		case *ast.Ident:
+			return value.Name == "operator"
+		case *ast.SelectorExpr:
+			return value.Sel.Name == "Operator"
+		default:
+			return false
+		}
+	}
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		switch value := node.(type) {
+		case *ast.SwitchStmt:
+			if !isOperator(value.Tag) {
+				return true
+			}
+			for _, rawClause := range value.Body.List {
+				for _, expression := range rawClause.(*ast.CaseClause).List {
+					add(expression)
+				}
+			}
+		case *ast.BinaryExpr:
+			if (value.Op == token.EQL || value.Op == token.NEQ) && isOperator(value.X) {
+				add(value.Y)
+			} else if (value.Op == token.EQL || value.Op == token.NEQ) && isOperator(value.Y) {
+				add(value.X)
+			}
+		case *ast.CompositeLit:
+			mapping, ok := value.Type.(*ast.MapType)
+			if !ok {
+				return true
+			}
+			keyType, ok := mapping.Key.(*ast.Ident)
+			if !ok || keyType.Name != "string" {
+				return true
+			}
+			for _, rawElement := range value.Elts {
+				if element, ok := rawElement.(*ast.KeyValueExpr); ok {
+					add(element.Key)
+				}
+			}
 		}
 		return true
 	})

@@ -69,7 +69,8 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr, document *KIRDocument) er
 		if !singleArg() {
 			return unsupported()
 		}
-		if _, ok := container(args[0].Type, "Array", 1); !ok || expression.Type != "Int" {
+		_, arrayOK := container(args[0].Type, "Array", 1)
+		if (!arrayOK && args[0].Type != "Bytes") || expression.Type != "Int" {
 			return unsupported()
 		}
 	case "process_args":
@@ -86,6 +87,42 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr, document *KIRDocument) er
 		}
 		resultTypes, ok := container(expression.Type, "Result", 2)
 		if !ok || resultTypes[0] != "String" || resultTypes[1] != "String" {
+			return unsupported()
+		}
+	case "fs_read_text":
+		if !singleArg() || args[0].Type != "String" {
+			return unsupported()
+		}
+		resultTypes, ok := container(expression.Type, "Result", 2)
+		if !ok || resultTypes[0] != "String" || resultTypes[1] != "String" {
+			return unsupported()
+		}
+	case "bytes", "bytes_from_u8":
+		if !singleArg() {
+			return unsupported()
+		}
+		itemType := "Int"
+		if expression.Name == "bytes_from_u8" {
+			itemType = "UInt8"
+		}
+		arrayTypes, ok := container(args[0].Type, "Array", 1)
+		if !ok || arrayTypes[0] != itemType || expression.Type != "Bytes" {
+			return unsupported()
+		}
+	case "u8_array":
+		if !singleArg() || args[0].Type != "Bytes" || expression.Type != "Array[UInt8]" {
+			return unsupported()
+		}
+	case "string_to_bytes":
+		if !singleArg() || args[0].Type != "String" || expression.Type != "Bytes" {
+			return unsupported()
+		}
+	case "fs_write_bytes":
+		if len(args) != 2 || args[0] == nil || args[0].Type != "String" || args[1] == nil || args[1].Type != "Bytes" {
+			return unsupported()
+		}
+		resultTypes, ok := container(expression.Type, "Result", 2)
+		if !ok || resultTypes[0] != "Nil" || resultTypes[1] != "String" {
 			return unsupported()
 		}
 	case "array_push":
@@ -290,9 +327,11 @@ func directKIRBinarySupported(expression *KIRExpr) bool {
 		if left == "String" {
 			return expression.Type == "String"
 		}
-		return left == "Int" && expression.Type == "Int"
+		return left == "Int" && expression.Type == "Int" || strings.HasPrefix(left, "UInt") && expression.Type == left
 	case "-", "*", "/", "%":
-		return left == "Int" && expression.Type == "Int"
+		return left == "Int" && expression.Type == "Int" || strings.HasPrefix(left, "UInt") && expression.Type == left
+	case "&", "|", "^":
+		return strings.HasPrefix(left, "UInt") && expression.Type == left
 	case "==", "!=":
 		if expression.Type != "Bool" {
 			return false
@@ -304,7 +343,7 @@ func directKIRBinarySupported(expression *KIRExpr) bool {
 			return false
 		}
 	case "<", "<=", ">", ">=":
-		return left == "Int" && expression.Type == "Bool"
+		return (left == "Int" || strings.HasPrefix(left, "UInt")) && expression.Type == "Bool"
 	default:
 		return false
 	}
@@ -722,6 +761,47 @@ func (builder *kirDirectBuilder) emitBuiltin(expression *KIRExpr) error {
 		}
 		machine.code = append(machine.code, 0x48, 0x8b, 0x00)
 		return nil
+	case "bytes", "bytes_from_u8":
+		if err := builder.emitExpr(args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc7)
+		machine.hostRuntimeUsed = true
+		machine.bytesFromArrayUsed = true
+		return machine.emitLabelCall(machine.bytesFromArrayLabel)
+	case "u8_array":
+		if err := builder.emitExpr(args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc7)
+		machine.hostRuntimeUsed = true
+		machine.arrayRuntimeUsed = true
+		machine.u8ArrayUsed = true
+		return machine.emitLabelCall(machine.u8ArrayLabel)
+	case "string_to_bytes":
+		return builder.emitExpr(args[0])
+	case "fs_read_text":
+		if err := builder.emitExpr(args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc7)
+		machine.hostRuntimeUsed = true
+		machine.fsReadTextUsed = true
+		machine.boxRuntimeUsed = true
+		return machine.emitLabelCall(machine.fsReadTextLabel)
+	case "fs_write_bytes":
+		if err := builder.emitExpr(args[0]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x50)
+		if err := builder.emitExpr(args[1]); err != nil {
+			return err
+		}
+		machine.code = append(machine.code, 0x48, 0x89, 0xc6, 0x5f)
+		machine.hostRuntimeUsed = true
+		machine.fsWriteBytesUsed = true
+		machine.boxRuntimeUsed = true
+		return machine.emitLabelCall(machine.fsWriteBytesLabel)
 	case "process_args":
 		if len(args) != 0 {
 			return fmt.Errorf("direct KIR ELF process_args expects no arguments")

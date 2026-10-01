@@ -144,7 +144,7 @@ func splitDirectKIRType(encoded string) (name string, arguments []string, compos
 
 func directKIRTypeSupported(encoded string, document *KIRDocument) bool {
 	switch encoded {
-	case "Int", "UInt8", "UInt16", "UInt32", "UInt64", "Bool", "String", "Nil":
+	case "Int", "UInt8", "UInt16", "UInt32", "UInt64", "Bool", "String", "Bytes", "Json", "Nil":
 		return true
 	}
 	name, arguments, composite, ok := splitDirectKIRType(encoded)
@@ -164,6 +164,11 @@ func directKIRTypeSupported(encoded string, document *KIRDocument) bool {
 	default:
 		return false
 	}
+}
+
+func kirDirectUIntBits(encoded string) uint8 {
+	bits, _ := kirExecUIntBits(encoded)
+	return bits
 }
 
 func directKIRMapKeyKind(encoded string) (uint64, bool) {

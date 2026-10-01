@@ -18,12 +18,8 @@ const (
 	peSubsystemGUI     = uint16(2)
 )
 
-// BuildDirectPE emits a Windows x64 executable without invoking a
-// compiler, assembler, or linker. Its intentionally narrow language slice
-// supports scalar and String values, up to four register arguments, basic
-// control flow, and print/println. Unsupported constructs fail before an
-// executable is produced. The output calls the Windows x64 kernel32 ABI; GUI
-// targets select the Windows subsystem in the PE header.
+// BuildDirectPE validates the program into MIR before lowering the supported
+// KIR subset for Windows amd64.
 func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	if err := validateNativeOutputTarget("pe-direct", target); err != nil {
 		return nil, err
@@ -35,86 +31,13 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	// Keep actionable capability diagnostics ahead of secondary KIR-subset
-	// errors. Inspect the validated document itself before lowering it.
 	if err := validateMIRNativeBuiltinSupport(mir, "pe-direct", target); err != nil {
 		return nil, err
 	}
 	return lowerDirectPEKIR(mir, mir.limits)
 }
 
-// validateDirectPEProgram prevents Linux syscalls or non-Win64 calling
-// conventions from slipping into this deliberately bounded backend. Adding a
-// feature here requires its semantics and calling convention to be implemented
-// below before the PE writer can accept it.
-func validateDirectPEProgram(p *Program) ([]*Stmt, error) {
-	if p == nil {
-		return nil, fmt.Errorf("missing checked program")
-	}
-	if len(p.Imports) != 0 || len(p.Structs) != 0 || len(p.Enums) != 0 {
-		return nil, fmt.Errorf("module imports, structs, and enums are not supported")
-	}
-	if len(p.Statements) != 0 {
-		for _, f := range p.Functions {
-			if f != nil && f.Name == "main" {
-				return nil, fmt.Errorf("top-level statements cannot be combined with main()")
-			}
-		}
-	} else {
-		foundMain := false
-		for _, f := range p.Functions {
-			if f == nil || f.Name != "main" {
-				continue
-			}
-			foundMain = true
-			if len(f.Params) != 0 || typeSpecString(f.Return) != "Nil" {
-				return nil, fmt.Errorf("main must have signature main() -> Nil")
-			}
-		}
-		if !foundMain {
-			return nil, fmt.Errorf("program requires top-level statements or main() -> Nil")
-		}
-	}
-
-	for _, f := range p.Functions {
-		if f == nil {
-			continue
-		}
-		if f.Receiver != nil || f.Worker || f.Unsafe || len(f.TypeParams) != 0 {
-			return nil, fmt.Errorf("function '%s' has unsupported metadata (module=%q receiver=%t worker=%t unsafe=%t type-parameters=%d)", f.Name, f.Module, f.Receiver != nil, f.Worker, f.Unsafe, len(f.TypeParams))
-		}
-		if f.Name == "main" {
-			continue
-		}
-		if len(f.Params) > directPEWindowsMaxArgs {
-			return nil, fmt.Errorf("function '%s' has %d parameters; Win64 direct PE currently supports at most %d", f.Name, len(f.Params), directPEWindowsMaxArgs)
-		}
-		if !directPETypeName(typeSpecString(f.Return), true) {
-			return nil, fmt.Errorf("function '%s' has unsupported return type %s", f.Name, typeSpecString(f.Return))
-		}
-		for _, param := range f.Params {
-			if !directPETypeName(typeSpecString(param.Type), false) {
-				return nil, fmt.Errorf("function '%s' parameter '%s' has unsupported type %s", f.Name, param.Name, typeSpecString(param.Type))
-			}
-		}
-	}
-	stmts, err := directDynamicStatements(p)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateDirectPEStatements(stmts); err != nil {
-		return nil, err
-	}
-	for _, f := range p.Functions {
-		if f != nil && f.Name != "main" {
-			if err := validateDirectPEStatements(f.Body); err != nil {
-				return nil, fmt.Errorf("function '%s': %w", f.Name, err)
-			}
-		}
-	}
-	return stmts, nil
-}
-
+// directPETypeName reports whether a KIR type spelling is supported by PE lowering.
 func directPETypeName(name string, allowNil bool) bool {
 	if allowNil && name == "Nil" {
 		return true
@@ -124,193 +47,6 @@ func directPETypeName(name string, allowNil bool) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func (m *directMachine) emitPEUnsignedConversionCheck(value *Expr, bits uint8) error {
-	if value == nil || value.Type == nil || (value.Type.Kind != TyInt && value.Type.Kind != TyUInt) || bits == 0 {
-		return fmt.Errorf("direct PE backend cannot validate an incomplete unsigned conversion")
-	}
-	if value.Type.Kind == TyInt {
-		m.code = append(m.code, 0x48, 0x85, 0xc0)                        // test rax, rax
-		if err := m.emitConditionalJump(0x88, m.trapLabel); err != nil { // js
-			return err
-		}
-	}
-	inputBits := uint8(64)
-	if value.Type.Kind == TyUInt {
-		inputBits = machineBits(value.Type)
-	}
-	if bits >= inputBits || bits >= 64 {
-		return nil
-	}
-	mask := ^((uint64(1) << bits) - 1)
-	m.code = append(m.code, 0x48, 0xb9) // mov rcx, imm64
-	var encodedMask [8]byte
-	binary.LittleEndian.PutUint64(encodedMask[:], mask)
-	m.code = append(m.code, encodedMask[:]...)
-	m.code = append(m.code, 0x48, 0x85, 0xc8)       // test rax, rcx
-	return m.emitConditionalJump(0x85, m.trapLabel) // jne
-}
-
-func validateDirectPEStatements(stmts []*Stmt) error {
-	for _, s := range stmts {
-		if s == nil {
-			continue
-		}
-		switch s.Kind {
-		case StLet, StConst:
-			if s.Init == nil || s.Init.Type == nil || !directPETypeName(s.Init.Type.String(), false) {
-				return fmt.Errorf("binding '%s' has an unsupported type", s.Name)
-			}
-			if err := validateDirectPEExpr(s.Init, false); err != nil {
-				return err
-			}
-		case StAssign:
-			if s.Target == nil || s.Target.Kind != ExVar || s.Value == nil || s.Value.Type == nil || !directPETypeName(s.Value.Type.String(), false) {
-				return fmt.Errorf("assignment requires a scalar or String binding")
-			}
-			if err := validateDirectPEExpr(s.Value, false); err != nil {
-				return err
-			}
-		case StExpr:
-			if s.Expr == nil || s.Expr.Kind != ExCall || s.Expr.Receiver != nil {
-				return fmt.Errorf("expression statements must be direct calls")
-			}
-			if s.Expr.Function == nil {
-				if err := validateDirectPEExpr(s.Expr, true); err != nil {
-					return err
-				}
-			} else if err := validateDirectPEExpr(s.Expr, false); err != nil {
-				return err
-			}
-		case StIf:
-			if s.Cond == nil || s.Cond.Type == nil || s.Cond.Type.Kind != TyBool {
-				return fmt.Errorf("if condition must be Bool")
-			}
-			if err := validateDirectPEExpr(s.Cond, false); err != nil {
-				return err
-			}
-			if err := validateDirectPEStatements(s.Then); err != nil {
-				return err
-			}
-			if err := validateDirectPEStatements(s.Else); err != nil {
-				return err
-			}
-		case StWhile:
-			if s.Cond == nil || s.Cond.Type == nil || s.Cond.Type.Kind != TyBool {
-				return fmt.Errorf("while condition must be Bool")
-			}
-			if err := validateDirectPEExpr(s.Cond, false); err != nil {
-				return err
-			}
-			if err := validateDirectPEStatements(s.Body); err != nil {
-				return err
-			}
-		case StBreak, StContinue:
-			// Nesting is checked by the machine emitter.
-		case StReturn:
-			if s.Return != nil && s.Return.Kind != ExNil {
-				if err := validateDirectPEExpr(s.Return, false); err != nil {
-					return err
-				}
-			}
-		default:
-			return fmt.Errorf("statement kind %s is not supported", stmtName(s.Kind))
-		}
-	}
-	return nil
-}
-
-func validateDirectPEExpr(e *Expr, allowOutput bool) error {
-	if e == nil {
-		return fmt.Errorf("missing expression")
-	}
-	if e.Type != nil && e.Type.Kind != TyNil && !directPETypeName(e.Type.String(), false) {
-		return fmt.Errorf("expression type %s is not supported", e.Type.String())
-	}
-	switch e.Kind {
-	case ExInt, ExBool, ExString, ExVar:
-		return nil
-	case ExNil:
-		return fmt.Errorf("Nil is supported only as a return value")
-	case ExUnary:
-		if e.Op != PLUS && e.Op != MINUS && e.Op != BANG && e.Op != BITNOT {
-			return fmt.Errorf("unary operator %s is not supported", opText(e.Op))
-		}
-		return validateDirectPEExpr(e.Operand, false)
-	case ExBinary:
-		if e.Type == nil || e.Type.Kind == TyString {
-			return fmt.Errorf("String concatenation and non-scalar binary operations are not supported")
-		}
-		if e.Left != nil && e.Left.Type != nil && e.Left.Type.Kind == TyString {
-			return fmt.Errorf("String comparison is not supported by the direct PE runtime")
-		}
-		switch e.Op {
-		case PLUS, MINUS, STAR, SLASH, PERCENT, BITAND, BITXOR, PIPE, SHL, SHR,
-			AND, OR, EQEQ, NEQ, LESS, LEQ, GREATER, GEQ:
-		default:
-			return fmt.Errorf("binary operator %s is not supported", opText(e.Op))
-		}
-		if err := validateDirectPEExpr(e.Left, false); err != nil {
-			return err
-		}
-		return validateDirectPEExpr(e.Right, false)
-	case ExCall:
-		if e.Receiver != nil {
-			return fmt.Errorf("receiver calls are not supported")
-		}
-		if e.Function != nil {
-			if len(e.Args) != len(e.Function.Params) || len(e.Args) > directPEWindowsMaxArgs {
-				return fmt.Errorf("function '%s' must be called with all arguments and at most %d parameters", e.Function.Name, directPEWindowsMaxArgs)
-			}
-			for _, arg := range e.Args {
-				if err := validateDirectPEExpr(arg, false); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		switch e.Name {
-		case "u8", "u16", "u32", "u64":
-			var bits uint8
-			switch e.Name {
-			case "u8":
-				bits = 8
-			case "u16":
-				bits = 16
-			case "u32":
-				bits = 32
-			case "u64":
-				bits = 64
-			}
-			if len(e.Args) != 1 || e.Type == nil || e.Type.Kind != TyUInt || e.Type.Bits != bits {
-				return fmt.Errorf("conversion %s must have one argument and return UInt%d", e.Name, bits)
-			}
-			arg := e.Args[0]
-			if arg == nil || arg.Type == nil || (arg.Type.Kind != TyInt && arg.Type.Kind != TyUInt) {
-				return fmt.Errorf("conversion %s requires an Int or UInt argument", e.Name)
-			}
-			return validateDirectPEExpr(arg, false)
-		case "str":
-			if len(e.Args) != 1 || e.Type == nil || e.Type.Kind != TyString {
-				return fmt.Errorf("conversion str must have one argument and return String")
-			}
-			arg := e.Args[0]
-			if arg == nil || arg.Type == nil || (arg.Type.Kind != TyInt && arg.Type.Kind != TyUInt && arg.Type.Kind != TyBool && arg.Type.Kind != TyString) {
-				return fmt.Errorf("direct PE str supports Int, UInt, Bool, and String values")
-			}
-			return validateDirectPEExpr(arg, false)
-		case "print", "println":
-			if !allowOutput || len(e.Args) != 1 {
-				return fmt.Errorf("only statement-form print(value) and println(value) are supported")
-			}
-			return validateDirectPEExpr(e.Args[0], false)
-		default:
-			return fmt.Errorf("builtin %q is not supported by the direct PE backend", e.Name)
-		}
-	default:
-		return fmt.Errorf("expression kind %s is not supported", expressionKindName(e.Kind))
 	}
 }
 

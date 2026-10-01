@@ -217,4 +217,5 @@ func init() {
 		Builtin{"websocket_receive_binary", "websocket_receive_binary(socket: WebSocket) -> Result[Bytes,String]", "network", "borrow", "I/O/limit failure", "Receive one complete binary WebSocket message.", "2.8.0", 1, "websocket_receive_binary"},
 		Builtin{"websocket_receive_binary_timeout", "websocket_receive_binary_timeout(socket: WebSocket,milliseconds: Int) -> Result[Bytes,String]", "network", "borrow", "timeout/I/O failure", "Receive one complete binary WebSocket message within a bounded duration without losing partial frame bytes.", "2.8.0", 2, "websocket_receive_binary_timeout"},
 	)
+	initBuiltinRegistry()
 }

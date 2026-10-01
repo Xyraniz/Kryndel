@@ -529,7 +529,7 @@ func captureIdentity(token Token, name string) string {
 	return fmt.Sprintf("%s:%d:%s", source, start, name)
 }
 
-func (c *Checker) matchFunctionValueType(function *Function, expected *Type) (*Type, bool) {
+func (c *Checker) matchFunctionValueType(function *Function, expected *Type, expression *Expr) (*Type, bool) {
 	if expected != nil && (expected.Kind != TyFunction || len(expected.Params) != len(function.Params)) {
 		return nil, false
 	}
@@ -578,6 +578,15 @@ func (c *Checker) matchFunctionValueType(function *Function, expected *Type) (*T
 	functionType := FunctionType(params, result)
 	if expected != nil && !compatible(expected, functionType) {
 		return nil, false
+	}
+	if expression != nil && len(function.TypeParams) != 0 {
+		expression.GenericArguments = make([]*Type, len(function.TypeParams))
+		for i, parameter := range function.TypeParams {
+			expression.GenericArguments[i] = c.Env.TypeParams[parameter.Name]
+			if expression.GenericArguments[i] == nil {
+				return nil, false
+			}
+		}
 	}
 	return functionType, true
 }
@@ -986,7 +995,7 @@ func (c *Checker) checkExpr(sc *Scope, e *Expr, expected *Type) (*Type, *Diagnos
 				var matched *Function
 				var matchedType *Type
 				for _, candidate := range visible {
-					functionType, ok := c.matchFunctionValueType(candidate, expected)
+					functionType, ok := c.matchFunctionValueType(candidate, expected, e)
 					if !ok {
 						continue
 					}

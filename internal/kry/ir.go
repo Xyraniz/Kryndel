@@ -57,7 +57,7 @@ func CompileMIR(program *Program, checker *Checker, target NativeTarget) (*Valid
 		// Keep diagnostics and package visibility as immutable MIR sidecars.
 		// Retaining Source pointers here would let later mutations to the
 		// frontend tree change the meaning of an already-validated MIR value.
-		sources[name] = &Source{Name: name, Text: source.Text, VisibilityScope: scope}
+		sources[name] = &Source{Name: source.Name, Text: source.Text, VisibilityScope: scope}
 		visibilityScopes[name] = scope
 	}
 	addSource(program.Source)

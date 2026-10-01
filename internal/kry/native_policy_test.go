@@ -138,7 +138,7 @@ func TestGeneratedBuiltinCapabilitiesMatchBackendDispatch(t *testing.T) {
 		want     map[string]struct{}
 	}{
 		{file: "codegen.go", fn: "builtinCall", selector: "Name", want: generatedCAOTBuiltinCases},
-		{file: "machine_dynamic.go", fn: "emitExpr", selector: "Name", want: generatedDirectELFBuiltinCases},
+		{file: "kir_machine_direct_values.go", fn: "emitBuiltin", selector: "Name", want: generatedDirectELFBuiltinCases},
 		{file: "kir_machine_pe.go", fn: "validateKIRDirectPEExpr", selector: "CallTarget", prefix: "builtin:", want: generatedDirectPEBuiltinCases},
 	}
 	for _, tc := range cases {
@@ -194,11 +194,6 @@ func TestGeneratedBuiltinCapabilitiesMatchBackendDispatch(t *testing.T) {
 				}
 				return true
 			})
-			if tc.fn == "emitExpr" {
-				// These two builtins are statement-lowered by emitStatements.
-				actual["print"] = true
-				actual["println"] = true
-			}
 			if len(actual) != len(tc.want) {
 				t.Fatalf("generated capability inventory has %d names, backend dispatch has %d", len(tc.want), len(actual))
 			}

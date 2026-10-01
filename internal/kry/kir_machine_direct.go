@@ -231,7 +231,7 @@ func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) e
 					return err
 				}
 				switch expression.Name {
-				case "print", "println", "len", "array_push", "array_concat", "array_get", "array_indices", "array_set", "array_slice", "array_take", "array_drop", "array_reverse", "map_get", "map_contains_key", "map_insert", "map_remove", "process_args", "some", "none", "ok", "err", "is_some", "is_none", "is_ok", "is_err", "unwrap_or", "result_unwrap", "result_error", "assert", "assert_eq", "u8", "u16", "u32", "u64", "int", "str", "string_chars", "substring", "contains", "starts_with", "ends_with":
+				case "print", "println", "len", "array_push", "array_concat", "array_get", "array_indices", "array_set", "array_slice", "array_take", "array_drop", "array_reverse", "map_get", "map_contains_key", "map_insert", "map_remove", "process_args", "some", "none", "ok", "err", "is_some", "is_none", "is_ok", "is_err", "unwrap_or", "result_unwrap", "result_error", "assert", "assert_eq", "u8", "u16", "u32", "u64", "int", "str", "string_chars", "substring", "contains", "starts_with", "ends_with", "bytes", "bytes_from_u8", "u8_array", "string_to_bytes", "fs_read_text", "fs_write_bytes":
 				default:
 					return fmt.Errorf("%w: direct KIR ELF does not lower builtin %q", errKIRSubsetUnsupported, expression.Name)
 				}
@@ -701,10 +701,12 @@ func (builder *kirDirectBuilder) build() ([]byte, error) {
 		}
 	}
 	if machine.hostRuntimeUsed {
-		if machine.intToStringUsed || machine.intFromStringUsed || machine.stringCharsUsed || machine.substringUsed || builder.processArgsUsed {
-			if err := machine.emitStringAllocRuntime(); err != nil {
-				return nil, err
-			}
+		// Keep the direct KIR host runtime set in parity with the AST backend.
+		// Several helpers have transitive dependencies (for example,
+		// fs_read_text allocates its returned String), so emitting only the
+		// apparent call target can leave valid calls pointing at unbound labels.
+		if err := machine.emitStringAllocRuntime(); err != nil {
+			return nil, err
 		}
 		if machine.stringCharsUsed {
 			if err := machine.emitStringCharsRuntime(); err != nil {
@@ -726,8 +728,28 @@ func (builder *kirDirectBuilder) build() ([]byte, error) {
 				return nil, err
 			}
 		}
+		if machine.bytesFromArrayUsed {
+			if err := machine.emitBytesFromArrayRuntime(); err != nil {
+				return nil, err
+			}
+		}
+		if machine.u8ArrayUsed {
+			if err := machine.emitU8ArrayRuntime(); err != nil {
+				return nil, err
+			}
+		}
 		if builder.processArgsUsed {
 			if err := machine.emitProcessArgsRuntime(); err != nil {
+				return nil, err
+			}
+		}
+		if machine.fsReadTextUsed {
+			if err := machine.emitFSReadTextRuntime(); err != nil {
+				return nil, err
+			}
+		}
+		if machine.fsWriteBytesUsed {
+			if err := machine.emitFSWriteBytesRuntime(); err != nil {
 				return nil, err
 			}
 		}
@@ -774,6 +796,9 @@ func (builder *kirDirectBuilder) build() ([]byte, error) {
 		return nil, err
 	}
 	if err := machine.emitExit(1); err != nil {
+		return nil, err
+	}
+	if err := machine.validateLabelReferences(); err != nil {
 		return nil, err
 	}
 	for _, ref := range machine.dataRefs {
@@ -1578,18 +1603,45 @@ func (builder *kirDirectBuilder) emitBinary(expression *KIRExpr) error {
 		}
 		return nil
 	}
+	unsigned := strings.HasPrefix(expression.Left.Type, "UInt")
 	if operator == "==" || operator == "!=" || operator == "<" || operator == "<=" || operator == ">" || operator == ">=" {
-		condition := map[string]byte{"==": 0x94, "!=": 0x95, "<": 0x9c, "<=": 0x9e, ">": 0x9f, ">=": 0x9d}[operator]
+		conditions := map[string]byte{"==": 0x94, "!=": 0x95, "<": 0x9c, "<=": 0x9e, ">": 0x9f, ">=": 0x9d}
+		if unsigned {
+			conditions["<"], conditions["<="], conditions[">"], conditions[">="] = 0x92, 0x96, 0x97, 0x93
+		}
+		condition := conditions[operator]
 		machine.code = append(machine.code, 0x48, 0x39, 0xc8, 0x0f, condition, 0xc0, 0x48, 0x0f, 0xb6, 0xc0)
 		return nil
 	}
 	switch operator {
 	case "+":
 		machine.code = append(machine.code, 0x48, 0x01, 0xc8)
+		if unsigned {
+			machine.emitUIntMask(kirDirectUIntBits(expression.Type))
+			return nil
+		}
 	case "-":
 		machine.code = append(machine.code, 0x48, 0x29, 0xc8)
+		if unsigned {
+			machine.emitUIntMask(kirDirectUIntBits(expression.Type))
+			return nil
+		}
 	case "*":
 		machine.code = append(machine.code, 0x48, 0x0f, 0xaf, 0xc1)
+		if unsigned {
+			machine.emitUIntMask(kirDirectUIntBits(expression.Type))
+			return nil
+		}
+	case "&", "|", "^":
+		opcode := byte(0x21)
+		if operator == "|" {
+			opcode = 0x09
+		} else if operator == "^" {
+			opcode = 0x31
+		}
+		machine.code = append(machine.code, 0x48, opcode, 0xc8)
+		machine.emitUIntMask(kirDirectUIntBits(expression.Type))
+		return nil
 	case "/", "%":
 		divisionByZeroMessage := "division by zero"
 		if operator == "%" {
@@ -1599,6 +1651,14 @@ func (builder *kirDirectBuilder) emitBinary(expression *KIRExpr) error {
 		machine.code = append(machine.code, 0x48, 0x85, 0xc9)
 		if err := machine.emitConditionalJump(0x84, zeroFailure); err != nil {
 			return err
+		}
+		if unsigned {
+			machine.code = append(machine.code, 0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1)
+			if operator == "%" {
+				machine.code = append(machine.code, 0x48, 0x89, 0xd0)
+			}
+			machine.emitUIntMask(kirDirectUIntBits(expression.Type))
+			return nil
 		}
 		overflowFailure := builder.diag(expression, CatRuntime, "checked integer arithmetic overflow")
 		machine.code = append(machine.code, 0x48, 0xba)
@@ -1641,6 +1701,10 @@ func (builder *kirDirectBuilder) emitBinary(expression *KIRExpr) error {
 		return nil
 	default:
 		return fmt.Errorf("direct KIR ELF does not support binary operator %q", operator)
+	}
+	if unsigned {
+		machine.emitUIntMask(kirDirectUIntBits(expression.Type))
+		return nil
 	}
 	overflowFailure := builder.diag(expression, CatRuntime, "checked integer arithmetic overflow")
 	return machine.emitConditionalJump(0x80, overflowFailure)

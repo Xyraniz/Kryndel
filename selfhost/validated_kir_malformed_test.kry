@@ -1,4 +1,5 @@
 import "dynamic_backend"
+import "validated_kir"
 
 fn malformed_document(target_os: String) -> String {
     let mut os_json: String = "\"linux\""
@@ -33,7 +34,95 @@ fn unexpected_statement_child_document(target_os: String) -> String {
 fn unknown_expression_field_document(target_os: String) -> String {
     let mut os_json: String = "\"linux\""
     if target_os == "windows" { os_json = "\"windows\"" }
-    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":[{\"kind\":\"expr\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"expr\":{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"int\":1,\"unexpected\":true}}]}"
+    let escaped_value: String = "\"quote \\\" brace {,}[]\""
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":[{\"kind\":\"expr\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"expr\":{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"int\":1,\"string\":" + escaped_value + ",\"unexpected\":true}}]}"
+}
+
+fn generated_document(target_os: String, structs: String, enums: String, statements: String) -> String {
+    let mut os_json: String = "\"linux\""
+    if target_os == "windows" { os_json = "\"windows\"" }
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":" + structs + ",\"enums\":" + enums + ",\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":" + statements + "}"
+}
+
+fn generated_expression_statement(expression: String) -> String {
+    return "[{\"kind\":\"expr\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"expr\":" + expression + "}]"
+}
+
+fn generated_int_expression(value: Int) -> String {
+    return "{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"const\":null,\"int\":" + str(value) + "}"
+}
+
+fn malformed_constant_document(target_os: String, constant: String) -> String {
+    let expression: String = "{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"UInt8\",\"const\":" + constant + ",\"int\":1}"
+    return generated_document(target_os, "[]", "[]", generated_expression_statement(expression))
+}
+
+fn unknown_struct_field_document(target_os: String) -> String {
+    let structs: String = "[{\"name\":\"Point\",\"public\":false,\"module\":\"\",\"type_params\":[],\"fields\":[{\"name\":\"x\",\"public\":false,\"type\":\"Int\"}]}]"
+    let expression: String = "{\"kind\":\"struct\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Point\",\"const\":null,\"struct_name\":\"Point\",\"fields\":[\"ghost\"],\"values\":[" + generated_int_expression(1) + "]}"
+    return generated_document(target_os, structs, "[]", generated_expression_statement(expression))
+}
+
+fn unknown_struct_reference_document(target_os: String) -> String {
+    let expression: String = "{\"kind\":\"struct\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Missing\",\"const\":null,\"struct_name\":\"Missing\",\"fields\":[],\"values\":[]}"
+    return generated_document(target_os, "[]", "[]", generated_expression_statement(expression))
+}
+
+fn duplicate_struct_field_document(target_os: String) -> String {
+    let structs: String = "[{\"name\":\"Point\",\"public\":false,\"module\":\"\",\"type_params\":[],\"fields\":[{\"name\":\"x\",\"public\":false,\"type\":\"Int\"},{\"name\":\"x\",\"public\":false,\"type\":\"Int\"}]}]"
+    return generated_document(target_os, structs, "[]", "[]")
+}
+
+fn duplicate_struct_declaration_document(target_os: String) -> String {
+    let declaration: String = "{\"name\":\"Point\",\"public\":false,\"module\":\"\",\"type_params\":[],\"fields\":[]}"
+    return generated_document(target_os, "[" + declaration + "," + declaration + "]", "[]", "[]")
+}
+
+fn valid_struct_document() -> String {
+    let declaration: String = "[{\"name\":\"Point\",\"public\":false,\"module\":\"\",\"type_params\":[],\"fields\":[{\"name\":\"x\",\"public\":false,\"type\":\"Int\"}]}]"
+    return generated_document("linux", declaration, "[]", "[]")
+}
+
+fn valid_generic_struct_document() -> String {
+    let declaration: String = "[{\"name\":\"Envelope\",\"public\":false,\"module\":\"\",\"type_params\":[{\"name\":\"T\",\"constraint\":\"\"}],\"fields\":[{\"name\":\"payload\",\"public\":false,\"type\":\"Option[Array[T]]\"}]}]"
+    let value: String = "{\"kind\":\"var\",\"source\":\"valid.kry\",\"line\":1,\"column\":1,\"type\":\"Option[Array[Int]]\",\"name\":\"payload\",\"binding\":{\"name\":\"payload\",\"type\":\"Option[Array[Int]]\",\"mutable\":false,\"source\":\"valid.kry\",\"line\":1,\"column\":1}}"
+    let expression: String = "{\"kind\":\"struct\",\"source\":\"valid.kry\",\"line\":1,\"column\":1,\"type\":\"Envelope[Int]\",\"const\":null,\"struct_name\":\"Envelope\",\"struct_type\":\"Envelope[Int]\",\"fields\":[\"payload\"],\"values\":[" + value + "]}"
+    return generated_document("linux", declaration, "[]", generated_expression_statement(expression))
+}
+
+fn malformed_generic_struct_document(target_os: String, type_params: String, field_type: String, instance_type: String) -> String {
+    let declaration: String = "[{\"name\":\"Envelope\",\"public\":false,\"module\":\"\",\"type_params\":" + type_params + ",\"fields\":[{\"name\":\"payload\",\"public\":false,\"type\":\"" + field_type + "\"}]}]"
+    let expression: String = "{\"kind\":\"struct\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + instance_type + "\",\"const\":null,\"struct_name\":\"Envelope\",\"struct_type\":\"" + instance_type + "\",\"fields\":[\"payload\"],\"values\":[" + generated_int_expression(1) + "]}"
+    return generated_document(target_os, declaration, "[]", generated_expression_statement(expression))
+}
+
+fn unknown_enum_variant_document(target_os: String) -> String {
+    let enums: String = "[{\"name\":\"Color\",\"public\":false,\"module\":\"\",\"variants\":[\"Red\"]}]"
+    let expression: String = "{\"kind\":\"enum\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Color\",\"const\":null,\"enum_type\":\"Color\",\"enum_variant\":\"Blue\"}"
+    return generated_document(target_os, "[]", enums, generated_expression_statement(expression))
+}
+
+fn unknown_enum_pattern_document(target_os: String) -> String {
+    let enums: String = "[{\"name\":\"Color\",\"public\":false,\"module\":\"\",\"variants\":[\"Red\"]}]"
+    let scrutinee: String = "{\"kind\":\"enum\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Color\",\"const\":null,\"enum_type\":\"Color\",\"enum_variant\":\"Red\"}"
+    let statement: String = "[{\"kind\":\"match\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"scrutinee\":" + scrutinee + ",\"arms\":[{\"pattern\":{\"kind\":\"enum\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Color\",\"variant\":\"Blue\",\"binding\":\"\"},\"body\":[]}]}]"
+    return generated_document(target_os, "[]", enums, statement)
+}
+
+fn duplicate_enum_variant_document(target_os: String) -> String {
+    let enums: String = "[{\"name\":\"Color\",\"public\":false,\"module\":\"\",\"variants\":[\"Red\",\"Red\"]}]"
+    return generated_document(target_os, "[]", enums, "[]")
+}
+
+fn duplicate_enum_declaration_document(target_os: String) -> String {
+    let declaration: String = "{\"name\":\"Color\",\"public\":false,\"module\":\"\",\"variants\":[\"Red\"]}"
+    return generated_document(target_os, "[]", "[" + declaration + "," + declaration + "]", "[]")
+}
+
+fn invalid_operator_document(target_os: String, unary: Bool) -> String {
+    let mut expression: String = "{\"kind\":\"binary\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"const\":null,\"operator\":\"??\",\"left\":" + generated_int_expression(1) + ",\"right\":" + generated_int_expression(2) + "}"
+    if unary { expression = "{\"kind\":\"unary\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"const\":null,\"operator\":\"?\",\"operand\":" + generated_int_expression(1) + "}" }
+    return generated_document(target_os, "[]", "[]", generated_expression_statement(expression))
 }
 
 fn rejected_before_lowering(document_text: String) -> Bool {
@@ -42,6 +131,29 @@ fn rejected_before_lowering(document_text: String) -> Bool {
     let compiled: Result[Bytes, String] = compile_document(result_unwrap(parsed))
     if is_ok(compiled) { return false }
     return starts_with(unwrap_or(result_error(compiled), ""), "KIR validation failed:")
+}
+
+fn rejected_by_generated_path(document_text: String) -> Bool {
+    let parsed: Result[Json, String] = json_parse(document_text)
+    if is_err(parsed) { return false }
+    let compiled: Result[Bytes, String] = compile_generated_document(result_unwrap(parsed))
+    if is_ok(compiled) { return false }
+    return starts_with(unwrap_or(result_error(compiled), ""), "KIR validation failed:")
+}
+
+fn accepted_by_generated_path(document_text: String) -> Bool {
+    let parsed: Result[Json, String] = json_parse(document_text)
+    if is_err(parsed) { return false }
+    let compiled: Result[Bytes, String] = compile_generated_document(result_unwrap(parsed))
+    if is_ok(compiled) { return true }
+    return !starts_with(unwrap_or(result_error(compiled), ""), "KIR validation failed:")
+}
+
+fn valid_generated_kir(document_text: String) -> Bool {
+    let parsed: Result[Json, String] = json_parse(document_text)
+    if is_err(parsed) { return false }
+    let validated: Result[ValidatedKIR, String] = validate_generated_kir_document(result_unwrap(parsed))
+    return is_ok(validated)
 }
 
 fn main() -> Nil {
@@ -59,5 +171,27 @@ fn main() -> Nil {
     assert_eq(rejected_before_lowering(function_call_document("windows", "[]", "Int")), true)
     assert_eq(rejected_before_lowering(function_call_document("linux", "[{\"kind\":\"string\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"String\",\"string\":\"wrong\"}]", "Int")), true)
     assert_eq(rejected_before_lowering(function_call_document("windows", "[{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"int\":1}]", "String")), true)
+    assert_eq(rejected_by_generated_path(function_call_document("windows", "[{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"int\":1}]", "String")), true)
+    assert_eq(rejected_by_generated_path(dangling_function_document("linux")), true)
+    assert_eq(valid_generated_kir(unknown_expression_field_document("linux")), true)
+    assert_eq(rejected_by_generated_path(malformed_constant_document("linux", "{\"kind\":\"mystery\"}")), true)
+    assert_eq(rejected_by_generated_path(malformed_constant_document("linux", "{\"kind\":\"int\"}")), true)
+    assert_eq(rejected_by_generated_path(malformed_constant_document("windows", "{\"kind\":\"uint\",\"uint\":255,\"uint_bits\":2}")), true)
+    assert_eq(rejected_by_generated_path(malformed_constant_document("windows", "{\"kind\":\"uint\",\"uint\":256,\"uint_bits\":8}")), true)
+    assert_eq(rejected_by_generated_path(unknown_struct_field_document("linux")), true)
+    assert_eq(rejected_by_generated_path(unknown_struct_reference_document("windows")), true)
+    assert_eq(rejected_by_generated_path(duplicate_struct_field_document("linux")), true)
+    assert_eq(rejected_by_generated_path(duplicate_struct_declaration_document("windows")), true)
+    assert_eq(rejected_by_generated_path(unknown_enum_variant_document("linux")), true)
+    assert_eq(rejected_by_generated_path(unknown_enum_pattern_document("windows")), true)
+    assert_eq(rejected_by_generated_path(duplicate_enum_variant_document("windows")), true)
+    assert_eq(rejected_by_generated_path(duplicate_enum_declaration_document("linux")), true)
+    assert_eq(rejected_by_generated_path(invalid_operator_document("linux", true)), true)
+    assert_eq(rejected_by_generated_path(invalid_operator_document("windows", false)), true)
+    assert_eq(accepted_by_generated_path(valid_struct_document()), true)
+    assert_eq(valid_generated_kir(valid_generic_struct_document()), true)
+    assert_eq(rejected_by_generated_path(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[Int, String]")), true)
+    assert_eq(rejected_by_generated_path(malformed_generic_struct_document("windows", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T[Int]", "Envelope[Int]")), true)
+    assert_eq(rejected_by_generated_path(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"Mystery\"}]", "T", "Envelope[Int]")), true)
     return nil
 }

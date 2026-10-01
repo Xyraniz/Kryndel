@@ -1295,6 +1295,29 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 	}
 }
 
+func TestSelfhostValidatorRejectsMalformedKIRFromGeneratedAPI(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "..", "..", "selfhost", "validated_kir_malformed_test.kry")
+	program, diagnostic := LoadProgram(fixture, DefaultLimits(), "")
+	if diagnostic != nil {
+		t.Fatalf("load malformed KIR validator fixture: %s", diagnostic.Message)
+	}
+	checker, diagnostic := Check(program, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("check malformed KIR validator fixture: %s", diagnostic.Message)
+	}
+	runtime, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+	if diagnostic != nil {
+		t.Fatalf("create malformed KIR validator runtime: %s", diagnostic.Message)
+	}
+	if diagnostic := runtime.run(); diagnostic != nil {
+		t.Fatalf("malformed KIR validator fixture failed: %s", diagnostic.Message)
+	}
+}
+
 func TestStage3SourceKIRCompilerMatchesDirectELFOracle(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {

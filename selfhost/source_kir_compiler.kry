@@ -393,20 +393,21 @@ fn lex(source: String, source_path: String) -> Result[Array[SourceToken], String
 }
 
 fn module_without_imports(path: String, tokens: Array[SourceToken]) -> Result[SourceModule, String] {
+    let path_json: String = json_quote(path)
     let mut output: Array[SourceToken] = []
     let mut output_chunks: Array[Array[SourceToken]] = []
     let mut imports: Array[String] = []
     let mut index: Int = 0
     let mut braces: Int = 0
     while index < len(tokens) {
-        let token: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "", source: path, source_json: json_quote(path), line: 1, column: 1 })
+        let token: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "", source: path, source_json: path_json, line: 1, column: 1 })
         if braces == 0 && token.kind == "identifier" && token.text == "import" {
-            let name: SourceToken = unwrap_or(array_get(tokens, index + 1), SourceToken{ kind: "eof", text: "", source: path, source_json: json_quote(path), line: 1, column: 1 })
+            let name: SourceToken = unwrap_or(array_get(tokens, index + 1), SourceToken{ kind: "eof", text: "", source: path, source_json: path_json, line: 1, column: 1 })
             if name.kind != "string" { return err("module: import expects a quoted module name in '" + path + "'") }
             if !safe_module_path(name.text) { return err("module: unsafe module path '" + name.text + "' in '" + path + "'") }
             imports = array_push(imports, name.text)
             index = index + 2
-            let separator: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "", source: path, source_json: json_quote(path), line: 1, column: 1 })
+            let separator: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "", source: path, source_json: path_json, line: 1, column: 1 })
             if separator.text == ";" { index = index + 1 }
             else if separator.kind != "eof" { return err("module: expected separator after import in '" + path + "'") }
             continue
@@ -608,7 +609,7 @@ fn parse_struct(parser: SourceParser, public: Bool) -> Result[ParsedStruct, Stri
     let after: SourceParser = result_unwrap(closed)
     let updated_structs: Map[String, SourceStruct] = map_insert(map_insert(after.structs, name.text, definition), definition.symbol, definition)
     let updated: SourceParser = SourceParser{ tokens: after.tokens, position: after.position, module_id: after.module_id, bindings: after.bindings, functions: after.functions, structs: updated_structs, return_type: after.return_type }
-    return ok(ParsedStruct{ parser: updated, json: "{\"name\":" + json_quote(definition.symbol) + ",\"public\":" + bool_text(public) + ",\"module\":\"\",\"fields\":" + fields_json + "]}" })
+    return ok(ParsedStruct{ parser: updated, json: "{\"name\":" + json_quote(definition.symbol) + ",\"public\":" + bool_text(public) + ",\"module\":\"\",\"type_params\":[],\"fields\":" + fields_json + "]}" })
 }
 
 fn parse_enum(parser: SourceParser, public: Bool, module_name: String) -> Result[ParsedEnum, String] {
@@ -656,6 +657,9 @@ fn parse_enum(parser: SourceParser, public: Bool, module_name: String) -> Result
 }
 
 fn json_quote(value: String) -> String {
+    if !contains(value, "\"") && !contains(value, "\\") && !contains(value, "\n") && !contains(value, "\r") && !contains(value, "\t") {
+        return "\"" + value + "\""
+    }
     let chars: Array[String] = string_chars(value)
     let mut result: String = "\""
     let mut index: Int = 0
@@ -1144,7 +1148,7 @@ fn parse_struct_literal(parser: SourceParser, type_name: String, token: SourceTo
     }
     let closed: Result[SourceParser, String] = expect(current, "}")
     if is_err(closed) { return err(parser_error(closed)) }
-    let json: String = prefix + "\"kind\":\"struct\",\"type\":" + json_quote(shape.symbol) + ",\"const\":null,\"struct_name\":" + json_quote(shape.symbol) + ",\"fields\":" + names + "],\"values\":" + values + "]}"
+    let json: String = prefix + "\"kind\":\"struct\",\"type\":" + json_quote(shape.symbol) + ",\"const\":null,\"struct_name\":" + json_quote(shape.symbol) + ",\"struct_type\":" + json_quote(shape.symbol) + ",\"fields\":" + names + "],\"values\":" + values + "]}"
     return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: shape.symbol, known: false, display: "", location: prefix, empty_kind: "" } })
 }
 
@@ -1774,7 +1778,7 @@ fn finish_statement(parser: SourceParser) -> Result[SourceParser, String] {
 }
 
 fn statement_json(kind: String, body: String, token: SourceToken) -> String {
-    return "{\"kind\":" + json_quote(kind) + ",\"source\":" + json_quote(token.source) + ",\"line\":" + str(token.line) + ",\"column\":" + str(token.column) + "," + body + "}"
+    return "{\"kind\":" + json_quote(kind) + ",\"source\":" + token.source_json + ",\"line\":" + str(token.line) + ",\"column\":" + str(token.column) + "," + body + "}"
 }
 
 fn parse_output(parser: SourceParser) -> Result[ParsedStatements, String] {

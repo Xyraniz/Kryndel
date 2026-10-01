@@ -1252,7 +1252,11 @@ func (r *Runtime) cleanup(prior *Diagnostic) *Diagnostic {
 		for _, t := range r.Threads {
 			t.mu.Lock()
 			joined := t.Joined
+			workerDiag := t.Diag
 			t.mu.Unlock()
+			if prior == nil && workerDiag != nil && workerDiag.Category == CatResource {
+				prior = workerDiag
+			}
 			if joined {
 				continue
 			}

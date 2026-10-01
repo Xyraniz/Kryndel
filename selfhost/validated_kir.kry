@@ -1,5 +1,5 @@
 // The backends accept this wrapper instead of raw JSON. Its private payload
-// can only be initialized in this module, by validate_kir_document.
+// can only be initialized here after strict KIR validation.
 pub struct ValidatedKIR {
     private document: Json
 }
@@ -8,6 +8,19 @@ struct KIRFunctionSignature {
     parameter_types: Array[String],
     required_arity: Int,
     return_type: String,
+}
+
+struct KIRTypeDeclarations {
+    structs: Json,
+    enums: Json,
+}
+
+struct KIRTypeParse {
+    valid: Bool,
+    next: Int,
+    name: String,
+    argument_count: Int,
+    valid_variables: Bool,
 }
 
 fn member(value: Json, key: String, label: String) -> Result[Json, String] {
@@ -97,10 +110,16 @@ fn validate_object_fields(value: Json, allowed: String, label: String) -> Result
             index = index + 1
             if index >= count || unwrap_or(array_get(chars, index), "") != ":" { return err(label + " has malformed JSON object syntax") }
             index = index + 1
+            if index >= count { return err(label + " has malformed JSON object value") }
             let child: Result[Json, String] = json_object_get(value, key)
             if is_err(child) { return err(label + " has malformed JSON object value") }
             let child_text: String = json_stringify(result_unwrap(child))
-            index = index + len(string_chars(child_text))
+            let child_length: Int = len(string_chars(child_text))
+            if child_length == 0 { return err(label + " has an empty JSON object value") }
+            // `text` is the canonical JSON serialization of `value`, so this
+            // child's canonical serialization occupies exactly this span.
+            // Skipping it avoids rescanning every nested object once per parent.
+            index = index + child_length
             if index >= count { return err(label + " has malformed JSON object syntax") }
             let separator: String = unwrap_or(array_get(chars, index), "")
             if separator == "," { index = index + 1 }
@@ -163,7 +182,152 @@ fn validate_string_array(values: Json, label: String) -> Result[Bool, String] {
     return ok(true)
 }
 
-fn validate_expression_list(owner: Json, key: String, label: String, functions: Map[String, KIRFunctionSignature], strict_fields: Bool) -> Result[Bool, String] {
+fn find_named_declaration(values: Json, name: String) -> Option[Json] {
+    let count: Int = result_unwrap(json_array_len(values))
+    let mut index: Int = 0
+    while index < count {
+        let item: Json = result_unwrap(array_item(values, index, "KIR declarations"))
+        let item_name: Result[String, String] = string_member(item, "name", "KIR declaration")
+        if is_ok(item_name) && result_unwrap(item_name) == name { return some(item) }
+        index = index + 1
+    }
+    return none()
+}
+
+fn enum_has_variant(declaration: Json, variant_name: String) -> Bool {
+    let variants: Json = result_unwrap(json_object_get(declaration, "variants"))
+    let count: Int = result_unwrap(json_array_len(variants))
+    let mut index: Int = 0
+    while index < count {
+        if result_unwrap(json_string(result_unwrap(array_item(variants, index, "KIR enum variants")))) == variant_name { return true }
+        index = index + 1
+    }
+    return false
+}
+
+fn struct_field_type(declaration: Json, field_name: String) -> String {
+    let fields: Json = result_unwrap(json_object_get(declaration, "fields"))
+    let count: Int = result_unwrap(json_array_len(fields))
+    let mut index: Int = 0
+    while index < count {
+        let item: Json = result_unwrap(array_item(fields, index, "KIR struct fields"))
+        let name: Json = result_unwrap(json_object_get(item, "name"))
+        if result_unwrap(json_string(name)) == field_name {
+            let type_name: Json = result_unwrap(json_object_get(item, "type"))
+            return result_unwrap(json_string(type_name))
+        }
+        index = index + 1
+    }
+    return ""
+}
+
+fn kir_type_identifier_start(character: String) -> Bool {
+    let points: Array[Int] = codepoints(character)
+    let codepoint: Int = unwrap_or(array_get(points, 0), 0)
+    return codepoint >= 128 || character == "@" || character == "_" || contains("abcdefghijklmnopqrstuvwxyz", character) || contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", character)
+}
+
+fn kir_type_identifier_continue(character: String) -> Bool {
+    let points: Array[Int] = codepoints(character)
+    let codepoint: Int = unwrap_or(array_get(points, 0), 0)
+    return codepoint >= 128 || character == "_" || contains("abcdefghijklmnopqrstuvwxyz", character) || contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", character) || contains("0123456789", character)
+}
+
+fn kir_type_text_at(chars: Array[String], index: Int, text: String) -> Bool {
+    let text_chars: Array[String] = string_chars(text)
+    if index < 0 || index + len(text_chars) > len(chars) { return false }
+    let mut offset: Int = 0
+    while offset < len(text_chars) {
+        if unwrap_or(array_get(chars, index + offset), "") != unwrap_or(array_get(text_chars, offset), "") { return false }
+        offset = offset + 1
+    }
+    return true
+}
+
+fn invalid_kir_type_parse() -> KIRTypeParse {
+    return KIRTypeParse{ valid: false, next: 0, name: "", argument_count: 0, valid_variables: false }
+}
+
+fn parse_kir_type(chars: Array[String], start: Int, variables: Map[String, Bool]) -> KIRTypeParse {
+    let count: Int = len(chars)
+    if start < 0 || start >= count { return invalid_kir_type_parse() }
+    if kir_type_text_at(chars, start, "fn(") {
+        let mut index: Int = start + 3
+        let mut argument_count: Int = 0
+        let mut valid_variables: Bool = true
+        if index >= count { return invalid_kir_type_parse() }
+        if unwrap_or(array_get(chars, index), "") != ")" {
+            while true {
+                let argument: KIRTypeParse = parse_kir_type(chars, index, variables)
+                if !argument.valid { return invalid_kir_type_parse() }
+                valid_variables = valid_variables && argument.valid_variables
+                argument_count = argument_count + 1
+                index = argument.next
+                if index < count && unwrap_or(array_get(chars, index), "") == "," {
+                    if !kir_type_text_at(chars, index, ", ") { return invalid_kir_type_parse() }
+                    index = index + 2
+                } else { break }
+            }
+        }
+        if index >= count || unwrap_or(array_get(chars, index), "") != ")" { return invalid_kir_type_parse() }
+        index = index + 1
+        if !kir_type_text_at(chars, index, " -> ") { return invalid_kir_type_parse() }
+        let result_type: KIRTypeParse = parse_kir_type(chars, index + 4, variables)
+        if !result_type.valid { return invalid_kir_type_parse() }
+        return KIRTypeParse{ valid: true, next: result_type.next, name: "fn", argument_count: argument_count, valid_variables: valid_variables && result_type.valid_variables }
+    }
+    if !kir_type_identifier_start(unwrap_or(array_get(chars, start), "")) { return invalid_kir_type_parse() }
+    let mut index: Int = start
+    let mut name: String = ""
+    while index < count && (kir_type_identifier_continue(unwrap_or(array_get(chars, index), "")) || (index == start && unwrap_or(array_get(chars, index), "") == "@")) {
+        name = name + unwrap_or(array_get(chars, index), "")
+        index = index + 1
+    }
+    let mut argument_count: Int = 0
+    let mut valid_variables: Bool = true
+    if index < count && unwrap_or(array_get(chars, index), "") == "[" {
+        index = index + 1
+        if index >= count || unwrap_or(array_get(chars, index), "") == "]" { return invalid_kir_type_parse() }
+        while true {
+            let argument: KIRTypeParse = parse_kir_type(chars, index, variables)
+            if !argument.valid { return invalid_kir_type_parse() }
+            valid_variables = valid_variables && argument.valid_variables
+            argument_count = argument_count + 1
+            index = argument.next
+            if index < count && unwrap_or(array_get(chars, index), "") == "," {
+                if !kir_type_text_at(chars, index, ", ") { return invalid_kir_type_parse() }
+                index = index + 2
+            } else { break }
+        }
+        if index >= count || unwrap_or(array_get(chars, index), "") != "]" { return invalid_kir_type_parse() }
+        index = index + 1
+    }
+    if map_contains_key(variables, name) && argument_count != 0 { valid_variables = false }
+    return KIRTypeParse{ valid: true, next: index, name: name, argument_count: argument_count, valid_variables: valid_variables }
+}
+
+fn valid_struct_instance_type(encoded: String, name: String, parameter_count: Int) -> Bool {
+    let chars: Array[String] = string_chars(encoded)
+    let parsed: KIRTypeParse = parse_kir_type(chars, 0, {})
+    return parsed.valid && parsed.next == len(chars) && parsed.name == name && parsed.argument_count == parameter_count
+}
+
+fn validate_constant_uint(value: Json, label: String) -> Result[Bool, String] {
+    let raw: Result[Json, String] = member(value, "uint", label)
+    let bits_result: Result[Int, String] = int_member(value, "uint_bits", label)
+    if is_err(raw) || json_kind(result_unwrap(raw)) != "number" || is_err(bits_result) { return err(label + " has malformed unsigned literal data") }
+    let bits: Int = result_unwrap(bits_result)
+    if bits != 8 && bits != 16 && bits != 32 && bits != 64 { return err(label + " has an invalid UInt bit width") }
+    let unsigned: Result[UInt64, String] = json_uint(result_unwrap(raw))
+    if is_err(unsigned) { return err(label + " has an out-of-range UInt value") }
+    if bits < 64 {
+        let maximum: UInt64 = (u64(1) << bits) - u64(1)
+        if result_unwrap(unsigned) > maximum { return err(label + " UInt value exceeds its bit width") }
+    }
+    return ok(true)
+}
+
+fn validate_expression_list(owner: Json, key: String, label: String, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
     let values: Result[Json, String] = array_member(owner, key, label)
     if is_err(values) { return err(unwrap_or(result_error(values), label + " has a malformed " + key)) }
     let count: Result[Int, String] = json_array_len(result_unwrap(values))
@@ -173,7 +337,7 @@ fn validate_expression_list(owner: Json, key: String, label: String, functions: 
     while index < result_unwrap(count) {
         let item: Result[Json, String] = array_item(result_unwrap(values), index, child_label)
         if is_err(item) { return err(unwrap_or(result_error(item), child_label + " contains an invalid expression")) }
-        let checked: Result[Bool, String] = validate_expression(result_unwrap(item), functions, strict_fields)
+        let checked: Result[Bool, String] = validate_expression(result_unwrap(item), functions, types, strict_fields)
         if is_err(checked) { return err(unwrap_or(result_error(checked), label + "." + key + " contains an invalid expression")) }
         index = index + 1
     }
@@ -217,8 +381,35 @@ fn validate_kir_value(value: Json, strict_fields: Bool) -> Result[Bool, String] 
     if json_kind(value) != "object" { return err("KIR constant value must be an object") }
     let shape: Result[Bool, String] = validate_object_fields_if(value, "|kind|int|uint|uint_bits|float|bool|string|bytes|array|inner|present|ok|", "KIR constant value", strict_fields)
     if is_err(shape) { return shape }
+    let kind: Result[String, String] = string_member(value, "kind", "KIR constant value")
+    if is_err(kind) { return err("KIR constant value has no kind") }
+    let kind_name: String = result_unwrap(kind)
+    if kind_name != "nil" && kind_name != "int" && kind_name != "uint" && kind_name != "float" && kind_name != "bool" && kind_name != "string" && kind_name != "bytes" && kind_name != "array" && kind_name != "struct" && kind_name != "enum" && kind_name != "option" && kind_name != "result" && kind_name != "channel" && kind_name != "thread" && kind_name != "map" && kind_name != "set" && kind_name != "json" && kind_name != "websocket" && kind_name != "actor" && kind_name != "shared" && kind_name != "task_group" && kind_name != "regex" && kind_name != "random" && kind_name != "sqlite" && kind_name != "tcp" && kind_name != "tcp_listener" && kind_name != "udp" && kind_name != "ffi_library" && kind_name != "ffi_symbol" && kind_name != "ffi_buffer" && kind_name != "tail_call" { return err("unknown constant value kind '" + kind_name + "'") }
+    if kind_name == "int" {
+        let payload: Result[Int, String] = int_member(value, "int", "KIR constant value")
+        if is_err(payload) { return err("KIR Int constant has no valid payload") }
+    }
+    if kind_name == "uint" {
+        let payload: Result[Bool, String] = validate_constant_uint(value, "KIR UInt constant")
+        if is_err(payload) { return payload }
+    }
+    if kind_name == "float" {
+        let payload: Result[Json, String] = member(value, "float", "KIR constant value")
+        if is_err(payload) || json_kind(result_unwrap(payload)) != "number" { return err("KIR Float constant has no valid payload") }
+    }
+    if kind_name == "bool" {
+        let payload: Result[Bool, String] = bool_member(value, "bool", "KIR constant value")
+        if is_err(payload) { return err("KIR Bool constant has no valid payload") }
+    }
+    if kind_name == "string" {
+        let payload: Result[String, String] = string_member(value, "string", "KIR constant value")
+        if is_err(payload) { return err("KIR String constant has no valid payload") }
+    }
+    let bytes: Result[Json, String] = json_object_get(value, "bytes")
+    if is_ok(bytes) && json_kind(result_unwrap(bytes)) != "null" && json_kind(result_unwrap(bytes)) != "string" { return err("KIR constant bytes payload must be a base64 String or null") }
     let items: Result[Json, String] = json_object_get(value, "array")
-    if is_ok(items) && json_kind(result_unwrap(items)) == "array" {
+    if is_ok(items) && json_kind(result_unwrap(items)) != "null" {
+        if json_kind(result_unwrap(items)) != "array" { return err("KIR constant array payload must be an array or null") }
         let count: Result[Int, String] = json_array_len(result_unwrap(items))
         if is_err(count) { return err("KIR constant array is malformed") }
         let mut index: Int = 0
@@ -232,13 +423,18 @@ fn validate_kir_value(value: Json, strict_fields: Bool) -> Result[Bool, String] 
     }
     let inner: Result[Json, String] = json_object_get(value, "inner")
     if is_ok(inner) && json_kind(result_unwrap(inner)) != "null" {
+        if json_kind(result_unwrap(inner)) != "object" { return err("KIR constant inner payload must be an object or null") }
         let checked_inner: Result[Bool, String] = validate_kir_value(result_unwrap(inner), strict_fields)
         if is_err(checked_inner) { return checked_inner }
     }
+    let present: Result[Json, String] = json_object_get(value, "present")
+    if is_ok(present) && json_kind(result_unwrap(present)) != "bool" { return err("KIR constant present payload must be a Bool") }
+    let is_ok_value: Result[Json, String] = json_object_get(value, "ok")
+    if is_ok(is_ok_value) && json_kind(result_unwrap(is_ok_value)) != "bool" { return err("KIR constant ok payload must be a Bool") }
     return ok(true)
 }
 
-fn validate_statement_array(values: Json, label: String, functions: Map[String, KIRFunctionSignature], strict_fields: Bool) -> Result[Bool, String] {
+fn validate_statement_array(values: Json, label: String, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
     if json_kind(values) != "array" { return err(label + " must be an array") }
     let count: Result[Int, String] = json_array_len(values)
     if is_err(count) { return err(label + " must be an array") }
@@ -246,17 +442,17 @@ fn validate_statement_array(values: Json, label: String, functions: Map[String, 
     while index < result_unwrap(count) {
         let item: Result[Json, String] = array_item(values, index, label)
         if is_err(item) { return err(unwrap_or(result_error(item), label + " contains an invalid statement")) }
-        let checked: Result[Bool, String] = validate_statement(result_unwrap(item), functions, strict_fields)
+        let checked: Result[Bool, String] = validate_statement(result_unwrap(item), functions, types, strict_fields)
         if is_err(checked) { return err(unwrap_or(result_error(checked), label + " contains an invalid statement")) }
         index = index + 1
     }
     return ok(true)
 }
 
-fn validate_statement_list(owner: Json, key: String, label: String, functions: Map[String, KIRFunctionSignature], strict_fields: Bool) -> Result[Bool, String] {
+fn validate_statement_list(owner: Json, key: String, label: String, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
     let values: Result[Json, String] = array_member(owner, key, label)
     if is_err(values) { return err(unwrap_or(result_error(values), label + " has a malformed " + key)) }
-    return validate_statement_array(result_unwrap(values), label + "." + key, functions, strict_fields)
+    return validate_statement_array(result_unwrap(values), label + "." + key, functions, types, strict_fields)
 }
 
 fn reject_unexpected_statement_child(statement: Json, key: String, allowed: Bool, label: String) -> Result[Bool, String] {
@@ -303,7 +499,7 @@ fn reject_unexpected_statement_children(statement: Json, kind: String, label: St
     return ok(true)
 }
 
-fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSignature], strict_fields: Bool) -> Result[Bool, String] {
+fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
     if json_kind(expression) != "object" { return err("KIR expression must be an object") }
     let shape: Result[Bool, String] = validate_object_fields_if(expression, "|kind|source|line|column|type|const|int|uint|uint_bits|float|bool|string|name|operator|call_target|trait_name|builtin_id|left|right|operand|args|items|base|field|receiver|map_keys|struct_name|struct_type|generic_arguments|fields|values|enum_type|enum_variant|tail|callee|lambda|binding|", "KIR expression", strict_fields)
     if is_err(shape) { return shape }
@@ -327,9 +523,10 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         return ok(true)
     }
     if result_unwrap(kind) == "uint" {
-        let value: Result[Json, String] = member(expression, "uint", label)
-        let bits: Result[Int, String] = int_member(expression, "uint_bits", label)
-        if is_err(value) || json_kind(result_unwrap(value)) != "number" || is_err(bits) { return err(label + " has malformed unsigned literal data") }
+        let checked_uint: Result[Bool, String] = validate_constant_uint(expression, label)
+        if is_err(checked_uint) { return checked_uint }
+        let bits: Int = result_unwrap(int_member(expression, "uint_bits", label))
+        if result_unwrap(type_name) != "UInt" + str(bits) { return err(label + " UInt width does not match its checked type") }
         return ok(true)
     }
     if result_unwrap(kind) == "float" {
@@ -365,16 +562,18 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         let operator: Result[String, String] = string_member(expression, "operator", label)
         let operand: Result[Json, String] = member(expression, "operand", label)
         if is_err(operator) || is_err(operand) { return err(label + " is missing its operator or operand") }
-        return validate_expression(result_unwrap(operand), functions, strict_fields)
+        if result_unwrap(operator) != "+" && result_unwrap(operator) != "-" && result_unwrap(operator) != "!" && result_unwrap(operator) != "~" { return err(label + " has an invalid unary operator") }
+        return validate_expression(result_unwrap(operand), functions, types, strict_fields)
     }
     if result_unwrap(kind) == "binary" {
         let operator: Result[String, String] = string_member(expression, "operator", label)
         let left: Result[Json, String] = member(expression, "left", label)
         let right: Result[Json, String] = member(expression, "right", label)
         if is_err(operator) || is_err(left) || is_err(right) { return err(label + " is missing its operator or operand") }
-        let checked_left: Result[Bool, String] = validate_expression(result_unwrap(left), functions, strict_fields)
+        if result_unwrap(operator) != "+" && result_unwrap(operator) != "-" && result_unwrap(operator) != "*" && result_unwrap(operator) != "/" && result_unwrap(operator) != "%" && result_unwrap(operator) != "==" && result_unwrap(operator) != "!=" && result_unwrap(operator) != "<" && result_unwrap(operator) != "<=" && result_unwrap(operator) != ">" && result_unwrap(operator) != ">=" && result_unwrap(operator) != "&&" && result_unwrap(operator) != "||" && result_unwrap(operator) != "&" && result_unwrap(operator) != "|" && result_unwrap(operator) != "^" && result_unwrap(operator) != "<<" && result_unwrap(operator) != ">>" { return err(label + " has an invalid binary operator") }
+        let checked_left: Result[Bool, String] = validate_expression(result_unwrap(left), functions, types, strict_fields)
         if is_err(checked_left) { return checked_left }
-        return validate_expression(result_unwrap(right), functions, strict_fields)
+        return validate_expression(result_unwrap(right), functions, types, strict_fields)
     }
     if result_unwrap(kind) == "call" {
         let name: Result[String, String] = string_member(expression, "name", label)
@@ -396,7 +595,7 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
             while argument_index < argument_count {
                 let argument: Result[Json, String] = array_item(result_unwrap(args), argument_index, label + " arguments")
                 if is_err(argument) { return err(label + " has an invalid function argument") }
-                let checked_argument: Result[Bool, String] = validate_expression(result_unwrap(argument), functions, strict_fields)
+                let checked_argument: Result[Bool, String] = validate_expression(result_unwrap(argument), functions, types, strict_fields)
                 if is_err(checked_argument) { return checked_argument }
                 let argument_type: Result[String, String] = string_member(result_unwrap(argument), "type", label + " argument")
                 let expected_type: String = unwrap_or(array_get(function_signature.parameter_types, argument_index), "")
@@ -416,39 +615,73 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         } else {
             return err(label + " target must use the KIR v5 function: or builtin: form")
         }
-        return validate_expression_list(expression, "args", label, functions, strict_fields)
+        return validate_expression_list(expression, "args", label, functions, types, strict_fields)
     }
     if result_unwrap(kind) == "array" || result_unwrap(kind) == "set" {
-        return validate_expression_list(expression, "items", label, functions, strict_fields)
+        return validate_expression_list(expression, "items", label, functions, types, strict_fields)
     }
     if result_unwrap(kind) == "index" {
         let base: Result[Json, String] = member(expression, "base", label)
         let index: Result[Json, String] = member(expression, "left", label)
         if is_err(base) || is_err(index) { return err(label + " is missing its base or index") }
-        let checked_base: Result[Bool, String] = validate_expression(result_unwrap(base), functions, strict_fields)
+        let checked_base: Result[Bool, String] = validate_expression(result_unwrap(base), functions, types, strict_fields)
         if is_err(checked_base) { return checked_base }
-        return validate_expression(result_unwrap(index), functions, strict_fields)
+        return validate_expression(result_unwrap(index), functions, types, strict_fields)
     }
     if result_unwrap(kind) == "field" {
         let base: Result[Json, String] = member(expression, "base", label)
         let field_name: Result[String, String] = string_member(expression, "field", label)
         if is_err(base) || is_err(field_name) || result_unwrap(field_name) == "" { return err(label + " is missing its base or field name") }
-        return validate_expression(result_unwrap(base), functions, strict_fields)
+        return validate_expression(result_unwrap(base), functions, types, strict_fields)
     }
     if result_unwrap(kind) == "struct" {
         let name: Result[String, String] = string_member(expression, "struct_name", label)
         let fields: Result[Json, String] = array_member(expression, "fields", label)
         let values: Result[Json, String] = array_member(expression, "values", label)
         if is_err(name) || result_unwrap(name) == "" || is_err(fields) || is_err(values) { return err(label + " has incomplete construction data") }
+        let declaration: Option[Json] = find_named_declaration(types.structs, result_unwrap(name))
+        if is_none(declaration) { return err(label + " references an unknown struct '" + result_unwrap(name) + "'") }
+        let structure: Json = unwrap_or(declaration, result_unwrap(json_parse("{}")))
+        let type_params: Result[Json, String] = array_member(structure, "type_params", "KIR struct")
+        if is_err(type_params) { return err(label + " references a malformed struct declaration") }
+        let type_parameter_count: Int = result_unwrap(json_array_len(result_unwrap(type_params)))
+        let mut instance_type: String = result_unwrap(name)
+        let struct_type: Result[Json, String] = json_object_get(expression, "struct_type")
+        if is_err(struct_type) || json_kind(result_unwrap(struct_type)) == "null" || json_kind(result_unwrap(struct_type)) != "string" { return err(label + " is missing its resolved struct type") }
+        instance_type = result_unwrap(json_string(result_unwrap(struct_type)))
+        if type_parameter_count == 0 && result_unwrap(type_name) != instance_type { return err(label + " type does not match its struct declaration") }
+        if type_parameter_count != 0 && result_unwrap(type_name) != instance_type { return err(label + " type does not match its generic struct instance") }
+        if !valid_struct_instance_type(instance_type, result_unwrap(name), type_parameter_count) { return err(label + " has an invalid generic struct type") }
         let checked_fields: Result[Bool, String] = validate_string_array(result_unwrap(fields), label + ".fields")
         if is_err(checked_fields) { return checked_fields }
-        if result_unwrap(json_array_len(result_unwrap(fields))) != result_unwrap(json_array_len(result_unwrap(values))) { return err(label + " field and value counts differ") }
-        return validate_expression_list(expression, "values", label, functions, strict_fields)
+        let field_count: Int = result_unwrap(json_array_len(result_unwrap(fields)))
+        if field_count != result_unwrap(json_array_len(result_unwrap(values))) { return err(label + " field and value counts differ") }
+        let declaration_fields: Json = result_unwrap(json_object_get(structure, "fields"))
+        if field_count != result_unwrap(json_array_len(declaration_fields)) { return err(label + " has missing or extra fields") }
+        let mut seen_fields: Map[String, Bool] = {}
+        let mut field_index: Int = 0
+        while field_index < field_count {
+            let field_name: String = result_unwrap(json_string(result_unwrap(array_item(result_unwrap(fields), field_index, label + ".fields"))))
+            if map_contains_key(seen_fields, field_name) { return err(label + " has duplicate field '" + field_name + "'") }
+            let expected_type: String = struct_field_type(structure, field_name)
+            if expected_type == "" { return err(label + " references unknown field '" + field_name + "'") }
+            let value: Json = result_unwrap(array_item(result_unwrap(values), field_index, label + ".values"))
+            if type_parameter_count == 0 {
+                let actual_type: Result[String, String] = string_member(value, "type", label + " field value")
+                if is_err(actual_type) || result_unwrap(actual_type) != expected_type { return err(label + " field '" + field_name + "' has an incompatible value type") }
+            }
+            seen_fields = map_insert(seen_fields, field_name, true)
+            field_index = field_index + 1
+        }
+        return validate_expression_list(expression, "values", label, functions, types, strict_fields)
     }
     if result_unwrap(kind) == "enum" {
         let enum_type: Result[String, String] = string_member(expression, "enum_type", label)
         let variant: Result[String, String] = string_member(expression, "enum_variant", label)
         if is_err(enum_type) || result_unwrap(enum_type) == "" || is_err(variant) || result_unwrap(variant) == "" { return err(label + " has incomplete enum data") }
+        let declaration: Option[Json] = find_named_declaration(types.enums, result_unwrap(enum_type))
+        if is_none(declaration) || result_unwrap(type_name) != result_unwrap(enum_type) { return err(label + " references an unknown or mismatched enum type") }
+        if !enum_has_variant(unwrap_or(declaration, result_unwrap(json_parse("{}"))), result_unwrap(variant)) { return err(label + " references an unknown enum variant") }
         return ok(true)
     }
     if result_unwrap(kind) == "map" {
@@ -456,19 +689,19 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         let values: Result[Json, String] = array_member(expression, "values", label)
         if is_err(keys) || is_err(values) { return err(label + " has incomplete map data") }
         if result_unwrap(json_array_len(result_unwrap(keys))) != result_unwrap(json_array_len(result_unwrap(values))) { return err(label + " key and value counts differ") }
-        let checked_keys: Result[Bool, String] = validate_expression_list(expression, "map_keys", label, functions, strict_fields)
+        let checked_keys: Result[Bool, String] = validate_expression_list(expression, "map_keys", label, functions, types, strict_fields)
         if is_err(checked_keys) { return checked_keys }
-        return validate_expression_list(expression, "values", label, functions, strict_fields)
+        return validate_expression_list(expression, "values", label, functions, types, strict_fields)
     }
     if result_unwrap(kind) == "propagate" {
         let operand: Result[Json, String] = member(expression, "operand", label)
         if is_err(operand) { return err(label + " is missing its operand") }
-        return validate_expression(result_unwrap(operand), functions, strict_fields)
+        return validate_expression(result_unwrap(operand), functions, types, strict_fields)
     }
     return err("selfhost backends do not support KIR expression kind '" + result_unwrap(kind) + "'")
 }
 
-fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignature], strict_fields: Bool) -> Result[Bool, String] {
+fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
     if json_kind(statement) != "object" { return err("KIR statement must be an object") }
     let shape: Result[Bool, String] = validate_object_fields_if(statement, "|kind|source|line|column|name|binding|mutable|const|annotation|init|expr|target|value|cond|then|else|body|iter|return|scrutinee|arms|", "KIR statement", strict_fields)
     if is_err(shape) { return shape }
@@ -490,12 +723,12 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         if is_err(type_name) { return err(unwrap_or(result_error(type_name), label + " initializer has no type")) }
         let checked_binding: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(name), result_unwrap(type_name), true, result_unwrap(mutable), label + " binding", strict_fields)
         if is_err(checked_binding) { return err(unwrap_or(result_error(checked_binding), label + " has an invalid binding")) }
-        return validate_expression(result_unwrap(init), functions, strict_fields)
+        return validate_expression(result_unwrap(init), functions, types, strict_fields)
     }
     if result_unwrap(kind) == "expr" {
         let value: Result[Json, String] = member(statement, "expr", label)
         if is_err(value) { return err(label + " has no expression") }
-        return validate_expression(result_unwrap(value), functions, strict_fields)
+        return validate_expression(result_unwrap(value), functions, types, strict_fields)
     }
     if result_unwrap(kind) == "assign" {
         let target: Result[Json, String] = member(statement, "target", label)
@@ -503,25 +736,25 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         if is_err(target) || is_err(value) { return err(label + " is missing its target or value") }
         let target_kind: Result[String, String] = string_member(result_unwrap(target), "kind", label + " target")
         if is_err(target_kind) || result_unwrap(target_kind) != "var" { return err(label + " target must be a variable") }
-        let checked_target: Result[Bool, String] = validate_expression(result_unwrap(target), functions, strict_fields)
+        let checked_target: Result[Bool, String] = validate_expression(result_unwrap(target), functions, types, strict_fields)
         if is_err(checked_target) { return checked_target }
-        return validate_expression(result_unwrap(value), functions, strict_fields)
+        return validate_expression(result_unwrap(value), functions, types, strict_fields)
     }
     if result_unwrap(kind) == "if" {
         let cond: Result[Json, String] = member(statement, "cond", label)
         if is_err(cond) { return err(label + " has no condition") }
-        let checked: Result[Bool, String] = validate_expression(result_unwrap(cond), functions, strict_fields)
+        let checked: Result[Bool, String] = validate_expression(result_unwrap(cond), functions, types, strict_fields)
         if is_err(checked) { return checked }
-        let then_result: Result[Bool, String] = validate_statement_list(statement, "then", label, functions, strict_fields)
+        let then_result: Result[Bool, String] = validate_statement_list(statement, "then", label, functions, types, strict_fields)
         if is_err(then_result) { return then_result }
-        return validate_statement_list(statement, "else", label, functions, strict_fields)
+        return validate_statement_list(statement, "else", label, functions, types, strict_fields)
     }
     if result_unwrap(kind) == "while" {
         let cond: Result[Json, String] = member(statement, "cond", label)
         if is_err(cond) { return err(label + " has no condition") }
-        let checked: Result[Bool, String] = validate_expression(result_unwrap(cond), functions, strict_fields)
+        let checked: Result[Bool, String] = validate_expression(result_unwrap(cond), functions, types, strict_fields)
         if is_err(checked) { return checked }
-        return validate_statement_list(statement, "body", label, functions, strict_fields)
+        return validate_statement_list(statement, "body", label, functions, types, strict_fields)
     }
     if result_unwrap(kind) == "for" {
         let name: Result[String, String] = string_member(statement, "name", label)
@@ -532,21 +765,21 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         if is_err(type_name) { return err(unwrap_or(result_error(type_name), label + " binding has no type")) }
         let checked_binding: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(name), result_unwrap(type_name), true, false, label + " binding", strict_fields)
         if is_err(checked_binding) { return checked_binding }
-        let checked_iter: Result[Bool, String] = validate_expression(result_unwrap(iter), functions, strict_fields)
+        let checked_iter: Result[Bool, String] = validate_expression(result_unwrap(iter), functions, types, strict_fields)
         if is_err(checked_iter) { return checked_iter }
-        return validate_statement_list(statement, "body", label, functions, strict_fields)
+        return validate_statement_list(statement, "body", label, functions, types, strict_fields)
     }
     if result_unwrap(kind) == "return" {
         let value: Result[Json, String] = json_object_get(statement, "return")
         if is_err(value) || json_kind(result_unwrap(value)) == "null" { return ok(true) }
-        return validate_expression(result_unwrap(value), functions, strict_fields)
+        return validate_expression(result_unwrap(value), functions, types, strict_fields)
     }
     if result_unwrap(kind) == "break" || result_unwrap(kind) == "continue" { return ok(true) }
     if result_unwrap(kind) == "match" {
         let scrutinee: Result[Json, String] = member(statement, "scrutinee", label)
         let arms: Result[Json, String] = array_member(statement, "arms", label)
         if is_err(scrutinee) || is_err(arms) || result_unwrap(json_array_len(result_unwrap(arms))) == 0 { return err(label + " has no scrutinee or match arms") }
-        let checked_scrutinee: Result[Bool, String] = validate_expression(result_unwrap(scrutinee), functions, strict_fields)
+        let checked_scrutinee: Result[Bool, String] = validate_expression(result_unwrap(scrutinee), functions, types, strict_fields)
         if is_err(checked_scrutinee) { return checked_scrutinee }
         let arm_count: Int = result_unwrap(json_array_len(result_unwrap(arms)))
         let mut arm_index: Int = 0
@@ -565,12 +798,16 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
                 let enum_type: Result[String, String] = string_member(result_unwrap(pattern), "type", label + " pattern")
                 let variant: Result[String, String] = string_member(result_unwrap(pattern), "variant", label + " pattern")
                 if is_err(enum_type) || result_unwrap(enum_type) == "" || is_err(variant) || result_unwrap(variant) == "" { return err("KIR enum pattern is incomplete") }
+                let declaration: Option[Json] = find_named_declaration(types.enums, result_unwrap(enum_type))
+                let scrutinee_type: Result[String, String] = string_member(result_unwrap(scrutinee), "type", label + " scrutinee")
+                if is_none(declaration) || is_err(scrutinee_type) || result_unwrap(scrutinee_type) != result_unwrap(enum_type) { return err("KIR enum pattern references an unknown or mismatched enum type") }
+                if !enum_has_variant(unwrap_or(declaration, result_unwrap(json_parse("{}"))), result_unwrap(variant)) { return err("KIR enum pattern references an unknown enum variant") }
             } else if result_unwrap(pattern_kind) != "wildcard" {
                 return err("selfhost backends do not support KIR match pattern kind '" + result_unwrap(pattern_kind) + "'")
             }
             let pattern_coordinates: Result[Bool, String] = validate_coordinates(result_unwrap(pattern), "KIR match pattern")
             if is_err(pattern_coordinates) { return pattern_coordinates }
-            let checked_body: Result[Bool, String] = validate_statement_array(result_unwrap(body), label + " arm body", functions, strict_fields)
+            let checked_body: Result[Bool, String] = validate_statement_array(result_unwrap(body), label + " arm body", functions, types, strict_fields)
             if is_err(checked_body) { return checked_body }
             arm_index = arm_index + 1
         }
@@ -582,6 +819,7 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
 fn validate_structs(values: Json, strict_fields: Bool) -> Result[Bool, String] {
     let count: Int = result_unwrap(json_array_len(values))
     let mut index: Int = 0
+    let mut seen_structs: Map[String, Bool] = {}
     while index < count {
         let item: Json = result_unwrap(array_item(values, index, "KIR structs"))
         if json_kind(item) != "object" { return err("KIR struct declaration must be an object") }
@@ -591,9 +829,27 @@ fn validate_structs(values: Json, strict_fields: Bool) -> Result[Bool, String] {
         let type_params: Result[Json, String] = array_member(item, "type_params", "KIR struct")
         let fields: Result[Json, String] = array_member(item, "fields", "KIR struct")
         if is_err(name) || result_unwrap(name) == "" || is_err(type_params) || is_err(fields) { return err("KIR struct declaration is incomplete") }
-        if result_unwrap(json_array_len(result_unwrap(type_params))) != 0 { return err("selfhost backends reject generic struct declarations") }
+        if map_contains_key(seen_structs, result_unwrap(name)) { return err("duplicate KIR struct declaration '" + result_unwrap(name) + "'") }
+        seen_structs = map_insert(seen_structs, result_unwrap(name), true)
+        let type_param_count: Int = result_unwrap(json_array_len(result_unwrap(type_params)))
+        let mut type_param_index: Int = 0
+        let mut seen_type_params: Map[String, Bool] = {}
+        while type_param_index < type_param_count {
+            let parameter: Json = result_unwrap(array_item(result_unwrap(type_params), type_param_index, "KIR struct type parameters"))
+            let parameter_shape: Result[Bool, String] = validate_object_fields_if(parameter, "|name|constraint|", "KIR struct type parameter", strict_fields)
+            if is_err(parameter_shape) { return parameter_shape }
+            let parameter_name: Result[String, String] = string_member(parameter, "name", "KIR struct type parameter")
+            let constraint: Result[String, String] = string_member(parameter, "constraint", "KIR struct type parameter")
+            if is_err(parameter_name) || result_unwrap(parameter_name) == "" || is_err(constraint) { return err("KIR struct has an incomplete type parameter") }
+            if map_contains_key(seen_type_params, result_unwrap(parameter_name)) { return err("KIR struct has a duplicate type parameter") }
+            let constraint_name: String = result_unwrap(constraint)
+            if constraint_name != "" && constraint_name != "Any" && constraint_name != "Copy" && constraint_name != "Integer" && constraint_name != "Numeric" && constraint_name != "Comparable" { return err("KIR struct has an unsupported type parameter constraint") }
+            seen_type_params = map_insert(seen_type_params, result_unwrap(parameter_name), true)
+            type_param_index = type_param_index + 1
+        }
         let field_count: Int = result_unwrap(json_array_len(result_unwrap(fields)))
         let mut field_index: Int = 0
+        let mut seen_fields: Map[String, Bool] = {}
         while field_index < field_count {
             let field: Json = result_unwrap(array_item(result_unwrap(fields), field_index, "KIR struct fields"))
             let field_shape: Result[Bool, String] = validate_object_fields_if(field, "|name|public|type|", "KIR struct field", strict_fields)
@@ -602,6 +858,13 @@ fn validate_structs(values: Json, strict_fields: Bool) -> Result[Bool, String] {
             let field_type: Result[String, String] = string_member(field, "type", "KIR struct field")
             let field_public: Result[Bool, String] = bool_member(field, "public", "KIR struct field")
             if is_err(field_name) || result_unwrap(field_name) == "" || is_err(field_type) || result_unwrap(field_type) == "" || is_err(field_public) { return err("KIR struct has an incomplete field") }
+            if type_param_count != 0 {
+                let field_type_chars: Array[String] = string_chars(result_unwrap(field_type))
+                let parsed_field_type: KIRTypeParse = parse_kir_type(field_type_chars, 0, seen_type_params)
+                if !parsed_field_type.valid || parsed_field_type.next != len(field_type_chars) || !parsed_field_type.valid_variables { return err("KIR struct field has an invalid generic type expression") }
+            }
+            if map_contains_key(seen_fields, result_unwrap(field_name)) { return err("KIR struct has duplicate field '" + result_unwrap(field_name) + "'") }
+            seen_fields = map_insert(seen_fields, result_unwrap(field_name), true)
             field_index = field_index + 1
         }
         index = index + 1
@@ -612,6 +875,7 @@ fn validate_structs(values: Json, strict_fields: Bool) -> Result[Bool, String] {
 fn validate_enums(values: Json, strict_fields: Bool) -> Result[Bool, String] {
     let count: Int = result_unwrap(json_array_len(values))
     let mut index: Int = 0
+    let mut seen_enums: Map[String, Bool] = {}
     while index < count {
         let item: Json = result_unwrap(array_item(values, index, "KIR enums"))
         if json_kind(item) != "object" { return err("KIR enum declaration must be an object") }
@@ -620,8 +884,20 @@ fn validate_enums(values: Json, strict_fields: Bool) -> Result[Bool, String] {
         let name: Result[String, String] = string_member(item, "name", "KIR enum")
         let variants: Result[Json, String] = array_member(item, "variants", "KIR enum")
         if is_err(name) || result_unwrap(name) == "" || is_err(variants) { return err("KIR enum declaration is incomplete") }
+        if map_contains_key(seen_enums, result_unwrap(name)) { return err("duplicate KIR enum declaration '" + result_unwrap(name) + "'") }
+        seen_enums = map_insert(seen_enums, result_unwrap(name), true)
         let checked: Result[Bool, String] = validate_string_array(result_unwrap(variants), "KIR enum variants")
         if is_err(checked) { return checked }
+        let variant_count: Int = result_unwrap(json_array_len(result_unwrap(variants)))
+        if variant_count == 0 { return err("KIR enum has no variants") }
+        let mut seen_variants: Map[String, Bool] = {}
+        let mut variant_index: Int = 0
+        while variant_index < variant_count {
+            let variant: String = result_unwrap(json_string(result_unwrap(array_item(result_unwrap(variants), variant_index, "KIR enum variants"))))
+            if variant == "" || map_contains_key(seen_variants, variant) { return err("KIR enum has an empty or duplicate variant") }
+            seen_variants = map_insert(seen_variants, variant, true)
+            variant_index = variant_index + 1
+        }
         index = index + 1
     }
     return ok(true)
@@ -679,7 +955,28 @@ fn validate_unique_function_names(values: Json) -> Result[Bool, String] {
     return ok(true)
 }
 
-fn validate_functions(values: Json, symbols: Map[String, KIRFunctionSignature], strict_fields: Bool) -> Result[Bool, String] {
+fn validate_distinct_type_names(structs: Json, enums: Json) -> Result[Bool, String] {
+    let struct_count: Int = result_unwrap(json_array_len(structs))
+    let enum_count: Int = result_unwrap(json_array_len(enums))
+    let mut enum_index: Int = 0
+    while enum_index < enum_count {
+        let enum_decl: Json = result_unwrap(array_item(enums, enum_index, "KIR enums"))
+        let enum_name: Result[String, String] = string_member(enum_decl, "name", "KIR enum")
+        if is_ok(enum_name) {
+            let mut struct_index: Int = 0
+            while struct_index < struct_count {
+                let struct_decl: Json = result_unwrap(array_item(structs, struct_index, "KIR structs"))
+                let struct_name: Result[String, String] = string_member(struct_decl, "name", "KIR struct")
+                if is_ok(struct_name) && result_unwrap(struct_name) == result_unwrap(enum_name) { return err("KIR struct and enum declarations share the name '" + result_unwrap(enum_name) + "'") }
+                struct_index = struct_index + 1
+            }
+        }
+        enum_index = enum_index + 1
+    }
+    return ok(true)
+}
+
+fn validate_functions(values: Json, symbols: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
     let count: Int = result_unwrap(json_array_len(values))
     let mut index: Int = 0
     while index < count {
@@ -722,7 +1019,7 @@ fn validate_functions(values: Json, symbols: Map[String, KIRFunctionSignature], 
             if is_err(checked_binding) { return checked_binding }
             if json_kind(result_unwrap(default)) != "null" {
                 default_seen = true
-                let checked_default: Result[Bool, String] = validate_expression(result_unwrap(default), symbols, strict_fields)
+                let checked_default: Result[Bool, String] = validate_expression(result_unwrap(default), symbols, types, strict_fields)
                 if is_err(checked_default) { return checked_default }
                 let default_type: Result[String, String] = string_member(result_unwrap(default), "type", label + " default")
                 if is_err(default_type) || result_unwrap(default_type) != result_unwrap(parameter_type) { return err(label + " default type does not match its parameter") }
@@ -731,7 +1028,7 @@ fn validate_functions(values: Json, symbols: Map[String, KIRFunctionSignature], 
             }
             param_index = param_index + 1
         }
-        let checked_body: Result[Bool, String] = validate_statement_list(item, "body", label + " '" + result_unwrap(name) + "'", symbols, strict_fields)
+        let checked_body: Result[Bool, String] = validate_statement_list(item, "body", label + " '" + result_unwrap(name) + "'", symbols, types, strict_fields)
         if is_err(checked_body) { return checked_body }
         index = index + 1
     }
@@ -782,12 +1079,15 @@ fn validate_kir_document_mode(document: Json, strict_fields: Bool) -> Result[Val
     if is_err(checked_structs) { return err(unwrap_or(result_error(checked_structs), "malformed KIR structs")) }
     let checked_enums: Result[Bool, String] = validate_enums(result_unwrap(enums), strict_fields)
     if is_err(checked_enums) { return err(unwrap_or(result_error(checked_enums), "malformed KIR enums")) }
+    let distinct_types: Result[Bool, String] = validate_distinct_type_names(result_unwrap(structs), result_unwrap(enums))
+    if is_err(distinct_types) { return err(unwrap_or(result_error(distinct_types), "KIR type declaration names conflict")) }
+    let types: KIRTypeDeclarations = KIRTypeDeclarations{ structs: result_unwrap(structs), enums: result_unwrap(enums) }
     let unique_functions: Result[Bool, String] = validate_unique_function_names(result_unwrap(functions))
     if is_err(unique_functions) { return err(unwrap_or(result_error(unique_functions), "malformed KIR functions")) }
     let function_symbols: Map[String, KIRFunctionSignature] = build_function_symbols(result_unwrap(functions))
-    let checked_functions: Result[Bool, String] = validate_functions(result_unwrap(functions), function_symbols, strict_fields)
+    let checked_functions: Result[Bool, String] = validate_functions(result_unwrap(functions), function_symbols, types, strict_fields)
     if is_err(checked_functions) { return err(unwrap_or(result_error(checked_functions), "malformed KIR functions")) }
-    let checked_statements: Result[Bool, String] = validate_statement_array(result_unwrap(statements), "KIR document statements", function_symbols, strict_fields)
+    let checked_statements: Result[Bool, String] = validate_statement_array(result_unwrap(statements), "KIR document statements", function_symbols, types, strict_fields)
     if is_err(checked_statements) { return err(unwrap_or(result_error(checked_statements), "malformed KIR statements")) }
     return ok(ValidatedKIR{ document: document })
 }
@@ -796,37 +1096,8 @@ pub fn validate_kir_document(document: Json) -> Result[ValidatedKIR, String] {
     return validate_kir_document_mode(document, true)
 }
 
-// Source-generated KIR comes from the source frontend's checked syntax tree
-// and fixed serializer. Validate its interchange envelope here; the frontend
-// has already checked expression, binding, and call signatures. External KIR
-// always uses validate_kir_document and its complete recursive checks.
+// Source-generated KIR comes from the fixed serializer, so it skips only the
+// repeated unknown-key scan while retaining recursive semantic validation.
 pub fn validate_generated_kir_document(document: Json) -> Result[ValidatedKIR, String] {
-    if json_kind(document) != "object" { return err("KIR document must be an object") }
-    let format: Result[String, String] = string_member(document, "format", "KIR document")
-    let version: Result[Int, String] = int_member(document, "version", "KIR document")
-    let language: Result[String, String] = string_member(document, "language_version", "KIR document")
-    let source: Result[String, String] = string_member(document, "source", "KIR document")
-    if is_err(format) || result_unwrap(format) != "kry-ir" { return err("unsupported KIR format") }
-    if is_err(version) || result_unwrap(version) != 5 { return err("source frontend requires KIR version 5") }
-    if is_err(language) || result_unwrap(language) != "1.0.0" { return err("KIR document has an unsupported language version") }
-    if is_err(source) || result_unwrap(source) == "" { return err("KIR document has no source path") }
-    let target: Result[Json, String] = member(document, "target", "KIR document")
-    if is_err(target) { return err("KIR document has no target") }
-    let target_os: Result[String, String] = string_member(result_unwrap(target), "os", "KIR target")
-    let target_arch: Result[String, String] = string_member(result_unwrap(target), "arch", "KIR target")
-    let target_gui: Result[Bool, String] = bool_member(result_unwrap(target), "gui", "KIR target")
-    if is_err(target_os) || is_err(target_arch) || is_err(target_gui) { return err("KIR target is incomplete") }
-    if (result_unwrap(target_os) != "linux" && result_unwrap(target_os) != "windows") || result_unwrap(target_arch) != "amd64" { return err("source frontend supports only linux-amd64 and windows-amd64") }
-    if result_unwrap(target_gui) && result_unwrap(target_os) != "windows" { return err("GUI target requires windows-amd64") }
-    let imports: Result[Json, String] = array_member(document, "imports", "KIR document")
-    let sources: Result[Json, String] = array_member(document, "sources", "KIR document")
-    let structs: Result[Json, String] = array_member(document, "structs", "KIR document")
-    let enums: Result[Json, String] = array_member(document, "enums", "KIR document")
-    let traits: Result[Json, String] = array_member(document, "traits", "KIR document")
-    let trait_impls: Result[Json, String] = array_member(document, "trait_impls", "KIR document")
-    let functions: Result[Json, String] = array_member(document, "functions", "KIR document")
-    let statements: Result[Json, String] = array_member(document, "statements", "KIR document")
-    if is_err(imports) || is_err(sources) || is_err(structs) || is_err(enums) || is_err(traits) || is_err(trait_impls) || is_err(functions) || is_err(statements) { return err("KIR v5 document is missing one or more required arrays") }
-    if result_unwrap(json_array_len(result_unwrap(traits))) != 0 || result_unwrap(json_array_len(result_unwrap(trait_impls))) != 0 { return err("source frontend does not emit KIR trait declarations") }
-    return ok(ValidatedKIR{ document: document })
+    return validate_kir_document_mode(document, false)
 }
