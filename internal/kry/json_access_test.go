@@ -54,6 +54,30 @@ main()
 	}
 }
 
+func TestJSONNestedAccessSerializesOnlyWhenObserved(t *testing.T) {
+	src := `
+fn main() -> Result[Nil, String] {
+    let document: Json = json_parse("{\"nested\":{\"values\":[1,{\"ok\":true}]}}")?
+    let nested: Json = result_unwrap(json_object_get(document, "nested"))
+    let values: Json = result_unwrap(json_object_get(nested, "values"))
+    let second: Json = result_unwrap(json_array_get(values, 1))
+    assert_eq(json_stringify(nested), "{\"values\":[1,{\"ok\":true}]}")
+    assert_eq(str(second), "{\"ok\":true}")
+    assert_eq(second, json_parse("{\"ok\":true}")?)
+    return ok(nil)
+}
+main()
+`
+	p, c := testProgram(t, src)
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("nested JSON access changed serialization, display, or equality: %s", d.Message)
+	}
+}
+
 func TestJSONObjectKeysAreSortedAndRejectNonObjects(t *testing.T) {
 	src := `
 fn main() -> Result[Nil, String] {

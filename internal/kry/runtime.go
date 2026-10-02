@@ -409,6 +409,9 @@ func display(v Value) string {
 		}
 		return "false"
 	case VString, VJSON:
+		if v.Kind == VJSON {
+			return jsonText(v)
+		}
 		return v.S
 	case VBytes:
 		return fmt.Sprintf("<Bytes:%d>", len(v.Bytes))
@@ -599,6 +602,9 @@ func equalValue(a, b Value) bool {
 	case VBool:
 		return a.Bool == b.Bool
 	case VString, VJSON:
+		if a.Kind == VJSON {
+			return jsonText(a) == jsonText(b)
+		}
 		return a.S == b.S
 	case VBytes:
 		return string(a.Bytes) == string(b.Bytes)
@@ -2609,7 +2615,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		}
 		return resVal(true, jsonValue(string(canon), normalized)), nil
 	case "json_stringify":
-		return stringVal(a[0].S), nil
+		return stringVal(jsonText(a[0])), nil
 	case "json_kind":
 		raw, err := jsonRawValue(a[0])
 		if err != nil {
@@ -2629,11 +2635,10 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if !ok {
 			return resVal(false, stringVal("JSON object key not found")), nil
 		}
-		data, err := json.Marshal(child)
-		if err != nil {
-			return resVal(false, stringVal(err.Error())), nil
-		}
-		return resVal(true, jsonValue(string(data), child)), nil
+		// Preserve the decoded subtree directly. Serializing every child here
+		// makes recursive consumers (such as the selfhost KIR validator) copy
+		// each nested subtree once per ancestor, yielding quadratic work.
+		return resVal(true, jsonValueRaw(child)), nil
 	case "json_object_keys":
 		raw, err := jsonRawValue(a[0])
 		if err != nil {
@@ -2684,11 +2689,7 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 		if a[1].I < 0 || a[1].I >= int64(len(items)) {
 			return resVal(false, stringVal("JSON array index out of range")), nil
 		}
-		data, err := json.Marshal(items[a[1].I])
-		if err != nil {
-			return resVal(false, stringVal(err.Error())), nil
-		}
-		return resVal(true, jsonValue(string(data), items[a[1].I])), nil
+		return resVal(true, jsonValueRaw(items[a[1].I])), nil
 	case "json_string":
 		var value string
 		if a[0].JSONReady {
@@ -4349,6 +4350,21 @@ func decodeJSONNode(text string) (any, error) {
 
 func jsonValue(text string, raw any) Value {
 	return Value{Kind: VJSON, S: text, JSON: raw, JSONReady: true}
+}
+
+func jsonValueRaw(raw any) Value {
+	return Value{Kind: VJSON, JSON: raw, JSONReady: true}
+}
+
+func jsonText(value Value) string {
+	if value.S != "" || !value.JSONReady {
+		return value.S
+	}
+	data, err := json.Marshal(value.JSON)
+	if err != nil {
+		return "null"
+	}
+	return string(data)
 }
 
 func jsonRawValue(v Value) (any, error) {
