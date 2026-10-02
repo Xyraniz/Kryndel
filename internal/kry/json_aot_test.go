@@ -83,6 +83,22 @@ func TestCAOTJSONObjectKeysMatchInterpreter(t *testing.T) {
 	requireJSONNativeParity(t, source)
 }
 
+func TestCAOTJSONObjectKeysAllowedMatchesInterpreter(t *testing.T) {
+	source := `fn main() -> Result[Nil, String] {
+    let object: Json = json_parse("{\"kind\":\"binary\",\"left\":1,\"right\":2}")?
+    println(json_object_keys_allowed(object, "|kind|left|right|"))
+    println(json_object_keys_allowed(object, "|kind|left|"))
+    println(json_object_keys_allowed(object, "kind|left|right|"))
+    println(json_object_keys_allowed(object, "|kind||left|right|"))
+    println(json_object_keys_allowed(json_parse("{}")?, ""))
+    println(json_object_keys_allowed(json_parse("{\"x\":1}")?, ""))
+    println(json_object_keys_allowed(json_parse("[]")?, "|length|"))
+    println(json_object_keys_allowed(json_parse("{\"é\":1}")?, "|é|"))
+    return ok(nil)
+}`
+	requireJSONNativeParity(t, source)
+}
+
 func TestCAOTJSONObjectFieldsEmptyExceptMatchInterpreter(t *testing.T) {
 	source := `fn main() -> Result[Nil, String] {
     let valid: Json = json_parse("{\"kind\":\"binary\",\"left\":1,\"right\":2,\"args\":[],\"map_keys\":[]}")?
@@ -98,6 +114,7 @@ func TestCAOTJSONObjectFieldsEmptyExceptMatchInterpreter(t *testing.T) {
 }`
 	requireJSONNativeParity(t, source)
 }
+
 func TestCAOTJSONObjectKeysRespectArrayElementLimit(t *testing.T) {
 	if !((runtime.GOOS == "linux" || runtime.GOOS == "windows") && runtime.GOARCH == "amd64") {
 		t.Skip("C AOT JSON differential tests require linux/amd64 or windows/amd64")

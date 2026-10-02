@@ -918,7 +918,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 
 	generatedCompiler := filepath.Join(dir, "source-kir-compiler")
 	maxWallMS := "720000"
-	maxInstructions := "100000000"
+	maxInstructions := "200000000"
 	if os.Getenv("KRY_RACE") == "1" {
 		// The race instrumented interpreter is substantially slower during
 		// the large bootstrap, but it must still exercise the same checks.

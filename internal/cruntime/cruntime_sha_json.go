@@ -507,6 +507,15 @@ static int k_json_field_set_contains(KValue fields, KValue key) {
     }
     return 0;
 }
+static KValue k_json_object_keys_allowed(KValue value, KValue allowed) {
+    if (!k_json_field_set_valid(allowed)) return kv_bool(0);
+    KValue object=k_json_unwrap(value);
+    if (object.tag!=K_MAP) return kv_bool(0);
+    for (size_t i=0;i<object.u.m.len;i++) {
+        if (!k_json_field_set_contains(allowed,object.u.m.keys[i])) return kv_bool(0);
+    }
+    return kv_bool(1);
+}
 static KValue k_json_object_fields_empty_except(KValue value, KValue candidates, KValue allowed, KValue empty_arrays) {
     if (!k_json_field_set_valid(candidates) || !k_json_field_set_valid(allowed) || !k_json_field_set_valid(empty_arrays)) return kv_bool(0);
     KValue object=k_json_unwrap(value);

@@ -2661,6 +2661,12 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			values[index] = stringVal(key)
 		}
 		return resVal(true, arrVal(values)), nil
+	case "json_object_keys_allowed":
+		raw, err := jsonRawValue(a[0])
+		if err != nil {
+			return boolVal(false), nil
+		}
+		return boolVal(jsonObjectKeysAllowed(raw, a[1].S)), nil
 	case "json_object_fields_empty_except":
 		raw, err := jsonRawValue(a[0])
 		if err != nil {
@@ -4427,6 +4433,23 @@ func jsonObjectFieldsEmptyExcept(raw any, candidateFields, allowedFields, emptyA
 			}
 		}
 		return false
+	}
+	return true
+}
+
+// jsonObjectKeysAllowed checks a JSON object's keys without allocating,
+// sorting, or materializing an Array[String]. This is the strict validator's
+// fast path; callers can enumerate keys separately only when they need to
+// report the first unknown field.
+func jsonObjectKeysAllowed(raw any, allowedFields string) bool {
+	object, ok := raw.(map[string]any)
+	if !ok || !validJSONFieldSet(allowedFields) {
+		return false
+	}
+	for key := range object {
+		if !jsonFieldSetContains(allowedFields, key) {
+			return false
+		}
 	}
 	return true
 }

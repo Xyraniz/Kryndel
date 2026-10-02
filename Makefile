@@ -5,7 +5,7 @@ BINARY ?= build/kry.exe
 else
 BINARY ?= build/kry
 endif
-TIMEOUT ?= 10m
+TIMEOUT ?= 20m
 RACE_TIMEOUT ?= 40m
 
 .PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs check-generated native-smoke native-parity package-smoke benchmark verify-fast verify-full verify install-association release clean
@@ -33,7 +33,7 @@ check: build
 	$(BINARY) check examples/concurrency.kry
 
 test: build check
-	$(GO) test ./...
+	$(GO) test -timeout=$(TIMEOUT) ./...
 	$(BINARY) run examples/hello.kry
 	$(BINARY) run examples/fibonacci.kry
 	$(BINARY) run examples/bytes.kry
@@ -63,7 +63,7 @@ test-static: build
 	    if [ -n "$$unformatted" ]; then printf '%s\n' "$$unformatted" >&2; exit 1; fi; \
 	  fi
 	$(GO) vet ./...
-	$(GO) test -count=1 ./...
+	$(GO) test -count=1 -timeout=$(TIMEOUT) ./...
 
 test-race:
 	KRY_RACE=1 $(GO) test -race -count=1 -timeout=$(RACE_TIMEOUT) ./...

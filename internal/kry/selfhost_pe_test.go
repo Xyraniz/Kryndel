@@ -1107,6 +1107,29 @@ fn main() -> Nil {
 	runSelfhostPEBackendExpectingOutput(t, source, "json-child-fields.exe", "true\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\nfalse\n")
 }
 
+func TestSelfhostPEBackendJSONObjectKeysAllowed(t *testing.T) {
+	source := `
+fn main() -> Nil {
+    println(json_object_keys_allowed(result_unwrap(json_parse("{\"kind\":\"call\",\"args\":[],\"line\":1}")), "|kind|args|line|"))
+    println(json_object_keys_allowed(result_unwrap(json_parse("{\"kind\":\"call\",\"extra\":true}")), "|kind|args|line|"))
+    println(json_object_keys_allowed(result_unwrap(json_parse("{\"args\":[],\"extra\":true}")), "|args|kind|line|"))
+    println(json_object_keys_allowed(result_unwrap(json_parse("{}")), ""))
+    println(json_object_keys_allowed(result_unwrap(json_parse("{}")), "malformed"))
+    println(json_object_keys_allowed(result_unwrap(json_parse("{}")), "||"))
+    println(json_object_keys_allowed(result_unwrap(json_parse("{\"kind\":1}")), "|kind||args|"))
+    println(json_object_keys_allowed(result_unwrap(json_parse("[]")), "|kind|"))
+    println(json_object_keys_allowed(result_unwrap(json_parse("{\"é\":1}")), "|é|"))
+    return nil
+}
+`
+	runSelfhostPEBackendExpectingOutput(t, source, "json-object-keys-allowed.exe", "true\nfalse\nfalse\ntrue\nfalse\nfalse\nfalse\nfalse\ntrue\n")
+}
+
+func TestSelfhostPEBackendJSONObjectKeysAllowedEmptyObject(t *testing.T) {
+	source := `fn main() -> Nil { println(json_object_keys_allowed(result_unwrap(json_parse("{}")), "bad")); return nil }`
+	runSelfhostPEBackendExpectingOutput(t, source, "json-object-keys-allowed-empty.exe", "false\n")
+}
+
 func TestSelfhostPEBackendJSONParserRejectsMalformedDocuments(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

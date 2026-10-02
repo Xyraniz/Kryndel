@@ -116,7 +116,6 @@ fn main() -> Nil { return nil }
 		t.Fatalf("expected Json parameter diagnostic, got %#v", diagnostic)
 	}
 }
-
 func TestJSONObjectKeysRespectArrayElementLimit(t *testing.T) {
 	src := `
 fn main() -> Result[Nil, String] {
@@ -138,6 +137,60 @@ main()
 	}
 	if d = r.run(); d != nil {
 		t.Fatalf("JSON object key limit was not enforced: %s", d.Message)
+	}
+}
+
+func TestJSONObjectKeysAllowed(t *testing.T) {
+	source := `
+fn main() -> Result[Nil, String] {
+    let object: Json = json_parse("{\"kind\":\"binary\",\"left\":1,\"right\":2}")?
+    assert_eq(json_object_keys_allowed(object, "|kind|left|right|"), true)
+    assert_eq(json_object_keys_allowed(object, "|kind|left|"), false)
+    assert_eq(json_object_keys_allowed(object, "kind|left|right|"), false)
+    assert_eq(json_object_keys_allowed(object, "|kind||left|right|"), false)
+    assert_eq(json_object_keys_allowed(json_parse("{}")?, ""), true)
+    assert_eq(json_object_keys_allowed(json_parse("{\"x\":1}")?, ""), false)
+    assert_eq(json_object_keys_allowed(json_parse("[]")?, "|length|"), false)
+    assert_eq(json_object_keys_allowed(json_parse("{\"é\":1}")?, "|é|"), true)
+    return ok(nil)
+}
+main()
+`
+	p, c := testProgram(t, source)
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("JSON key allowlist validation failed: %s", d.Message)
+	}
+}
+
+func TestJSONObjectKeysAllowedCheckerRequiresJsonAndString(t *testing.T) {
+	source := `fn invalid(value: String) -> Bool { return json_object_keys_allowed(value, "|key|") }
+fn main() -> Nil { return nil }
+`
+	program, diagnostic := Parse(&Source{Name: "json-object-keys-allowed-type.kry", Text: source}, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	if _, diagnostic = Check(program, DefaultLimits()); diagnostic == nil || !strings.Contains(diagnostic.Message, "json_object_keys_allowed expects Json and String") {
+		t.Fatalf("expected Json parameter diagnostic, got %#v", diagnostic)
+	}
+}
+
+func TestJSONObjectKeysAllowedKIRExpressionShapeCorpus(t *testing.T) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(`{"kind":"call","source":"selfhost/source_kir_compiler.kry","line":81,"column":12,"type":"Result[Json,String]","name":"json_parse","call_target":"builtin:json_parse","builtin_id":"json_parse","args":[],"items":[],"left":null,"right":null,"operand":null,"base":null,"receiver":null,"callee":null,"lambda":null,"map_keys":[],"values":[]}`), &raw); err != nil {
+		t.Fatal(err)
+	}
+	allowed := "|kind|source|line|column|type|name|call_target|builtin_id|args|items|left|right|operand|base|receiver|callee|lambda|map_keys|values|"
+	if !jsonObjectKeysAllowed(raw, allowed) {
+		t.Fatal("valid compiler KIR expression keys were rejected")
+	}
+	raw["unknown_extension"] = true
+	if jsonObjectKeysAllowed(raw, allowed) {
+		t.Fatal("unknown compiler KIR expression key was accepted")
 	}
 }
 

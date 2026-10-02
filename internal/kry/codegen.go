@@ -1513,6 +1513,8 @@ func (g *cgen) builtinCall(e *KIRExpr, b Builtin) string {
 		return fmt.Sprintf("k_json_object_get(%s, %s)", arg(0), arg(1))
 	case "json_object_keys":
 		return fmt.Sprintf("k_json_object_keys(%s)", arg(0))
+	case "json_object_keys_allowed":
+		return fmt.Sprintf("k_json_object_keys_allowed(%s, %s)", arg(0), arg(1))
 	case "json_object_fields_empty_except":
 		return fmt.Sprintf("k_json_object_fields_empty_except(%s, %s, %s, %s)", arg(0), arg(1), arg(2), arg(3))
 	case "json_array_len":

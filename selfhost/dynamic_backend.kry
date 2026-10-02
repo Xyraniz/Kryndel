@@ -419,6 +419,10 @@ fn host_json_field_set_lookup_label(state: EmitState) -> Int {
     return state.assembler.common.box_alloc_label + 32
 }
 
+fn host_json_object_keys_allowed_label(state: EmitState) -> Int {
+    return state.assembler.common.box_alloc_label + 33
+}
+
 fn host_map_remove_label(state: EmitState) -> Int {
     return state.assembler.common.box_alloc_label + 27
 }
@@ -4810,6 +4814,96 @@ fn emit_json_object_fields_empty_except_runtime(state: EmitState) -> Result[Emit
     return ok(current)
 }
 
+fn emit_json_object_keys_allowed_runtime(state: EmitState) -> Result[EmitState, String] {
+    let bound: Result[EmitState, String] = bind_label(state, host_json_object_keys_allowed_label(state))
+    if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind JSON key allowlist runtime")) }
+    let start: LabelState = new_label(result_unwrap(bound))
+    let valid_set: LabelState = new_label(start.state)
+    let validate_loop: LabelState = new_label(valid_set.state)
+    let validate_delimiter: LabelState = new_label(validate_loop.state)
+    let validate_first_delimiter: LabelState = new_label(validate_delimiter.state)
+    let validate_next: LabelState = new_label(validate_first_delimiter.state)
+    let key_loop: LabelState = new_label(validate_next.state)
+    let success: LabelState = new_label(key_loop.state)
+    let failure: LabelState = new_label(success.state)
+    let invalid: LabelState = new_label(failure.state)
+    let epilogue: LabelState = new_label(invalid.state)
+    let mut current: EmitState = append_code(epilogue.state, [
+        u8(83), u8(85), u8(65), u8(84), u8(65), u8(85), u8(65), u8(86), u8(65), u8(87),
+        u8(73), u8(137), u8(252), u8(73), u8(137), u8(245), u8(72), u8(131), u8(236), u8(32),
+        u8(76), u8(137), u8(231)
+    ])
+    current = emit_json_call_aligned(current, host_json_object_keys_label(current))
+    current = append_code(current, [u8(72), u8(133), u8(192)])
+    current = emit_jump(current, failure.label, true, u8(132))
+    current = append_code(current, [u8(72), u8(131), u8(56), u8(0)])
+    current = emit_jump(current, failure.label, true, u8(133))
+    current = append_code(current, [u8(72), u8(137), u8(4), u8(36), u8(77), u8(139), u8(117), u8(0), u8(77), u8(133), u8(246)])
+    current = emit_jump(current, valid_set.label, true, u8(132))
+    current = append_code(current, [u8(73), u8(131), u8(254), u8(3)])
+    current = emit_jump(current, invalid.label, true, u8(130))
+    current = append_code(current, [u8(77), u8(141), u8(69), u8(8), u8(65), u8(128), u8(56), u8(124)])
+    current = emit_jump(current, invalid.label, true, u8(133))
+    current = append_code(current, [u8(76), u8(137), u8(240), u8(72), u8(255), u8(200), u8(65), u8(128), u8(60), u8(0), u8(124)])
+    current = emit_jump(current, invalid.label, true, u8(133))
+    current = append_code(current, [u8(72), u8(199), u8(195), u8(1), u8(0), u8(0), u8(0)])
+    current = emit_jump(current, validate_loop.label, false, u8(0))
+    let bound_validate_loop: Result[EmitState, String] = bind_label(current, validate_loop.label)
+    if is_err(bound_validate_loop) { return err(unwrap_or(result_error(bound_validate_loop), "dynamic backend: cannot bind key allowlist validation loop")) }
+    current = append_code(result_unwrap(bound_validate_loop), [u8(76), u8(57), u8(243)])
+    current = emit_jump(current, valid_set.label, true, u8(135))
+    current = append_code(current, [u8(72), u8(137), u8(216), u8(72), u8(255), u8(200), u8(65), u8(15), u8(182), u8(20), u8(0), u8(128), u8(250), u8(124)])
+    current = emit_jump(current, validate_delimiter.label, true, u8(132))
+    current = append_code(current, [u8(65), u8(186), u8(1), u8(0), u8(0), u8(0)])
+    current = emit_jump(current, validate_next.label, false, u8(0))
+    let bound_validate_delimiter: Result[EmitState, String] = bind_label(current, validate_delimiter.label)
+    if is_err(bound_validate_delimiter) { return err(unwrap_or(result_error(bound_validate_delimiter), "dynamic backend: cannot bind key allowlist delimiter")) }
+    current = append_code(result_unwrap(bound_validate_delimiter), [u8(72), u8(137), u8(216), u8(72), u8(255), u8(200), u8(65), u8(15), u8(182), u8(4), u8(0), u8(60), u8(124)])
+    current = emit_jump(current, invalid.label, true, u8(133))
+    current = append_code(current, [u8(72), u8(131), u8(251), u8(1)])
+    current = emit_jump(current, validate_first_delimiter.label, true, u8(132))
+    current = append_code(current, [u8(69), u8(133), u8(210)])
+    current = emit_jump(current, invalid.label, true, u8(132))
+    current = append_code(current, [u8(69), u8(49), u8(210)])
+    current = emit_jump(current, validate_next.label, false, u8(0))
+    let bound_validate_first_delimiter: Result[EmitState, String] = bind_label(current, validate_first_delimiter.label)
+    if is_err(bound_validate_first_delimiter) { return err(unwrap_or(result_error(bound_validate_first_delimiter), "dynamic backend: cannot bind initial key allowlist delimiter")) }
+    current = append_code(result_unwrap(bound_validate_first_delimiter), [u8(69), u8(49), u8(210)])
+    let bound_validate_next: Result[EmitState, String] = bind_label(current, validate_next.label)
+    if is_err(bound_validate_next) { return err(unwrap_or(result_error(bound_validate_next), "dynamic backend: cannot bind key allowlist advance")) }
+    current = append_code(result_unwrap(bound_validate_next), [u8(72), u8(255), u8(195)])
+    current = emit_jump(current, validate_loop.label, false, u8(0))
+    let bound_valid_set: Result[EmitState, String] = bind_label(current, valid_set.label)
+    if is_err(bound_valid_set) { return err(unwrap_or(result_error(bound_valid_set), "dynamic backend: cannot bind validated key allowlist")) }
+    current = append_code(result_unwrap(bound_valid_set), [u8(72), u8(139), u8(4), u8(36), u8(76), u8(139), u8(112), u8(8), u8(72), u8(49), u8(219)])
+    current = emit_jump(current, key_loop.label, false, u8(0))
+    let bound_key_loop: Result[EmitState, String] = bind_label(current, key_loop.label)
+    if is_err(bound_key_loop) { return err(unwrap_or(result_error(bound_key_loop), "dynamic backend: cannot bind JSON key allowlist lookup loop")) }
+    current = append_code(result_unwrap(bound_key_loop), [u8(73), u8(139), u8(6), u8(72), u8(57), u8(195)])
+    current = emit_jump(current, success.label, true, u8(131))
+    current = append_code(current, [u8(72), u8(137), u8(216), u8(72), u8(193), u8(224), u8(3), u8(76), u8(1), u8(240), u8(72), u8(131), u8(192), u8(8), u8(72), u8(139), u8(48), u8(76), u8(137), u8(239), u8(76), u8(139), u8(62)])
+    current = emit_json_call_aligned(current, host_json_field_set_lookup_label(current))
+    current = append_code(current, [u8(72), u8(131), u8(248), u8(0)])
+    current = emit_jump(current, failure.label, true, u8(142))
+    current = append_code(current, [u8(72), u8(255), u8(195)])
+    current = emit_jump(current, key_loop.label, false, u8(0))
+    let bound_success: Result[EmitState, String] = bind_label(current, success.label)
+    if is_err(bound_success) { return err(unwrap_or(result_error(bound_success), "dynamic backend: cannot bind JSON key allowlist success")) }
+    current = emit_int(result_unwrap(bound_success), 1)
+    current = emit_jump(current, epilogue.label, false, u8(0))
+    let bound_failure: Result[EmitState, String] = bind_label(current, failure.label)
+    if is_err(bound_failure) { return err(unwrap_or(result_error(bound_failure), "dynamic backend: cannot bind JSON key allowlist failure")) }
+    current = emit_int(result_unwrap(bound_failure), 0)
+    current = emit_jump(current, epilogue.label, false, u8(0))
+    let bound_invalid: Result[EmitState, String] = bind_label(current, invalid.label)
+    if is_err(bound_invalid) { return err(unwrap_or(result_error(bound_invalid), "dynamic backend: cannot bind malformed JSON key allowlist")) }
+    current = emit_int(result_unwrap(bound_invalid), 0)
+    let bound_epilogue: Result[EmitState, String] = bind_label(current, epilogue.label)
+    if is_err(bound_epilogue) { return err(unwrap_or(result_error(bound_epilogue), "dynamic backend: cannot bind JSON key allowlist epilogue")) }
+    current = append_code(result_unwrap(bound_epilogue), [u8(72), u8(131), u8(196), u8(32), u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)])
+    return ok(current)
+}
+
 fn emit_json_array_len_runtime(state: EmitState) -> Result[EmitState, String] {
     let bound: Result[EmitState, String] = bind_label(state, host_json_array_len_label(state))
     if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind JSON array length runtime")) }
@@ -6192,6 +6286,17 @@ fn emit_expression(state: EmitState, expression: Json) -> Result[EmitState, Stri
             let marked: EmitState = state_with_array_used(state_with_box_used(state_with_host_used(moved)))
             return ok(emit_label_call(marked, host_json_object_keys_label(marked)))
         }
+        if target == "builtin:json_object_keys_allowed" {
+            if result_unwrap(json_array_len(arguments)) != 2 || expr_type(argument) != "Json" || expr_type(result_unwrap(json_array_get(arguments, 1))) != "String" { return err("dynamic backend: json_object_keys_allowed expects Json and String") }
+            let first: Result[EmitState, String] = emit_expression(state, argument)
+            if is_err(first) { return err(expression_error(first)) }
+            let pushed: EmitState = append_code(result_unwrap(first), [u8(80)])
+            let second: Result[EmitState, String] = emit_expression(pushed, result_unwrap(json_array_get(arguments, 1)))
+            if is_err(second) { return err(expression_error(second)) }
+            let moved: EmitState = append_code(result_unwrap(second), [u8(72), u8(137), u8(198), u8(95)])
+            let marked: EmitState = state_with_array_used(state_with_box_used(state_with_host_used(moved)))
+            return ok(emit_label_call(marked, host_json_object_keys_allowed_label(marked)))
+        }
         if target == "builtin:json_object_fields_empty_except" {
             if result_unwrap(json_array_len(arguments)) != 4 || expr_type(argument) != "Json" || expr_type(result_unwrap(json_array_get(arguments, 1))) != "String" || expr_type(result_unwrap(json_array_get(arguments, 2))) != "String" || expr_type(result_unwrap(json_array_get(arguments, 3))) != "String" { return err("dynamic backend: json_object_fields_empty_except expects Json and three Strings") }
             let first: Result[EmitState, String] = emit_expression(state, argument)
@@ -7387,6 +7492,7 @@ fn pe_validate_json_call(expression: Json, enums: Json, struct_fields: Map[Strin
     else if target == "builtin:json_stringify" || target == "builtin:json_kind" { expected_type = "String" }
     else if target == "builtin:json_object_get" { expected_count = 2; expected_type = "Result[Json,String]" }
     else if target == "builtin:json_object_keys" { expected_type = "Result[Array[String],String]" }
+    else if target == "builtin:json_object_keys_allowed" { expected_count = 2; expected_type = "Bool" }
     else if target == "builtin:json_object_fields_empty_except" { expected_count = 4; expected_type = "Bool" }
     else if target == "builtin:json_array_len" { expected_type = "Result[Int,String]" }
     else if target == "builtin:json_array_get" { expected_count = 2; expected_type = "Result[Json,String]" }
@@ -8171,8 +8277,9 @@ fn compile_dynamic(kir: ValidatedKIR) -> Result[Bytes, String] {
     let host_json_string_scan_label: LabelState = new_label(host_string_less_label.state)
     let host_json_object_fields_empty_except_label: LabelState = new_label(host_json_string_scan_label.state)
     let host_json_field_set_lookup_label: LabelState = new_label(host_json_object_fields_empty_except_label.state)
+    let host_json_object_keys_allowed_label: LabelState = new_label(host_json_field_set_lookup_label.state)
     let slot_count: Int = count_slots(statements)
-    state = state_with_string_concat_label(host_json_field_set_lookup_label.state, string_concat_label.label)
+    state = state_with_string_concat_label(host_json_object_keys_allowed_label.state, string_concat_label.label)
     state = state_with_array_labels(state, array_alloc_label.label, array_push_label.label, array_concat_label.label)
     state = state_with_box_label(state, box_alloc_label.label)
     state = state_with_env(state, CompileEnv{ slots: {}, static_values: {}, struct_fields: struct_fields, function_labels: {}, function_returns: {}, next_slot: 0, breaks: [], continues: [], end_label: end_label.label, trap_label: trap_label.label, buffer_offset: slot_count * 8 + 1, in_function: false, current_function: "" })
@@ -8222,6 +8329,9 @@ fn compile_dynamic(kir: ValidatedKIR) -> Result[Bytes, String] {
         let json_field_set_lookup_runtime: Result[EmitState, String] = emit_json_field_set_lookup_runtime(lowered)
         if is_err(json_field_set_lookup_runtime) { return err(unwrap_or(result_error(json_field_set_lookup_runtime), "dynamic backend: JSON field set lookup lowering failed")) }
         lowered = result_unwrap(json_field_set_lookup_runtime)
+        let json_object_keys_allowed_runtime: Result[EmitState, String] = emit_json_object_keys_allowed_runtime(lowered)
+        if is_err(json_object_keys_allowed_runtime) { return err(unwrap_or(result_error(json_object_keys_allowed_runtime), "dynamic backend: JSON object key allowlist lowering failed")) }
+        lowered = result_unwrap(json_object_keys_allowed_runtime)
         let json_array_len_runtime: Result[EmitState, String] = emit_json_array_len_runtime(lowered)
         if is_err(json_array_len_runtime) { return err(unwrap_or(result_error(json_array_len_runtime), "dynamic backend: JSON array length lowering failed")) }
         lowered = result_unwrap(json_array_len_runtime)
