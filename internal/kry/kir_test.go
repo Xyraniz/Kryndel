@@ -700,6 +700,57 @@ func TestKIRAcceptsPropagatingLambdaReturn(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsInconsistentDeclarationFlags(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		mutate func(*KIRStmt)
+		want   string
+	}{
+		{
+			name:   "let marked const",
+			source: "let value: Int = 1\n",
+			mutate: func(statement *KIRStmt) { statement.Const = true },
+			want:   "inconsistent const or mutability flags",
+		},
+		{
+			name:   "const not marked const",
+			source: "const value: Int = 1\n",
+			mutate: func(statement *KIRStmt) { statement.Const = false },
+			want:   "inconsistent const or mutability flags",
+		},
+		{
+			name:   "mutable for binding",
+			source: "for item in [1] {}\n",
+			mutate: func(statement *KIRStmt) { statement.Mutable = true },
+			want:   "cannot be mutable or const",
+		},
+		{
+			name:   "mutable resolved for binding",
+			source: "for item in [1] {}\n",
+			mutate: func(statement *KIRStmt) { statement.Binding.Mutable = true },
+			want:   "binding must be immutable",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document.Statements[0])
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})

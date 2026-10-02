@@ -846,6 +846,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if statement.Name == "" {
 				return fmt.Errorf("%s statement has no binding name", statement.Kind)
 			}
+			if statement.Const != (statement.Kind == "const") || statement.Kind == "const" && statement.Mutable {
+				return fmt.Errorf("%s statement has inconsistent const or mutability flags", statement.Kind)
+			}
 			if err := requireExpr(statement.Init, "initializer"); err != nil {
 				return err
 			}
@@ -888,11 +891,17 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if statement.Name == "" {
 				return fmt.Errorf("for statement has no binding name")
 			}
+			if statement.Mutable || statement.Const {
+				return fmt.Errorf("for statement binding cannot be mutable or const")
+			}
 			if err := requireExpr(statement.Iter, "iterator"); err != nil {
 				return err
 			}
 			if document.Version >= 3 && (!validKIRBinding(statement.Binding) || statement.Binding.Name != statement.Name || statement.Binding.Type == "") {
 				return fmt.Errorf("for statement has an invalid resolved binding")
+			}
+			if document.Version >= 3 && statement.Binding.Mutable {
+				return fmt.Errorf("for statement binding must be immutable")
 			}
 			if document.Version >= 3 {
 				elementType, ok := kirIterableElementType(statement.Iter.Type)
