@@ -863,6 +863,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if err := validateExpr(parameter.Default, 1); err != nil {
 				return fmt.Errorf("function %q default: %w", function.Name, err)
 			}
+			if parameter.Default != nil && !compatibleKIRTypes(parameter.Type, parameter.Default.Type) {
+				return fmt.Errorf("function %q parameter %q default type does not match its declaration", function.Name, parameter.Name)
+			}
 		}
 		for _, statement := range function.Body {
 			if err := validateStmt(statement, 1); err != nil {

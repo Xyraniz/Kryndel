@@ -314,6 +314,24 @@ func TestKIRRejectsResolvedFunctionCallSignatureMismatch(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsFunctionDefaultTypeMismatch(t *testing.T) {
+	program, checker := testProgram(t, "fn choose(value: Int = 1) -> Int { return value }\n")
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Functions[0].Params[0].Default.Kind = "bool"
+	document.Functions[0].Params[0].Default.Type = "Bool"
+	document.Functions[0].Params[0].Default.Bool = true
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "default type does not match") {
+		t.Fatalf("expected KIR rejection for mismatched parameter default, got %v", err)
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
