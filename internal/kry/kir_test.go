@@ -733,6 +733,86 @@ func TestKIRRejectsMissingStructFieldValue(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsStructFieldAccessTypeMismatch(t *testing.T) {
+	program, checker := testProgram(t, `struct Person { age: Int }
+let person: Person = Person{age: 1}
+let age: Int = person.age
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[1].Init.Type = "String"
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `field expression "age" has checked type "String", want "Int"`) {
+		t.Fatalf("expected KIR rejection for a mismatched struct field access type, got %v", err)
+	}
+}
+
+func TestKIRRejectsGenericStructFieldAccessTypeMismatch(t *testing.T) {
+	program, checker := testProgram(t, `struct Box[T: Copy] { value: T }
+let box: Box[Int] = Box[Int]{value: 1}
+let value: Int = box.value
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[1].Init.Type = "String"
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `field expression "value" has checked type "String", want "Int"`) {
+		t.Fatalf("expected KIR rejection for a mismatched generic struct field access type, got %v", err)
+	}
+}
+
+func TestKIRRejectsUnknownOrNonStructFieldAccess(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*KIRExpr)
+		want   string
+	}{
+		{
+			name: "unknown field",
+			mutate: func(expression *KIRExpr) {
+				expression.Field = "missing"
+			},
+			want: `references unknown field "missing"`,
+		},
+		{
+			name: "non-struct base",
+			mutate: func(expression *KIRExpr) {
+				expression.Base.Type = "Int"
+			},
+			want: `base has non-struct checked type "Int"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, `struct Person { age: Int }
+let person: Person = Person{age: 1}
+let age: Int = person.age
+`)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document.Statements[1].Init)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsIncompatibleMatchPatterns(t *testing.T) {
 	tests := []struct {
 		name   string

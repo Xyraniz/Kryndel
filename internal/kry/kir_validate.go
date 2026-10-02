@@ -739,6 +739,21 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if expression.Field == "" {
 				return fmt.Errorf("field expression has no field name")
 			}
+			baseType, ok := parseKIRTypeExpression(expression.Base.Type)
+			if !ok || baseType.Function {
+				return fmt.Errorf("field expression base has non-struct checked type %q", expression.Base.Type)
+			}
+		declaration := structs[baseType.Name]
+			if declaration == nil || !validKIRStructInstanceType(expression.Base.Type, declaration) {
+				return fmt.Errorf("field expression base has non-struct checked type %q", expression.Base.Type)
+			}
+			expectedType, found := kirStructFieldType(declaration, expression.Base.Type, expression.Field)
+			if !found {
+				return fmt.Errorf("field expression references unknown field %q on %s", expression.Field, expression.Base.Type)
+			}
+			if !compatibleKIRTypes(expectedType, expression.Type) {
+				return fmt.Errorf("field expression %q has checked type %q, want %q", expression.Field, expression.Type, expectedType)
+			}
 		case "struct":
 			decl := structs[expression.StructName]
 			if expression.StructName == "" || decl == nil || len(expression.Fields) != len(expression.Values) || len(expression.Fields) != len(decl.Fields) {
@@ -751,28 +766,13 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if expression.Type != instanceType || !validKIRStructInstanceType(instanceType, decl) {
 				return fmt.Errorf("struct expression has an invalid generic instantiation")
 			}
-			declaredFields := make(map[string]*KIRField, len(decl.Fields))
-			for _, field := range decl.Fields {
-				declaredFields[field.Name] = field
-			}
 			seenFields := make(map[string]bool, len(expression.Fields))
-			substitutions := map[string]string{}
-			if len(decl.TypeParams) > 0 {
-				arguments, ok := splitKIRGenericArguments(instanceType, decl.Name)
-				if !ok || len(arguments) != len(decl.TypeParams) {
-					return fmt.Errorf("struct expression has invalid generic field arguments")
-				}
-				for index, parameter := range decl.TypeParams {
-					substitutions[parameter.Name] = arguments[index]
-				}
-			}
 			for index, field := range expression.Fields {
-				declaration := declaredFields[field]
-				if declaration == nil || seenFields[field] {
+				expectedType, found := kirStructFieldType(decl, instanceType, field)
+				if !found || seenFields[field] {
 					return fmt.Errorf("struct expression references an unknown or duplicate field %q", field)
 				}
 				seenFields[field] = true
-				expectedType := substituteKIRType(declaration.Type, substitutions)
 				value := expression.Values[index]
 				if value == nil {
 					return fmt.Errorf("struct field %q has no value", field)
@@ -1079,6 +1079,28 @@ func kirFunctionValueType(function *KIRFunction) string {
 		parameters[index] = parameter.Type
 	}
 	return "fn(" + strings.Join(parameters, ", ") + ") -> " + function.Return
+}
+
+func kirStructFieldType(declaration *KIRStruct, instanceType, fieldName string) (string, bool) {
+	if declaration == nil || !validKIRStructInstanceType(instanceType, declaration) {
+		return "", false
+	}
+	substitutions := map[string]string{}
+	if len(declaration.TypeParams) > 0 {
+		arguments, ok := splitKIRGenericArguments(instanceType, declaration.Name)
+		if !ok || len(arguments) != len(declaration.TypeParams) {
+			return "", false
+		}
+		for index, parameter := range declaration.TypeParams {
+			substitutions[parameter.Name] = arguments[index]
+		}
+	}
+	for _, field := range declaration.Fields {
+		if field != nil && field.Name == fieldName {
+			return substituteKIRType(field.Type, substitutions), true
+		}
+	}
+	return "", false
 }
 
 func compatibleKIRTypes(binding, initializer string) bool {
