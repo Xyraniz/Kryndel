@@ -45,6 +45,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 	traits := make(map[string]*KIRTrait, len(document.Traits))
 	functionCounts := make(map[string]int, len(document.Functions))
 	functionTargets := make(map[string]string, len(document.Functions))
+	functionDeclarations := make(map[string]*KIRFunction, len(document.Functions))
 	functionGenericArguments := make(map[string]int, len(document.Functions))
 	if document.Version < 5 && (len(document.Traits) != 0 || len(document.TraitImpls) != 0) {
 		return fmt.Errorf("trait declarations and implementations require KIR version 5")
@@ -215,6 +216,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			return fmt.Errorf("duplicate function target %q", target)
 		}
 		functionTargets[target] = function.Name
+		functionDeclarations[target] = function
 		functionGenericArguments[target] = len(function.TypeParams)
 	}
 	traitImplTargets := map[string]bool{}
@@ -543,6 +545,30 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 					}
 					if resolvedName != expression.Name {
 						return fmt.Errorf("call expression name does not match its target")
+					}
+					function := functionDeclarations[name]
+					if function == nil {
+						return fmt.Errorf("call target %q has no function declaration", name)
+					}
+					requiredArity := len(function.Params)
+					for index, parameter := range function.Params {
+						if parameter.Default != nil {
+							requiredArity = index
+							break
+						}
+					}
+					if len(expression.Args) < requiredArity || len(expression.Args) > len(function.Params) {
+						return fmt.Errorf("call to function %q has %d arguments, expected %d to %d", name, len(expression.Args), requiredArity, len(function.Params))
+					}
+					if len(function.TypeParams) == 0 && function.Receiver == "" {
+						if !compatibleKIRTypes(expression.Type, function.Return) {
+							return fmt.Errorf("call to function %q has result type %q, want %q", name, expression.Type, function.Return)
+						}
+						for index, argument := range expression.Args {
+							if argument == nil || !compatibleKIRTypes(argument.Type, function.Params[index].Type) {
+								return fmt.Errorf("call to function %q argument %d has a mismatched type", name, index+1)
+							}
+						}
 					}
 				}
 			}

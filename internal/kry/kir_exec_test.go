@@ -1053,7 +1053,16 @@ func TestKIRExecutorChecksSubsetSemanticsBeyondDecoder(t *testing.T) {
 	if err := json.Unmarshal(kirBytes, &document); err != nil {
 		t.Fatal(err)
 	}
-	document.Statements[0].Cond.Type = "Int"
+	condition := document.Statements[0].Cond
+	document.Statements[0].Cond = &KIRExpr{
+		Kind:    "var",
+		Source:  condition.Source,
+		Line:    condition.Line,
+		Column:  condition.Column,
+		Type:    "Int",
+		Name:    "condition",
+		Binding: &KIRBinding{Name: "condition", Type: "Int", Source: condition.Source, Line: condition.Line, Column: condition.Column},
+	}
 	malformed, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)

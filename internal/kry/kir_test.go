@@ -264,6 +264,56 @@ let text: Int = choose("two")
 	}
 }
 
+func TestKIRRejectsResolvedFunctionCallSignatureMismatch(t *testing.T) {
+	program, checker := testProgram(t, "fn identity(value: Int) -> Int { return value }\nlet result: Int = identity(1)\n")
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		want   string
+		mutate func(*KIRExpr)
+	}{
+		{
+			name: "argument type",
+			want: "has a mismatched type",
+			mutate: func(call *KIRExpr) {
+				argument := *call.Args[0]
+				argument.Kind = "string"
+				argument.Type = "String"
+				argument.Int = 0
+				argument.String = "wrong"
+				argument.Const = nil
+				call.Args[0] = &argument
+			},
+		},
+		{
+			name:   "result type",
+			want:   "has result type",
+			mutate: func(call *KIRExpr) { call.Type = "String" },
+		},
+		{
+			name:   "required argument count",
+			want:   "expected 1 to 1",
+			mutate: func(call *KIRExpr) { call.Args = nil },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			call := document.Statements[0].Init
+			test.mutate(call)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR call rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
