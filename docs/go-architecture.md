@@ -23,6 +23,13 @@ The compiler and execution subsystems remain in `internal/kry`. Bounded camera a
 
 The frontend produces checker-annotated source trees and lowers them to an opaque, validated in-memory MIR/KIR. Production interpreter and native-build entrypoints receive this value; they do not lower the original source AST. The Engine interpreter evaluates typed KIR nodes directly and retains its executor and global scope across REPL snippets. C AOT, direct ELF, and direct PE lower their supported constructs from typed KIR and reject unsupported forms without an AST fallback. The bounded direct KIR entrypoint also supports differential and backend-subset tests, whose reference runtime uses the retained AST evaluator explicitly. The runtime carries an `ExecContext` with cancellation, instruction, wall-clock, call-depth, stack, memory, source, and output budgets. Every host-facing operation returns a typed error. Go panics are not used for language failures and are converted at the CLI boundary only for unexpected host failures.
 
+This Go `ValidatedMIR` boundary does not mean the self-hosted compiler shares
+the same in-memory value. The self-hosted compiler currently validates and
+lowers serialized KIR JSON with its own `ValidatedKIR` wrapper and validator;
+the two validators are not generated from a common schema, and its backends
+support a bounded subset. Treat Go-to-selfhost validation parity and full
+selfhost backend coverage as remaining work.
+
 `Copy` analysis is memoized with `unknown`, `visiting`, `copyable`, and `non-copyable` states. Recursive structural values are conservatively non-copyable. Type equality, display, layout, and serialization use the same recursion/depth guard. Channel send APIs call one runtime and checker transferability predicate, including try and timed variants.
 
 The filesystem policy rejects absolute paths, NUL bytes, parent traversal, symlink components, and reparse/junction-like escapes. Reads and writes resolve relative to the configured root and use `Lstat` checks for every component; writes use a temporary file created in the trusted parent and an atomic rename only after revalidation. The implementation documents the residual limitation of a portable Go user-space check on platforms without an openat-equivalent API and never presents that check as a race-free kernel capability.
