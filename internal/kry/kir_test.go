@@ -860,6 +860,48 @@ func TestKIRRejectsInvalidMapLiteralTypes(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsInvalidArrayAndSetElementTypes(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		mutate func(*KIRExpr)
+		want   string
+	}{
+		{
+			name:   "array element type",
+			source: "let values: Array[Int] = [1, 2]\n",
+			mutate: func(expression *KIRExpr) {
+				expression.Items[1] = &KIRExpr{Kind: "string", Type: "String", String: "wrong"}
+			},
+			want: `array element 2 has checked type "String", want "Int"`,
+		},
+		{
+			name:   "set element type",
+			source: `let values: Set[String] = |{"ready", "done"}|` + "\n",
+			mutate: func(expression *KIRExpr) {
+				expression.Items[1] = &KIRExpr{Kind: "int", Type: "Int", Int: 2}
+			},
+			want: `set element 2 has checked type "Int", want "String"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document.Statements[0].Init)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsIncompatibleMatchPatterns(t *testing.T) {
 	tests := []struct {
 		name   string

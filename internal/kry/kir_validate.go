@@ -725,6 +725,27 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				return err
 			}
 		case "array", "set":
+			elementType, ok := kirCollectionElementType(expression.Type, expression.Kind)
+			if !ok {
+				return fmt.Errorf("%s expression has invalid checked type %q", expression.Kind, expression.Type)
+			}
+			if expression.Kind == "set" && containsKIRFunctionType(elementType) {
+				return fmt.Errorf("set element type cannot contain function values")
+			}
+			for index, item := range expression.Items {
+				if item == nil {
+					return fmt.Errorf("%s expression contains a missing element", expression.Kind)
+				}
+				if expression.Kind == "set" && containsKIRFunctionType(item.Type) {
+					return fmt.Errorf("set elements cannot contain function values")
+				}
+				if elementType == "" {
+					elementType = item.Type
+				}
+				if !compatibleKIRTypes(elementType, item.Type) {
+					return fmt.Errorf("%s element %d has checked type %q, want %q", expression.Kind, index+1, item.Type, elementType)
+				}
+			}
 		case "index":
 			if err := require(expression.Base, "base"); err != nil {
 				return err
@@ -1337,6 +1358,20 @@ func isKIRArrayType(encoded string) bool {
 	}
 	spec, ok := parseKIRTypeExpression(encoded)
 	return ok && !spec.Function && spec.Name == "Array" && len(spec.Params) == 1
+}
+
+func kirCollectionElementType(encoded, kind string) (string, bool) {
+	if kind == "array" && isKIRUnspecifiedArray(encoded) || kind == "set" && (encoded == "Set" || encoded == "Set[<unknown>]") {
+		return "", true
+	}
+	spec, ok := parseKIRTypeExpression(encoded)
+	if !ok || spec.Function || len(spec.Params) != 1 {
+		return "", false
+	}
+	if kind == "array" && spec.Name == "Array" || kind == "set" && spec.Name == "Set" {
+		return TypeSpecString(spec.Params[0]), true
+	}
+	return "", false
 }
 
 func checkKIRCount(label string, count, maximum int) error {
