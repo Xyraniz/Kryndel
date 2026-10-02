@@ -335,6 +335,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		}
 		return nil
 	}
+	genericConstraints := map[string]string(nil)
 	var validateExpr func(*KIRExpr, int) error
 	var validateStmt func(*KIRStmt, int) error
 	var validatePattern func(*KIRPattern, int) error
@@ -470,7 +471,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			}
 			switch expression.Operator {
 			case "+":
-				if !isKIRNumericType(expression.Operand.Type) || expression.Type != expression.Operand.Type {
+				if !isKIRNumericType(expression.Operand.Type, genericConstraints) || expression.Type != expression.Operand.Type {
 					return fmt.Errorf("unary operator + requires a numeric operand and matching result type")
 				}
 			case "-":
@@ -916,6 +917,11 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		return nil
 	}
 	for _, function := range document.Functions {
+		previousGenericConstraints := genericConstraints
+		genericConstraints = make(map[string]string, len(function.TypeParams))
+		for _, parameter := range function.TypeParams {
+			genericConstraints[parameter.Name] = parameter.Constraint
+		}
 		for _, parameter := range function.Params {
 			if err := validateExpr(parameter.Default, 1); err != nil {
 				return fmt.Errorf("function %q default: %w", function.Name, err)
@@ -929,6 +935,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				return fmt.Errorf("function %q: %w", function.Name, err)
 			}
 		}
+		genericConstraints = previousGenericConstraints
 	}
 	if err := checkKIRCount("top-level statements", len(document.Statements), limits.MaxArrayElements); err != nil {
 		return err
@@ -958,8 +965,12 @@ func isKIRUIntType(encoded string) bool {
 	}
 }
 
-func isKIRNumericType(encoded string) bool {
-	return encoded == "Int" || encoded == "Float" || isKIRUIntType(encoded)
+func isKIRNumericType(encoded string, genericConstraints map[string]string) bool {
+	if encoded == "Int" || encoded == "Float" || isKIRUIntType(encoded) {
+		return true
+	}
+	constraint, generic := genericConstraints[encoded]
+	return generic && (constraint == "Numeric" || constraint == "Integer")
 }
 
 func kirIterableElementType(encoded string) (string, bool) {

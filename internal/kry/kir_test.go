@@ -443,6 +443,17 @@ func TestKIRRejectsUnaryOperatorTypeMismatch(t *testing.T) {
 	}
 }
 
+func TestKIRAcceptsGenericNumericUnaryPlus(t *testing.T) {
+	for _, constraint := range []string{"Numeric", "Integer"} {
+		t.Run(constraint, func(t *testing.T) {
+			program, checker := testProgram(t, "fn positive[T: "+constraint+"](value: T) -> T { return +value }\n")
+			if _, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"}); err != nil {
+				t.Fatalf("KIR rejected a valid generic %s unary plus: %v", constraint, err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsBitwiseAndShiftTypeMismatch(t *testing.T) {
 	tests := []struct {
 		name    string
