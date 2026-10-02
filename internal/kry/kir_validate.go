@@ -808,6 +808,15 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if document.Version >= 3 && (!validKIRBinding(statement.Binding) || statement.Binding.Name != statement.Name || statement.Binding.Type == "") {
 				return fmt.Errorf("for statement has an invalid resolved binding")
 			}
+			if document.Version >= 3 {
+				elementType, ok := kirIterableElementType(statement.Iter.Type)
+				if !ok {
+					return fmt.Errorf("for statement iterator has non-iterable checked type %q", statement.Iter.Type)
+				}
+				if elementType != "" && !compatibleKIRTypes(statement.Binding.Type, elementType) {
+					return fmt.Errorf("for statement binding type %q does not match iterator element type %q", statement.Binding.Type, elementType)
+				}
+			}
 		case "return", "break", "continue", "defer", "unsafe":
 		case "match":
 			if err := requireExpr(statement.Scrutinee, "scrutinee"); err != nil {
@@ -890,6 +899,22 @@ func compatibleKIRTypes(binding, initializer string) bool {
 	}
 	return isKIRUnspecifiedArray(binding) && isKIRArrayType(initializer) ||
 		isKIRUnspecifiedArray(initializer) && isKIRArrayType(binding)
+}
+
+func kirIterableElementType(encoded string) (string, bool) {
+	switch encoded {
+	case "String":
+		return "String", true
+	case "Bytes":
+		return "Int", true
+	case "Array", "Array[<unknown>]":
+		return "", true
+	}
+	spec, ok := parseKIRTypeExpression(encoded)
+	if !ok || spec.Function || len(spec.Params) != 1 || spec.Name != "Array" && spec.Name != "Set" {
+		return "", false
+	}
+	return TypeSpecString(spec.Params[0]), true
 }
 
 func isKIRUnspecifiedArray(encoded string) bool {

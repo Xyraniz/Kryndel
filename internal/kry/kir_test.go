@@ -332,6 +332,37 @@ func TestKIRRejectsFunctionDefaultTypeMismatch(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsForBindingTypeMismatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		wrong  string
+	}{
+		{name: "array", source: "for item in [1] {}\n", wrong: "String"},
+		{name: "set", source: "for item in |{1}| {}\n", wrong: "String"},
+		{name: "string", source: "for item in \"text\" {}\n", wrong: "Int"},
+		{name: "bytes", source: "let data: Bytes = bytes([1])\nfor item in data {}\n", wrong: "String"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			loop := document.Statements[len(document.Statements)-1]
+			loop.Binding.Type = test.wrong
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "does not match iterator element type") {
+				t.Fatalf("expected KIR rejection for mismatched for binding, got %v", err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
