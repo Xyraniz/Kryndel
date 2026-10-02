@@ -314,6 +314,38 @@ func TestKIRRejectsResolvedFunctionCallSignatureMismatch(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsBuiltinArityMismatch(t *testing.T) {
+	program, checker := testProgram(t, "let length: Int = len(\"text\")\n")
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[0].Init.Args = nil
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `builtin "len" has 0 arguments, want 1`) {
+		t.Fatalf("expected KIR rejection for builtin arity mismatch, got %v", err)
+	}
+}
+
+func TestKIRRequiresBuiltinIDInVersionFive(t *testing.T) {
+	program, checker := testProgram(t, "let length: Int = len(\"text\")\n")
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[0].Init.BuiltinID = ""
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "mismatched builtin id") {
+		t.Fatalf("expected KIR v5 rejection for missing builtin id, got %v", err)
+	}
+}
+
 func TestKIRRejectsFunctionDefaultTypeMismatch(t *testing.T) {
 	program, checker := testProgram(t, "fn choose(value: Int = 1) -> Int { return value }\n")
 	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})

@@ -583,7 +583,10 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 					if !ok {
 						return fmt.Errorf("call references unknown builtin %q", name)
 					}
-					if expression.BuiltinID != "" && expression.BuiltinID != builtin.ID {
+					if len(expression.Args) != builtin.Arity {
+						return fmt.Errorf("call to builtin %q has %d arguments, want %d", name, len(expression.Args), builtin.Arity)
+					}
+					if (expression.BuiltinID != "" && expression.BuiltinID != builtin.ID) || (document.Version >= 5 && expression.BuiltinID == "") {
 						return fmt.Errorf("call to builtin %q has a mismatched builtin id", name)
 					}
 				} else if prefix == "trait" {
