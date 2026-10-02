@@ -151,6 +151,17 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		}
 		enums[decl.Name] = decl
 	}
+	for _, declaration := range document.Structs {
+		constraints := make(map[string]string, len(declaration.TypeParams))
+		for _, parameter := range declaration.TypeParams {
+			constraints[parameter.Name] = parameter.Constraint
+		}
+		for _, field := range declaration.Fields {
+			if err := kirValidateTypeInstantiationConstraints(field.Type, structs, constraints, document); err != nil {
+				return fmt.Errorf("struct %q field %q type: %w", declaration.Name, field.Name, err)
+			}
+		}
+	}
 	for name := range traits {
 		if structs[name] != nil || enums[name] != nil {
 			return fmt.Errorf("trait %q conflicts with a type declaration", name)
@@ -231,6 +242,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		}
 		if !validKIRTraitTargetType(implementation.For, structs, enums) {
 			return fmt.Errorf("trait %q implementation has an invalid or non-concrete target type", implementation.Trait)
+		}
+		if err := kirValidateTypeInstantiationConstraints(implementation.For, structs, nil, document); err != nil {
+			return fmt.Errorf("trait %q implementation target: %w", implementation.Trait, err)
 		}
 		implementationKey := implementation.Trait + " for " + implementation.For
 		if traitImplementations[implementationKey] {
@@ -392,6 +406,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if len(expression.Type) > limits.MaxSourceBytes && limits.MaxSourceBytes > 0 {
 			return fmt.Errorf("expression type exceeds configured string limit")
 		}
+		if err := kirValidateTypeInstantiationConstraints(expression.Type, structs, genericConstraints, document); err != nil {
+			return fmt.Errorf("%s checked type: %w", expression.Kind, err)
+		}
 		if document.Version < 3 && (expression.Binding != nil || expression.Callee != nil || expression.Lambda != nil) {
 			return fmt.Errorf("function values and resolved expression bindings require KIR version 3")
 		}
@@ -479,10 +496,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 						}
 						substitutions[parameter.Name] = argument
 					}
-					expected := kirFunctionValueType(function)
-					for parameter, argument := range substitutions {
-						expected = substituteKIRType(expected, map[string]string{parameter: argument})
-					}
+					expected := substituteKIRType(kirFunctionValueType(function), substitutions)
 					if expression.Type != expected {
 						return fmt.Errorf("function value type %q does not match target signature %q", expression.Type, expected)
 					}
@@ -664,30 +678,47 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 					if len(expression.Args) < requiredArity || len(expression.Args) > len(function.Params) {
 						return fmt.Errorf("call to function %q has %d arguments, expected %d to %d", name, len(expression.Args), requiredArity, len(function.Params))
 					}
-					if function.Receiver == "" {
-						substitutions := map[string]string{}
-						if len(function.TypeParams) != len(expression.GenericArguments) {
-							return fmt.Errorf("call to function %q has incomplete generic type arguments", name)
+					substitutions := map[string]string{}
+					if function.Receiver != "" {
+						if expression.Receiver == nil {
+							return fmt.Errorf("method call to %q has no receiver", name)
 						}
-						for index, parameter := range function.TypeParams {
-							argument := expression.GenericArguments[index]
-							if !kirExecConstraintSatisfied(argument, parameter.Constraint, &kirExecScope{types: genericConstraints}, document) {
-								return fmt.Errorf("call to function %q type argument %d (%q) does not satisfy constraint %q", name, index+1, argument, parameter.Constraint)
-							}
-							substitutions[parameter.Name] = argument
+						receiverSubstitutions, ok := kirReceiverTypeSubstitutions(function.Receiver, expression.Receiver.Type, structs)
+						if !ok {
+							return fmt.Errorf("method call to %q has receiver type %q, incompatible with %q", name, expression.Receiver.Type, function.Receiver)
 						}
-						expectedReturn := substituteKIRType(function.Return, substitutions)
-						if !compatibleKIRTypes(expression.Type, expectedReturn) {
-							return fmt.Errorf("call to function %q has result type %q, want %q", name, expression.Type, expectedReturn)
+						receiverType, _ := parseKIRTypeExpression(expression.Receiver.Type)
+						declaration := structs[receiverType.Name]
+						if err := kirValidateStructInstantiationConstraints(expression.Receiver.Type, declaration, genericConstraints, document); err != nil {
+							return fmt.Errorf("method call to %q receiver: %w", name, err)
 						}
-						for index, argument := range expression.Args {
-							expectedArgument := substituteKIRType(function.Params[index].Type, substitutions)
-							if argument == nil {
-								return fmt.Errorf("call to function %q has a missing argument", name)
-							}
-							if !compatibleKIRTypes(argument.Type, expectedArgument) {
-								return fmt.Errorf("call to function %q argument %d has type %q, want %q", name, index+1, argument.Type, expectedArgument)
-							}
+						for parameter, argument := range receiverSubstitutions {
+							substitutions[parameter] = argument
+						}
+					} else if expression.Receiver != nil {
+						return fmt.Errorf("function call to %q has an unexpected receiver", name)
+					}
+					if len(function.TypeParams) != len(expression.GenericArguments) {
+						return fmt.Errorf("call to function %q has incomplete generic type arguments", name)
+					}
+					for index, parameter := range function.TypeParams {
+						argument := expression.GenericArguments[index]
+						if !kirExecConstraintSatisfied(argument, parameter.Constraint, &kirExecScope{types: genericConstraints}, document) {
+							return fmt.Errorf("call to function %q type argument %d (%q) does not satisfy constraint %q", name, index+1, argument, parameter.Constraint)
+						}
+						substitutions[parameter.Name] = argument
+					}
+					expectedReturn := substituteKIRType(function.Return, substitutions)
+					if !compatibleKIRTypes(expression.Type, expectedReturn) {
+						return fmt.Errorf("call to function %q has result type %q, want %q", name, expression.Type, expectedReturn)
+					}
+					for index, argument := range expression.Args {
+						expectedArgument := substituteKIRType(function.Params[index].Type, substitutions)
+						if argument == nil {
+							return fmt.Errorf("call to function %q has a missing argument", name)
+						}
+						if !compatibleKIRTypes(argument.Type, expectedArgument) {
+							return fmt.Errorf("call to function %q argument %d has type %q, want %q", name, index+1, argument.Type, expectedArgument)
 						}
 					}
 				}
@@ -833,6 +864,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			}
 			if expression.Type != instanceType || !validKIRStructInstanceType(instanceType, decl) {
 				return fmt.Errorf("struct expression has an invalid generic instantiation")
+			}
+			if err := kirValidateStructInstantiationConstraints(instanceType, decl, genericConstraints, document); err != nil {
+				return err
 			}
 			seenFields := make(map[string]bool, len(expression.Fields))
 			for index, field := range expression.Fields {
@@ -1127,10 +1161,38 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		genericConstraints = make(map[string]string, len(function.TypeParams))
 		expectedReturnType = function.Return
 		loopDepth = 0
+		if function.Receiver != "" {
+			receiverType, ok := parseKIRTypeExpression(function.Receiver)
+			if !ok || receiverType.Function {
+				return fmt.Errorf("function %q has an invalid generic receiver type", function.Name)
+			}
+			declaration := structs[receiverType.Name]
+			if declaration == nil || len(receiverType.Params) != len(declaration.TypeParams) {
+				return fmt.Errorf("function %q has an invalid generic receiver type", function.Name)
+			}
+			for index, parameter := range declaration.TypeParams {
+				argument := receiverType.Params[index]
+				if parameter != nil && argument != nil && !argument.Function && len(argument.Params) == 0 && !kirExecTypeInDocument(argument.Name, document) {
+					genericConstraints[argument.Name] = parameter.Constraint
+				}
+			}
+		}
 		for _, parameter := range function.TypeParams {
 			genericConstraints[parameter.Name] = parameter.Constraint
 		}
+		if function.Receiver != "" {
+			receiverType, _ := parseKIRTypeExpression(function.Receiver)
+			if err := kirValidateStructInstantiationConstraints(function.Receiver, structs[receiverType.Name], genericConstraints, document); err != nil {
+				return fmt.Errorf("function %q receiver: %w", function.Name, err)
+			}
+		}
+		if err := kirValidateTypeInstantiationConstraints(function.Return, structs, genericConstraints, document); err != nil {
+			return fmt.Errorf("function %q return type: %w", function.Name, err)
+		}
 		for _, parameter := range function.Params {
+			if err := kirValidateTypeInstantiationConstraints(parameter.Type, structs, genericConstraints, document); err != nil {
+				return fmt.Errorf("function %q parameter %q type: %w", function.Name, parameter.Name, err)
+			}
 			if err := validateExpr(parameter.Default, 1); err != nil {
 				return fmt.Errorf("function %q default: %w", function.Name, err)
 			}
@@ -1192,6 +1254,126 @@ func kirStructFieldType(declaration *KIRStruct, instanceType, fieldName string) 
 		}
 	}
 	return "", false
+}
+
+func kirReceiverTypeSubstitutions(declared, actual string, structs map[string]*KIRStruct) (map[string]string, bool) {
+	declaredType, declaredOK := parseKIRTypeExpression(declared)
+	actualType, actualOK := parseKIRTypeExpression(actual)
+	if !declaredOK || !actualOK || declaredType.Function || actualType.Function || declaredType.Name != actualType.Name {
+		return nil, false
+	}
+	structure := structs[declaredType.Name]
+	if structure == nil || len(declaredType.Params) != len(structure.TypeParams) || len(actualType.Params) != len(structure.TypeParams) {
+		return nil, false
+	}
+	parameters := make(map[string]bool, len(structure.TypeParams))
+	for _, parameter := range structure.TypeParams {
+		if parameter == nil || parameter.Name == "" || parameters[parameter.Name] {
+			return nil, false
+		}
+		parameters[parameter.Name] = true
+	}
+	substitutions := make(map[string]string, len(parameters))
+	var unify func(*TypeSpec, *TypeSpec, int) bool
+	unify = func(pattern, value *TypeSpec, depth int) bool {
+		if pattern == nil || value == nil {
+			return pattern == nil && value == nil
+		}
+		if depth > 128 || pattern.Function != value.Function {
+			return false
+		}
+		if !pattern.Function && len(pattern.Params) == 0 && parameters[pattern.Name] {
+			encoded := TypeSpecString(value)
+			if previous := substitutions[pattern.Name]; previous != "" {
+				return previous == encoded
+			}
+			substitutions[pattern.Name] = encoded
+			return true
+		}
+		if pattern.Name != value.Name || len(pattern.Params) != len(value.Params) {
+			return false
+		}
+		for index := range pattern.Params {
+			if !unify(pattern.Params[index], value.Params[index], depth+1) {
+				return false
+			}
+		}
+		return unify(pattern.Return, value.Return, depth+1)
+	}
+	if !unify(declaredType, actualType, 0) || len(substitutions) != len(parameters) {
+		return nil, false
+	}
+	return substitutions, true
+}
+
+func kirValidateStructInstantiationConstraints(instance string, declaration *KIRStruct, genericConstraints map[string]string, document *KIRDocument) error {
+	if declaration == nil {
+		return fmt.Errorf("generic struct instance %q has no declaration", instance)
+	}
+	if len(declaration.TypeParams) == 0 && instance == declaration.Name {
+		return nil
+	}
+	arguments, ok := splitKIRGenericArguments(instance, declaration.Name)
+	if !ok || len(arguments) != len(declaration.TypeParams) {
+		return fmt.Errorf("generic struct instance %q has invalid type arguments", instance)
+	}
+	scope := &kirExecScope{types: genericConstraints}
+	for index, parameter := range declaration.TypeParams {
+		if parameter == nil || !kirExecConstraintSatisfied(arguments[index], parameter.Constraint, scope, document) {
+			constraint := ""
+			if parameter != nil {
+				constraint = parameter.Constraint
+			}
+			return fmt.Errorf("generic struct %q type argument %d (%q) does not satisfy constraint %q", declaration.Name, index+1, arguments[index], constraint)
+		}
+	}
+	return nil
+}
+
+func kirValidateTypeInstantiationConstraints(encoded string, structs map[string]*KIRStruct, genericConstraints map[string]string, document *KIRDocument) error {
+	spec, ok := parseKIRTypeExpression(encoded)
+	if !ok {
+		return fmt.Errorf("invalid type expression %q", encoded)
+	}
+	scope := &kirExecScope{types: genericConstraints}
+	var visit func(*TypeSpec, int) error
+	visit = func(current *TypeSpec, depth int) error {
+		if current == nil {
+			return nil
+		}
+		if depth > 128 {
+			return fmt.Errorf("type expression exceeds the nesting limit")
+		}
+		if !current.Function && len(current.Params) == 0 {
+			if _, generic := scope.typeParameter(current.Name); generic {
+				return nil
+			}
+		}
+		if !current.Function {
+			if declaration := structs[current.Name]; declaration != nil {
+				if len(current.Params) != len(declaration.TypeParams) {
+					return fmt.Errorf("generic struct %q has %d type argument(s), expected %d", current.Name, len(current.Params), len(declaration.TypeParams))
+				}
+				for index, parameter := range declaration.TypeParams {
+					argument := TypeSpecString(current.Params[index])
+					if parameter == nil || !kirExecConstraintSatisfied(argument, parameter.Constraint, scope, document) {
+						constraint := ""
+						if parameter != nil {
+							constraint = parameter.Constraint
+						}
+						return fmt.Errorf("generic struct %q type argument %d (%q) does not satisfy constraint %q", declaration.Name, index+1, argument, constraint)
+					}
+				}
+			}
+		}
+		for _, parameter := range current.Params {
+			if err := visit(parameter, depth+1); err != nil {
+				return err
+			}
+		}
+		return visit(current.Return, depth+1)
+	}
+	return visit(spec, 0)
 }
 
 func compatibleKIRTypes(binding, initializer string) bool {

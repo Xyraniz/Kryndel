@@ -717,6 +717,64 @@ let boxed: Box[Int] = Box[Int]{value: 1}
 	}
 }
 
+func TestKIRRejectsGenericStructConstraintMismatch(t *testing.T) {
+	program, checker := testProgram(t, `struct Box[T: Numeric] { value: T }
+let boxed: Box[Int] = Box[Int]{value: 1}
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[0].Init.StructType = "Box[String]"
+	document.Statements[0].Init.Type = "Box[String]"
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `type argument 1 ("String") does not satisfy constraint "Numeric"`) {
+		t.Fatalf("expected KIR rejection for an unsatisfied generic struct constraint, got %v", err)
+	}
+}
+
+func TestKIRRejectsGenericStructConstraintInFunctionSignature(t *testing.T) {
+	program, checker := testProgram(t, `struct Box[T: Numeric] { value: T }
+fn read(values: Array[Box[Int]]) -> Int { return 1 }
+read([Box[Int]{value: 2}])
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Functions[0].Params[0].Type = "Array[Box[String]]"
+	document.Functions[0].Params[0].Binding.Type = "Array[Box[String]]"
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `type argument 1 ("String") does not satisfy constraint "Numeric"`) {
+		t.Fatalf("expected KIR rejection for an invalid generic type in a signature, got %v", err)
+	}
+}
+
+func TestKIRRejectsNestedStructConstraintInFieldType(t *testing.T) {
+	program, checker := testProgram(t, `struct Inner[T: Numeric] { value: T }
+struct Outer[T: Numeric] { inner: Inner[T] }
+let outer: Outer[Int] = Outer[Int]{inner: Inner[Int]{value: 1}}
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Structs[1].TypeParams[0].Constraint = "Copy"
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `type argument 1 ("T") does not satisfy constraint "Numeric"`) {
+		t.Fatalf("expected KIR rejection for an invalid nested struct constraint, got %v", err)
+	}
+}
+
 func TestKIRRejectsMissingStructFieldValue(t *testing.T) {
 	program, checker := testProgram(t, "struct Person { age: Int }\nlet person: Person = Person{age: 1}\n")
 	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
@@ -1298,6 +1356,115 @@ identity(7)
 	}
 }
 
+func TestKIRRejectsInvalidMethodCallTypes(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		selectCall func(*KIRDocument) *KIRExpr
+		mutate     func(*KIRExpr)
+		want       string
+	}{
+		{
+			name: "generic receiver result",
+			selectCall: func(document *KIRDocument) *KIRExpr {
+				return document.Statements[1].Init
+			},
+			mutate: func(call *KIRExpr) { call.Type = "String" },
+			want:   `has result type "String", want "Int"`,
+		},
+		{
+			name: "generic method argument",
+			selectCall: func(document *KIRDocument) *KIRExpr {
+				return document.Statements[2].Init
+			},
+			mutate: func(call *KIRExpr) { call.Args[0].Type = "String" },
+			want:   `argument 1 has type "String", want "Int"`,
+		},
+		{
+			name: "receiver type",
+			selectCall: func(document *KIRDocument) *KIRExpr {
+				return document.Statements[1].Init
+			},
+			mutate: func(call *KIRExpr) { call.Receiver.Type = "Int" },
+			want:   `has receiver type "Int", incompatible with "Box[T]"`,
+		},
+		{
+			name: "receiver generic constraint",
+			selectCall: func(document *KIRDocument) *KIRExpr {
+				return document.Statements[1].Init
+			},
+			mutate: func(call *KIRExpr) { call.Receiver.Type = "Box[FFIBuffer]" },
+			want:   `type argument 1 ("FFIBuffer") does not satisfy constraint "Copy"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, `struct Box[T: Copy] { value: T }
+impl Box[T] {
+    fn get() -> T { return self.value }
+    fn echo[U: Copy](value: U) -> U { return value }
+}
+let box: Box[Int] = Box[Int]{value: 1}
+let value: Int = box.get()
+let echoed: Int = box.echo(2)
+`)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			call := test.selectCall(&document)
+			test.mutate(call)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestKIRAcceptsConstrainedGenericReceiverMethods(t *testing.T) {
+	program, checker := testProgram(t, `struct Number[T: Numeric] { value: T }
+impl Number[T] {
+    fn add(other: T) -> T { return self.value + other }
+}
+fn plus[T: Numeric](left: T, right: T) -> T {
+    let number: Number[T] = Number[T]{value: left}
+    return number.add(right)
+}
+let result: Int = plus(1, 2)
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeKIR(data, DefaultLimits()); err != nil {
+		t.Fatalf("KIR rejected a checked constrained generic receiver method: %v", err)
+	}
+}
+
+func TestKIRRejectsInvalidGenericReceiverConstraint(t *testing.T) {
+	program, checker := testProgram(t, `struct Box[T: Copy] { value: T }
+impl Box[T] {
+    fn get() -> T { return self.value }
+}
+let box: Box[Int] = Box[Int]{value: 1}
+let value: Int = box.get()
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Functions[0].Receiver = "Box[FFIBuffer]"
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `type argument 1 ("FFIBuffer") does not satisfy constraint "Copy"`) {
+		t.Fatalf("expected KIR rejection for an invalid generic receiver constraint, got %v", err)
+	}
+}
+
 func TestKIRRejectsGenericFunctionValueMismatches(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -1339,6 +1506,13 @@ let callback: fn(Int) -> Int = identity
 				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
 			}
 		})
+	}
+}
+
+func TestKIRTypeSubstitutionUsesOneInstantiationMap(t *testing.T) {
+	got := substituteKIRType("fn(T, U) -> Map[T, U]", map[string]string{"T": "U", "U": "T"})
+	if want := "fn(U, T) -> Map[U, T]"; got != want {
+		t.Fatalf("simultaneous generic substitution = %q, want %q", got, want)
 	}
 }
 
