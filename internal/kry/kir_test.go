@@ -670,6 +670,36 @@ func TestKIRRejectsIncompatibleMatchPatterns(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsFunctionReturnTypeMismatch(t *testing.T) {
+	program, checker := testProgram(t, "fn identity(value: Int) -> Int { return value }\n")
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Functions[0].Body[0].Return = &KIRExpr{Kind: "string", Source: document.Source, Line: 1, Column: 1, Type: "String", String: "wrong"}
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "function expects") {
+		t.Fatalf("expected KIR rejection for mismatched function return, got %v", err)
+	}
+}
+
+func TestKIRAcceptsPropagatingLambdaReturn(t *testing.T) {
+	source := `fn make(result: Result[Int, String]) -> fn() -> Result[Int, String] {
+    return fn() -> Result[Int, String] {
+        let value: Int = result?
+        return ok(value)
+    }
+}
+`
+	program, checker := testProgram(t, source)
+	if _, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"}); err != nil {
+		t.Fatalf("KIR rejected a lambda whose propagation matches its return type: %v", err)
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})

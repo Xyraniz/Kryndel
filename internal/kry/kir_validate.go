@@ -336,6 +336,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		return nil
 	}
 	genericConstraints := map[string]string(nil)
+	expectedReturnType := ""
 	var validateExpr func(*KIRExpr, int) error
 	var validateStmt func(*KIRStmt, int) error
 	var validatePattern func(*KIRPattern, int) error
@@ -698,11 +699,14 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if err := checkKIRCount("lambda body statements", len(lambda.Body), limits.MaxArrayElements); err != nil {
 				return err
 			}
+			previousReturnType := expectedReturnType
+			expectedReturnType = lambda.Return
 			for _, statement := range lambda.Body {
 				if err := validateStmt(statement, depth+1); err != nil {
 					return fmt.Errorf("lambda body: %w", err)
 				}
 			}
+			expectedReturnType = previousReturnType
 			if err := validateKIRLambdaCaptures(lambda); err != nil {
 				return err
 			}
@@ -899,7 +903,18 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 					return fmt.Errorf("for statement binding type %q does not match iterator element type %q", statement.Binding.Type, elementType)
 				}
 			}
-		case "return", "break", "continue", "defer", "unsafe":
+		case "return":
+			if expectedReturnType == "" {
+				return fmt.Errorf("return statement appears outside a function")
+			}
+			if !kirReturnTypeCompatible(expectedReturnType, statement.Return) {
+				returnType := "Nil"
+				if statement.Return != nil {
+					returnType = statement.Return.Type
+				}
+				return fmt.Errorf("return value has checked type %q, function expects %q", returnType, expectedReturnType)
+			}
+		case "break", "continue", "defer", "unsafe":
 		case "match":
 			if err := requireExpr(statement.Scrutinee, "scrutinee"); err != nil {
 				return err
@@ -954,7 +969,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 	}
 	for _, function := range document.Functions {
 		previousGenericConstraints := genericConstraints
+		previousReturnType := expectedReturnType
 		genericConstraints = make(map[string]string, len(function.TypeParams))
+		expectedReturnType = function.Return
 		for _, parameter := range function.TypeParams {
 			genericConstraints[parameter.Name] = parameter.Constraint
 		}
@@ -972,6 +989,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			}
 		}
 		genericConstraints = previousGenericConstraints
+		expectedReturnType = previousReturnType
 	}
 	if err := checkKIRCount("top-level statements", len(document.Statements), limits.MaxArrayElements); err != nil {
 		return err
@@ -1057,6 +1075,31 @@ func validateKIRPatternType(pattern *KIRPattern, scrutineeType string, enums map
 		return fmt.Errorf("pattern binding %q does not match its checked payload type", pattern.Binding)
 	}
 	return nil
+}
+
+func kirReturnTypeCompatible(expected string, value *KIRExpr) bool {
+	if value == nil {
+		return expected == "Nil"
+	}
+	if value.Kind != "propagate" {
+		return compatibleKIRTypes(expected, value.Type)
+	}
+	if value.Operand == nil {
+		return false
+	}
+	expectedType, expectedOK := parseKIRTypeExpression(expected)
+	operandType, operandOK := parseKIRTypeExpression(value.Operand.Type)
+	if !expectedOK || !operandOK || expectedType.Name != operandType.Name || len(expectedType.Params) != len(operandType.Params) {
+		return false
+	}
+	switch expectedType.Name {
+	case "Option":
+		return len(expectedType.Params) == 1 && compatibleKIRTypes(TypeSpecString(expectedType.Params[0]), value.Type) && compatibleKIRTypes(TypeSpecString(expectedType.Params[0]), TypeSpecString(operandType.Params[0]))
+	case "Result":
+		return len(expectedType.Params) == 2 && compatibleKIRTypes(TypeSpecString(expectedType.Params[0]), value.Type) && compatibleKIRTypes(TypeSpecString(expectedType.Params[1]), TypeSpecString(operandType.Params[1]))
+	default:
+		return false
+	}
 }
 
 func isKIRIntegerType(encoded string, genericConstraints map[string]string) bool {
