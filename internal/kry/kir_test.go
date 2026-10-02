@@ -681,6 +681,58 @@ let result: Int = callback(1)
 	}
 }
 
+func TestKIRRejectsStructFieldValueTypeMismatch(t *testing.T) {
+	program, checker := testProgram(t, `struct Person { age: Int }
+let person: Person = Person{age: 1}
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[0].Init.Values[0] = &KIRExpr{Kind: "string", Type: "String", String: "wrong"}
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `struct field "age" has checked type "String", want "Int"`) {
+		t.Fatalf("expected KIR rejection for a mismatched struct field value, got %v", err)
+	}
+}
+
+func TestKIRRejectsGenericStructFieldValueTypeMismatch(t *testing.T) {
+	program, checker := testProgram(t, `struct Box[T: Copy] { value: T }
+let boxed: Box[Int] = Box[Int]{value: 1}
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[0].Init.Values[0] = &KIRExpr{Kind: "string", Type: "String", String: "wrong"}
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `struct field "value" has checked type "String", want "Int"`) {
+		t.Fatalf("expected KIR rejection for a mismatched generic struct field value, got %v", err)
+	}
+}
+
+func TestKIRRejectsMissingStructFieldValue(t *testing.T) {
+	program, checker := testProgram(t, "struct Person { age: Int }\nlet person: Person = Person{age: 1}\n")
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[0].Init.Values[0] = nil
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `struct field "age" has no value`) {
+		t.Fatalf("expected KIR rejection for a missing struct field value, got %v", err)
+	}
+}
+
 func TestKIRRejectsIncompatibleMatchPatterns(t *testing.T) {
 	tests := []struct {
 		name   string

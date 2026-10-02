@@ -751,16 +751,35 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if expression.Type != instanceType || !validKIRStructInstanceType(instanceType, decl) {
 				return fmt.Errorf("struct expression has an invalid generic instantiation")
 			}
-			declaredFields := make(map[string]bool, len(decl.Fields))
+			declaredFields := make(map[string]*KIRField, len(decl.Fields))
 			for _, field := range decl.Fields {
-				declaredFields[field.Name] = true
+				declaredFields[field.Name] = field
 			}
 			seenFields := make(map[string]bool, len(expression.Fields))
-			for _, field := range expression.Fields {
-				if !declaredFields[field] || seenFields[field] {
+			substitutions := map[string]string{}
+			if len(decl.TypeParams) > 0 {
+				arguments, ok := splitKIRGenericArguments(instanceType, decl.Name)
+				if !ok || len(arguments) != len(decl.TypeParams) {
+					return fmt.Errorf("struct expression has invalid generic field arguments")
+				}
+				for index, parameter := range decl.TypeParams {
+					substitutions[parameter.Name] = arguments[index]
+				}
+			}
+			for index, field := range expression.Fields {
+				declaration := declaredFields[field]
+				if declaration == nil || seenFields[field] {
 					return fmt.Errorf("struct expression references an unknown or duplicate field %q", field)
 				}
 				seenFields[field] = true
+				expectedType := substituteKIRType(declaration.Type, substitutions)
+				value := expression.Values[index]
+				if value == nil {
+					return fmt.Errorf("struct field %q has no value", field)
+				}
+				if !compatibleKIRTypes(expectedType, value.Type) {
+					return fmt.Errorf("struct field %q has checked type %q, want %q", field, value.Type, expectedType)
+				}
 			}
 		case "enum":
 			decl := enums[expression.EnumType]
