@@ -515,6 +515,26 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				if !isKIRUIntType(expression.Left.Type) || expression.Right.Type != "Int" || expression.Type != expression.Left.Type {
 					return fmt.Errorf("shift operator %q requires a UInt value, Int count, and matching result", expression.Operator)
 				}
+			case "+", "-", "*", "/", "%":
+				left, right := expression.Left.Type, expression.Right.Type
+				if !compatibleKIRTypes(left, right) || expression.Type != left {
+					return fmt.Errorf("arithmetic operator %q requires matching operand and result types", expression.Operator)
+				}
+				switch expression.Operator {
+				case "+":
+					concatenable := left == "String" || left == "Bytes" || isKIRArrayType(left)
+					if !concatenable && !isKIRNumericType(left, genericConstraints) {
+						return fmt.Errorf("operator + does not support checked type %q", left)
+					}
+				case "%":
+					if !isKIRIntegerType(left, genericConstraints) {
+						return fmt.Errorf("operator %% requires Int or UInt operands")
+					}
+				default:
+					if !isKIRNumericType(left, genericConstraints) {
+						return fmt.Errorf("operator %q requires numeric operands", expression.Operator)
+					}
+				}
 			}
 		case "call":
 			if expression.Callee != nil {
@@ -971,6 +991,13 @@ func isKIRNumericType(encoded string, genericConstraints map[string]string) bool
 	}
 	constraint, generic := genericConstraints[encoded]
 	return generic && (constraint == "Numeric" || constraint == "Integer")
+}
+
+func isKIRIntegerType(encoded string, genericConstraints map[string]string) bool {
+	if encoded == "Int" || isKIRUIntType(encoded) {
+		return true
+	}
+	return genericConstraints[encoded] == "Integer"
 }
 
 func kirIterableElementType(encoded string) (string, bool) {

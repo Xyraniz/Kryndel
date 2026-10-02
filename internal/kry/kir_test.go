@@ -499,6 +499,68 @@ func TestKIRRejectsComparisonResultTypeMismatch(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsInvalidArithmeticOperandTypes(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		mutate  func(*KIRExpr)
+		wantErr string
+	}{
+		{
+			name:    "float remainder",
+			source:  "let value: Float = 3.0 / 2.0\n",
+			mutate:  func(expression *KIRExpr) { expression.Operator = "%" },
+			wantErr: "operator % requires Int or UInt",
+		},
+		{
+			name:    "string subtraction",
+			source:  "let value: String = \"a\" + \"b\"\n",
+			mutate:  func(expression *KIRExpr) { expression.Operator = "-" },
+			wantErr: "requires numeric operands",
+		},
+		{
+			name:    "wrong result type",
+			source:  "let value: Int = 1 + 2\n",
+			mutate:  func(expression *KIRExpr) { expression.Type = "Float" },
+			wantErr: "matching operand and result types",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document.Statements[0].Init)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestKIRAcceptsSupportedArithmeticTypeShapes(t *testing.T) {
+	source := `let label: String = "a" + "b"
+let first: Array[Int] = [1]
+let second: Array[Int] = [2]
+let joined: Array[Int] = first + second
+let first_bytes: Bytes = bytes([65])
+let second_bytes: Bytes = bytes([66])
+let joined_bytes: Bytes = first_bytes + second_bytes
+fn sum[T: Numeric](left: T, right: T) -> T { return left + right }
+fn remainder[T: Integer](left: T, right: T) -> T { return left % right }
+`
+	program, checker := testProgram(t, source)
+	if _, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"}); err != nil {
+		t.Fatalf("KIR rejected supported arithmetic operand types: %v", err)
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
