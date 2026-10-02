@@ -291,6 +291,13 @@ func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 			},
 		},
 		{
+			name: "literal checked type mismatch",
+			want: `int literal has checked type "String", want "Int"`,
+			mutate: func(doc *KIRDocument) {
+				doc.Statements[0].Init.Type = "String"
+			},
+		},
+		{
 			name: "unknown call target",
 			want: "undeclared function",
 			mutate: func(doc *KIRDocument) {

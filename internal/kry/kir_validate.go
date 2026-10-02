@@ -422,6 +422,22 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		}
 		switch expression.Kind {
 		case "int", "float", "bool", "nil", "string":
+			want := ""
+			switch expression.Kind {
+			case "int":
+				want = "Int"
+			case "float":
+				want = "Float"
+			case "bool":
+				want = "Bool"
+			case "nil":
+				want = "Nil"
+			case "string":
+				want = "String"
+			}
+			if expression.Type != want {
+				return fmt.Errorf("%s literal has checked type %q, want %q", expression.Kind, expression.Type, want)
+			}
 		case "var":
 			if expression.Name == "" {
 				return fmt.Errorf("variable expression has no name")
