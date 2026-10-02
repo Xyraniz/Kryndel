@@ -938,6 +938,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if err := validatePattern(arm.Pattern, depth+1); err != nil {
 				return err
 			}
+			if err := validateKIRPatternType(arm.Pattern, statement.Scrutinee.Type, enums, document.Version); err != nil {
+				return err
+			}
 			if err := checkKIRCount("match arm statements", len(arm.Body), limits.MaxArrayElements); err != nil {
 				return err
 			}
@@ -1004,6 +1007,56 @@ func isKIRNumericType(encoded string, genericConstraints map[string]string) bool
 	}
 	constraint, generic := genericConstraints[encoded]
 	return generic && (constraint == "Numeric" || constraint == "Integer")
+}
+
+func validateKIRPatternType(pattern *KIRPattern, scrutineeType string, enums map[string]*KIREnum, version int) error {
+	if pattern == nil {
+		return fmt.Errorf("match arm has no pattern")
+	}
+	bindingType := ""
+	valid := false
+	switch pattern.Kind {
+	case "wildcard":
+		valid = true
+	case "nil":
+		valid = scrutineeType == "Nil"
+		if spec, ok := parseKIRTypeExpression(scrutineeType); ok {
+			valid = valid || spec.Name == "Option" && len(spec.Params) == 1
+		}
+	case "bool":
+		valid = scrutineeType == "Bool"
+	case "int":
+		valid = scrutineeType == "Int"
+	case "string":
+		valid = scrutineeType == "String"
+	case "enum":
+		valid = pattern.Type == scrutineeType && enums[pattern.Type] != nil
+	case "option":
+		if spec, ok := parseKIRTypeExpression(scrutineeType); ok && spec.Name == "Option" && len(spec.Params) == 1 {
+			valid = true
+			if pattern.Present && pattern.Binding != "" {
+				bindingType = TypeSpecString(spec.Params[0])
+			}
+		}
+	case "result":
+		if spec, ok := parseKIRTypeExpression(scrutineeType); ok && spec.Name == "Result" && len(spec.Params) == 2 {
+			valid = true
+			if pattern.Binding != "" {
+				index := 1
+				if pattern.OK {
+					index = 0
+				}
+				bindingType = TypeSpecString(spec.Params[index])
+			}
+		}
+	}
+	if !valid {
+		return fmt.Errorf("%s pattern is incompatible with checked scrutinee type %q", pattern.Kind, scrutineeType)
+	}
+	if pattern.Binding != "" && version >= 3 && (bindingType == "" || pattern.ResolvedBinding == nil || pattern.ResolvedBinding.Type != bindingType) {
+		return fmt.Errorf("pattern binding %q does not match its checked payload type", pattern.Binding)
+	}
+	return nil
 }
 
 func isKIRIntegerType(encoded string, genericConstraints map[string]string) bool {

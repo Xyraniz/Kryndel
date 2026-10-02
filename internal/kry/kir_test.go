@@ -630,6 +630,46 @@ let equal: Bool = true == true
 	}
 }
 
+func TestKIRRejectsIncompatibleMatchPatterns(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		mutate func(*KIRStmt)
+		want   string
+	}{
+		{
+			name:   "pattern kind",
+			source: "match true { true => {} false => {} }\n",
+			mutate: func(statement *KIRStmt) { statement.Arms[0].Pattern.Kind = "int" },
+			want:   "int pattern is incompatible",
+		},
+		{
+			name:   "option payload binding",
+			source: "let value: Option[Int] = some(1)\nmatch value { some(item) => { println(item) } none => {} }\n",
+			mutate: func(statement *KIRStmt) { statement.Arms[0].Pattern.ResolvedBinding.Type = "String" },
+			want:   "does not match its checked payload type",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			statement := document.Statements[len(document.Statements)-1]
+			test.mutate(statement)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
