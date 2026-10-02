@@ -478,6 +478,11 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if err := require(expression.Right, "right operand"); err != nil {
 				return err
 			}
+			if expression.Operator == "&&" || expression.Operator == "||" {
+				if expression.Left.Type != "Bool" || expression.Right.Type != "Bool" || expression.Type != "Bool" {
+					return fmt.Errorf("logical operator %q requires Bool operands and result", expression.Operator)
+				}
+			}
 		case "call":
 			if expression.Callee != nil {
 				if document.Version < 3 || expression.Name != "" || expression.CallTarget != "" || expression.BuiltinID != "" || expression.TraitName != "" {
@@ -790,6 +795,17 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			}
 			if err := requireExpr(statement.Value, "value"); err != nil {
 				return err
+			}
+			if document.Version >= 3 {
+				if !validKIRBinding(statement.Target.Binding) || statement.Target.Binding.Name != statement.Target.Name {
+					return fmt.Errorf("assignment target has an invalid resolved binding")
+				}
+				if !statement.Target.Binding.Mutable {
+					return fmt.Errorf("assignment target %q is immutable", statement.Target.Name)
+				}
+				if !compatibleKIRTypes(statement.Target.Type, statement.Value.Type) {
+					return fmt.Errorf("assignment value type %q does not match target type %q", statement.Value.Type, statement.Target.Type)
+				}
 			}
 		case "if", "while":
 			if err := requireExpr(statement.Cond, "condition"); err != nil {

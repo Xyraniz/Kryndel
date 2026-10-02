@@ -363,6 +363,55 @@ func TestKIRRejectsForBindingTypeMismatch(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsInvalidAssignmentSemantics(t *testing.T) {
+	program, checker := testProgram(t, "let mut value: Int = 1\nvalue = 2\n")
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := func() *KIRDocument {
+		t.Helper()
+		var document KIRDocument
+		if err := json.Unmarshal(data, &document); err != nil {
+			t.Fatal(err)
+		}
+		return &document
+	}
+	t.Run("value type", func(t *testing.T) {
+		document := decode()
+		document.Statements[1].Value = &KIRExpr{Kind: "bool", Source: document.Source, Line: 2, Column: 9, Type: "Bool", Bool: true}
+		if err := validateKIRDocument(document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "does not match target type") {
+			t.Fatalf("expected KIR rejection for mismatched assignment, got %v", err)
+		}
+	})
+	t.Run("immutable target", func(t *testing.T) {
+		document := decode()
+		target := document.Statements[1].Target
+		binding := *target.Binding
+		binding.Mutable = false
+		target.Binding = &binding
+		if err := validateKIRDocument(document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "is immutable") {
+			t.Fatalf("expected KIR rejection for immutable assignment target, got %v", err)
+		}
+	})
+}
+
+func TestKIRRejectsLogicalOperatorTypeMismatch(t *testing.T) {
+	program, checker := testProgram(t, "let value: Bool = true && false\n")
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[0].Init.Left = &KIRExpr{Kind: "int", Source: document.Source, Line: 1, Column: 21, Type: "Int", Int: 1}
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "requires Bool operands and result") {
+		t.Fatalf("expected KIR rejection for ill-typed logical operation, got %v", err)
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
