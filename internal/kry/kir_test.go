@@ -554,10 +554,79 @@ let second_bytes: Bytes = bytes([66])
 let joined_bytes: Bytes = first_bytes + second_bytes
 fn sum[T: Numeric](left: T, right: T) -> T { return left + right }
 fn remainder[T: Integer](left: T, right: T) -> T { return left % right }
+fn is_less[T: Numeric](left: T, right: T) -> Bool { return left < right }
 `
 	program, checker := testProgram(t, source)
 	if _, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"}); err != nil {
 		t.Fatalf("KIR rejected supported arithmetic operand types: %v", err)
+	}
+}
+
+func TestKIRRejectsInvalidComparisonOperandTypes(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		mutate  func(*KIRExpr)
+		wantErr string
+	}{
+		{
+			name:   "equality operands differ",
+			source: "let value: Bool = 1 == 1\n",
+			mutate: func(expression *KIRExpr) {
+				expression.Right = &KIRExpr{Kind: "string", Source: expression.Source, Line: 1, Column: 1, Type: "String", String: "bad"}
+			},
+			wantErr: "requires matching operand types",
+		},
+		{
+			name:   "ordered string operands",
+			source: "let value: Bool = 1 < 2\n",
+			mutate: func(expression *KIRExpr) {
+				expression.Left = &KIRExpr{Kind: "string", Source: expression.Source, Line: 1, Column: 1, Type: "String", String: "a"}
+				expression.Right = &KIRExpr{Kind: "string", Source: expression.Source, Line: 1, Column: 2, Type: "String", String: "b"}
+			},
+			wantErr: "requires matching numeric operands",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document.Statements[0].Init)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestKIRRejectsFunctionValueEquality(t *testing.T) {
+	source := `fn identity(value: Int) -> Int { return value }
+let callback: fn(Int) -> Int = identity
+let equal: Bool = true == true
+`
+	program, checker := testProgram(t, source)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	comparison := document.Statements[1].Init
+	left := *document.Statements[0].Init
+	right := left
+	comparison.Left = &left
+	comparison.Right = &right
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "does not support function values") {
+		t.Fatalf("expected KIR rejection for function equality, got %v", err)
 	}
 }
 

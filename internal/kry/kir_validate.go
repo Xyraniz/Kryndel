@@ -503,9 +503,22 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				}
 			}
 			switch expression.Operator {
-			case "==", "!=", "<", "<=", ">", ">=":
+			case "==", "!=":
 				if expression.Type != "Bool" {
 					return fmt.Errorf("comparison operator %q requires Bool result", expression.Operator)
+				}
+				if !compatibleKIRTypes(expression.Left.Type, expression.Right.Type) {
+					return fmt.Errorf("equality operator %q requires matching operand types", expression.Operator)
+				}
+				if containsKIRFunctionType(expression.Left.Type) {
+					return fmt.Errorf("equality operator %q does not support function values", expression.Operator)
+				}
+			case "<", "<=", ">", ">=":
+				if expression.Type != "Bool" {
+					return fmt.Errorf("comparison operator %q requires Bool result", expression.Operator)
+				}
+				if expression.Left.Type != expression.Right.Type || !isKIRNumericType(expression.Left.Type, genericConstraints) {
+					return fmt.Errorf("ordered comparison %q requires matching numeric operands", expression.Operator)
 				}
 			case "&", "|", "^":
 				if !isKIRUIntType(expression.Left.Type) || expression.Right.Type != expression.Left.Type || expression.Type != expression.Left.Type {
@@ -998,6 +1011,32 @@ func isKIRIntegerType(encoded string, genericConstraints map[string]string) bool
 		return true
 	}
 	return genericConstraints[encoded] == "Integer"
+}
+
+func containsKIRFunctionType(encoded string) bool {
+	spec, ok := parseKIRTypeExpression(encoded)
+	if !ok {
+		return false
+	}
+	var visit func(*TypeSpec) bool
+	visit = func(current *TypeSpec) bool {
+		if current == nil {
+			return false
+		}
+		if current.Function {
+			return true
+		}
+		if visit(current.Return) {
+			return true
+		}
+		for _, parameter := range current.Params {
+			if visit(parameter) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(spec)
 }
 
 func kirIterableElementType(encoded string) (string, bool) {
