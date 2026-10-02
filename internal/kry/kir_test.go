@@ -783,6 +783,34 @@ func TestKIRRejectsInconsistentDeclarationFlags(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsLoopControlOutsideLoops(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{name: "break", source: "while false { break }\n", want: "break statement appears outside a loop"},
+		{name: "continue", source: "while false { continue }\n", want: "continue statement appears outside a loop"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			document.Statements = []*KIRStmt{document.Statements[0].Body[0]}
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})

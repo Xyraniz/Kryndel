@@ -337,6 +337,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 	}
 	genericConstraints := map[string]string(nil)
 	expectedReturnType := ""
+	loopDepth := 0
 	var validateExpr func(*KIRExpr, int) error
 	var validateStmt func(*KIRStmt, int) error
 	var validatePattern func(*KIRPattern, int) error
@@ -703,13 +704,16 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				return err
 			}
 			previousReturnType := expectedReturnType
+			previousLoopDepth := loopDepth
 			expectedReturnType = lambda.Return
+			loopDepth = 0
 			for _, statement := range lambda.Body {
 				if err := validateStmt(statement, depth+1); err != nil {
 					return fmt.Errorf("lambda body: %w", err)
 				}
 			}
 			expectedReturnType = previousReturnType
+			loopDepth = previousLoopDepth
 			if err := validateKIRLambdaCaptures(lambda); err != nil {
 				return err
 			}
@@ -926,7 +930,11 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				}
 				return fmt.Errorf("return value has checked type %q, function expects %q", returnType, expectedReturnType)
 			}
-		case "break", "continue", "defer", "unsafe":
+		case "break", "continue":
+			if loopDepth == 0 {
+				return fmt.Errorf("%s statement appears outside a loop", statement.Kind)
+			}
+		case "defer", "unsafe":
 		case "match":
 			if err := requireExpr(statement.Scrutinee, "scrutinee"); err != nil {
 				return err
@@ -945,7 +953,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if document.Version >= 3 && (statement.Kind == "let" || statement.Kind == "const") && !compatibleKIRTypes(statement.Binding.Type, statement.Init.Type) {
 			return fmt.Errorf("%s statement binding type does not match its initializer", statement.Kind)
 		}
-		for _, list := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
+		for _, list := range [][]*KIRStmt{statement.Then, statement.Else} {
 			if err := checkKIRCount("statement block", len(list), limits.MaxArrayElements); err != nil {
 				return err
 			}
@@ -955,6 +963,19 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				}
 			}
 		}
+		if err := checkKIRCount("statement block", len(statement.Body), limits.MaxArrayElements); err != nil {
+			return err
+		}
+		previousLoopDepth := loopDepth
+		if statement.Kind == "while" || statement.Kind == "for" {
+			loopDepth++
+		}
+		for _, child := range statement.Body {
+			if err := validateStmt(child, depth+1); err != nil {
+				return err
+			}
+		}
+		loopDepth = previousLoopDepth
 		if err := checkKIRCount("match arms", len(statement.Arms), limits.MaxArrayElements); err != nil {
 			return err
 		}
@@ -982,8 +1003,10 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 	for _, function := range document.Functions {
 		previousGenericConstraints := genericConstraints
 		previousReturnType := expectedReturnType
+		previousLoopDepth := loopDepth
 		genericConstraints = make(map[string]string, len(function.TypeParams))
 		expectedReturnType = function.Return
+		loopDepth = 0
 		for _, parameter := range function.TypeParams {
 			genericConstraints[parameter.Name] = parameter.Constraint
 		}
@@ -1002,6 +1025,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		}
 		genericConstraints = previousGenericConstraints
 		expectedReturnType = previousReturnType
+		loopDepth = previousLoopDepth
 	}
 	if err := checkKIRCount("top-level statements", len(document.Statements), limits.MaxArrayElements); err != nil {
 		return err
