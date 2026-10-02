@@ -399,6 +399,26 @@ fn host_json_uint_label(state: EmitState) -> Int {
     return state.assembler.common.box_alloc_label + 26
 }
 
+fn host_json_object_keys_label(state: EmitState) -> Int {
+    return state.assembler.common.box_alloc_label + 28
+}
+
+fn host_string_less_label(state: EmitState) -> Int {
+    return state.assembler.common.box_alloc_label + 29
+}
+
+fn host_json_string_scan_label(state: EmitState) -> Int {
+    return state.assembler.common.box_alloc_label + 30
+}
+
+fn host_json_object_fields_empty_except_label(state: EmitState) -> Int {
+    return state.assembler.common.box_alloc_label + 31
+}
+
+fn host_json_field_set_lookup_label(state: EmitState) -> Int {
+    return state.assembler.common.box_alloc_label + 32
+}
+
 fn host_map_remove_label(state: EmitState) -> Int {
     return state.assembler.common.box_alloc_label + 27
 }
@@ -2602,167 +2622,391 @@ fn emit_array_slice_runtime(state: EmitState) -> Result[EmitState, String] {
     return ok(emit_jump(result_unwrap(bound_failure), result_unwrap(bound_failure).env.trap_label, false, u8(0)))
 }
 
-fn emit_json_skip_runtime(state: EmitState) -> Result[EmitState, String] {
+fn emit_json_call_aligned(state: EmitState, label: Int) -> EmitState {
+    // Runtime helpers can be entered with different live RSP alignments on PE.
+    // Preserve the caller's RBP while using it to restore the original stack.
+    let mut current: EmitState = append_code(state, [u8(85), u8(72), u8(137), u8(229), u8(72), u8(131), u8(228), u8(240)])
+    if current.assembler.common.windows_abi { current = append_code(current, [u8(72), u8(131), u8(236), u8(32)]) }
+    current = emit_relative_call(current, label)
+    return append_code(current, [u8(72), u8(137), u8(236), u8(93)])
+}
+
+fn emit_json_expect_byte(state: EmitState, value: Int, failure: Int) -> EmitState {
+    let mut current: EmitState = append_code(state, [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, failure, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(value)])
+    current = emit_jump(current, failure, true, u8(133))
+    return append_code(current, [u8(73), u8(255), u8(198)])
+}
+
+fn emit_json_literal(state: EmitState, bytes: Array[Int], failure: Int) -> EmitState {
+    let mut current: EmitState = state
+    for byte in bytes { current = emit_json_expect_byte(current, byte, failure) }
+    return current
+}
+
+fn emit_json_skip_ws_inline(state: EmitState) -> Result[EmitState, String] {
+    let loop_label: LabelState = new_label(state)
+    let next_label: LabelState = new_label(loop_label.state)
+    let done_label: LabelState = new_label(next_label.state)
+    let mut current: EmitState = emit_jump(done_label.state, loop_label.label, false, u8(0))
+    let bound_loop: Result[EmitState, String] = bind_label(current, loop_label.label)
+    if is_err(bound_loop) { return err(unwrap_or(result_error(bound_loop), "dynamic backend: cannot bind JSON whitespace scan")) }
+    current = append_code(result_unwrap(bound_loop), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, done_label.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(32)])
+    current = emit_jump(current, next_label.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(9)])
+    current = emit_jump(current, next_label.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(10)])
+    current = emit_jump(current, next_label.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(13)])
+    current = emit_jump(current, next_label.label, true, u8(132))
+    current = emit_jump(current, done_label.label, false, u8(0))
+    let bound_next: Result[EmitState, String] = bind_label(current, next_label.label)
+    if is_err(bound_next) { return err(unwrap_or(result_error(bound_next), "dynamic backend: cannot bind JSON whitespace advance")) }
+    current = append_code(result_unwrap(bound_next), [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, loop_label.label, false, u8(0))
+    let bound_done: Result[EmitState, String] = bind_label(current, done_label.label)
+    if is_err(bound_done) { return err(unwrap_or(result_error(bound_done), "dynamic backend: cannot bind JSON whitespace completion")) }
+    return ok(result_unwrap(bound_done))
+}
+
+fn emit_json_skip_strict_runtime(state: EmitState) -> Result[EmitState, String] {
     let bound: Result[EmitState, String] = bind_label(state, host_json_skip_label(state))
-    if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind JSON scanner")) }
-    let failure: LabelState = new_label(result_unwrap(bound))
-    let lead_loop: LabelState = new_label(failure.state)
-    let lead_next: LabelState = new_label(lead_loop.state)
-    let string_value: LabelState = new_label(lead_next.state)
-    let string_loop: LabelState = new_label(string_value.state)
-    let string_escape: LabelState = new_label(string_loop.state)
-    let string_after: LabelState = new_label(string_escape.state)
-    let primitive_value: LabelState = new_label(string_after.state)
-    let primitive_loop: LabelState = new_label(primitive_value.state)
-    let primitive_done: LabelState = new_label(primitive_loop.state)
-    let container_value: LabelState = new_label(primitive_done.state)
-    let container_open: LabelState = new_label(container_value.state)
-    let container_close: LabelState = new_label(container_open.state)
-    let container_loop: LabelState = new_label(container_close.state)
-    let container_string: LabelState = new_label(container_loop.state)
-    let container_enter_string: LabelState = new_label(container_string.state)
-    let container_leave_string: LabelState = new_label(container_enter_string.state)
-    let container_string_loop: LabelState = new_label(container_leave_string.state)
-    let container_string_escape: LabelState = new_label(container_string_loop.state)
-    let success: LabelState = new_label(container_string_escape.state)
-    let mut current: EmitState = append_code(success.state, [
+    if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind strict JSON parser")) }
+    let inner: LabelState = new_label(result_unwrap(bound))
+    let failure: LabelState = new_label(inner.state)
+    let success: LabelState = new_label(failure.state)
+    let epilogue: LabelState = new_label(success.state)
+    let dispatch: LabelState = new_label(epilogue.state)
+    let string_value: LabelState = new_label(dispatch.state)
+    let object_begin: LabelState = new_label(string_value.state)
+    let object_open: LabelState = new_label(object_begin.state)
+    let object_key: LabelState = new_label(object_open.state)
+    let object_colon: LabelState = new_label(object_key.state)
+    let object_value: LabelState = new_label(object_colon.state)
+    let object_after: LabelState = new_label(object_value.state)
+    let object_comma: LabelState = new_label(object_after.state)
+    let object_close: LabelState = new_label(object_comma.state)
+    let array_begin: LabelState = new_label(object_close.state)
+    let array_open: LabelState = new_label(array_begin.state)
+    let array_value: LabelState = new_label(array_open.state)
+    let array_after: LabelState = new_label(array_value.state)
+    let array_comma: LabelState = new_label(array_after.state)
+    let array_close: LabelState = new_label(array_comma.state)
+    let literal_true: LabelState = new_label(array_close.state)
+    let literal_false: LabelState = new_label(literal_true.state)
+    let literal_null: LabelState = new_label(literal_false.state)
+    let number_negative: LabelState = new_label(literal_null.state)
+    let number_integer: LabelState = new_label(number_negative.state)
+    let number_zero: LabelState = new_label(number_integer.state)
+    let number_digits: LabelState = new_label(number_zero.state)
+    let number_suffix: LabelState = new_label(number_digits.state)
+    let number_fraction: LabelState = new_label(number_suffix.state)
+    let fraction_first: LabelState = new_label(number_fraction.state)
+    let fraction_digits: LabelState = new_label(fraction_first.state)
+    let number_exponent: LabelState = new_label(fraction_digits.state)
+    let exponent_sign: LabelState = new_label(number_exponent.state)
+    let exponent_advance: LabelState = new_label(exponent_sign.state)
+    let exponent_first: LabelState = new_label(exponent_advance.state)
+    let exponent_digits: LabelState = new_label(exponent_first.state)
+    let number_success: LabelState = new_label(exponent_digits.state)
+    let mut current: EmitState = append_code(number_success.state, [u8(49), u8(210)])
+    current = emit_jump(current, inner.label, false, u8(0))
+    let bound_inner: Result[EmitState, String] = bind_label(current, inner.label)
+    if is_err(bound_inner) { return err(unwrap_or(result_error(bound_inner), "dynamic backend: cannot bind strict JSON parser body")) }
+    current = append_code(result_unwrap(bound_inner), [
         u8(83), u8(85), u8(65), u8(84), u8(65), u8(85), u8(65), u8(86), u8(65), u8(87),
-        u8(73), u8(137), u8(252), u8(77), u8(139), u8(44), u8(36), u8(73), u8(137), u8(246), u8(77), u8(49), u8(255), u8(49), u8(219)
+        u8(73), u8(137), u8(252), u8(77), u8(139), u8(44), u8(36), u8(73), u8(137), u8(246), u8(73), u8(137), u8(215)
     ])
-    current = emit_jump(current, lead_loop.label, false, u8(0))
-    let bound_lead: Result[EmitState, String] = bind_label(current, lead_loop.label)
-    if is_err(bound_lead) { return err(unwrap_or(result_error(bound_lead), "dynamic backend: cannot bind JSON scanner leading loop")) }
-    current = append_code(result_unwrap(bound_lead), [u8(77), u8(57), u8(238)])
+    let leading: Result[EmitState, String] = emit_json_skip_ws_inline(current)
+    if is_err(leading) { return err(unwrap_or(result_error(leading), "dynamic backend: JSON leading whitespace scan failed")) }
+    current = emit_jump(result_unwrap(leading), dispatch.label, false, u8(0))
+    let bound_dispatch: Result[EmitState, String] = bind_label(current, dispatch.label)
+    if is_err(bound_dispatch) { return err(unwrap_or(result_error(bound_dispatch), "dynamic backend: cannot bind JSON value dispatch")) }
+    current = append_code(result_unwrap(bound_dispatch), [u8(77), u8(57), u8(238)])
     current = emit_jump(current, failure.label, true, u8(131))
     current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8)])
-    current = append_code(current, [u8(60), u8(32)])
-    current = emit_jump(current, lead_next.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(9)])
-    current = emit_jump(current, lead_next.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(10)])
-    current = emit_jump(current, lead_next.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(13)])
-    current = emit_jump(current, lead_next.label, true, u8(132))
     current = append_code(current, [u8(60), u8(34)])
     current = emit_jump(current, string_value.label, true, u8(132))
     current = append_code(current, [u8(60), u8(123)])
-    current = emit_jump(current, container_value.label, true, u8(132))
+    current = emit_jump(current, object_begin.label, true, u8(132))
     current = append_code(current, [u8(60), u8(91)])
-    current = emit_jump(current, container_value.label, true, u8(132))
-    current = emit_jump(current, primitive_value.label, false, u8(0))
-    let bound_lead_next: Result[EmitState, String] = bind_label(current, lead_next.label)
-    if is_err(bound_lead_next) { return err(unwrap_or(result_error(bound_lead_next), "dynamic backend: cannot bind JSON scanner whitespace")) }
-    current = append_code(result_unwrap(bound_lead_next), [u8(73), u8(255), u8(198)])
-    current = emit_jump(current, lead_loop.label, false, u8(0))
+    current = emit_jump(current, array_begin.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(116)])
+    current = emit_jump(current, literal_true.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(102)])
+    current = emit_jump(current, literal_false.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(110)])
+    current = emit_jump(current, literal_null.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(45)])
+    current = emit_jump(current, number_negative.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(48)])
+    current = emit_jump(current, number_zero.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(49)])
+    current = emit_jump(current, failure.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, failure.label, true, u8(135))
+    current = emit_jump(current, number_integer.label, false, u8(0))
+
     let bound_string: Result[EmitState, String] = bind_label(current, string_value.label)
-    if is_err(bound_string) { return err(unwrap_or(result_error(bound_string), "dynamic backend: cannot bind JSON scanner string")) }
-    current = append_code(result_unwrap(bound_string), [u8(73), u8(255), u8(198)])
-    current = emit_jump(current, string_loop.label, false, u8(0))
-    let bound_string_loop: Result[EmitState, String] = bind_label(current, string_loop.label)
-    if is_err(bound_string_loop) { return err(unwrap_or(result_error(bound_string_loop), "dynamic backend: cannot bind JSON scanner string loop")) }
-    current = append_code(result_unwrap(bound_string_loop), [u8(77), u8(57), u8(238)])
-    current = emit_jump(current, failure.label, true, u8(131))
-    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(92)])
-    current = emit_jump(current, string_escape.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(34)])
-    current = emit_jump(current, string_after.label, true, u8(132))
-    current = append_code(current, [u8(73), u8(255), u8(198)])
-    current = emit_jump(current, string_loop.label, false, u8(0))
-    let bound_string_escape: Result[EmitState, String] = bind_label(current, string_escape.label)
-    if is_err(bound_string_escape) { return err(unwrap_or(result_error(bound_string_escape), "dynamic backend: cannot bind JSON scanner escape")) }
-    current = append_code(result_unwrap(bound_string_escape), [u8(73), u8(131), u8(198), u8(2)])
-    current = emit_jump(current, string_loop.label, false, u8(0))
-    let bound_string_after: Result[EmitState, String] = bind_label(current, string_after.label)
-    if is_err(bound_string_after) { return err(unwrap_or(result_error(bound_string_after), "dynamic backend: cannot bind JSON scanner string completion")) }
-    current = append_code(result_unwrap(bound_string_after), [u8(73), u8(255), u8(198)])
-    current = emit_jump(current, success.label, false, u8(0))
-    let bound_primitive: Result[EmitState, String] = bind_label(current, primitive_value.label)
-    if is_err(bound_primitive) { return err(unwrap_or(result_error(bound_primitive), "dynamic backend: cannot bind JSON scanner primitive")) }
-    current = append_code(result_unwrap(bound_primitive), [u8(76), u8(137), u8(245)])
-    current = emit_jump(current, primitive_loop.label, false, u8(0))
-    let bound_primitive_loop: Result[EmitState, String] = bind_label(current, primitive_loop.label)
-    if is_err(bound_primitive_loop) { return err(unwrap_or(result_error(bound_primitive_loop), "dynamic backend: cannot bind JSON scanner primitive loop")) }
-    current = append_code(result_unwrap(bound_primitive_loop), [u8(77), u8(57), u8(238)])
-    current = emit_jump(current, primitive_done.label, true, u8(131))
-    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8)])
-    current = append_code(current, [u8(60), u8(32)])
-    current = emit_jump(current, primitive_done.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(9)])
-    current = emit_jump(current, primitive_done.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(10)])
-    current = emit_jump(current, primitive_done.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(13)])
-    current = emit_jump(current, primitive_done.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(44)])
-    current = emit_jump(current, primitive_done.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(93)])
-    current = emit_jump(current, primitive_done.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(125)])
-    current = emit_jump(current, primitive_done.label, true, u8(132))
-    current = append_code(current, [u8(73), u8(255), u8(198)])
-    current = emit_jump(current, primitive_loop.label, false, u8(0))
-    let bound_primitive_done: Result[EmitState, String] = bind_label(current, primitive_done.label)
-    if is_err(bound_primitive_done) { return err(unwrap_or(result_error(bound_primitive_done), "dynamic backend: cannot bind JSON scanner primitive completion")) }
-    current = append_code(result_unwrap(bound_primitive_done), [u8(76), u8(137), u8(240), u8(72), u8(57), u8(232)])
+    if is_err(bound_string) { return err(unwrap_or(result_error(bound_string), "dynamic backend: cannot bind JSON string value")) }
+    current = append_code(result_unwrap(bound_string), [u8(76), u8(137), u8(231), u8(76), u8(137), u8(246)])
+    current = emit_json_call_aligned(current, host_json_string_scan_label(current))
+    current = append_code(current, [u8(72), u8(131), u8(248), u8(255)])
     current = emit_jump(current, failure.label, true, u8(132))
+    current = append_code(current, [u8(73), u8(137), u8(198)])
     current = emit_jump(current, success.label, false, u8(0))
-    let bound_container: Result[EmitState, String] = bind_label(current, container_value.label)
-    if is_err(bound_container) { return err(unwrap_or(result_error(bound_container), "dynamic backend: cannot bind JSON scanner container")) }
-    current = append_code(result_unwrap(bound_container), [u8(73), u8(199), u8(199), u8(1), u8(0), u8(0), u8(0), u8(73), u8(255), u8(198)])
-    current = emit_jump(current, container_loop.label, false, u8(0))
-    let bound_container_open: Result[EmitState, String] = bind_label(current, container_open.label)
-    if is_err(bound_container_open) { return err(unwrap_or(result_error(bound_container_open), "dynamic backend: cannot bind JSON scanner nested container")) }
-    current = append_code(result_unwrap(bound_container_open), [u8(73), u8(255), u8(199), u8(73), u8(255), u8(198)])
-    current = emit_jump(current, container_loop.label, false, u8(0))
-    let bound_container_loop: Result[EmitState, String] = bind_label(current, container_loop.label)
-    if is_err(bound_container_loop) { return err(unwrap_or(result_error(bound_container_loop), "dynamic backend: cannot bind JSON scanner container loop")) }
-    current = append_code(result_unwrap(bound_container_loop), [u8(77), u8(57), u8(238)])
+
+    let bound_object: Result[EmitState, String] = bind_label(current, object_begin.label)
+    if is_err(bound_object) { return err(unwrap_or(result_error(bound_object), "dynamic backend: cannot bind JSON object")) }
+    current = append_code(result_unwrap(bound_object), [u8(73), u8(129), u8(255), u8(0), u8(2), u8(0), u8(0)])
     current = emit_jump(current, failure.label, true, u8(131))
-    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(132), u8(219)])
-    current = emit_jump(current, container_string.label, true, u8(133))
-    current = append_code(current, [u8(60), u8(34)])
-    current = emit_jump(current, container_enter_string.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(123)])
-    current = emit_jump(current, container_open.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(91)])
-    current = emit_jump(current, container_open.label, true, u8(132))
+    current = append_code(current, [u8(73), u8(255), u8(198)])
+    let object_ws: Result[EmitState, String] = emit_json_skip_ws_inline(current)
+    if is_err(object_ws) { return err(unwrap_or(result_error(object_ws), "dynamic backend: JSON object whitespace scan failed")) }
+    current = emit_jump(result_unwrap(object_ws), object_open.label, false, u8(0))
+    let bound_object_open: Result[EmitState, String] = bind_label(current, object_open.label)
+    if is_err(bound_object_open) { return err(unwrap_or(result_error(bound_object_open), "dynamic backend: cannot bind JSON object entries")) }
+    current = append_code(result_unwrap(bound_object_open), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, failure.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(125)])
+    current = emit_jump(current, object_close.label, true, u8(132))
+    current = emit_jump(current, object_key.label, false, u8(0))
+    let bound_object_key: Result[EmitState, String] = bind_label(current, object_key.label)
+    if is_err(bound_object_key) { return err(unwrap_or(result_error(bound_object_key), "dynamic backend: cannot bind JSON object key")) }
+    current = append_code(result_unwrap(bound_object_key), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, failure.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(34)])
+    current = emit_jump(current, failure.label, true, u8(133))
+    current = append_code(current, [u8(76), u8(137), u8(231), u8(76), u8(137), u8(246)])
+    current = emit_json_call_aligned(current, host_json_string_scan_label(current))
+    current = append_code(current, [u8(72), u8(131), u8(248), u8(255)])
+    current = emit_jump(current, failure.label, true, u8(132))
+    current = append_code(current, [u8(73), u8(137), u8(198)])
+    let key_ws: Result[EmitState, String] = emit_json_skip_ws_inline(current)
+    if is_err(key_ws) { return err(unwrap_or(result_error(key_ws), "dynamic backend: JSON key whitespace scan failed")) }
+    current = emit_json_expect_byte(result_unwrap(key_ws), 58, failure.label)
+    current = emit_jump(current, object_value.label, false, u8(0))
+    let bound_object_value: Result[EmitState, String] = bind_label(current, object_value.label)
+    if is_err(bound_object_value) { return err(unwrap_or(result_error(bound_object_value), "dynamic backend: cannot bind JSON object value")) }
+    current = append_code(result_unwrap(bound_object_value), [u8(76), u8(137), u8(231), u8(76), u8(137), u8(246), u8(76), u8(137), u8(250)])
+    current = emit_json_call_aligned(current, inner.label)
+    current = append_code(current, [u8(72), u8(131), u8(248), u8(255)])
+    current = emit_jump(current, failure.label, true, u8(132))
+    current = append_code(current, [u8(73), u8(137), u8(198)])
+    let object_after_ws: Result[EmitState, String] = emit_json_skip_ws_inline(current)
+    if is_err(object_after_ws) { return err(unwrap_or(result_error(object_after_ws), "dynamic backend: JSON object separator scan failed")) }
+    current = emit_jump(result_unwrap(object_after_ws), object_after.label, false, u8(0))
+    let bound_object_after: Result[EmitState, String] = bind_label(current, object_after.label)
+    if is_err(bound_object_after) { return err(unwrap_or(result_error(bound_object_after), "dynamic backend: cannot bind JSON object separator")) }
+    current = append_code(result_unwrap(bound_object_after), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, failure.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(44)])
+    current = emit_jump(current, object_comma.label, true, u8(132))
     current = append_code(current, [u8(60), u8(125)])
-    current = emit_jump(current, container_close.label, true, u8(132))
+    current = emit_jump(current, object_close.label, true, u8(132))
+    current = emit_jump(current, failure.label, false, u8(0))
+    let bound_object_comma: Result[EmitState, String] = bind_label(current, object_comma.label)
+    if is_err(bound_object_comma) { return err(unwrap_or(result_error(bound_object_comma), "dynamic backend: cannot bind JSON object comma")) }
+    current = append_code(result_unwrap(bound_object_comma), [u8(73), u8(255), u8(198)])
+    let comma_ws: Result[EmitState, String] = emit_json_skip_ws_inline(current)
+    if is_err(comma_ws) { return err(unwrap_or(result_error(comma_ws), "dynamic backend: JSON object comma whitespace scan failed")) }
+    current = emit_jump(result_unwrap(comma_ws), object_key.label, false, u8(0))
+    let bound_object_close: Result[EmitState, String] = bind_label(current, object_close.label)
+    if is_err(bound_object_close) { return err(unwrap_or(result_error(bound_object_close), "dynamic backend: cannot bind JSON object close")) }
+    current = append_code(result_unwrap(bound_object_close), [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, success.label, false, u8(0))
+
+    let bound_array: Result[EmitState, String] = bind_label(current, array_begin.label)
+    if is_err(bound_array) { return err(unwrap_or(result_error(bound_array), "dynamic backend: cannot bind JSON array")) }
+    current = append_code(result_unwrap(bound_array), [u8(73), u8(129), u8(255), u8(0), u8(2), u8(0), u8(0)])
+    current = emit_jump(current, failure.label, true, u8(131))
+    current = append_code(current, [u8(73), u8(255), u8(198)])
+    let array_ws: Result[EmitState, String] = emit_json_skip_ws_inline(current)
+    if is_err(array_ws) { return err(unwrap_or(result_error(array_ws), "dynamic backend: JSON array whitespace scan failed")) }
+    current = emit_jump(result_unwrap(array_ws), array_open.label, false, u8(0))
+    let bound_array_open: Result[EmitState, String] = bind_label(current, array_open.label)
+    if is_err(bound_array_open) { return err(unwrap_or(result_error(bound_array_open), "dynamic backend: cannot bind JSON array entries")) }
+    current = append_code(result_unwrap(bound_array_open), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, failure.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(93)])
+    current = emit_jump(current, array_close.label, true, u8(132))
+    current = emit_jump(current, array_value.label, false, u8(0))
+    let bound_array_value: Result[EmitState, String] = bind_label(current, array_value.label)
+    if is_err(bound_array_value) { return err(unwrap_or(result_error(bound_array_value), "dynamic backend: cannot bind JSON array value")) }
+    current = append_code(result_unwrap(bound_array_value), [u8(76), u8(137), u8(231), u8(76), u8(137), u8(246), u8(76), u8(137), u8(250)])
+    current = emit_json_call_aligned(current, inner.label)
+    current = append_code(current, [u8(72), u8(131), u8(248), u8(255)])
+    current = emit_jump(current, failure.label, true, u8(132))
+    current = append_code(current, [u8(73), u8(137), u8(198)])
+    let array_after_ws: Result[EmitState, String] = emit_json_skip_ws_inline(current)
+    if is_err(array_after_ws) { return err(unwrap_or(result_error(array_after_ws), "dynamic backend: JSON array separator scan failed")) }
+    current = emit_jump(result_unwrap(array_after_ws), array_after.label, false, u8(0))
+    let bound_array_after: Result[EmitState, String] = bind_label(current, array_after.label)
+    if is_err(bound_array_after) { return err(unwrap_or(result_error(bound_array_after), "dynamic backend: cannot bind JSON array separator")) }
+    current = append_code(result_unwrap(bound_array_after), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, failure.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(44)])
+    current = emit_jump(current, array_comma.label, true, u8(132))
     current = append_code(current, [u8(60), u8(93)])
-    current = emit_jump(current, container_close.label, true, u8(132))
+    current = emit_jump(current, array_close.label, true, u8(132))
+    current = emit_jump(current, failure.label, false, u8(0))
+    let bound_array_comma: Result[EmitState, String] = bind_label(current, array_comma.label)
+    if is_err(bound_array_comma) { return err(unwrap_or(result_error(bound_array_comma), "dynamic backend: cannot bind JSON array comma")) }
+    current = append_code(result_unwrap(bound_array_comma), [u8(73), u8(255), u8(198)])
+    let array_comma_ws: Result[EmitState, String] = emit_json_skip_ws_inline(current)
+    if is_err(array_comma_ws) { return err(unwrap_or(result_error(array_comma_ws), "dynamic backend: JSON array comma whitespace scan failed")) }
+    current = emit_jump(result_unwrap(array_comma_ws), array_value.label, false, u8(0))
+    let bound_array_close: Result[EmitState, String] = bind_label(current, array_close.label)
+    if is_err(bound_array_close) { return err(unwrap_or(result_error(bound_array_close), "dynamic backend: cannot bind JSON array close")) }
+    current = append_code(result_unwrap(bound_array_close), [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, success.label, false, u8(0))
+
+    let bound_true: Result[EmitState, String] = bind_label(current, literal_true.label)
+    if is_err(bound_true) { return err(unwrap_or(result_error(bound_true), "dynamic backend: cannot bind JSON true")) }
+    current = emit_json_literal(result_unwrap(bound_true), [116, 114, 117, 101], failure.label)
+    current = emit_jump(current, success.label, false, u8(0))
+    let bound_false: Result[EmitState, String] = bind_label(current, literal_false.label)
+    if is_err(bound_false) { return err(unwrap_or(result_error(bound_false), "dynamic backend: cannot bind JSON false")) }
+    current = emit_json_literal(result_unwrap(bound_false), [102, 97, 108, 115, 101], failure.label)
+    current = emit_jump(current, success.label, false, u8(0))
+    let bound_null: Result[EmitState, String] = bind_label(current, literal_null.label)
+    if is_err(bound_null) { return err(unwrap_or(result_error(bound_null), "dynamic backend: cannot bind JSON null")) }
+    current = emit_json_literal(result_unwrap(bound_null), [110, 117, 108, 108], failure.label)
+    current = emit_jump(current, success.label, false, u8(0))
+
+    let bound_negative: Result[EmitState, String] = bind_label(current, number_negative.label)
+    if is_err(bound_negative) { return err(unwrap_or(result_error(bound_negative), "dynamic backend: cannot bind JSON number sign")) }
+    current = append_code(result_unwrap(bound_negative), [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, number_integer.label, false, u8(0))
+    let bound_integer: Result[EmitState, String] = bind_label(current, number_integer.label)
+    if is_err(bound_integer) { return err(unwrap_or(result_error(bound_integer), "dynamic backend: cannot bind JSON integer")) }
+    current = append_code(result_unwrap(bound_integer), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, failure.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(48)])
+    current = emit_jump(current, number_zero.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(49)])
+    current = emit_jump(current, failure.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, failure.label, true, u8(135))
     current = append_code(current, [u8(73), u8(255), u8(198)])
-    current = emit_jump(current, container_loop.label, false, u8(0))
-    let bound_container_close: Result[EmitState, String] = bind_label(current, container_close.label)
-    if is_err(bound_container_close) { return err(unwrap_or(result_error(bound_container_close), "dynamic backend: cannot bind JSON scanner container close")) }
-    current = append_code(result_unwrap(bound_container_close), [u8(73), u8(255), u8(207), u8(73), u8(255), u8(198), u8(77), u8(133), u8(255)])
-    current = emit_jump(current, success.label, true, u8(132))
-    current = emit_jump(current, container_loop.label, false, u8(0))
-    let bound_container_enter_string: Result[EmitState, String] = bind_label(current, container_enter_string.label)
-    if is_err(bound_container_enter_string) { return err(unwrap_or(result_error(bound_container_enter_string), "dynamic backend: cannot bind JSON scanner string entry")) }
-    current = append_code(result_unwrap(bound_container_enter_string), [u8(179), u8(1), u8(73), u8(255), u8(198)])
-    current = emit_jump(current, container_loop.label, false, u8(0))
-    let bound_container_leave_string: Result[EmitState, String] = bind_label(current, container_leave_string.label)
-    if is_err(bound_container_leave_string) { return err(unwrap_or(result_error(bound_container_leave_string), "dynamic backend: cannot bind JSON scanner string exit")) }
-    current = append_code(result_unwrap(bound_container_leave_string), [u8(49), u8(219), u8(73), u8(255), u8(198)])
-    current = emit_jump(current, container_loop.label, false, u8(0))
-    let bound_container_string: Result[EmitState, String] = bind_label(current, container_string.label)
-    if is_err(bound_container_string) { return err(unwrap_or(result_error(bound_container_string), "dynamic backend: cannot bind JSON scanner nested string")) }
-    current = append_code(result_unwrap(bound_container_string), [u8(60), u8(92)])
-    current = emit_jump(current, container_string_escape.label, true, u8(132))
-    current = append_code(current, [u8(60), u8(34)])
-    current = emit_jump(current, container_leave_string.label, true, u8(132))
+    current = emit_jump(current, number_digits.label, false, u8(0))
+    let bound_zero: Result[EmitState, String] = bind_label(current, number_zero.label)
+    if is_err(bound_zero) { return err(unwrap_or(result_error(bound_zero), "dynamic backend: cannot bind JSON zero")) }
+    current = append_code(result_unwrap(bound_zero), [u8(73), u8(255), u8(198), u8(77), u8(57), u8(238)])
+    current = emit_jump(current, number_suffix.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(48)])
+    current = emit_jump(current, number_suffix.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, failure.label, true, u8(134))
+    current = emit_jump(current, number_suffix.label, false, u8(0))
+    let bound_digits: Result[EmitState, String] = bind_label(current, number_digits.label)
+    if is_err(bound_digits) { return err(unwrap_or(result_error(bound_digits), "dynamic backend: cannot bind JSON integer digits")) }
+    current = append_code(result_unwrap(bound_digits), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, number_suffix.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(48)])
+    current = emit_jump(current, number_suffix.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, number_suffix.label, true, u8(135))
     current = append_code(current, [u8(73), u8(255), u8(198)])
-    current = emit_jump(current, container_loop.label, false, u8(0))
-    let bound_container_string_escape: Result[EmitState, String] = bind_label(current, container_string_escape.label)
-    if is_err(bound_container_string_escape) { return err(unwrap_or(result_error(bound_container_string_escape), "dynamic backend: cannot bind JSON scanner nested escape")) }
-    current = append_code(result_unwrap(bound_container_string_escape), [u8(73), u8(131), u8(198), u8(2)])
-    current = emit_jump(current, container_loop.label, false, u8(0))
+    current = emit_jump(current, number_digits.label, false, u8(0))
+    let bound_suffix: Result[EmitState, String] = bind_label(current, number_suffix.label)
+    if is_err(bound_suffix) { return err(unwrap_or(result_error(bound_suffix), "dynamic backend: cannot bind JSON number suffix")) }
+    current = append_code(result_unwrap(bound_suffix), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, number_success.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(46)])
+    current = emit_jump(current, number_fraction.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(101)])
+    current = emit_jump(current, number_exponent.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(69)])
+    current = emit_jump(current, number_exponent.label, true, u8(132))
+    current = emit_jump(current, number_success.label, false, u8(0))
+    let bound_fraction: Result[EmitState, String] = bind_label(current, number_fraction.label)
+    if is_err(bound_fraction) { return err(unwrap_or(result_error(bound_fraction), "dynamic backend: cannot bind JSON fraction")) }
+    current = append_code(result_unwrap(bound_fraction), [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, fraction_first.label, false, u8(0))
+    let bound_fraction_first: Result[EmitState, String] = bind_label(current, fraction_first.label)
+    if is_err(bound_fraction_first) { return err(unwrap_or(result_error(bound_fraction_first), "dynamic backend: cannot bind JSON fraction digits")) }
+    current = append_code(result_unwrap(bound_fraction_first), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, failure.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(48)])
+    current = emit_jump(current, failure.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, failure.label, true, u8(135))
+    current = append_code(current, [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, fraction_digits.label, false, u8(0))
+    let bound_fraction_digits: Result[EmitState, String] = bind_label(current, fraction_digits.label)
+    if is_err(bound_fraction_digits) { return err(unwrap_or(result_error(bound_fraction_digits), "dynamic backend: cannot bind JSON fraction scan")) }
+    current = append_code(result_unwrap(bound_fraction_digits), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, number_success.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(48)])
+    current = emit_jump(current, number_success.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(101)])
+    current = emit_jump(current, number_exponent.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(69)])
+    current = emit_jump(current, number_exponent.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, number_success.label, true, u8(135))
+    current = append_code(current, [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, fraction_digits.label, false, u8(0))
+    let bound_exponent: Result[EmitState, String] = bind_label(current, number_exponent.label)
+    if is_err(bound_exponent) { return err(unwrap_or(result_error(bound_exponent), "dynamic backend: cannot bind JSON exponent")) }
+    current = append_code(result_unwrap(bound_exponent), [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, exponent_sign.label, false, u8(0))
+    let bound_exponent_sign: Result[EmitState, String] = bind_label(current, exponent_sign.label)
+    if is_err(bound_exponent_sign) { return err(unwrap_or(result_error(bound_exponent_sign), "dynamic backend: cannot bind JSON exponent sign")) }
+    current = append_code(result_unwrap(bound_exponent_sign), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, exponent_first.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(43)])
+    current = emit_jump(current, exponent_advance.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(45)])
+    current = emit_jump(current, exponent_advance.label, true, u8(132))
+    current = emit_jump(current, exponent_first.label, false, u8(0))
+    let bound_exponent_advance: Result[EmitState, String] = bind_label(current, exponent_advance.label)
+    if is_err(bound_exponent_advance) { return err(unwrap_or(result_error(bound_exponent_advance), "dynamic backend: cannot bind JSON exponent sign advance")) }
+    current = append_code(result_unwrap(bound_exponent_advance), [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, exponent_first.label, false, u8(0))
+    let bound_exponent_first: Result[EmitState, String] = bind_label(current, exponent_first.label)
+    if is_err(bound_exponent_first) { return err(unwrap_or(result_error(bound_exponent_first), "dynamic backend: cannot bind JSON exponent digits")) }
+    current = append_code(result_unwrap(bound_exponent_first), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, failure.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(48)])
+    current = emit_jump(current, failure.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, failure.label, true, u8(135))
+    current = append_code(current, [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, exponent_digits.label, false, u8(0))
+    let bound_exponent_digits: Result[EmitState, String] = bind_label(current, exponent_digits.label)
+    if is_err(bound_exponent_digits) { return err(unwrap_or(result_error(bound_exponent_digits), "dynamic backend: cannot bind JSON exponent scan")) }
+    current = append_code(result_unwrap(bound_exponent_digits), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, number_success.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(48)])
+    current = emit_jump(current, number_success.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, number_success.label, true, u8(135))
+    current = append_code(current, [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, exponent_digits.label, false, u8(0))
+    let bound_number_success: Result[EmitState, String] = bind_label(current, number_success.label)
+    if is_err(bound_number_success) { return err(unwrap_or(result_error(bound_number_success), "dynamic backend: cannot bind JSON number completion")) }
+    current = emit_jump(result_unwrap(bound_number_success), success.label, false, u8(0))
+
     let bound_success: Result[EmitState, String] = bind_label(current, success.label)
-    if is_err(bound_success) { return err(unwrap_or(result_error(bound_success), "dynamic backend: cannot bind JSON scanner success")) }
-    current = append_code(result_unwrap(bound_success), [u8(76), u8(137), u8(240), u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)])
+    if is_err(bound_success) { return err(unwrap_or(result_error(bound_success), "dynamic backend: cannot bind strict JSON parser success")) }
+    current = append_code(result_unwrap(bound_success), [u8(76), u8(137), u8(240)])
+    current = emit_jump(current, epilogue.label, false, u8(0))
     let bound_failure: Result[EmitState, String] = bind_label(current, failure.label)
-    if is_err(bound_failure) { return err(unwrap_or(result_error(bound_failure), "dynamic backend: cannot bind JSON scanner failure")) }
-    return ok(append_code(result_unwrap(bound_failure), [u8(72), u8(199), u8(192), u8(255), u8(255), u8(255), u8(255), u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)]))
+    if is_err(bound_failure) { return err(unwrap_or(result_error(bound_failure), "dynamic backend: cannot bind strict JSON parser failure")) }
+    current = append_code(result_unwrap(bound_failure), [u8(72), u8(199), u8(192), u8(255), u8(255), u8(255), u8(255)])
+    current = emit_jump(current, epilogue.label, false, u8(0))
+    let bound_epilogue: Result[EmitState, String] = bind_label(current, epilogue.label)
+    if is_err(bound_epilogue) { return err(unwrap_or(result_error(bound_epilogue), "dynamic backend: cannot bind strict JSON parser epilogue")) }
+    return ok(append_code(result_unwrap(bound_epilogue), [u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)]))
+}
+
+fn emit_json_skip_runtime(state: EmitState) -> Result[EmitState, String] {
+    return emit_json_skip_strict_runtime(state)
 }
 
 fn emit_json_parse_runtime(state: EmitState) -> Result[EmitState, String] {
@@ -2776,7 +3020,7 @@ fn emit_json_parse_runtime(state: EmitState) -> Result[EmitState, String] {
         u8(83), u8(85), u8(65), u8(84), u8(65), u8(85), u8(65), u8(86), u8(65), u8(87),
         u8(73), u8(137), u8(252), u8(77), u8(139), u8(44), u8(36), u8(72), u8(49), u8(246)
     ])
-    current = emit_label_call(current, host_json_skip_label(current))
+    current = emit_json_call_aligned(current, host_json_skip_label(current))
     current = append_code(current, [u8(72), u8(131), u8(248), u8(255)])
     current = emit_jump(current, failure.label, true, u8(132))
     current = append_code(current, [u8(73), u8(137), u8(198)])
@@ -2811,6 +3055,106 @@ fn emit_json_parse_runtime(state: EmitState) -> Result[EmitState, String] {
     return ok(append_code(current, [u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)]))
 }
 
+fn emit_json_string_scan_runtime(state: EmitState) -> Result[EmitState, String] {
+    let bound: Result[EmitState, String] = bind_label(state, host_json_string_scan_label(state))
+    if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind JSON string scanner")) }
+    let start: LabelState = new_label(result_unwrap(bound))
+    let scan: LabelState = new_label(start.state)
+    let escaped: LabelState = new_label(scan.state)
+    let escape_simple: LabelState = new_label(escaped.state)
+    let unicode: LabelState = new_label(escape_simple.state)
+    let hex_loop: LabelState = new_label(unicode.state)
+    let hex_valid: LabelState = new_label(hex_loop.state)
+    let close: LabelState = new_label(hex_valid.state)
+    let invalid: LabelState = new_label(close.state)
+    let mut current: EmitState = append_code(invalid.state, [
+        u8(83), u8(85), u8(65), u8(84), u8(65), u8(85), u8(65), u8(86), u8(65), u8(87),
+        u8(73), u8(137), u8(252), u8(76), u8(139), u8(47), u8(73), u8(137), u8(255), u8(73), u8(137), u8(246)
+    ])
+    current = emit_jump(current, start.label, false, u8(0))
+    let bound_start: Result[EmitState, String] = bind_label(current, start.label)
+    if is_err(bound_start) { return err(unwrap_or(result_error(bound_start), "dynamic backend: cannot bind JSON string scanner start")) }
+    current = append_code(result_unwrap(bound_start), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, invalid.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(55), u8(8), u8(60), u8(34)])
+    current = emit_jump(current, invalid.label, true, u8(133))
+    current = append_code(current, [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, scan.label, false, u8(0))
+    let bound_scan: Result[EmitState, String] = bind_label(current, scan.label)
+    if is_err(bound_scan) { return err(unwrap_or(result_error(bound_scan), "dynamic backend: cannot bind JSON string scanner loop")) }
+    current = append_code(result_unwrap(bound_scan), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, invalid.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(55), u8(8), u8(60), u8(34)])
+    current = emit_jump(current, close.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(32)])
+    current = emit_jump(current, invalid.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(92)])
+    current = emit_jump(current, escaped.label, true, u8(132))
+    current = append_code(current, [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, scan.label, false, u8(0))
+    let bound_escaped: Result[EmitState, String] = bind_label(current, escaped.label)
+    if is_err(bound_escaped) { return err(unwrap_or(result_error(bound_escaped), "dynamic backend: cannot bind JSON string escape")) }
+    current = append_code(result_unwrap(bound_escaped), [u8(73), u8(255), u8(198), u8(77), u8(57), u8(238)])
+    current = emit_jump(current, invalid.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(55), u8(8)])
+    current = append_code(current, [u8(60), u8(34)])
+    current = emit_jump(current, escape_simple.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(92)])
+    current = emit_jump(current, escape_simple.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(47)])
+    current = emit_jump(current, escape_simple.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(98)])
+    current = emit_jump(current, escape_simple.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(102)])
+    current = emit_jump(current, escape_simple.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(110)])
+    current = emit_jump(current, escape_simple.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(114)])
+    current = emit_jump(current, escape_simple.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(116)])
+    current = emit_jump(current, escape_simple.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(117)])
+    current = emit_jump(current, unicode.label, true, u8(132))
+    current = emit_jump(current, invalid.label, false, u8(0))
+    let bound_simple: Result[EmitState, String] = bind_label(current, escape_simple.label)
+    if is_err(bound_simple) { return err(unwrap_or(result_error(bound_simple), "dynamic backend: cannot bind JSON simple escape")) }
+    current = append_code(result_unwrap(bound_simple), [u8(73), u8(255), u8(198)])
+    current = emit_jump(current, scan.label, false, u8(0))
+    let bound_unicode: Result[EmitState, String] = bind_label(current, unicode.label)
+    if is_err(bound_unicode) { return err(unwrap_or(result_error(bound_unicode), "dynamic backend: cannot bind JSON unicode escape")) }
+    current = append_code(result_unwrap(bound_unicode), [u8(73), u8(255), u8(198), u8(187), u8(4), u8(0), u8(0), u8(0)])
+    current = emit_jump(current, hex_loop.label, false, u8(0))
+    let bound_hex: Result[EmitState, String] = bind_label(current, hex_loop.label)
+    if is_err(bound_hex) { return err(unwrap_or(result_error(bound_hex), "dynamic backend: cannot bind JSON unicode digits")) }
+    current = append_code(result_unwrap(bound_hex), [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, invalid.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(55), u8(8), u8(60), u8(48)])
+    current = emit_jump(current, invalid.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, hex_valid.label, true, u8(134))
+    current = append_code(current, [u8(60), u8(65)])
+    current = emit_jump(current, invalid.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(70)])
+    current = emit_jump(current, hex_valid.label, true, u8(134))
+    current = append_code(current, [u8(60), u8(97)])
+    current = emit_jump(current, invalid.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(102)])
+    current = emit_jump(current, invalid.label, true, u8(135))
+    let bound_hex_valid: Result[EmitState, String] = bind_label(current, hex_valid.label)
+    if is_err(bound_hex_valid) { return err(unwrap_or(result_error(bound_hex_valid), "dynamic backend: cannot bind JSON unicode digit")) }
+    current = append_code(result_unwrap(bound_hex_valid), [u8(73), u8(255), u8(198), u8(255), u8(203)])
+    current = emit_jump(current, hex_loop.label, true, u8(133))
+    current = emit_jump(current, scan.label, false, u8(0))
+    let bound_close: Result[EmitState, String] = bind_label(current, close.label)
+    if is_err(bound_close) { return err(unwrap_or(result_error(bound_close), "dynamic backend: cannot bind JSON string close")) }
+    current = append_code(result_unwrap(bound_close), [u8(73), u8(255), u8(198), u8(76), u8(137), u8(240)])
+    current = append_code(current, [u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)])
+    let bound_invalid: Result[EmitState, String] = bind_label(current, invalid.label)
+    if is_err(bound_invalid) { return err(unwrap_or(result_error(bound_invalid), "dynamic backend: cannot bind JSON string scanner failure")) }
+    current = append_code(result_unwrap(bound_invalid), [u8(72), u8(199), u8(192), u8(255), u8(255), u8(255), u8(255)])
+    return ok(append_code(current, [u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)]))
+}
+
 fn emit_json_string_runtime(state: EmitState) -> Result[EmitState, String] {
     let bound: Result[EmitState, String] = bind_label(state, host_json_string_label(state))
     if is_err(bound) { return err(unwrap_or(result_error(bound), "dynamic backend: cannot bind JSON String runtime")) }
@@ -2819,13 +3163,30 @@ fn emit_json_string_runtime(state: EmitState) -> Result[EmitState, String] {
     let scan: LabelState = new_label(leading_next.state)
     let scan_escape: LabelState = new_label(scan.state)
     let scan_escape_done: LabelState = new_label(scan_escape.state)
-    let scan_close: LabelState = new_label(scan_escape_done.state)
+    let scan_unicode: LabelState = new_label(scan_escape_done.state)
+    let scan_close: LabelState = new_label(scan_unicode.state)
     let trailing: LabelState = new_label(scan_close.state)
     let trailing_next: LabelState = new_label(trailing.state)
     let allocate: LabelState = new_label(trailing_next.state)
     let fill: LabelState = new_label(allocate.state)
     let fill_escape: LabelState = new_label(fill.state)
-    let write_byte: LabelState = new_label(fill_escape.state)
+    let fill_unicode: LabelState = new_label(fill_escape.state)
+    let unicode_hex_loop: LabelState = new_label(fill_unicode.state)
+    let unicode_hex_digit: LabelState = new_label(unicode_hex_loop.state)
+    let unicode_hex_alpha: LabelState = new_label(unicode_hex_digit.state)
+    let unicode_hex_value: LabelState = new_label(unicode_hex_alpha.state)
+    let unicode_hex_done: LabelState = new_label(unicode_hex_value.state)
+    let unicode_pair_combine: LabelState = new_label(unicode_hex_done.state)
+    let unicode_high: LabelState = new_label(unicode_pair_combine.state)
+    let unicode_pair_bad: LabelState = new_label(unicode_high.state)
+    let unicode_one: LabelState = new_label(unicode_pair_bad.state)
+    let unicode_two: LabelState = new_label(unicode_one.state)
+    let unicode_three: LabelState = new_label(unicode_two.state)
+    let unicode_four: LabelState = new_label(unicode_three.state)
+    let unicode_replacement: LabelState = new_label(unicode_four.state)
+    let unicode_not_surrogate: LabelState = new_label(unicode_replacement.state)
+    let unicode_done: LabelState = new_label(unicode_not_surrogate.state)
+    let write_byte: LabelState = new_label(unicode_done.state)
     let escape_backspace: LabelState = new_label(write_byte.state)
     let escape_formfeed: LabelState = new_label(escape_backspace.state)
     let escape_newline: LabelState = new_label(escape_formfeed.state)
@@ -2894,10 +3255,16 @@ fn emit_json_string_runtime(state: EmitState) -> Result[EmitState, String] {
     current = emit_jump(current, scan_escape_done.label, true, u8(132))
     current = append_code(current, [u8(60), u8(116)])
     current = emit_jump(current, scan_escape_done.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(117)])
+    current = emit_jump(current, scan_unicode.label, true, u8(132))
     current = emit_jump(current, failure.label, false, u8(0))
     let bound_scan_escape_done: Result[EmitState, String] = bind_label(current, scan_escape_done.label)
     if is_err(bound_scan_escape_done) { return err(unwrap_or(result_error(bound_scan_escape_done), "dynamic backend: cannot bind JSON String escape completion")) }
     current = append_code(result_unwrap(bound_scan_escape_done), [u8(73), u8(255), u8(198), u8(73), u8(255), u8(199)])
+    current = emit_jump(current, scan.label, false, u8(0))
+    let bound_scan_unicode: Result[EmitState, String] = bind_label(current, scan_unicode.label)
+    if is_err(bound_scan_unicode) { return err(unwrap_or(result_error(bound_scan_unicode), "dynamic backend: cannot bind JSON unicode scan")) }
+    current = append_code(result_unwrap(bound_scan_unicode), [u8(73), u8(131), u8(198), u8(5)])
     current = emit_jump(current, scan.label, false, u8(0))
     let bound_scan_close: Result[EmitState, String] = bind_label(current, scan_close.label)
     if is_err(bound_scan_close) { return err(unwrap_or(result_error(bound_scan_close), "dynamic backend: cannot bind JSON String scan completion")) }
@@ -2923,7 +3290,9 @@ fn emit_json_string_runtime(state: EmitState) -> Result[EmitState, String] {
     current = emit_jump(current, trailing.label, false, u8(0))
     let bound_allocate: Result[EmitState, String] = bind_label(current, allocate.label)
     if is_err(bound_allocate) { return err(unwrap_or(result_error(bound_allocate), "dynamic backend: cannot bind JSON String allocation")) }
-    current = append_code(result_unwrap(bound_allocate), [u8(76), u8(137), u8(226), u8(72), u8(1), u8(234), u8(72), u8(141), u8(122), u8(8), u8(76), u8(137), u8(254)])
+    // Reserve the remaining source length as a safe upper bound. Unicode
+    // escapes can expand while decoding, so set the String length after fill.
+    current = append_code(result_unwrap(bound_allocate), [u8(76), u8(137), u8(226), u8(72), u8(1), u8(234), u8(72), u8(141), u8(122), u8(8), u8(76), u8(137), u8(238), u8(72), u8(41), u8(238)])
     current = emit_label_call(current, host_string_alloc_label(current))
     current = append_code(current, [u8(72), u8(137), u8(195), u8(73), u8(137), u8(238), u8(77), u8(49), u8(255)])
     current = emit_jump(current, fill.label, false, u8(0))
@@ -2958,6 +3327,8 @@ fn emit_json_string_runtime(state: EmitState) -> Result[EmitState, String] {
     current = emit_jump(current, escape_return.label, true, u8(132))
     current = append_code(current, [u8(60), u8(116)])
     current = emit_jump(current, escape_tab.label, true, u8(132))
+    current = append_code(current, [u8(60), u8(117)])
+    current = emit_jump(current, fill_unicode.label, true, u8(132))
     current = emit_jump(current, failure.label, false, u8(0))
     let bound_backspace: Result[EmitState, String] = bind_label(current, escape_backspace.label)
     if is_err(bound_backspace) { return err(unwrap_or(result_error(bound_backspace), "dynamic backend: cannot bind JSON String backspace escape")) }
@@ -2979,13 +3350,107 @@ fn emit_json_string_runtime(state: EmitState) -> Result[EmitState, String] {
     if is_err(bound_tab) { return err(unwrap_or(result_error(bound_tab), "dynamic backend: cannot bind JSON String tab escape")) }
     current = append_code(result_unwrap(bound_tab), [u8(176), u8(9)])
     current = emit_jump(current, write_byte.label, false, u8(0))
+    let bound_unicode: Result[EmitState, String] = bind_label(current, fill_unicode.label)
+    if is_err(bound_unicode) { return err(unwrap_or(result_error(bound_unicode), "dynamic backend: cannot bind JSON unicode decode")) }
+    current = append_code(result_unwrap(bound_unicode), [u8(73), u8(255), u8(198), u8(69), u8(49), u8(192), u8(69), u8(49), u8(219), u8(185), u8(4), u8(0), u8(0), u8(0)])
+    current = emit_jump(current, unicode_hex_loop.label, false, u8(0))
+    let bound_hex_loop: Result[EmitState, String] = bind_label(current, unicode_hex_loop.label)
+    if is_err(bound_hex_loop) { return err(unwrap_or(result_error(bound_hex_loop), "dynamic backend: cannot bind JSON unicode hex loop")) }
+    current = append_code(result_unwrap(bound_hex_loop), [u8(133), u8(201)])
+    current = emit_jump(current, unicode_hex_done.label, true, u8(132))
+    current = append_code(current, [u8(77), u8(57), u8(238)])
+    current = emit_jump(current, failure.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(48)])
+    current = emit_jump(current, failure.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(57)])
+    current = emit_jump(current, unicode_hex_digit.label, true, u8(134))
+    current = append_code(current, [u8(12), u8(32), u8(60), u8(97)])
+    current = emit_jump(current, failure.label, true, u8(130))
+    current = append_code(current, [u8(60), u8(102)])
+    current = emit_jump(current, failure.label, true, u8(135))
+    current = append_code(current, [u8(44), u8(87)])
+    current = emit_jump(current, unicode_hex_value.label, false, u8(0))
+    let bound_hex_digit: Result[EmitState, String] = bind_label(current, unicode_hex_digit.label)
+    if is_err(bound_hex_digit) { return err(unwrap_or(result_error(bound_hex_digit), "dynamic backend: cannot bind JSON unicode decimal digit")) }
+    current = append_code(result_unwrap(bound_hex_digit), [u8(44), u8(48)])
+    let bound_hex_value: Result[EmitState, String] = bind_label(current, unicode_hex_value.label)
+    if is_err(bound_hex_value) { return err(unwrap_or(result_error(bound_hex_value), "dynamic backend: cannot bind JSON unicode hex digit")) }
+    current = append_code(result_unwrap(bound_hex_value), [u8(15), u8(182), u8(192), u8(65), u8(193), u8(224), u8(4), u8(65), u8(9), u8(192), u8(73), u8(255), u8(198), u8(255), u8(201)])
+    current = emit_jump(current, unicode_hex_loop.label, true, u8(133))
+    current = emit_jump(current, unicode_hex_done.label, false, u8(0))
+    let bound_hex_done: Result[EmitState, String] = bind_label(current, unicode_hex_done.label)
+    if is_err(bound_hex_done) { return err(unwrap_or(result_error(bound_hex_done), "dynamic backend: cannot bind JSON unicode code unit")) }
+    current = append_code(result_unwrap(bound_hex_done), [u8(69), u8(133), u8(219)])
+    current = emit_jump(current, unicode_pair_combine.label, true, u8(133))
+    current = append_code(current, [u8(65), u8(129), u8(248), u8(0), u8(216), u8(0), u8(0)])
+    current = emit_jump(current, unicode_not_surrogate.label, true, u8(130))
+    current = append_code(current, [u8(65), u8(129), u8(248), u8(0), u8(220), u8(0), u8(0)])
+    current = emit_jump(current, unicode_high.label, true, u8(130))
+    current = append_code(current, [u8(65), u8(129), u8(248), u8(255), u8(223), u8(0), u8(0)])
+    current = emit_jump(current, unicode_replacement.label, true, u8(134))
+    current = emit_jump(current, unicode_not_surrogate.label, false, u8(0))
+    let bound_high: Result[EmitState, String] = bind_label(current, unicode_high.label)
+    if is_err(bound_high) { return err(unwrap_or(result_error(bound_high), "dynamic backend: cannot bind JSON high surrogate")) }
+    current = append_code(result_unwrap(bound_high), [u8(69), u8(137), u8(193), u8(77), u8(137), u8(242), u8(77), u8(57), u8(238)])
+    current = emit_jump(current, unicode_pair_bad.label, true, u8(131))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(8), u8(60), u8(92)])
+    current = emit_jump(current, unicode_pair_bad.label, true, u8(133))
+    current = append_code(current, [u8(75), u8(15), u8(182), u8(68), u8(52), u8(9), u8(60), u8(117)])
+    current = emit_jump(current, unicode_pair_bad.label, true, u8(133))
+    current = append_code(current, [u8(73), u8(131), u8(198), u8(2), u8(69), u8(49), u8(192), u8(185), u8(4), u8(0), u8(0), u8(0), u8(65), u8(187), u8(1), u8(0), u8(0), u8(0)])
+    current = emit_jump(current, unicode_hex_loop.label, false, u8(0))
+    let bound_pair_combine: Result[EmitState, String] = bind_label(current, unicode_pair_combine.label)
+    if is_err(bound_pair_combine) { return err(unwrap_or(result_error(bound_pair_combine), "dynamic backend: cannot bind JSON surrogate pair")) }
+    current = append_code(result_unwrap(bound_pair_combine), [u8(69), u8(133), u8(219)])
+    current = emit_jump(current, unicode_pair_bad.label, true, u8(132))
+    current = append_code(current, [u8(65), u8(129), u8(248), u8(0), u8(220), u8(0), u8(0)])
+    current = emit_jump(current, unicode_pair_bad.label, true, u8(130))
+    current = append_code(current, [u8(65), u8(129), u8(248), u8(255), u8(223), u8(0), u8(0)])
+    current = emit_jump(current, unicode_pair_bad.label, true, u8(135))
+    current = append_code(current, [u8(65), u8(129), u8(233), u8(0), u8(216), u8(0), u8(0), u8(65), u8(193), u8(225), u8(10), u8(65), u8(129), u8(232), u8(0), u8(220), u8(0), u8(0), u8(69), u8(1), u8(200), u8(65), u8(129), u8(192), u8(0), u8(0), u8(1), u8(0), u8(69), u8(49), u8(219)])
+    current = emit_jump(current, unicode_not_surrogate.label, false, u8(0))
+    let bound_pair_bad: Result[EmitState, String] = bind_label(current, unicode_pair_bad.label)
+    if is_err(bound_pair_bad) { return err(unwrap_or(result_error(bound_pair_bad), "dynamic backend: cannot bind JSON lone surrogate")) }
+    current = append_code(result_unwrap(bound_pair_bad), [u8(77), u8(137), u8(214), u8(65), u8(184), u8(253), u8(255), u8(0), u8(0), u8(69), u8(49), u8(219)])
+    current = emit_jump(current, unicode_replacement.label, false, u8(0))
+    let bound_not_surrogate: Result[EmitState, String] = bind_label(current, unicode_not_surrogate.label)
+    if is_err(bound_not_surrogate) { return err(unwrap_or(result_error(bound_not_surrogate), "dynamic backend: cannot bind JSON unicode non-surrogate path")) }
+    current = result_unwrap(bound_not_surrogate)
+    current = append_code(current, [u8(65), u8(129), u8(248), u8(128), u8(0), u8(0), u8(0)])
+    current = emit_jump(current, unicode_one.label, true, u8(130))
+    current = append_code(current, [u8(65), u8(129), u8(248), u8(0), u8(8), u8(0), u8(0)])
+    current = emit_jump(current, unicode_two.label, true, u8(130))
+    current = append_code(current, [u8(65), u8(129), u8(248), u8(0), u8(0), u8(1), u8(0)])
+    current = emit_jump(current, unicode_three.label, true, u8(130))
+    let bound_four: Result[EmitState, String] = bind_label(current, unicode_four.label)
+    if is_err(bound_four) { return err(unwrap_or(result_error(bound_four), "dynamic backend: cannot bind JSON unicode four byte output")) }
+    current = append_code(result_unwrap(bound_four), [u8(68), u8(137), u8(192), u8(193), u8(232), u8(18), u8(12), u8(240), u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199), u8(68), u8(137), u8(192), u8(193), u8(232), u8(12), u8(36), u8(63), u8(12), u8(128), u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199), u8(68), u8(137), u8(192), u8(193), u8(232), u8(6), u8(36), u8(63), u8(12), u8(128), u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199), u8(68), u8(137), u8(192), u8(36), u8(63), u8(12), u8(128), u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199)])
+    current = emit_jump(current, unicode_done.label, false, u8(0))
+    let bound_three: Result[EmitState, String] = bind_label(current, unicode_three.label)
+    if is_err(bound_three) { return err(unwrap_or(result_error(bound_three), "dynamic backend: cannot bind JSON unicode three byte output")) }
+    current = append_code(result_unwrap(bound_three), [u8(68), u8(137), u8(192), u8(193), u8(232), u8(12), u8(12), u8(224), u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199), u8(68), u8(137), u8(192), u8(193), u8(232), u8(6), u8(36), u8(63), u8(12), u8(128), u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199), u8(68), u8(137), u8(192), u8(36), u8(63), u8(12), u8(128), u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199)])
+    current = emit_jump(current, unicode_done.label, false, u8(0))
+    let bound_two: Result[EmitState, String] = bind_label(current, unicode_two.label)
+    if is_err(bound_two) { return err(unwrap_or(result_error(bound_two), "dynamic backend: cannot bind JSON unicode two byte output")) }
+    current = append_code(result_unwrap(bound_two), [u8(68), u8(137), u8(192), u8(193), u8(232), u8(6), u8(12), u8(192), u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199), u8(68), u8(137), u8(192), u8(36), u8(63), u8(12), u8(128), u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199)])
+    current = emit_jump(current, unicode_done.label, false, u8(0))
+    let bound_one: Result[EmitState, String] = bind_label(current, unicode_one.label)
+    if is_err(bound_one) { return err(unwrap_or(result_error(bound_one), "dynamic backend: cannot bind JSON unicode one byte output")) }
+    current = append_code(result_unwrap(bound_one), [u8(68), u8(137), u8(192), u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199)])
+    current = emit_jump(current, unicode_done.label, false, u8(0))
+    let bound_replacement: Result[EmitState, String] = bind_label(current, unicode_replacement.label)
+    if is_err(bound_replacement) { return err(unwrap_or(result_error(bound_replacement), "dynamic backend: cannot bind JSON unicode replacement")) }
+    current = append_code(result_unwrap(bound_replacement), [u8(74), u8(141), u8(84), u8(59), u8(8), u8(198), u8(2), u8(239), u8(73), u8(255), u8(199), u8(74), u8(141), u8(84), u8(59), u8(8), u8(198), u8(2), u8(191), u8(73), u8(255), u8(199), u8(74), u8(141), u8(84), u8(59), u8(8), u8(198), u8(2), u8(189), u8(73), u8(255), u8(199)])
+    let bound_unicode_done: Result[EmitState, String] = bind_label(current, unicode_done.label)
+    if is_err(bound_unicode_done) { return err(unwrap_or(result_error(bound_unicode_done), "dynamic backend: cannot bind JSON unicode completion")) }
+    current = emit_jump(result_unwrap(bound_unicode_done), fill.label, false, u8(0))
     let bound_write: Result[EmitState, String] = bind_label(current, write_byte.label)
     if is_err(bound_write) { return err(unwrap_or(result_error(bound_write), "dynamic backend: cannot bind JSON String write")) }
     current = append_code(result_unwrap(bound_write), [u8(74), u8(141), u8(84), u8(59), u8(8), u8(136), u8(2), u8(73), u8(255), u8(199), u8(73), u8(255), u8(198)])
     current = emit_jump(current, fill.label, false, u8(0))
     let bound_success: Result[EmitState, String] = bind_label(current, success.label)
     if is_err(bound_success) { return err(unwrap_or(result_error(bound_success), "dynamic backend: cannot bind JSON String success")) }
-    current = append_code(result_unwrap(bound_success), [u8(72), u8(137), u8(216)])
+    current = append_code(result_unwrap(bound_success), [u8(76), u8(137), u8(59), u8(72), u8(137), u8(216)])
     current = emit_box_call(current, u64(0))
     current = append_code(current, [u8(65), u8(95), u8(65), u8(94), u8(65), u8(93), u8(65), u8(92), u8(93), u8(91), u8(195)])
     let bound_failure: Result[EmitState, String] = bind_label(current, failure.label)
@@ -6835,8 +7300,13 @@ fn compile_dynamic(kir: ValidatedKIR) -> Result[Bytes, String] {
     let host_json_int_label: LabelState = new_label(host_json_bool_label.state)
     let host_json_uint_label: LabelState = new_label(host_json_int_label.state)
     let host_map_remove_label: LabelState = new_label(host_json_uint_label.state)
+    let host_json_object_keys_label: LabelState = new_label(host_map_remove_label.state)
+    let host_string_less_label: LabelState = new_label(host_json_object_keys_label.state)
+    let host_json_string_scan_label: LabelState = new_label(host_string_less_label.state)
+    let host_json_object_fields_empty_except_label: LabelState = new_label(host_json_string_scan_label.state)
+    let host_json_field_set_lookup_label: LabelState = new_label(host_json_object_fields_empty_except_label.state)
     let slot_count: Int = count_slots(statements)
-    state = state_with_string_concat_label(host_map_remove_label.state, string_concat_label.label)
+    state = state_with_string_concat_label(host_json_field_set_lookup_label.state, string_concat_label.label)
     state = state_with_array_labels(state, array_alloc_label.label, array_push_label.label, array_concat_label.label)
     state = state_with_box_label(state, box_alloc_label.label)
     state = state_with_env(state, CompileEnv{ slots: {}, static_values: {}, struct_fields: struct_fields, function_labels: {}, function_returns: {}, next_slot: 0, breaks: [], continues: [], end_label: end_label.label, trap_label: trap_label.label, buffer_offset: slot_count * 8 + 1, in_function: false, current_function: "" })
@@ -6868,6 +7338,9 @@ fn compile_dynamic(kir: ValidatedKIR) -> Result[Bytes, String] {
         let json_skip_runtime: Result[EmitState, String] = emit_json_skip_runtime(lowered)
         if is_err(json_skip_runtime) { return err(unwrap_or(result_error(json_skip_runtime), "dynamic backend: JSON scanner lowering failed")) }
         lowered = result_unwrap(json_skip_runtime)
+        let json_string_scan_runtime: Result[EmitState, String] = emit_json_string_scan_runtime(lowered)
+        if is_err(json_string_scan_runtime) { return err(unwrap_or(result_error(json_string_scan_runtime), "dynamic backend: JSON string scanner lowering failed")) }
+        lowered = result_unwrap(json_string_scan_runtime)
         let json_parse_runtime: Result[EmitState, String] = emit_json_parse_runtime(lowered)
         if is_err(json_parse_runtime) { return err(unwrap_or(result_error(json_parse_runtime), "dynamic backend: JSON parse lowering failed")) }
         lowered = result_unwrap(json_parse_runtime)
