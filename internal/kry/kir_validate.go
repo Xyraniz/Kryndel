@@ -468,6 +468,16 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if err := require(expression.Operand, "operand"); err != nil {
 				return err
 			}
+			switch expression.Operator {
+			case "!":
+				if expression.Operand.Type != "Bool" || expression.Type != "Bool" {
+					return fmt.Errorf("unary operator ! requires Bool operand and result")
+				}
+			case "~":
+				if !isKIRUIntType(expression.Operand.Type) || expression.Type != expression.Operand.Type {
+					return fmt.Errorf("unary operator ~ requires a UInt operand and matching result type")
+				}
+			}
 		case "binary":
 			if !isKIRBinaryOperator(expression.Operator) {
 				return fmt.Errorf("binary expression has invalid operator %q", expression.Operator)
@@ -915,6 +925,15 @@ func compatibleKIRTypes(binding, initializer string) bool {
 	}
 	return isKIRUnspecifiedArray(binding) && isKIRArrayType(initializer) ||
 		isKIRUnspecifiedArray(initializer) && isKIRArrayType(binding)
+}
+
+func isKIRUIntType(encoded string) bool {
+	switch encoded {
+	case "UInt8", "UInt16", "UInt32", "UInt64":
+		return true
+	default:
+		return false
+	}
 }
 
 func kirIterableElementType(encoded string) (string, bool) {
