@@ -277,7 +277,7 @@ func TestKIRRejectsResolvedFunctionCallSignatureMismatch(t *testing.T) {
 	}{
 		{
 			name: "argument type",
-			want: "has a mismatched type",
+			want: `argument 1 has type "String", want "Int"`,
 			mutate: func(call *KIRExpr) {
 				argument := *call.Args[0]
 				argument.Kind = "string"
@@ -1096,7 +1096,7 @@ func TestKIRRejectsGenericArgumentsOutsideDirectFunctionCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	document.Statements[0].Expr.GenericArguments = []string{"Int"}
-	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "generic type arguments require a direct function call") {
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "generic type arguments require a direct function call or function value") {
 		t.Fatalf("expected KIR rejection for generic builtin arguments, got %v", err)
 	}
 }
@@ -1150,6 +1150,191 @@ func TestKIRRejectsInvalidIndexTypes(t *testing.T) {
 				t.Fatal(err)
 			}
 			test.mutate(document.Statements[1].Init)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestKIRAcceptsGenericMapIndex(t *testing.T) {
+	program, checker := testProgram(t, `fn lookup[K: Copy, V: Copy](values: Map[K, V], key: K) -> V {
+    return values[key]
+}
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeKIR(data, DefaultLimits()); err != nil {
+		t.Fatalf("KIR rejected a checked generic Map[K, V] index: %v", err)
+	}
+}
+
+func TestKIRAcceptsArrayMapKeyIndex(t *testing.T) {
+	program, checker := testProgram(t, `fn lookup(values: Map[Array[Int], Int], key: Array[Int]) -> Int {
+    return values[key]
+}
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeKIR(data, DefaultLimits()); err != nil {
+		t.Fatalf("KIR rejected a checked Array key index into Map: %v", err)
+	}
+}
+
+func TestKIRRejectsInvalidPropagationTypes(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		mutate func(*KIRDocument)
+		want   string
+	}{
+		{
+			name:   "result error type",
+			source: "fn use(value: Result[Int, String]) -> Result[Int, String] { let inner: Int = value?; return ok(inner) }\n",
+			mutate: func(document *KIRDocument) {
+				document.Functions[0].Body[0].Init.Operand.Type = "Result[Int, Bool]"
+			},
+			want: "are incompatible with enclosing return type",
+		},
+		{
+			name:   "payload type",
+			source: "fn use(value: Option[Int]) -> Option[Int] { let inner: Int = value?; return some(inner) }\n",
+			mutate: func(document *KIRDocument) {
+				document.Functions[0].Body[0].Init.Type = "String"
+			},
+			want: "are incompatible with enclosing return type",
+		},
+		{
+			name:   "outside function",
+			source: "let value: Int = 1\n",
+			mutate: func(document *KIRDocument) {
+				document.Statements[0].Init = &KIRExpr{Kind: "propagate", Type: "Int", Operand: &KIRExpr{Kind: "int", Type: "Int", Int: 1}}
+			},
+			want: "are incompatible with enclosing return type \"\"",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&document)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestKIRRejectsGenericCallTypeMismatches(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*KIRExpr)
+		want   string
+	}{
+		{
+			name:   "argument",
+			mutate: func(call *KIRExpr) { call.Args[0].Type = "String" },
+			want:   `argument 1 has type "String", want "Int"`,
+		},
+		{
+			name:   "result",
+			mutate: func(call *KIRExpr) { call.Type = "String" },
+			want:   `has result type "String", want "Int"`,
+		},
+		{
+			name: "substituted generic type",
+			mutate: func(call *KIRExpr) {
+				call.GenericArguments[0] = "String"
+			},
+			want: `has result type "Int", want "String"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, `fn identity[T: Copy](value: T) -> T { return value }
+let result: Int = identity(7)
+`)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document.Statements[0].Init)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestKIRRejectsGenericCallConstraintMismatch(t *testing.T) {
+	program, checker := testProgram(t, `fn identity[T: Numeric](value: T) -> T { return value }
+identity(7)
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	call := document.Statements[0].Expr
+	call.GenericArguments[0] = "String"
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), `does not satisfy constraint "Numeric"`) {
+		t.Fatalf("expected KIR rejection for an unsatisfied generic constraint, got %v", err)
+	}
+}
+
+func TestKIRRejectsGenericFunctionValueMismatches(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*KIRExpr)
+		want   string
+	}{
+		{
+			name: "constraint",
+			mutate: func(value *KIRExpr) {
+				value.GenericArguments[0] = "String"
+				value.Type = "fn(String) -> String"
+			},
+			want: `does not satisfy constraint "Numeric"`,
+		},
+		{
+			name:   "signature",
+			mutate: func(value *KIRExpr) { value.Type = "fn(String) -> String" },
+			want:   `does not match target signature "fn(Int) -> Int"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, `fn identity[T: Numeric](value: T) -> T { return value }
+let callback: fn(Int) -> Int = identity
+`)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			value := document.Statements[0].Init
+			if value == nil || value.Kind != "var" || len(value.GenericArguments) != 1 {
+				t.Fatalf("expected an instantiated generic function value, got %#v", value)
+			}
+			test.mutate(value)
 			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
 			}

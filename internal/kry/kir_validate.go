@@ -399,15 +399,19 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			return fmt.Errorf("generic type call metadata requires KIR version 4")
 		}
 		if document.Version >= 4 {
-			if len(expression.GenericArguments) != 0 && (expression.Kind != "call" || expression.Callee != nil || !strings.HasPrefix(expression.CallTarget, "function:")) {
-				return fmt.Errorf("generic type arguments require a direct function call")
+			if len(expression.GenericArguments) != 0 {
+				isDirectCall := expression.Kind == "call" && expression.Callee == nil && strings.HasPrefix(expression.CallTarget, "function:")
+				isFunctionValue := expression.Kind == "var" && strings.HasPrefix(expression.CallTarget, "function:")
+				if !isDirectCall && !isFunctionValue {
+					return fmt.Errorf("generic type arguments require a direct function call or function value")
+				}
 			}
 			for _, argument := range expression.GenericArguments {
 				if !validKIRTypeExpression(argument) {
 					return fmt.Errorf("expression has an invalid generic type argument")
 				}
 			}
-			if expression.Kind == "call" && strings.HasPrefix(expression.CallTarget, "function:") {
+			if (expression.Kind == "call" || expression.Kind == "var") && strings.HasPrefix(expression.CallTarget, "function:") {
 				target := strings.TrimPrefix(expression.CallTarget, "function:")
 				if arity, exists := functionGenericArguments[target]; exists && len(expression.GenericArguments) != arity {
 					return fmt.Errorf("function call %q has %d generic type argument(s), expected %d", target, len(expression.GenericArguments), arity)
@@ -463,8 +467,25 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 					return fmt.Errorf("function value references undeclared function or unresolved overload %q", target)
 				}
 				function := functionDeclarations[target]
-				if function != nil && len(function.TypeParams) == 0 && function.Receiver == "" && expression.Type != kirFunctionValueType(function) {
-					return fmt.Errorf("function value type %q does not match target signature %q", expression.Type, kirFunctionValueType(function))
+				if function != nil && function.Receiver == "" {
+					substitutions := map[string]string{}
+					if len(function.TypeParams) != len(expression.GenericArguments) {
+						return fmt.Errorf("function value %q has incomplete generic type arguments", expression.Name)
+					}
+					for index, parameter := range function.TypeParams {
+						argument := expression.GenericArguments[index]
+						if !kirExecConstraintSatisfied(argument, parameter.Constraint, &kirExecScope{types: genericConstraints}, document) {
+							return fmt.Errorf("function value %q type argument %d (%q) does not satisfy constraint %q", expression.Name, index+1, argument, parameter.Constraint)
+						}
+						substitutions[parameter.Name] = argument
+					}
+					expected := kirFunctionValueType(function)
+					for parameter, argument := range substitutions {
+						expected = substituteKIRType(expected, map[string]string{parameter: argument})
+					}
+					if expression.Type != expected {
+						return fmt.Errorf("function value type %q does not match target signature %q", expression.Type, expected)
+					}
 				}
 			} else if document.Version >= 3 {
 				if !validKIRBinding(expression.Binding) || expression.Binding.Name != expression.Name || expression.Binding.Type != expression.Type {
@@ -643,13 +664,29 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 					if len(expression.Args) < requiredArity || len(expression.Args) > len(function.Params) {
 						return fmt.Errorf("call to function %q has %d arguments, expected %d to %d", name, len(expression.Args), requiredArity, len(function.Params))
 					}
-					if len(function.TypeParams) == 0 && function.Receiver == "" {
-						if !compatibleKIRTypes(expression.Type, function.Return) {
-							return fmt.Errorf("call to function %q has result type %q, want %q", name, expression.Type, function.Return)
+					if function.Receiver == "" {
+						substitutions := map[string]string{}
+						if len(function.TypeParams) != len(expression.GenericArguments) {
+							return fmt.Errorf("call to function %q has incomplete generic type arguments", name)
+						}
+						for index, parameter := range function.TypeParams {
+							argument := expression.GenericArguments[index]
+							if !kirExecConstraintSatisfied(argument, parameter.Constraint, &kirExecScope{types: genericConstraints}, document) {
+								return fmt.Errorf("call to function %q type argument %d (%q) does not satisfy constraint %q", name, index+1, argument, parameter.Constraint)
+							}
+							substitutions[parameter.Name] = argument
+						}
+						expectedReturn := substituteKIRType(function.Return, substitutions)
+						if !compatibleKIRTypes(expression.Type, expectedReturn) {
+							return fmt.Errorf("call to function %q has result type %q, want %q", name, expression.Type, expectedReturn)
 						}
 						for index, argument := range expression.Args {
-							if argument == nil || !compatibleKIRTypes(argument.Type, function.Params[index].Type) {
-								return fmt.Errorf("call to function %q argument %d has a mismatched type", name, index+1)
+							expectedArgument := substituteKIRType(function.Params[index].Type, substitutions)
+							if argument == nil {
+								return fmt.Errorf("call to function %q has a missing argument", name)
+							}
+							if !compatibleKIRTypes(argument.Type, expectedArgument) {
+								return fmt.Errorf("call to function %q argument %d has type %q, want %q", name, index+1, argument.Type, expectedArgument)
 							}
 						}
 					}
@@ -844,6 +881,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		case "propagate":
 			if err := require(expression.Operand, "operand"); err != nil {
 				return err
+			}
+			if !kirPropagateTypesCompatible(expectedReturnType, expression.Type, expression.Operand.Type) {
+				return fmt.Errorf("propagation result %q and operand %q are incompatible with enclosing return type %q", expression.Type, expression.Operand.Type, expectedReturnType)
 			}
 		default:
 			return fmt.Errorf("unknown expression kind %q", expression.Kind)
@@ -1309,6 +1349,24 @@ func kirReturnTypeCompatible(expected string, value *KIRExpr) bool {
 	}
 }
 
+func kirPropagateTypesCompatible(enclosingReturn, result, operand string) bool {
+	expected, expectedOK := parseKIRTypeExpression(enclosingReturn)
+	actual, actualOK := parseKIRTypeExpression(operand)
+	if !expectedOK || !actualOK || expected.Function || actual.Function || expected.Name != actual.Name || len(expected.Params) != len(actual.Params) {
+		return false
+	}
+	switch expected.Name {
+	case "Option":
+		return len(expected.Params) == 1 && len(actual.Params) == 1 && compatibleKIRTypes(TypeSpecString(actual.Params[0]), result)
+	case "Result":
+		return len(expected.Params) == 2 && len(actual.Params) == 2 &&
+			compatibleKIRTypes(TypeSpecString(actual.Params[0]), result) &&
+			compatibleKIRTypes(TypeSpecString(expected.Params[1]), TypeSpecString(actual.Params[1]))
+	default:
+		return false
+	}
+}
+
 func isKIRIntegerType(encoded string, genericConstraints map[string]string) bool {
 	if encoded == "Int" || isKIRUIntType(encoded) {
 		return true
@@ -1380,9 +1438,7 @@ func kirIndexTypes(encoded string) (index, result string, ok bool) {
 	case "Map":
 		if len(spec.Params) == 2 {
 			key, value := TypeSpecString(spec.Params[0]), TypeSpecString(spec.Params[1])
-			if isKIRMapKeyType(key) {
-				return key, value, true
-			}
+			return key, value, true
 		}
 	}
 	return "", "", false
