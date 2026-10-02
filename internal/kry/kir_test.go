@@ -662,6 +662,25 @@ let equal: Bool = true == true
 	}
 }
 
+func TestKIRRejectsFunctionValueSignatureMismatch(t *testing.T) {
+	program, checker := testProgram(t, `fn identity(value: Int) -> Int { return value }
+let callback: fn(Int) -> Int = identity
+let result: Int = callback(1)
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[0].Init.Type = "fn(String) -> String"
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "does not match target signature") {
+		t.Fatalf("expected KIR rejection for a mismatched function value signature, got %v", err)
+	}
+}
+
 func TestKIRRejectsIncompatibleMatchPatterns(t *testing.T) {
 	tests := []struct {
 		name   string

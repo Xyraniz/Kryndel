@@ -462,6 +462,10 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				if prefix != "function" || !ok || resolvedName != expression.Name {
 					return fmt.Errorf("function value references undeclared function or unresolved overload %q", target)
 				}
+				function := functionDeclarations[target]
+				if function != nil && len(function.TypeParams) == 0 && function.Receiver == "" && expression.Type != kirFunctionValueType(function) {
+					return fmt.Errorf("function value type %q does not match target signature %q", expression.Type, kirFunctionValueType(function))
+				}
 			} else if document.Version >= 3 {
 				if !validKIRBinding(expression.Binding) || expression.Binding.Name != expression.Name || expression.Binding.Type != expression.Type {
 					return fmt.Errorf("variable %q has an invalid resolved binding", expression.Name)
@@ -1042,6 +1046,20 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		}
 	}
 	return nil
+}
+
+func kirFunctionValueType(function *KIRFunction) string {
+	if function == nil {
+		return ""
+	}
+	parameters := make([]string, len(function.Params))
+	for index, parameter := range function.Params {
+		if parameter == nil {
+			return ""
+		}
+		parameters[index] = parameter.Type
+	}
+	return "fn(" + strings.Join(parameters, ", ") + ") -> " + function.Return
 }
 
 func compatibleKIRTypes(binding, initializer string) bool {
