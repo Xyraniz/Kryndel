@@ -418,6 +418,8 @@ func TestKIRRejectsUnaryOperatorTypeMismatch(t *testing.T) {
 		source  string
 		wantErr string
 	}{
+		{name: "positive", source: "let value: Int = +1\n", wantErr: "unary operator + requires a numeric"},
+		{name: "negative", source: "let value: Int = -1\n", wantErr: "unary operator - requires an Int or Float"},
 		{name: "not", source: "let value: Bool = !true\n", wantErr: "unary operator ! requires Bool"},
 		{name: "bitwise not", source: "let value: UInt8 = ~u8(1)\n", wantErr: "unary operator ~ requires a UInt"},
 	}
@@ -433,7 +435,7 @@ func TestKIRRejectsUnaryOperatorTypeMismatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			unary := document.Statements[0].Init
-			unary.Operand = &KIRExpr{Kind: "int", Source: document.Source, Line: 1, Column: 1, Type: "Int", Int: 1}
+			unary.Operand = &KIRExpr{Kind: "string", Source: document.Source, Line: 1, Column: 1, Type: "String", String: "bad"}
 			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("expected KIR rejection containing %q, got %v", test.wantErr, err)
 			}

@@ -469,6 +469,14 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				return err
 			}
 			switch expression.Operator {
+			case "+":
+				if !isKIRNumericType(expression.Operand.Type) || expression.Type != expression.Operand.Type {
+					return fmt.Errorf("unary operator + requires a numeric operand and matching result type")
+				}
+			case "-":
+				if expression.Operand.Type != "Int" && expression.Operand.Type != "Float" || expression.Type != expression.Operand.Type {
+					return fmt.Errorf("unary operator - requires an Int or Float operand and matching result type")
+				}
 			case "!":
 				if expression.Operand.Type != "Bool" || expression.Type != "Bool" {
 					return fmt.Errorf("unary operator ! requires Bool operand and result")
@@ -948,6 +956,10 @@ func isKIRUIntType(encoded string) bool {
 	default:
 		return false
 	}
+}
+
+func isKIRNumericType(encoded string) bool {
+	return encoded == "Int" || encoded == "Float" || isKIRUIntType(encoded)
 }
 
 func kirIterableElementType(encoded string) (string, bool) {
