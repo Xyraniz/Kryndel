@@ -811,6 +811,40 @@ func TestKIRRejectsLoopControlOutsideLoops(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsNonExhaustiveMatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{name: "bool", source: "match true { true => {} false => {} }\n"},
+		{name: "option", source: "let value: Option[Int] = some(1)\nmatch value { some(item) => {} none => {} }\n"},
+		{name: "result", source: "let value: Result[Int, String] = ok(1)\nmatch value { ok(item) => {} err(problem) => {} }\n"},
+		{name: "enum", source: "enum State { Ready, Waiting }\nmatch State::Ready { State::Ready => {} State::Waiting => {} }\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			for _, statement := range document.Statements {
+				if statement != nil && statement.Kind == "match" {
+					statement.Arms = statement.Arms[:len(statement.Arms)-1]
+					break
+				}
+			}
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "non-exhaustive match") {
+				t.Fatalf("expected KIR rejection for non-exhaustive match, got %v", err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})

@@ -998,6 +998,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 				}
 			}
 		}
+		if statement.Kind == "match" && !kirMatchIsExhaustive(statement.Arms, statement.Scrutinee.Type, enums) {
+			return fmt.Errorf("non-exhaustive match for checked type %q", statement.Scrutinee.Type)
+		}
 		return nil
 	}
 	for _, function := range document.Functions {
@@ -1111,6 +1114,57 @@ func validateKIRPatternType(pattern *KIRPattern, scrutineeType string, enums map
 		return fmt.Errorf("pattern binding %q does not match its checked payload type", pattern.Binding)
 	}
 	return nil
+}
+
+func kirMatchIsExhaustive(arms []*KIRArm, scrutineeType string, enums map[string]*KIREnum) bool {
+	seen := map[string]bool{}
+	for _, arm := range arms {
+		if arm == nil || arm.Pattern == nil {
+			continue
+		}
+		pattern := arm.Pattern
+		if pattern.Kind == "wildcard" {
+			return true
+		}
+		switch pattern.Kind {
+		case "bool":
+			seen[fmt.Sprint(pattern.Bool)] = true
+		case "nil":
+			seen["nil"] = true
+		case "option":
+			seen[fmt.Sprint(pattern.Present)] = true
+		case "result":
+			seen["ok"] = seen["ok"] || pattern.OK
+			seen["err"] = seen["err"] || !pattern.OK
+		case "enum":
+			if pattern.Type == scrutineeType {
+				seen[pattern.Variant] = true
+			}
+		}
+	}
+	switch scrutineeType {
+	case "Bool":
+		return seen["true"] && seen["false"]
+	case "Nil":
+		return seen["nil"]
+	}
+	if spec, ok := parseKIRTypeExpression(scrutineeType); ok && len(spec.Params) > 0 {
+		switch spec.Name {
+		case "Option":
+			return len(spec.Params) == 1 && seen["true"] && seen["false"]
+		case "Result":
+			return len(spec.Params) == 2 && seen["ok"] && seen["err"]
+		}
+	}
+	if declaration := enums[scrutineeType]; declaration != nil {
+		for _, variant := range declaration.Variants {
+			if !seen[variant] {
+				return false
+			}
+		}
+		return len(declaration.Variants) > 0
+	}
+	return false
 }
 
 func kirReturnTypeCompatible(expected string, value *KIRExpr) bool {
