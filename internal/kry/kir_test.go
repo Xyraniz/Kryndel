@@ -845,6 +845,22 @@ func TestKIRRejectsNonExhaustiveMatch(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsGenericArgumentsOutsideDirectFunctionCalls(t *testing.T) {
+	program, checker := testProgram(t, "println(1)\n")
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[0].Expr.GenericArguments = []string{"Int"}
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "generic type arguments require a direct function call") {
+		t.Fatalf("expected KIR rejection for generic builtin arguments, got %v", err)
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})

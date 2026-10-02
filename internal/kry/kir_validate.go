@@ -399,6 +399,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			return fmt.Errorf("generic type call metadata requires KIR version 4")
 		}
 		if document.Version >= 4 {
+			if len(expression.GenericArguments) != 0 && (expression.Kind != "call" || expression.Callee != nil || !strings.HasPrefix(expression.CallTarget, "function:")) {
+				return fmt.Errorf("generic type arguments require a direct function call")
+			}
 			for _, argument := range expression.GenericArguments {
 				if !validKIRTypeExpression(argument) {
 					return fmt.Errorf("expression has an invalid generic type argument")

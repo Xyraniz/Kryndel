@@ -85,9 +85,11 @@ from KIR. The direct machine backends target Linux amd64 and Windows amd64,
 respectively, and do not imply support for every valid KIR node.
 
 The source checker remains the semantic authority for source programs. KIR
-decoding validates the wire contract and structural invariants; it does not
-independently rerun source overload resolution. Target feature checks now walk
-validated KIR against the selected target before output bytes are emitted.
+decoding validates the wire contract and checked invariants such as operator
+types, assignment mutability, control-flow bindings, call metadata, and match
+exhaustiveness; it does not independently rerun source overload resolution.
+Target feature checks now walk validated KIR against the selected target
+before output bytes are emitted.
 Backend support limits and KIR version history are tracked in the
 [KIR reference](kry-ir.md).
 
