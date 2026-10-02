@@ -753,6 +753,16 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if err := require(expression.Left, "index"); err != nil {
 				return err
 			}
+			indexType, resultType, ok := kirIndexTypes(expression.Base.Type)
+			if !ok {
+				return fmt.Errorf("index expression has non-indexable checked base type %q", expression.Base.Type)
+			}
+			if !compatibleKIRTypes(indexType, expression.Left.Type) {
+				return fmt.Errorf("index expression has checked index type %q, want %q", expression.Left.Type, indexType)
+			}
+			if resultType != "" && !compatibleKIRTypes(resultType, expression.Type) {
+				return fmt.Errorf("index expression has checked result type %q, want %q", expression.Type, resultType)
+			}
 		case "field":
 			if err := require(expression.Base, "base"); err != nil {
 				return err
@@ -1346,6 +1356,36 @@ func kirIterableElementType(encoded string) (string, bool) {
 		return "", false
 	}
 	return TypeSpecString(spec.Params[0]), true
+}
+
+func kirIndexTypes(encoded string) (index, result string, ok bool) {
+	switch encoded {
+	case "String":
+		return "Int", "String", true
+	case "Bytes":
+		return "Int", "Int", true
+	}
+	if isKIRUnspecifiedArray(encoded) {
+		return "Int", "", true
+	}
+	spec, valid := parseKIRTypeExpression(encoded)
+	if !valid || spec.Function {
+		return "", "", false
+	}
+	switch spec.Name {
+	case "Array":
+		if len(spec.Params) == 1 {
+			return "Int", TypeSpecString(spec.Params[0]), true
+		}
+	case "Map":
+		if len(spec.Params) == 2 {
+			key, value := TypeSpecString(spec.Params[0]), TypeSpecString(spec.Params[1])
+			if isKIRMapKeyType(key) {
+				return key, value, true
+			}
+		}
+	}
+	return "", "", false
 }
 
 func isKIRUnspecifiedArray(encoded string) bool {

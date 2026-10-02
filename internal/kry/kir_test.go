@@ -1101,6 +1101,62 @@ func TestKIRRejectsGenericArgumentsOutsideDirectFunctionCalls(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsInvalidIndexTypes(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		mutate func(*KIRExpr)
+		want   string
+	}{
+		{
+			name:   "array index type",
+			source: "let values: Array[Int] = [1]\nlet item: Int = values[0]\n",
+			mutate: func(expression *KIRExpr) { expression.Left.Type = "String" },
+			want:   `checked index type "String", want "Int"`,
+		},
+		{
+			name:   "array result type",
+			source: "let values: Array[Int] = [1]\nlet item: Int = values[0]\n",
+			mutate: func(expression *KIRExpr) { expression.Type = "String" },
+			want:   `checked result type "String", want "Int"`,
+		},
+		{
+			name:   "map index type",
+			source: "let values: Map[String, Int] = {\"key\": 1}\nlet item: Int = values[\"key\"]\n",
+			mutate: func(expression *KIRExpr) { expression.Left.Type = "Int" },
+			want:   `checked index type "Int", want "String"`,
+		},
+		{
+			name:   "map result type",
+			source: "let values: Map[String, Int] = {\"key\": 1}\nlet item: Int = values[\"key\"]\n",
+			mutate: func(expression *KIRExpr) { expression.Type = "String" },
+			want:   `checked result type "String", want "Int"`,
+		},
+		{
+			name:   "non-indexable base",
+			source: "let values: Array[Int] = [1]\nlet item: Int = values[0]\n",
+			mutate: func(expression *KIRExpr) { expression.Base.Type = "Bool" },
+			want:   `non-indexable checked base type "Bool"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document.Statements[1].Init)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
