@@ -493,6 +493,20 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 					return fmt.Errorf("logical operator %q requires Bool operands and result", expression.Operator)
 				}
 			}
+			switch expression.Operator {
+			case "==", "!=", "<", "<=", ">", ">=":
+				if expression.Type != "Bool" {
+					return fmt.Errorf("comparison operator %q requires Bool result", expression.Operator)
+				}
+			case "&", "|", "^":
+				if !isKIRUIntType(expression.Left.Type) || expression.Right.Type != expression.Left.Type || expression.Type != expression.Left.Type {
+					return fmt.Errorf("bitwise operator %q requires matching UInt operands and result", expression.Operator)
+				}
+			case "<<", ">>":
+				if !isKIRUIntType(expression.Left.Type) || expression.Right.Type != "Int" || expression.Type != expression.Left.Type {
+					return fmt.Errorf("shift operator %q requires a UInt value, Int count, and matching result", expression.Operator)
+				}
+			}
 		case "call":
 			if expression.Callee != nil {
 				if document.Version < 3 || expression.Name != "" || expression.CallTarget != "" || expression.BuiltinID != "" || expression.TraitName != "" {

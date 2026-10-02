@@ -441,6 +441,51 @@ func TestKIRRejectsUnaryOperatorTypeMismatch(t *testing.T) {
 	}
 }
 
+func TestKIRRejectsBitwiseAndShiftTypeMismatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		wantErr string
+	}{
+		{name: "bitwise", source: "let value: UInt8 = u8(1) & u8(2)\n", wantErr: "matching UInt operands and result"},
+		{name: "shift", source: "let value: UInt8 = u8(1) << 1\n", wantErr: "UInt value, Int count"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, test.source)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			binary := document.Statements[0].Init
+			binary.Left = &KIRExpr{Kind: "int", Source: document.Source, Line: 1, Column: 1, Type: "Int", Int: 1}
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestKIRRejectsComparisonResultTypeMismatch(t *testing.T) {
+	program, checker := testProgram(t, "let value: Bool = 1 == 1\n")
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.Statements[0].Init.Type = "Int"
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "requires Bool result") {
+		t.Fatalf("expected KIR rejection for a comparison with non-Bool result, got %v", err)
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})
