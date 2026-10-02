@@ -11,8 +11,8 @@ struct KIRFunctionSignature {
 }
 
 struct KIRTypeDeclarations {
-    structs: Json,
-    enums: Json,
+    structs: Map[String, Json],
+    enums: Map[String, Json],
 }
 
 struct KIRTypeParse {
@@ -68,65 +68,23 @@ fn array_item(values: Json, index: Int, label: String) -> Result[Json, String] {
     return found
 }
 
-// json_object_get intentionally hides unknown fields. Inspect one object's
-// canonical JSON keys so this boundary rejects the same extension typos as
-// Go's DisallowUnknownFields without adding a backend-specific builtin.
+// json_object_get intentionally hides unknown fields. Enumerate member names
+// directly so strict validation does not expand a whole nested value into
+// one Value per JSON character.
 fn validate_object_fields(value: Json, allowed: String, label: String) -> Result[Bool, String] {
     if json_kind(value) != "object" { return err(label + " must be an object") }
-    let text: String = json_stringify(value)
-    let chars: Array[String] = string_chars(text)
-    let count: Int = len(chars)
-    if count < 2 || unwrap_or(array_get(chars, 0), "") != "{" { return err(label + " must be an object") }
-    let mut index: Int = 1
+    let keys: Result[Array[String], String] = json_object_keys(value)
+    if is_err(keys) { return err(unwrap_or(result_error(keys), label + " must be an object")) }
+    let names: Array[String] = result_unwrap(keys)
+    let count: Int = len(names)
+    let mut index: Int = 0
     while index < count {
-        let current: String = unwrap_or(array_get(chars, index), "")
-        if current == "}" {
-            return ok(true)
-        } else {
-            if current != "\"" { return err(label + " has malformed JSON object keys") }
-            let key_start: Int = index
-            index = index + 1
-            let mut in_escape: Bool = false
-            while index < count {
-                let key_char: String = unwrap_or(array_get(chars, index), "")
-                if in_escape {
-                    in_escape = false
-                } else if key_char == "\\" {
-                    in_escape = true
-                } else if key_char == "\"" {
-                    break
-                }
-                index = index + 1
-            }
-            if index >= count { return err(label + " has an unterminated JSON object key") }
-            let key_text: String = result_unwrap(substring(text, key_start, index - key_start + 1))
-            let parsed_key: Result[Json, String] = json_parse(key_text)
-            if is_err(parsed_key) { return err(label + " has a malformed JSON object key") }
-            let key_value: Result[String, String] = json_string(result_unwrap(parsed_key))
-            if is_err(key_value) { return err(label + " has a malformed JSON object key") }
-            let key: String = result_unwrap(key_value)
-            let marker: String = "|" + key + "|"
-            if contains(key, "|") || !contains(allowed, marker) { return err(label + " has unknown field '" + key + "'") }
-            index = index + 1
-            if index >= count || unwrap_or(array_get(chars, index), "") != ":" { return err(label + " has malformed JSON object syntax") }
-            index = index + 1
-            if index >= count { return err(label + " has malformed JSON object value") }
-            let child: Result[Json, String] = json_object_get(value, key)
-            if is_err(child) { return err(label + " has malformed JSON object value") }
-            let child_text: String = json_stringify(result_unwrap(child))
-            let child_length: Int = len(string_chars(child_text))
-            if child_length == 0 { return err(label + " has an empty JSON object value") }
-            // `text` is the canonical JSON serialization of `value`, so this
-            // child's canonical serialization occupies exactly this span.
-            // Skipping it avoids rescanning every nested object once per parent.
-            index = index + child_length
-            if index >= count { return err(label + " has malformed JSON object syntax") }
-            let separator: String = unwrap_or(array_get(chars, index), "")
-            if separator == "," { index = index + 1 }
-            else if separator != "}" { return err(label + " has malformed JSON object syntax") }
-        }
+        let key: String = unwrap_or(array_get(names, index), "")
+        let marker: String = "|" + key + "|"
+        if contains(key, "|") || !contains(allowed, marker) { return err(label + " has unknown field '" + key + "'") }
+        index = index + 1
     }
-    return err(label + " has malformed JSON object syntax")
+    return ok(true)
 }
 
 fn validate_object_fields_if(value: Json, allowed: String, label: String, strict_fields: Bool) -> Result[Bool, String] {
@@ -134,7 +92,7 @@ fn validate_object_fields_if(value: Json, allowed: String, label: String, strict
     return validate_object_fields(value, allowed, label)
 }
 
-fn validate_binding(binding: Json, expected_name: String, expected_type: String, check_mutable: Bool, expected_mutable: Bool, label: String, strict_fields: Bool) -> Result[Bool, String] {
+fn validate_binding(binding: Json, expected_name: String, expected_type: String, expected_mutable: String, label: String, strict_fields: Bool) -> Result[Bool, String] {
     let shape: Result[Bool, String] = validate_object_fields_if(binding, "|name|type|mutable|source|line|column|", label, strict_fields)
     if is_err(shape) { return shape }
     let name: Result[String, String] = string_member(binding, "name", label)
@@ -152,7 +110,7 @@ fn validate_binding(binding: Json, expected_name: String, expected_type: String,
     if result_unwrap(name) == "" || result_unwrap(type_name) == "" { return err(label + " has an empty name or type") }
     if expected_name != "" && result_unwrap(name) != expected_name { return err(label + " name does not match its declaration") }
     if expected_type != "" && result_unwrap(type_name) != expected_type { return err(label + " type does not match its declaration") }
-    if check_mutable && result_unwrap(mutable) != expected_mutable { return err(label + " mutability does not match its declaration") }
+    if expected_mutable != "" && str(result_unwrap(mutable)) != expected_mutable { return err(label + " mutability does not match its declaration") }
     return ok(true)
 }
 
@@ -167,7 +125,7 @@ fn validate_coordinates(value: Json, label: String) -> Result[Bool, String] {
 }
 
 fn recognized_builtin(name: String) -> Bool {
-    return name == "print" || name == "println" || name == "len" || name == "bytes" || name == "string_to_bytes" || name == "array_push" || name == "int" || name == "str" || name == "assert" || name == "assert_eq" || name == "contains" || name == "starts_with" || name == "ends_with" || name == "string_chars" || name == "substring" || name == "some" || name == "none" || name == "ok" || name == "err" || name == "is_some" || name == "is_none" || name == "is_ok" || name == "is_err" || name == "unwrap_or" || name == "result_unwrap" || name == "result_error" || name == "array_get" || name == "array_concat" || name == "array_indices" || name == "array_set" || name == "array_slice" || name == "bytes_from_u8" || name == "u8_array" || name == "process_args" || name == "fs_read_text" || name == "fs_write_bytes" || name == "json_parse" || name == "json_stringify" || name == "json_kind" || name == "json_array_len" || name == "json_object_get" || name == "json_array_get" || name == "json_string" || name == "json_bool" || name == "json_int" || name == "json_uint" || name == "map_get" || name == "map_insert" || name == "map_contains_key" || name == "map_remove" || name == "ffi_library_open" || name == "ffi_library_close" || name == "ffi_symbol" || name == "ffi_call" || name == "ffi_buffer_new" || name == "ffi_buffer_new_sized" || name == "ffi_buffer_address" || name == "ffi_buffer_read" || name == "ffi_buffer_close" || name == "ffi_thread_pin" || name == "ffi_thread_unpin" || name == "u8" || name == "u16" || name == "u32" || name == "u64"
+    return name == "print" || name == "println" || name == "len" || name == "bytes" || name == "string_to_bytes" || name == "array_push" || name == "int" || name == "str" || name == "assert" || name == "assert_eq" || name == "contains" || name == "starts_with" || name == "ends_with" || name == "string_chars" || name == "codepoints" || name == "substring" || name == "some" || name == "none" || name == "ok" || name == "err" || name == "is_some" || name == "is_none" || name == "is_ok" || name == "is_err" || name == "unwrap_or" || name == "result_unwrap" || name == "result_error" || name == "array_get" || name == "array_concat" || name == "array_indices" || name == "array_set" || name == "array_slice" || name == "bytes_from_u8" || name == "u8_array" || name == "process_args" || name == "fs_read_text" || name == "fs_write_bytes" || name == "json_parse" || name == "json_stringify" || name == "json_kind" || name == "json_array_len" || name == "json_object_get" || name == "json_object_keys" || name == "json_object_fields_empty_except" || name == "json_array_get" || name == "json_string" || name == "json_bool" || name == "json_int" || name == "json_uint" || name == "map_get" || name == "map_insert" || name == "map_contains_key" || name == "map_remove" || name == "ffi_library_open" || name == "ffi_library_close" || name == "ffi_symbol" || name == "ffi_call" || name == "ffi_buffer_new" || name == "ffi_buffer_new_sized" || name == "ffi_buffer_address" || name == "ffi_buffer_read" || name == "ffi_buffer_close" || name == "ffi_thread_pin" || name == "ffi_thread_unpin" || name == "u8" || name == "u16" || name == "u32" || name == "u64"
 }
 
 fn validate_string_array(values: Json, label: String) -> Result[Bool, String] {
@@ -182,16 +140,17 @@ fn validate_string_array(values: Json, label: String) -> Result[Bool, String] {
     return ok(true)
 }
 
-fn find_named_declaration(values: Json, name: String) -> Option[Json] {
+fn index_named_declarations(values: Json, label: String) -> Map[String, Json] {
     let count: Int = result_unwrap(json_array_len(values))
     let mut index: Int = 0
+    let mut declarations: Map[String, Json] = {}
     while index < count {
-        let item: Json = result_unwrap(array_item(values, index, "KIR declarations"))
-        let item_name: Result[String, String] = string_member(item, "name", "KIR declaration")
-        if is_ok(item_name) && result_unwrap(item_name) == name { return some(item) }
+        let item: Json = result_unwrap(array_item(values, index, label))
+        let item_name: Result[String, String] = string_member(item, "name", label)
+        if is_ok(item_name) { declarations = map_insert(declarations, result_unwrap(item_name), item) }
         index = index + 1
     }
-    return none()
+    return declarations
 }
 
 fn enum_has_variant(declaration: Json, variant_name: String) -> Bool {
@@ -222,15 +181,17 @@ fn struct_field_type(declaration: Json, field_name: String) -> String {
 }
 
 fn kir_type_identifier_start(character: String) -> Bool {
-    let points: Array[Int] = codepoints(character)
-    let codepoint: Int = unwrap_or(array_get(points, 0), 0)
-    return codepoint >= 128 || character == "@" || character == "_" || contains("abcdefghijklmnopqrstuvwxyz", character) || contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", character)
+    let encoded: Bytes = string_to_bytes(character)
+    let bytes: Array[UInt8] = u8_array(encoded)
+    let byte_count: Int = len(bytes)
+    return byte_count > 1 || character == "@" || character == "_" || contains("abcdefghijklmnopqrstuvwxyz", character) || contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", character)
 }
 
 fn kir_type_identifier_continue(character: String) -> Bool {
-    let points: Array[Int] = codepoints(character)
-    let codepoint: Int = unwrap_or(array_get(points, 0), 0)
-    return codepoint >= 128 || character == "_" || contains("abcdefghijklmnopqrstuvwxyz", character) || contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", character) || contains("0123456789", character)
+    let encoded: Bytes = string_to_bytes(character)
+    let bytes: Array[UInt8] = u8_array(encoded)
+    let byte_count: Int = len(bytes)
+    return byte_count > 1 || character == "_" || contains("abcdefghijklmnopqrstuvwxyz", character) || contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", character) || contains("0123456789", character)
 }
 
 fn kir_type_text_at(chars: Array[String], index: Int, text: String) -> Bool {
@@ -345,35 +306,26 @@ fn validate_expression_list(owner: Json, key: String, label: String, functions: 
 }
 
 fn reject_unexpected_expression_child(expression: Json, key: String, allowed: Bool, label: String) -> Result[Bool, String] {
+    if allowed { return ok(true) }
     let child: Result[Json, String] = json_object_get(expression, key)
-    if is_err(child) || allowed { return ok(true) }
+    if is_err(child) { return ok(true) }
     if json_kind(result_unwrap(child)) != "null" { return err(label + " has an unsupported '" + key + "' child") }
     return ok(true)
 }
 
 fn reject_unexpected_expression_children(expression: Json, kind: String, label: String) -> Result[Bool, String] {
-    let left: Result[Bool, String] = reject_unexpected_expression_child(expression, "left", kind == "binary" || kind == "index", label)
-    let right: Result[Bool, String] = reject_unexpected_expression_child(expression, "right", kind == "binary", label)
-    let operand: Result[Bool, String] = reject_unexpected_expression_child(expression, "operand", kind == "unary" || kind == "propagate", label)
-    let base: Result[Bool, String] = reject_unexpected_expression_child(expression, "base", kind == "index" || kind == "field", label)
-    let receiver: Result[Bool, String] = reject_unexpected_expression_child(expression, "receiver", false, label)
-    let callee: Result[Bool, String] = reject_unexpected_expression_child(expression, "callee", false, label)
-    let lambda: Result[Bool, String] = reject_unexpected_expression_child(expression, "lambda", false, label)
-    if is_err(left) { return left }
-    if is_err(right) { return right }
-    if is_err(operand) { return operand }
-    if is_err(base) { return base }
-    if is_err(receiver) { return receiver }
-    if is_err(callee) { return callee }
-    if is_err(lambda) { return lambda }
-    let args: Result[Json, String] = json_object_get(expression, "args")
-    if kind != "call" && is_ok(args) && json_kind(result_unwrap(args)) != "null" && (json_kind(result_unwrap(args)) != "array" || result_unwrap(json_array_len(result_unwrap(args))) != 0) { return err(label + " has unsupported 'args' children") }
-    let items: Result[Json, String] = json_object_get(expression, "items")
-    if kind != "array" && kind != "set" && is_ok(items) && json_kind(result_unwrap(items)) != "null" && (json_kind(result_unwrap(items)) != "array" || result_unwrap(json_array_len(result_unwrap(items))) != 0) { return err(label + " has unsupported 'items' children") }
-    let map_keys: Result[Json, String] = json_object_get(expression, "map_keys")
-    if kind != "map" && is_ok(map_keys) && json_kind(result_unwrap(map_keys)) != "null" && (json_kind(result_unwrap(map_keys)) != "array" || result_unwrap(json_array_len(result_unwrap(map_keys))) != 0) { return err(label + " has unsupported 'map_keys' children") }
-    let values: Result[Json, String] = json_object_get(expression, "values")
-    if kind != "map" && kind != "struct" && is_ok(values) && json_kind(result_unwrap(values)) != "null" && (json_kind(result_unwrap(values)) != "array" || result_unwrap(json_array_len(result_unwrap(values))) != 0) { return err(label + " has unsupported 'values' children") }
+    let mut allowed_fields: String = "|kind|source|line|column|type|const|int|uint|uint_bits|float|bool|string|name|operator|call_target|trait_name|builtin_id|field|struct_name|struct_type|generic_arguments|fields|enum_type|enum_variant|tail|binding|"
+    if kind == "binary" { allowed_fields = allowed_fields + "left|right|" }
+    else if kind == "index" { allowed_fields = allowed_fields + "left|base|" }
+    else if kind == "field" { allowed_fields = allowed_fields + "base|" }
+    else if kind == "unary" || kind == "propagate" { allowed_fields = allowed_fields + "operand|" }
+    else if kind == "call" { allowed_fields = allowed_fields + "args|" }
+    else if kind == "array" || kind == "set" { allowed_fields = allowed_fields + "items|" }
+    else if kind == "map" { allowed_fields = allowed_fields + "map_keys|values|" }
+    else if kind == "struct" { allowed_fields = allowed_fields + "values|" }
+    let candidates: String = "|left|right|operand|base|receiver|callee|lambda|args|items|map_keys|values|"
+    let empty_arrays: String = "|args|items|map_keys|values|"
+    if !json_object_fields_empty_except(expression, candidates, allowed_fields, empty_arrays) { return err(label + " has unsupported child fields") }
     return ok(true)
 }
 
@@ -554,7 +506,7 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         }
         let binding: Result[Json, String] = member(expression, "binding", label)
         if is_err(binding) { return err(unwrap_or(result_error(binding), label + " has no resolved binding")) }
-        let checked: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(name), result_unwrap(type_name), false, false, label + " binding", strict_fields)
+        let checked: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(name), result_unwrap(type_name), "", label + " binding", strict_fields)
         if is_err(checked) { return err(unwrap_or(result_error(checked), label + " has an invalid resolved binding")) }
         return ok(true)
     }
@@ -639,7 +591,7 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         let fields: Result[Json, String] = array_member(expression, "fields", label)
         let values: Result[Json, String] = array_member(expression, "values", label)
         if is_err(name) || result_unwrap(name) == "" || is_err(fields) || is_err(values) { return err(label + " has incomplete construction data") }
-        let declaration: Option[Json] = find_named_declaration(types.structs, result_unwrap(name))
+        let declaration: Option[Json] = map_get(types.structs, result_unwrap(name))
         if is_none(declaration) { return err(label + " references an unknown struct '" + result_unwrap(name) + "'") }
         let structure: Json = unwrap_or(declaration, result_unwrap(json_parse("{}")))
         let type_params: Result[Json, String] = array_member(structure, "type_params", "KIR struct")
@@ -679,7 +631,7 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         let enum_type: Result[String, String] = string_member(expression, "enum_type", label)
         let variant: Result[String, String] = string_member(expression, "enum_variant", label)
         if is_err(enum_type) || result_unwrap(enum_type) == "" || is_err(variant) || result_unwrap(variant) == "" { return err(label + " has incomplete enum data") }
-        let declaration: Option[Json] = find_named_declaration(types.enums, result_unwrap(enum_type))
+        let declaration: Option[Json] = map_get(types.enums, result_unwrap(enum_type))
         if is_none(declaration) || result_unwrap(type_name) != result_unwrap(enum_type) { return err(label + " references an unknown or mismatched enum type") }
         if !enum_has_variant(unwrap_or(declaration, result_unwrap(json_parse("{}"))), result_unwrap(variant)) { return err(label + " references an unknown enum variant") }
         return ok(true)
@@ -721,7 +673,7 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         if result_unwrap(kind) == "const" && result_unwrap(mutable) { return err("KIR const binding cannot be mutable") }
         let type_name: Result[String, String] = string_member(result_unwrap(init), "type", label + " initializer")
         if is_err(type_name) { return err(unwrap_or(result_error(type_name), label + " initializer has no type")) }
-        let checked_binding: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(name), result_unwrap(type_name), true, result_unwrap(mutable), label + " binding", strict_fields)
+        let checked_binding: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(name), result_unwrap(type_name), str(result_unwrap(mutable)), label + " binding", strict_fields)
         if is_err(checked_binding) { return err(unwrap_or(result_error(checked_binding), label + " has an invalid binding")) }
         return validate_expression(result_unwrap(init), functions, types, strict_fields)
     }
@@ -763,7 +715,7 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         if is_err(name) || result_unwrap(name) == "" || is_err(iter) || is_err(binding) { return err(label + " has incomplete loop binding data") }
         let type_name: Result[String, String] = string_member(result_unwrap(binding), "type", label + " binding")
         if is_err(type_name) { return err(unwrap_or(result_error(type_name), label + " binding has no type")) }
-        let checked_binding: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(name), result_unwrap(type_name), true, false, label + " binding", strict_fields)
+        let checked_binding: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(name), result_unwrap(type_name), "false", label + " binding", strict_fields)
         if is_err(checked_binding) { return checked_binding }
         let checked_iter: Result[Bool, String] = validate_expression(result_unwrap(iter), functions, types, strict_fields)
         if is_err(checked_iter) { return checked_iter }
@@ -798,7 +750,7 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
                 let enum_type: Result[String, String] = string_member(result_unwrap(pattern), "type", label + " pattern")
                 let variant: Result[String, String] = string_member(result_unwrap(pattern), "variant", label + " pattern")
                 if is_err(enum_type) || result_unwrap(enum_type) == "" || is_err(variant) || result_unwrap(variant) == "" { return err("KIR enum pattern is incomplete") }
-                let declaration: Option[Json] = find_named_declaration(types.enums, result_unwrap(enum_type))
+                let declaration: Option[Json] = map_get(types.enums, result_unwrap(enum_type))
                 let scrutinee_type: Result[String, String] = string_member(result_unwrap(scrutinee), "type", label + " scrutinee")
                 if is_none(declaration) || is_err(scrutinee_type) || result_unwrap(scrutinee_type) != result_unwrap(enum_type) { return err("KIR enum pattern references an unknown or mismatched enum type") }
                 if !enum_has_variant(unwrap_or(declaration, result_unwrap(json_parse("{}"))), result_unwrap(variant)) { return err("KIR enum pattern references an unknown enum variant") }
@@ -1015,7 +967,7 @@ fn validate_functions(values: Json, symbols: Map[String, KIRFunctionSignature], 
             if is_err(default) { return err(label + " parameter is missing its default field") }
             let binding: Result[Json, String] = member(parameter, "binding", label + " parameter")
             if is_err(binding) { return err("KIR v5 parameter is missing its resolved binding") }
-            let checked_binding: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(parameter_name), result_unwrap(parameter_type), true, false, label + " parameter binding", strict_fields)
+            let checked_binding: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(parameter_name), result_unwrap(parameter_type), "false", label + " parameter binding", strict_fields)
             if is_err(checked_binding) { return checked_binding }
             if json_kind(result_unwrap(default)) != "null" {
                 default_seen = true
@@ -1081,7 +1033,7 @@ fn validate_kir_document_mode(document: Json, strict_fields: Bool) -> Result[Val
     if is_err(checked_enums) { return err(unwrap_or(result_error(checked_enums), "malformed KIR enums")) }
     let distinct_types: Result[Bool, String] = validate_distinct_type_names(result_unwrap(structs), result_unwrap(enums))
     if is_err(distinct_types) { return err(unwrap_or(result_error(distinct_types), "KIR type declaration names conflict")) }
-    let types: KIRTypeDeclarations = KIRTypeDeclarations{ structs: result_unwrap(structs), enums: result_unwrap(enums) }
+    let types: KIRTypeDeclarations = KIRTypeDeclarations{ structs: index_named_declarations(result_unwrap(structs), "KIR structs"), enums: index_named_declarations(result_unwrap(enums), "KIR enums") }
     let unique_functions: Result[Bool, String] = validate_unique_function_names(result_unwrap(functions))
     if is_err(unique_functions) { return err(unwrap_or(result_error(unique_functions), "malformed KIR functions")) }
     let function_symbols: Map[String, KIRFunctionSignature] = build_function_symbols(result_unwrap(functions))

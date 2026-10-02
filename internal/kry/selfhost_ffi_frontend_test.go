@@ -14,6 +14,31 @@ type selfhostFFIFrontend struct {
 	limits  Limits
 }
 
+func TestValidatedKIRBootstrapFunctionArityFitsDynamicBackend(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "..", "..", "selfhost", "validated_kir.kry")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, diagnostic := Parse(&Source{Name: path, Text: string(contents)}, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("parse validated KIR module: %s", diagnostic.Message)
+	}
+	for _, function := range program.Functions {
+		if function.Name == "validate_binding" {
+			if len(function.Params) > 6 {
+				t.Fatalf("validate_binding has %d parameters; Linux dynamic backend supports at most 6", len(function.Params))
+			}
+			return
+		}
+	}
+	t.Fatal("validated KIR module is missing validate_binding")
+}
+
 func loadSelfhostFFIFrontend(t *testing.T) selfhostFFIFrontend {
 	t.Helper()
 	root, err := os.Getwd()

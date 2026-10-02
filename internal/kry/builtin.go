@@ -34,6 +34,8 @@ func init() {
 		Builtin{"u8_array", "u8_array(value: Bytes) -> Array[UInt8]", "pure", "copy", "none", "Expose raw bytes as UInt8 values.", "2.9.0", 1, "u8_array"},
 		Builtin{"json_kind", "json_kind(value: Json) -> String", "json", "copy", "invalid JSON", "Return the validated JSON node kind.", "2.9.0", 1, "json_kind"},
 		Builtin{"json_object_get", "json_object_get(value: Json,key: String) -> Result[Json,String]", "json", "copy", "type/key failure", "Read one object member without losing JSON number precision.", "2.9.0", 2, "json_object_get"},
+		Builtin{"json_object_keys", "json_object_keys(value: Json) -> Result[Array[String],String]", "json", "copy", "type/limit failure", "Return a bounded list of object member names without serializing its values.", "2.9.0", 1, "json_object_keys"},
+		Builtin{"json_object_fields_empty_except", "json_object_fields_empty_except(value: Json,candidate_fields: String,allowed_fields: String,empty_array_fields: String) -> Bool", "json", "copy", "none", "Require candidate fields outside allowed_fields to be null, except names in empty_array_fields may be empty arrays.", "2.10.0", 4, "json_object_fields_empty_except"},
 		Builtin{"json_array_len", "json_array_len(value: Json) -> Result[Int,String]", "json", "copy", "type failure", "Return the length of a JSON array.", "2.9.0", 1, "json_array_len"},
 		Builtin{"json_array_get", "json_array_get(value: Json,index: Int) -> Result[Json,String]", "json", "copy", "type/index failure", "Read one JSON array element.", "2.9.0", 2, "json_array_get"},
 		Builtin{"json_string", "json_string(value: Json) -> Result[String,String]", "json", "copy", "type failure", "Decode a JSON string node.", "2.9.0", 1, "json_string"},

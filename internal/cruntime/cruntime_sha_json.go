@@ -474,6 +474,53 @@ static KValue k_json_object_get(KValue value, KValue key) {
     }
     return kv_res(0,kv_cstr("JSON object key not found"));
 }
+static int k_json_string_key_compare(const void *left, const void *right) {
+    const KValue *a=(const KValue*)left, *b=(const KValue*)right;
+    size_t n=a->u.s.len<b->u.s.len?a->u.s.len:b->u.s.len;
+    int order=memcmp(a->u.s.data,b->u.s.data,n);
+    if (order) return order;
+    return a->u.s.len<b->u.s.len?-1:(a->u.s.len>b->u.s.len?1:0);
+}
+static KValue k_json_object_keys(KValue value) {
+    KValue node=k_json_unwrap(value);
+    if (node.tag!=K_MAP) return kv_res(0,kv_cstr("JSON value is not an object"));
+    if (k_max_array_elements<0 || node.u.m.len>(unsigned long long)k_max_array_elements)
+        return kv_res(0,kv_cstr("JSON object key count exceeds configured limit"));
+    size_t count=node.u.m.len;
+    KValue *keys=(KValue*)kalloc(sizeof(KValue)*(count?count:1));
+    if (count) memcpy(keys,node.u.m.keys,sizeof(KValue)*count);
+    qsort(keys,count,sizeof(KValue),k_json_string_key_compare);
+    return kv_res(1,kv_arr(keys,count));
+}
+static int k_json_field_set_valid(KValue fields) {
+    if (fields.tag!=K_STRING) return 0;
+    if (!fields.u.s.len) return 1;
+    if (fields.u.s.len<3 || fields.u.s.data[0]!='|' || fields.u.s.data[fields.u.s.len-1]!='|') return 0;
+    for (size_t i=1;i<fields.u.s.len;i++) if (fields.u.s.data[i]=='|' && fields.u.s.data[i-1]=='|') return 0;
+    return 1;
+}
+static int k_json_field_set_contains(KValue fields, KValue key) {
+    if (key.tag!=K_STRING || !key.u.s.len || !fields.u.s.len || memchr(key.u.s.data,'|',key.u.s.len)) return 0;
+    size_t wanted=key.u.s.len+2;
+    for (size_t i=0;i+wanted<=fields.u.s.len;i++) {
+        if (fields.u.s.data[i]=='|' && !memcmp(fields.u.s.data+i+1,key.u.s.data,key.u.s.len) && fields.u.s.data[i+wanted-1]=='|') return 1;
+    }
+    return 0;
+}
+static KValue k_json_object_fields_empty_except(KValue value, KValue candidates, KValue allowed, KValue empty_arrays) {
+    if (!k_json_field_set_valid(candidates) || !k_json_field_set_valid(allowed) || !k_json_field_set_valid(empty_arrays)) return kv_bool(0);
+    KValue object=k_json_unwrap(value);
+    if (object.tag!=K_MAP) return kv_bool(0);
+    for (size_t i=1;i+1<candidates.u.s.len;) {
+        size_t end=i; while (end<candidates.u.s.len && candidates.u.s.data[end]!='|') end++;
+        if (end==i || end>=candidates.u.s.len) return kv_bool(0);
+        KValue key=kv_nil(), child=kv_nil(); key.tag=K_STRING; key.u.s.data=candidates.u.s.data+i; key.u.s.len=end-i; int exists=0;
+        for (size_t j=0;j<object.u.m.len;j++) if (object.u.m.keys[j].u.s.len==key.u.s.len && !memcmp(object.u.m.keys[j].u.s.data,key.u.s.data,key.u.s.len)) { child=object.u.m.vals[j]; exists=1; break; }
+        if (exists && !k_json_field_set_contains(allowed,key) && child.tag!=K_NIL && !(k_json_field_set_contains(empty_arrays,key) && child.tag==K_ARRAY && child.u.a.len==0)) return kv_bool(0);
+        i=end+1;
+    }
+    return kv_bool(1);
+}
 static KValue k_json_array_len(KValue value) {
     KValue node=k_json_unwrap(value);
     if (node.tag!=K_ARRAY) return kv_res(0,kv_cstr("JSON value is not an array"));

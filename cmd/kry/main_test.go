@@ -202,6 +202,26 @@ func TestMaxJSONCLIOverride(t *testing.T) {
 	}
 }
 
+func TestMaxArrayElementsCLIOverride(t *testing.T) {
+	if got := kry.DefaultLimits().MaxArrayElements; got != 1_000_000 {
+		t.Fatalf("default MaxArrayElements = %d; want 1,000,000", got)
+	}
+	source := filepath.Join(t.TempDir(), "array-limit.kry")
+	program := []byte("let values: Array[Int] = [1, 2]\nprintln(len(values))\n")
+	if err := os.WriteFile(source, program, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := run([]string{"--max-array-elements", "1", "run", source}); status == 0 {
+		t.Fatal("--max-array-elements 1 accepted a two-element array")
+	}
+	if status := run([]string{"--max-array-elements", "2", "run", source}); status != 0 {
+		t.Fatalf("--max-array-elements 2 rejected a two-element array with status %d", status)
+	}
+	if status := run([]string{"--max-array-elements", "bad", "run", source}); status != 2 {
+		t.Fatalf("invalid --max-array-elements value returned status %d, want 2", status)
+	}
+}
+
 func TestNoExternalToolchainCLIRejectsUnsupportedTargetsBeforeSourceIO(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.kry")
 	for _, tc := range []struct {

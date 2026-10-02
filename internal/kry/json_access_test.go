@@ -3,6 +3,7 @@ package kry
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,95 @@ main()
 	}
 	if d = r.run(); d != nil {
 		t.Fatalf("typed JSON errors failed: %s", d.Message)
+	}
+}
+
+func TestJSONObjectKeysAreSortedAndRejectNonObjects(t *testing.T) {
+	src := `
+fn main() -> Result[Nil, String] {
+    let value: Json = json_parse("{\"z\":1,\"é\":2,\"a\":3,\"💩\":4,\"z\":5}")?
+    let keys: Array[String] = json_object_keys(value)?
+    assert_eq(unwrap_or(array_get(keys, 0), ""), "a")
+    assert_eq(unwrap_or(array_get(keys, 1), ""), "z")
+    assert_eq(unwrap_or(array_get(keys, 2), ""), "é")
+    assert_eq(unwrap_or(array_get(keys, 3), ""), "💩")
+    assert_eq(is_err(json_object_keys(json_parse("[]")?)), true)
+    return ok(nil)
+}
+main()
+`
+	p, c := testProgram(t, src)
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("JSON object keys failed: %s", d.Message)
+	}
+}
+
+func TestJSONObjectKeysCheckerRequiresJson(t *testing.T) {
+	source := `fn invalid(value: String) -> Result[Array[String], String] {
+    return json_object_keys(value)
+}
+fn main() -> Nil { return nil }
+`
+	program, diagnostic := Parse(&Source{Name: "json-object-keys-type.kry", Text: source}, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	if _, diagnostic = Check(program, DefaultLimits()); diagnostic == nil || !strings.Contains(diagnostic.Message, "json_object_keys expects Json") {
+		t.Fatalf("expected Json parameter diagnostic, got %#v", diagnostic)
+	}
+}
+
+func TestJSONObjectKeysRespectArrayElementLimit(t *testing.T) {
+	src := `
+fn main() -> Result[Nil, String] {
+    let within: Json = json_parse("{\"f\":1,\"e\":2,\"d\":3,\"c\":4,\"b\":5,\"a\":6}")?
+    assert_eq(is_ok(json_object_keys(within)), true)
+    let over: Json = json_parse("{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7}")?
+    assert_eq(is_err(json_object_keys(over)), true)
+    assert_eq(unwrap_or(result_error(json_object_keys(over)), "missing error"), "JSON object key count exceeds configured limit")
+    return ok(nil)
+}
+main()
+	`
+	p, c := testProgram(t, src)
+	limits := DefaultLimits()
+	limits.MaxArrayElements = 6
+	r, d := NewRuntime(p, c, limits, Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("JSON object key limit was not enforced: %s", d.Message)
+	}
+}
+
+func TestJSONObjectFieldsEmptyExcept(t *testing.T) {
+	source := `
+fn main() -> Result[Nil, String] {
+    let object: Json = json_parse("{\"kind\":\"int\",\"left\":null,\"args\":[],\"items\":[]}")?
+    assert_eq(json_object_fields_empty_except(object, "|left|args|items|", "|kind|", "|args|items|"), true)
+    assert_eq(json_object_fields_empty_except(object, "|left|args|items|", "|kind|", "|args|"), false)
+    let nonempty_child: Json = json_parse("{\"kind\":\"int\",\"left\":1}")?
+    assert_eq(json_object_fields_empty_except(nonempty_child, "|left|", "|kind|", ""), false)
+    let null_child: Json = json_parse("{\"kind\":\"int\",\"left\":null}")?
+    assert_eq(json_object_fields_empty_except(null_child, "|left|", "|kind|", ""), true)
+    assert_eq(json_object_fields_empty_except(json_parse("[]")?, "|left|", "|kind|", ""), false)
+    assert_eq(json_object_fields_empty_except(object, "|left|args|items|", "kind", "|args|items|"), false)
+    return ok(nil)
+}
+main()
+`
+	p, c := testProgram(t, source)
+	r, d := NewRuntime(p, c, DefaultLimits(), Sandbox{})
+	if d != nil {
+		t.Fatal(d.Message)
+	}
+	if d = r.run(); d != nil {
+		t.Fatalf("JSON empty-field checks failed: %s", d.Message)
 	}
 }
 

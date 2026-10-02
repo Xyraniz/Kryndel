@@ -67,6 +67,11 @@ func run(args []string) (status int) {
 			if i < 0 {
 				return 2
 			}
+		case "--max-array-elements":
+			i = takeLimit(args, i, "array-elements", &e.Limits.MaxArrayElements)
+			if i < 0 {
+				return 2
+			}
 		case "--max-instructions":
 			v, n := nextInt(args, i)
 			if n < 0 {

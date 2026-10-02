@@ -62,6 +62,7 @@ Kryndel keeps its standard library small and explicit. The current release provi
 | `json_parse` | `json_parse(value: String) -> Result[Json,String]` | Validates and canonicalizes JSON under the source-size limit. |
 | `json_stringify` | `json_stringify(value: Json) -> String` | Returns the canonical validated JSON text. |
 | `json_kind`, `json_is_null` | `json_kind(value: Json) -> String`, `json_is_null(value: Json) -> Bool` | Inspect a JSON node without converting it to an untyped string. |
+| `json_object_keys` | `json_object_keys(value: Json) -> Result[Array[String],String]` | Return object member names in deterministic sorted order, subject to the array element limit. |
 | `json_object_get`, `json_array_len`, `json_array_get` | Typed object/array accessors returning `Result[...,String]`. | Traverse nested JSON while preserving number spelling and bounds errors. |
 | `json_string`, `json_int`, `json_uint`, `json_float`, `json_bool` | Typed scalar accessors returning `Result[...,String]`. | Decode only the requested scalar type; `json_uint` preserves the full UInt64 range. |
 | `thread_channel` | `thread_channel() -> Channel[T]` | Creates a FIFO queue with capacity 64; a `Channel[T]` context is required. |

@@ -261,7 +261,7 @@ func TestBuiltinCapabilityMatrixListsEveryBackendAndTarget(t *testing.T) {
 		t.Fatalf("unexpected Linux x64 json_parse capability: %#v", jsonLinux)
 	}
 	jsonBuiltins := []string{
-		"json_parse", "json_stringify", "json_kind", "json_object_get",
+		"json_parse", "json_stringify", "json_kind", "json_object_get", "json_object_keys", "json_object_fields_empty_except",
 		"json_array_len", "json_array_get", "json_string", "json_int",
 		"json_uint", "json_float", "json_bool", "json_is_null",
 	}

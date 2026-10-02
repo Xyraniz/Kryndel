@@ -136,16 +136,17 @@ func runStage38EnumMatchFixture(t *testing.T, compiler, fixturePath, label strin
 }
 
 type bootstrapLock struct {
-	SchemaVersion             int               `json:"schema_version"`
-	SourceRevision            string            `json:"source_revision"`
-	Target                    string            `json:"target"`
-	HostGo                    string            `json:"host_go"`
-	Stage1SeedPath            string            `json:"stage1_seed_path"`
-	Stage0Build               string            `json:"stage0_build"`
-	SourceCompilerKIRBytes    int               `json:"source_compiler_kir_bytes"`
-	SourceCompilerKIRMaxBytes int               `json:"source_compiler_kir_max_bytes"`
-	Command                   string            `json:"command"`
-	SHA256                    map[string]string `json:"sha256"`
+	SchemaVersion                     int               `json:"schema_version"`
+	SourceRevision                    string            `json:"source_revision"`
+	Target                            string            `json:"target"`
+	HostGo                            string            `json:"host_go"`
+	Stage1SeedPath                    string            `json:"stage1_seed_path"`
+	Stage0Build                       string            `json:"stage0_build"`
+	SourceCompilerKIRBytes            int               `json:"source_compiler_kir_bytes"`
+	SourceCompilerKIRMaxBytes         int               `json:"source_compiler_kir_max_bytes"`
+	SourceCompilerKIRMaxArrayElements int               `json:"source_compiler_kir_max_array_elements"`
+	Command                           string            `json:"command"`
+	SHA256                            map[string]string `json:"sha256"`
 }
 
 func loadBootstrapLock(t *testing.T, path string) bootstrapLock {
@@ -158,7 +159,7 @@ func loadBootstrapLock(t *testing.T, path string) bootstrapLock {
 	if err := json.Unmarshal(data, &lock); err != nil {
 		t.Fatalf("decode bootstrap lock %q: %v", path, err)
 	}
-	if lock.SchemaVersion != 3 || lock.Target != "linux-amd64" || lock.HostGo != "go1.27.1" || lock.Stage1SeedPath == "" || lock.SourceRevision == "" || lock.Stage0Build == "" || lock.SourceCompilerKIRBytes <= 0 || lock.SourceCompilerKIRMaxBytes <= lock.SourceCompilerKIRBytes || lock.Command == "" {
+	if lock.SchemaVersion != 3 || lock.Target != "linux-amd64" || lock.HostGo != "go1.27.1" || lock.Stage1SeedPath == "" || lock.SourceRevision == "" || lock.Stage0Build == "" || lock.SourceCompilerKIRBytes <= 0 || lock.SourceCompilerKIRMaxBytes <= lock.SourceCompilerKIRBytes || lock.SourceCompilerKIRMaxArrayElements < 2_000_000 || lock.Command == "" {
 		t.Fatalf("invalid bootstrap lock metadata: %#v", lock)
 	}
 	return lock
@@ -925,7 +926,8 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 		maxInstructions = "250000000"
 	}
 	bootstrapKIRLimit := fmt.Sprint(lock.SourceCompilerKIRMaxBytes)
-	runBackend := exec.Command(stage0Path, "--max-artifact", bootstrapKIRLimit, "--max-json", bootstrapKIRLimit, "--max-instructions", maxInstructions, "--max-wall-ms", maxWallMS, "run", backendPath, kirFile, generatedCompiler)
+	bootstrapArrayLimit := fmt.Sprint(lock.SourceCompilerKIRMaxArrayElements)
+	runBackend := exec.Command(stage0Path, "--max-artifact", bootstrapKIRLimit, "--max-json", bootstrapKIRLimit, "--max-array-elements", bootstrapArrayLimit, "--max-instructions", maxInstructions, "--max-wall-ms", maxWallMS, "run", backendPath, kirFile, generatedCompiler)
 	if output, err := runBackend.CombinedOutput(); err != nil {
 		t.Fatalf("Stage 0 failed to run kir_backend.kry on source compiler KIR: %v; output: %s", err, output)
 	}
@@ -2880,6 +2882,7 @@ func TestSourceCompilerJSONIsRejectedByELFDirect(t *testing.T) {
 	compilerLimits := DefaultLimits()
 	compilerLimits.MaxArtifactBytes = bootstrapLock.SourceCompilerKIRMaxBytes
 	compilerLimits.MaxJSONBytes = bootstrapLock.SourceCompilerKIRMaxBytes
+	compilerLimits.MaxArrayElements = bootstrapLock.SourceCompilerKIRMaxArrayElements
 	compilerProgram, d := LoadProgram(compiler, compilerLimits, "")
 	if d != nil {
 		t.Fatal(d.Message)

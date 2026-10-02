@@ -2628,6 +2628,34 @@ func (r *Runtime) evalBuiltin(e *Expr, b Builtin, a []Value) (Value, *Diagnostic
 			return resVal(false, stringVal(err.Error())), nil
 		}
 		return resVal(true, jsonValue(string(data), child)), nil
+	case "json_object_keys":
+		raw, err := jsonRawValue(a[0])
+		if err != nil {
+			return resVal(false, stringVal(err.Error())), nil
+		}
+		object, ok := raw.(map[string]any)
+		if !ok {
+			return resVal(false, stringVal("JSON value is not an object")), nil
+		}
+		if len(object) > r.Lim.MaxArrayElements {
+			return resVal(false, stringVal("JSON object key count exceeds configured limit")), nil
+		}
+		keys := make([]string, 0, len(object))
+		for key := range object {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		values := make([]Value, len(keys))
+		for index, key := range keys {
+			values[index] = stringVal(key)
+		}
+		return resVal(true, arrVal(values)), nil
+	case "json_object_fields_empty_except":
+		raw, err := jsonRawValue(a[0])
+		if err != nil {
+			return boolVal(false), nil
+		}
+		return boolVal(jsonObjectFieldsEmptyExcept(raw, a[1].S, a[2].S, a[3].S)), nil
 	case "json_array_len":
 		raw, err := jsonRawValue(a[0])
 		if err != nil {
@@ -4353,6 +4381,55 @@ func jsonNodeKind(v any) string {
 	default:
 		return "unknown"
 	}
+}
+
+// jsonObjectFieldsEmptyExcept accepts field sets encoded as pipe-delimited
+// names (for example, "|kind|source|"). Fields outside allowedFields must be
+// null, except names in emptyArrayFields may also hold an empty JSON array.
+func jsonObjectFieldsEmptyExcept(raw any, candidateFields, allowedFields, emptyArrayFields string) bool {
+	object, ok := raw.(map[string]any)
+	if !ok || !validJSONFieldSet(candidateFields) || !validJSONFieldSet(allowedFields) || !validJSONFieldSet(emptyArrayFields) {
+		return false
+	}
+	for _, key := range strings.Split(candidateFields, "|") {
+		if key == "" {
+			continue
+		}
+		value, exists := object[key]
+		if !exists || jsonFieldSetContains(allowedFields, key) || value == nil {
+			continue
+		}
+		if jsonFieldSetContains(emptyArrayFields, key) {
+			if items, ok := value.([]any); ok && len(items) == 0 {
+				continue
+			}
+		}
+		return false
+	}
+	return true
+}
+
+
+func validJSONFieldSet(fields string) bool {
+	if fields == "" {
+		return true
+	}
+	if len(fields) < 3 || fields[0] != '|' || fields[len(fields)-1] != '|' {
+		return false
+	}
+	for index := 1; index < len(fields); index++ {
+		if fields[index] == '|' && fields[index-1] == '|' {
+			return false
+		}
+	}
+	return true
+}
+
+func jsonFieldSetContains(fields, key string) bool {
+	if key == "" || strings.Contains(key, "|") || fields == "" {
+		return false
+	}
+	return strings.Contains(fields, "|"+key+"|")
 }
 
 func (r *Runtime) httpRequestAuth(e *Expr, method, rawURL, body, token string) (Value, *Diagnostic) {

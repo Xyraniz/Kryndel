@@ -60,6 +60,20 @@ fn main() -> Nil {
 	}
 }
 
+func TestSelfhostPEBackendUnicodeEnumTypeNames(t *testing.T) {
+	source := `
+enum État { Vrai, Faux }
+
+fn main() -> Nil {
+    let states: Array[État] = [État::Vrai, État::Faux]
+    println(len(states))
+    let lookup: Map[String, État] = {"state": État::Vrai}
+    println(unwrap_or(map_get(lookup, "state"), État::Faux))
+}
+`
+	runSelfhostPEBackendExpectingOutput(t, source, "unicode-enum-types.exe", "2\nÉtat::Vrai\n")
+}
+
 func TestSelfhostPEBackendPrintsEnumNames(t *testing.T) {
 	source := `
 enum Mode { Idle, Active, Failed }

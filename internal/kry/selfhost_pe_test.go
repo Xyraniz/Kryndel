@@ -882,6 +882,272 @@ func TestSelfhostPEBackendTrapsOutOfRangeShift(t *testing.T) {
 	}
 }
 
+func runSelfhostPEBackendExpectingOutput(t *testing.T, source, filename, want string) {
+	t.Helper()
+	image, err := runSelfhostPEBackend(t, source)
+	if err != nil {
+		t.Fatalf("selfhost PE backend failed to compile fixture: %v", err)
+	}
+	peImage, err := pe.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatalf("Go PE parser rejected generated image: %v", err)
+	}
+	if peImage.Machine != pe.IMAGE_FILE_MACHINE_AMD64 {
+		peImage.Close()
+		t.Fatalf("generated PE has machine %#x, want amd64", peImage.Machine)
+	}
+	if _, err := peImage.ImportedSymbols(); err != nil {
+		peImage.Close()
+		t.Fatalf("could not read generated PE imports: %v", err)
+	}
+	peImage.Close()
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("native PE execution requires Windows amd64")
+	}
+	executable := filepath.Join(t.TempDir(), filename)
+	if err := os.WriteFile(executable, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(executable).CombinedOutput()
+	if err != nil {
+		t.Fatalf("selfhost-generated PE failed: %v; output: %s", err, output)
+	}
+	if string(output) != want {
+		t.Fatalf("unexpected PE output %q; want %q", output, want)
+	}
+}
+
+func kryStringContents(value string) string {
+	const hex = "0123456789abcdef"
+	var escaped strings.Builder
+	for i := 0; i < len(value); i++ {
+		b := value[i]
+		switch {
+		case b == '\\':
+			escaped.WriteString(`\\`)
+		case b == '"':
+			escaped.WriteString(`\"`)
+		case b < 0x20:
+			escaped.WriteString(`\x`)
+			escaped.WriteByte(hex[b>>4])
+			escaped.WriteByte(hex[b&0x0f])
+		default:
+			escaped.WriteByte(b)
+		}
+	}
+	return escaped.String()
+}
+
+func TestSelfhostPEBackendJSONObjectKeysSortedUniqueAndLastWins(t *testing.T) {
+	source := `
+fn read_keys() -> Array[String] {
+    return result_unwrap(json_object_keys(result_unwrap(json_parse("{\"z\":1,\"\\u0062\":2,\"é\":3,\"💩\":4,\"\\uD83D\\uDCA9\":5,\"\\uD800\":6,\"quote\\\"key\":7,\"slash\\\\key\":8,\"z\":9}"))))
+}
+
+fn last_duplicate() -> Int {
+    return result_unwrap(json_int(result_unwrap(json_object_get(result_unwrap(json_parse("{\"z\":1,\"z\":7}")), "z"))))
+}
+fn escaped_duplicate() -> Int {
+    return result_unwrap(json_int(result_unwrap(json_object_get(result_unwrap(json_parse("{\"z\":1,\"\\u007a\":7}")), "z"))))
+}
+fn main() -> Nil {
+    let keys: Array[String] = read_keys()
+    println(len(keys))
+    println(unwrap_or(array_get(keys, 0), "missing"))
+    println(unwrap_or(array_get(keys, 1), "missing"))
+    println(unwrap_or(array_get(keys, 2), "missing"))
+    println(unwrap_or(array_get(keys, 3), "missing"))
+    println(unwrap_or(array_get(keys, 4), "missing"))
+    println(unwrap_or(array_get(keys, 5), "missing"))
+    println(unwrap_or(array_get(keys, 6), "missing"))
+    println(last_duplicate())
+    println(escaped_duplicate())
+}
+`
+	want := "7\nb\nquote\"key\nslash\\key\nz\né\n�\n💩\n7\n7\n"
+	runSelfhostPEBackendExpectingOutput(t, source, "json-object-keys.exe", want)
+}
+
+func TestSelfhostPEBackendJSONObjectKeysSortOrder(t *testing.T) {
+	source := `
+fn get_keys() -> Array[String] {
+    return result_unwrap(json_object_keys(result_unwrap(json_parse("{\"a\":1,\"b\":2,\"z\":3}"))))
+}
+fn main() -> Nil {
+    let keys: Array[String] = get_keys()
+    println(unwrap_or(array_get(keys, 0), "missing"))
+    println(unwrap_or(array_get(keys, 1), "missing"))
+    println(unwrap_or(array_get(keys, 2), "missing"))
+}
+`
+	runSelfhostPEBackendExpectingOutput(t, source, "json-keys-sort.exe", "a\nb\nz\n")
+}
+
+func TestSelfhostPEBackendJSONObjectKeysSortUTF8(t *testing.T) {
+	json := `{"💩":1,"é":2,"�":3,"a":4}`
+	source := `
+fn get_keys() -> Array[String] {
+    return result_unwrap(json_object_keys(result_unwrap(json_parse("` + kryStringContents(json) + `"))))
+}
+
+fn main() -> Nil {
+    let keys: Array[String] = get_keys()
+    println(unwrap_or(array_get(keys, 0), "missing"))
+    println(unwrap_or(array_get(keys, 1), "missing"))
+    println(unwrap_or(array_get(keys, 2), "missing"))
+    println(unwrap_or(array_get(keys, 3), "missing"))
+}
+`
+	runSelfhostPEBackendExpectingOutput(t, source, "json-keys-sort-utf8.exe", "a\né\n�\n💩\n")
+}
+
+func TestSelfhostPEBackendJSONObjectKeysSortUTF8Pair(t *testing.T) {
+	first := `{"é":1,"�":2}`
+	second := `{"�":1,"é":2}`
+	source := `
+fn keys_first() -> Array[String] {
+    return result_unwrap(json_object_keys(result_unwrap(json_parse("` + kryStringContents(first) + `"))))
+}
+fn keys_second() -> Array[String] {
+    return result_unwrap(json_object_keys(result_unwrap(json_parse("` + kryStringContents(second) + `"))))
+}
+
+fn main() -> Nil {
+    let a: Array[String] = keys_first()
+    let b: Array[String] = keys_second()
+    println(unwrap_or(array_get(a, 0), "missing"))
+    println(unwrap_or(array_get(a, 1), "missing"))
+    println(unwrap_or(array_get(b, 0), "missing"))
+    println(unwrap_or(array_get(b, 1), "missing"))
+}
+`
+	runSelfhostPEBackendExpectingOutput(t, source, "json-keys-sort-utf8-pair.exe", "é\n�\né\n�\n")
+}
+
+func TestSelfhostPEBackendJSONObjectKeysDeduplicateEscapedAndRaw(t *testing.T) {
+	json := `{"b":1,"\u0062":2,"💩":3,"\uD83D\uDCA9":4}`
+	source := `
+fn get_keys() -> Array[String] {
+    return result_unwrap(json_object_keys(result_unwrap(json_parse("` + kryStringContents(json) + `"))))
+}
+fn main() -> Nil {
+    let keys: Array[String] = get_keys()
+    println(len(keys))
+    println(unwrap_or(array_get(keys, 0), "missing"))
+    println(unwrap_or(array_get(keys, 1), "missing"))
+}
+`
+	runSelfhostPEBackendExpectingOutput(t, source, "json-keys-dedup-escaped.exe", "2\nb\n💩\n")
+}
+
+
+func TestSelfhostPEBackendJSONArrayLengthAndGet(t *testing.T) {
+	source := `
+fn inspect_array(raw: String) -> Nil {
+    let values: Json = result_unwrap(json_parse(raw))
+    println(result_unwrap(json_array_len(values)))
+    println(result_unwrap(json_string(result_unwrap(json_array_get(values, 0)))))
+    println(result_unwrap(json_string(result_unwrap(json_array_get(values, 1)))))
+    return nil
+}
+
+fn inspect_kir_sources() -> Nil {
+    let document: Json = result_unwrap(json_parse("{\"sources\":[\"main.kry\",\"lib.kry\"]}"))
+    let sources: Json = result_unwrap(json_object_get(document, "sources"))
+    println(result_unwrap(json_array_len(sources)))
+    println(result_unwrap(json_string(result_unwrap(json_array_get(sources, 0)))))
+    println(result_unwrap(json_string(result_unwrap(json_array_get(sources, 1)))))
+    return nil
+}
+
+fn main() -> Nil {
+    inspect_array("[\"alpha\",\"beta\"]")
+    inspect_array(" [ \"spaced-a\" , \"spaced-b\" ] ")
+    println(result_unwrap(json_array_len(result_unwrap(json_parse("[]")))))
+    inspect_kir_sources()
+    return nil
+}
+`
+	want := "2\nalpha\nbeta\n2\nspaced-a\nspaced-b\n0\n2\nmain.kry\nlib.kry\n"
+	runSelfhostPEBackendExpectingOutput(t, source, "json-array-access.exe", want)
+}
+
+func TestSelfhostPEBackendJSONArrayGetNestedObjectFields(t *testing.T) {
+	source := `
+fn main() -> Nil {
+    let values: Json = result_unwrap(json_parse("[{\"name\":\"abc\",\"source\":\"f\",\"line\":1}]"))
+    let item: Json = result_unwrap(json_array_get(values, 0))
+    println(result_unwrap(json_string(result_unwrap(json_object_get(item, "name")))))
+    println(result_unwrap(json_string(result_unwrap(json_object_get(item, "source")))))
+    println(result_unwrap(json_int(result_unwrap(json_object_get(item, "line")))))
+    return nil
+}
+`
+	runSelfhostPEBackendExpectingOutput(t, source, "json-array-nested-object.exe", "abc\nf\n1\n")
+}
+
+func TestSelfhostPEBackendJSONChildFieldValidation(t *testing.T) {
+	source := `
+fn check(raw: String, candidates: String, allowed: String, empty_arrays: String) -> Bool {
+    return json_object_fields_empty_except(result_unwrap(json_parse(raw)), candidates, allowed, empty_arrays)
+}
+fn main() -> Nil {
+    println(check("{}", "|args|items|", "|kind|", "|args|items|"))
+    println(check("[]", "|args|items|", "|kind|", "|args|items|"))
+    println(check("{\"other\":null}", "|args|items|", "|kind|", "|args|items|"))
+    println(check("{\"args\":[]}", "|args|items|", "|kind|", "|args|items|"))
+    println(check("{\"items\":[1]}", "|args|items|", "|kind|", "|args|items|"))
+    println(check("{\"args\":1,\"args\":null}", "|args|items|", "|kind|", "|args|items|"))
+    println(check("{\"args\":null,\"args\":1}", "|args|items|", "|kind|", "|args|items|"))
+    println(check("{\"\\u0061rgs\":1}", "|args|items|", "|kind|", "|args|items|"))
+    println(check("{\"args\":[]}", "|args|items|", "kind", "|args|items|"))
+    return nil
+}
+`
+	runSelfhostPEBackendExpectingOutput(t, source, "json-child-fields.exe", "true\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\nfalse\n")
+}
+
+func TestSelfhostPEBackendJSONParserRejectsMalformedDocuments(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input string
+	}{
+		{name: "missing value", input: `{"a":}`},
+		{name: "invalid escape", input: `{"a":"\q"}`},
+		{name: "raw control character", input: "{\"a\":\"\x01\"}"},
+		{name: "object trailing comma", input: `{"a":1,}`},
+		{name: "array trailing comma", input: `{"a":[1,]}`},
+		{name: "key without colon", input: `{"a" 1}`},
+		{name: "leading zero", input: `{"a":01}`},
+		{name: "incomplete literal", input: `{"a":tru}`},
+		{name: "extra data after document", input: `{} false`},
+		{name: "object keys on non-object", input: `[]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "object keys on non-object" {
+				source := `fn main() -> Nil { println(is_err(json_object_keys(result_unwrap(json_parse("` + kryStringContents(tc.input) + `"))))) }
+`
+				runSelfhostPEBackendExpectingOutput(t, source, "json-non-object-keys.exe", "true\n")
+				return
+			}
+			source := `fn main() -> Nil { println(is_err(json_parse("` + kryStringContents(tc.input) + `"))) }
+`
+			runSelfhostPEBackendExpectingOutput(t, source, "json-invalid-input.exe", "true\n")
+		})
+	}
+}
+
+func TestSelfhostPEBackendJSONParserAcceptsFractionAndExponent(t *testing.T) {
+	source := `
+fn main() -> Nil {
+    println(is_ok(json_parse("1.25")))
+    println(is_ok(json_parse("1.25e2")))
+    println(is_ok(json_parse("{\"f\":1.25E-2}")))
+}
+`
+	runSelfhostPEBackendExpectingOutput(t, source, "json-valid-numbers.exe", "true\ntrue\ntrue\n")
+}
+
 func TestSelfhostSourceCompilerBuildsWindowsPE(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {

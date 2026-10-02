@@ -172,15 +172,17 @@ suffix. ELF-direct samples its wall-clock deadline every 64 KIR steps while
 checking the instruction limit on each step.
 
 C AOT JSON support includes `json_parse`, `json_stringify`, `json_kind`,
-`json_object_get`, `json_array_len`, `json_array_get`, `json_string`,
+`json_object_get`, `json_object_keys`, `json_array_len`, `json_array_get`, `json_string`,
 `json_int`, `json_uint`, `json_float`, `json_bool`, and `json_is_null`. Accessor
 results retain the interpreter's typed errors and integer range behavior,
 including the full UInt64 range. Both implementations replace invalid UTF-8
 and unpaired surrogate escapes with U+FFFD, keep the last duplicate object
 key, and reject documents nested deeper than 256 containers with the same
-`Result` error. The JSON builtins are unsupported by `elf-direct`; capabilities
-reports that explicitly, and a build using one fails with a builtin-specific
-diagnostic. Differential regression tests execute the interpreter and C AOT
+`Result` error. `json_object_keys` returns sorted unique member names and
+respects the configured array-element limit. The JSON builtins remain
+unsupported by `elf-direct`; the capability matrix reports that explicitly,
+and a build using one fails with a builtin-specific diagnostic. Differential
+regression tests execute the interpreter and C AOT
 output on Linux amd64, including accessor errors, number boundaries, escaped
 duplicate keys, large objects, nesting limits, and invalid UTF-8 through the C
 runtime. The generated C implementation is advertised for Linux amd64, Linux

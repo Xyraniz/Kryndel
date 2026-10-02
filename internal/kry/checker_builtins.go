@@ -642,6 +642,35 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 			return bad("json_object_get expects a String key")
 		}
 		return Res(TJSON, TString), nil
+	case "json_object_keys":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_object_keys expects Json")
+		}
+		return Res(Arr(TString), TString), nil
+	case "json_object_fields_empty_except":
+		if t, d := arg(0, TJSON); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TJSON) {
+			return bad("json_object_fields_empty_except expects Json, String, and String")
+		}
+		if t, d := arg(1, TString); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TString) {
+			return bad("json_object_fields_empty_except expects Json, String, and String")
+		}
+		if t, d := arg(2, TString); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TString) {
+			return bad("json_object_fields_empty_except expects Json and three Strings")
+		}
+		if t, d := arg(3, TString); d != nil {
+			return TError, d
+		} else if !typeEqual(t, TString) {
+			return bad("json_object_fields_empty_except expects Json and three Strings")
+		}
+		return TBool, nil
 	case "json_array_len":
 		if t, d := arg(0, TJSON); d != nil {
 			return TError, d

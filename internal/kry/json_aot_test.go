@@ -67,6 +67,64 @@ func TestCAOTJSONAccessorsMatchInterpreter(t *testing.T) {
 	requireJSONNativeParity(t, source)
 }
 
+func TestCAOTJSONObjectKeysMatchInterpreter(t *testing.T) {
+	source := `fn main() -> Result[Nil, String] {
+    let doc: Json = json_parse("{\"z\":1,\"é\":2,\"a\":3,\"💩\":4,\"z\":5}")?
+    let keys: Array[String] = json_object_keys(doc)?
+    assert_eq(unwrap_or(array_get(keys, 0), ""), "a")
+    assert_eq(unwrap_or(array_get(keys, 1), ""), "z")
+    assert_eq(unwrap_or(array_get(keys, 2), ""), "é")
+    assert_eq(unwrap_or(array_get(keys, 3), ""), "💩")
+    println(str(keys))
+    println(json_object_keys(json_parse("[]")?))
+    return ok(nil)
+}
+`
+	requireJSONNativeParity(t, source)
+}
+
+func TestCAOTJSONObjectFieldsEmptyExceptMatchInterpreter(t *testing.T) {
+	source := `fn main() -> Result[Nil, String] {
+    let valid: Json = json_parse("{\"kind\":\"binary\",\"left\":1,\"right\":2,\"args\":[],\"map_keys\":[]}")?
+    let scalar_child: Json = json_parse("{\"kind\":\"int\",\"left\":1}")?
+    let null_child: Json = json_parse("{\"kind\":\"int\",\"left\":null}")?
+    println(json_object_fields_empty_except(valid, "|left|right|args|map_keys|", "|kind|left|right|", "|args|map_keys|"))
+    println(json_object_fields_empty_except(valid, "|left|right|args|map_keys|", "|kind|left|right|", "|args|"))
+    println(json_object_fields_empty_except(scalar_child, "|left|", "|kind|", ""))
+    println(json_object_fields_empty_except(null_child, "|left|", "|kind|", ""))
+    println(json_object_fields_empty_except(json_parse("[]")?, "|left|", "|kind|", ""))
+    println(json_object_fields_empty_except(valid, "|left|right|args|map_keys|", "kind", "|args|map_keys|"))
+    return ok(nil)
+}`
+	requireJSONNativeParity(t, source)
+}
+func TestCAOTJSONObjectKeysRespectArrayElementLimit(t *testing.T) {
+	if !((runtime.GOOS == "linux" || runtime.GOOS == "windows") && runtime.GOARCH == "amd64") {
+		t.Skip("C AOT JSON differential tests require linux/amd64 or windows/amd64")
+	}
+	source := `fn main() -> Result[Nil, String] {
+    let within: Json = json_parse("{\"e\":1,\"d\":2,\"c\":3,\"b\":4,\"a\":5}")?
+    let over: Json = json_parse("{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6}")?
+    println(is_ok(json_object_keys(within)))
+    println(json_object_keys(over))
+    return ok(nil)
+}
+`
+	limits := DefaultLimits()
+	limits.MaxArrayElements = 5
+	interpreted, diagnostic := runInterpreterCaptureWithLimits(t, source, limits)
+	if diagnostic != nil {
+		t.Fatalf("interpreter failed: %s", diagnostic.Message)
+	}
+	native, status, err := buildAndRunNativeAOTWithLimits(t, source, limits)
+	if err != nil || status != 0 {
+		t.Fatalf("C AOT failed: status=%d err=%v output=%q", status, err, native)
+	}
+	if native != interpreted {
+		t.Fatalf("object key limit differs:\ninterpreter: %q\nC AOT:       %q", interpreted, native)
+	}
+}
+
 func TestCAOTJSONAccessorErrorsMatchInterpreter(t *testing.T) {
 	source := `fn main() -> Result[Nil, String] {
     let object: Json = json_parse("{\"a\":1}")?
@@ -256,18 +314,19 @@ func TestCAOTJSONInvalidUTF8StringMatchesInterpreter(t *testing.T) {
 
 func TestDirectELFRejectsJSONBuiltinsWithExplicitDiagnostics(t *testing.T) {
 	builtins := map[string]string{
-		"json_parse":      `fn use() -> Result[Json, String] { return json_parse("null") }`,
-		"json_stringify":  `fn use(doc: Json) -> String { return json_stringify(doc) }`,
-		"json_kind":       `fn use(doc: Json) -> String { return json_kind(doc) }`,
-		"json_object_get": `fn use(doc: Json) -> Result[Json, String] { return json_object_get(doc, "x") }`,
-		"json_array_len":  `fn use(doc: Json) -> Result[Int, String] { return json_array_len(doc) }`,
-		"json_array_get":  `fn use(doc: Json) -> Result[Json, String] { return json_array_get(doc, 0) }`,
-		"json_string":     `fn use(doc: Json) -> Result[String, String] { return json_string(doc) }`,
-		"json_int":        `fn use(doc: Json) -> Result[Int, String] { return json_int(doc) }`,
-		"json_uint":       `fn use(doc: Json) -> Result[UInt64, String] { return json_uint(doc) }`,
-		"json_float":      `fn use(doc: Json) -> Result[Float, String] { return json_float(doc) }`,
-		"json_bool":       `fn use(doc: Json) -> Result[Bool, String] { return json_bool(doc) }`,
-		"json_is_null":    `fn use(doc: Json) -> Bool { return json_is_null(doc) }`,
+		"json_parse":       `fn use() -> Result[Json, String] { return json_parse("null") }`,
+		"json_stringify":   `fn use(doc: Json) -> String { return json_stringify(doc) }`,
+		"json_kind":        `fn use(doc: Json) -> String { return json_kind(doc) }`,
+		"json_object_get":  `fn use(doc: Json) -> Result[Json, String] { return json_object_get(doc, "x") }`,
+		"json_object_keys": `fn use(doc: Json) -> Result[Array[String], String] { return json_object_keys(doc) }`,
+		"json_array_len":   `fn use(doc: Json) -> Result[Int, String] { return json_array_len(doc) }`,
+		"json_array_get":   `fn use(doc: Json) -> Result[Json, String] { return json_array_get(doc, 0) }`,
+		"json_string":      `fn use(doc: Json) -> Result[String, String] { return json_string(doc) }`,
+		"json_int":         `fn use(doc: Json) -> Result[Int, String] { return json_int(doc) }`,
+		"json_uint":        `fn use(doc: Json) -> Result[UInt64, String] { return json_uint(doc) }`,
+		"json_float":       `fn use(doc: Json) -> Result[Float, String] { return json_float(doc) }`,
+		"json_bool":        `fn use(doc: Json) -> Result[Bool, String] { return json_bool(doc) }`,
+		"json_is_null":     `fn use(doc: Json) -> Bool { return json_is_null(doc) }`,
 	}
 	for builtin, useFunction := range builtins {
 		t.Run(builtin, func(t *testing.T) {
