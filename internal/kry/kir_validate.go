@@ -743,7 +743,7 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if !ok || baseType.Function {
 				return fmt.Errorf("field expression base has non-struct checked type %q", expression.Base.Type)
 			}
-		declaration := structs[baseType.Name]
+			declaration := structs[baseType.Name]
 			if declaration == nil || !validKIRStructInstanceType(expression.Base.Type, declaration) {
 				return fmt.Errorf("field expression base has non-struct checked type %q", expression.Base.Type)
 			}
@@ -789,6 +789,26 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		case "map":
 			if len(expression.MapKeys) != len(expression.Values) {
 				return fmt.Errorf("map expression has mismatched keys and values")
+			}
+			mapType, ok := parseKIRTypeExpression(expression.Type)
+			if !ok || mapType.Function || mapType.Name != "Map" || len(mapType.Params) != 2 {
+				return fmt.Errorf("map expression has invalid checked type %q", expression.Type)
+			}
+			keyType, valueType := TypeSpecString(mapType.Params[0]), TypeSpecString(mapType.Params[1])
+			if !isKIRMapKeyType(keyType) {
+				return fmt.Errorf("map expression has unsupported key type %q", keyType)
+			}
+			for index := range expression.MapKeys {
+				key, value := expression.MapKeys[index], expression.Values[index]
+				if key == nil || value == nil {
+					return fmt.Errorf("map expression contains a missing key or value")
+				}
+				if !compatibleKIRTypes(keyType, key.Type) {
+					return fmt.Errorf("map key %d has checked type %q, want %q", index+1, key.Type, keyType)
+				}
+				if !compatibleKIRTypes(valueType, value.Type) {
+					return fmt.Errorf("map value %d has checked type %q, want %q", index+1, value.Type, valueType)
+				}
 			}
 		case "propagate":
 			if err := require(expression.Operand, "operand"); err != nil {
@@ -1118,6 +1138,10 @@ func isKIRUIntType(encoded string) bool {
 	default:
 		return false
 	}
+}
+
+func isKIRMapKeyType(encoded string) bool {
+	return encoded == "Int" || encoded == "Bool" || encoded == "String" || isKIRUIntType(encoded)
 }
 
 func isKIRNumericType(encoded string, genericConstraints map[string]string) bool {

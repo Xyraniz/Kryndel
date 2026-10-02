@@ -813,6 +813,53 @@ let age: Int = person.age
 	}
 }
 
+func TestKIRRejectsInvalidMapLiteralTypes(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*KIRExpr)
+		want   string
+	}{
+		{
+			name: "value type",
+			mutate: func(expression *KIRExpr) {
+				expression.Values[0] = &KIRExpr{Kind: "string", Type: "String", String: "wrong"}
+			},
+			want: `map value 1 has checked type "String", want "Int"`,
+		},
+		{
+			name: "key type",
+			mutate: func(expression *KIRExpr) {
+				expression.MapKeys[0] = &KIRExpr{Kind: "int", Type: "Int", Int: 1}
+			},
+			want: `map key 1 has checked type "Int", want "String"`,
+		},
+		{
+			name: "unsupported key type",
+			mutate: func(expression *KIRExpr) {
+				expression.Type = "Map[Float, Int]"
+			},
+			want: `unsupported key type "Float"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			program, checker := testProgram(t, `let values: Map[String, Int] = {"answer": 41}
+`)
+			data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document KIRDocument
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document.Statements[0].Init)
+			if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected KIR rejection containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestKIRRejectsIncompatibleMatchPatterns(t *testing.T) {
 	tests := []struct {
 		name   string
