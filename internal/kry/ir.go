@@ -31,6 +31,9 @@ func CompileMIR(program *Program, checker *Checker, target NativeTarget) (*Valid
 	if checker.Prog != program {
 		return nil, fmt.Errorf("checker does not describe the supplied program")
 	}
+	if !checker.checked {
+		return nil, fmt.Errorf("checker has not completed successfully")
+	}
 	if diagnostic := ValidateASTLimits(program, checker.Lim); diagnostic != nil {
 		return nil, fmt.Errorf("%s", diagnostic.Message)
 	}

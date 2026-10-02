@@ -68,6 +68,7 @@ type Checker struct {
 	Globals         *Scope
 	Lim             Limits
 	Err             *Diagnostic
+	checked         bool
 	funcs           map[string]bool
 	currentReturn   *Type
 	currentFunction *Function
@@ -109,6 +110,7 @@ func Check(prog *Program, lim Limits) (*Checker, *Diagnostic) {
 	if d := c.checkStatements(top, prog.Statements, TNil, 0, false); d != nil {
 		return nil, d
 	}
+	c.checked = true
 	return c, nil
 }
 func compatible(a, b *Type) bool {

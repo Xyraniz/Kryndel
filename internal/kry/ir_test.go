@@ -57,6 +57,15 @@ func TestCompileMIRRejectsCheckerForDifferentProgram(t *testing.T) {
 	}
 }
 
+func TestCompileMIRRejectsCheckerThatDidNotComplete(t *testing.T) {
+	program, checker := testProgram(t, "let value: Int = 42\n")
+	unvalidated := *checker
+	unvalidated.checked = false
+	if _, err := CompileMIR(program, &unvalidated, NativeTarget{OS: "linux", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), "checker has not completed successfully") {
+		t.Fatalf("CompileMIR accepted an unchecked Checker or returned the wrong error: %v", err)
+	}
+}
+
 func TestDecodedMIRRunsDirectlyInInterpreterAndPreservesLocations(t *testing.T) {
 	program, checker := testProgram(t, "fn main() -> Nil {\n    println(42)\n}\n")
 	compiled, err := CompileMIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
