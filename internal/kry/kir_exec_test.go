@@ -1043,7 +1043,7 @@ main()
 	}
 }
 
-func TestKIRExecutorChecksSubsetSemanticsBeyondDecoder(t *testing.T) {
+func TestKIRConditionSemanticsAreCheckedByDecoderAndExecutor(t *testing.T) {
 	program, checker := testProgram(t, "if true { println(\"yes\") }\n")
 	kirBytes, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
 	if err != nil {
@@ -1053,26 +1053,12 @@ func TestKIRExecutorChecksSubsetSemanticsBeyondDecoder(t *testing.T) {
 	if err := json.Unmarshal(kirBytes, &document); err != nil {
 		t.Fatal(err)
 	}
-	condition := document.Statements[0].Cond
-	document.Statements[0].Cond = &KIRExpr{
-		Kind:    "var",
-		Source:  condition.Source,
-		Line:    condition.Line,
-		Column:  condition.Column,
-		Type:    "Int",
-		Name:    "condition",
-		Binding: &KIRBinding{Name: "condition", Type: "Int", Source: condition.Source, Line: condition.Line, Column: condition.Column},
+	document.Statements[0].Cond.Type = "Int"
+	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "condition has checked type") {
+		t.Fatalf("KIR decoder accepted a non-Bool condition: %v", err)
 	}
-	malformed, err := json.Marshal(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := DecodeKIR(malformed, DefaultLimits())
-	if err != nil {
-		t.Fatalf("structural KIR decoder rejected the fixture earlier than expected: %v", err)
-	}
-	if _, err := executeKIRSubset(decoded, DefaultLimits(), kirSourceMap(program)); err == nil || errors.Is(err, errKIRSubsetUnsupported) {
-		t.Fatalf("executor accepted semantically invalid condition type: %v", err)
+	if err := validateKIRExecSubset(&document); err == nil || errors.Is(err, errKIRSubsetUnsupported) {
+		t.Fatalf("KIR executor accepted a non-Bool condition: %v", err)
 	}
 }
 

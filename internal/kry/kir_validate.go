@@ -795,6 +795,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			if err := requireExpr(statement.Cond, "condition"); err != nil {
 				return err
 			}
+			if statement.Cond.Type != "Bool" {
+				return fmt.Errorf("%s condition has checked type %q, want %q", statement.Kind, statement.Cond.Type, "Bool")
+			}
 		case "for":
 			if statement.Name == "" {
 				return fmt.Errorf("for statement has no binding name")

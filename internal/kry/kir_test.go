@@ -348,6 +348,19 @@ func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 			},
 		},
 		{
+			name: "non-bool if condition",
+			want: `if condition has checked type "Int", want "Bool"`,
+			mutate: func(doc *KIRDocument) {
+				doc.Statements[0] = &KIRStmt{
+					Kind:   "if",
+					Source: doc.Source,
+					Line:   1,
+					Column: 1,
+					Cond:   &KIRExpr{Kind: "var", Source: doc.Source, Line: 1, Column: 1, Type: "Int", Name: "condition", Binding: &KIRBinding{Name: "condition", Type: "Int", Source: doc.Source, Line: 1, Column: 1}},
+				}
+			},
+		},
+		{
 			name: "unknown call target",
 			want: "undeclared function",
 			mutate: func(doc *KIRDocument) {
