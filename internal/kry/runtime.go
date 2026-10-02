@@ -841,6 +841,7 @@ type Runtime struct {
 	Prog              *Program
 	Checker           *Checker
 	mir               *ValidatedMIR
+	astOracle         bool
 	kirScope          *kirExecScope
 	kirExecutor       *kirExecutor
 	output            io.Writer
@@ -1073,7 +1074,9 @@ func newRuntimeFromMIR(mir *ValidatedMIR, lim Limits, sb Sandbox, args []string)
 	return runtime, nil
 }
 
-func newRuntimeFromProgram(prog *Program, c *Checker, lim Limits, sb Sandbox, args []string) (*Runtime, *Diagnostic) {
+// newASTOracleRuntime preserves the pre-MIR interpreter as a differential-test
+// oracle. Production runtimes are created from ValidatedMIR instead.
+func newASTOracleRuntime(prog *Program, c *Checker, lim Limits, sb Sandbox, args []string) (*Runtime, *Diagnostic) {
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if lim.MaxWallTimeMS == 0 {
@@ -1081,7 +1084,7 @@ func newRuntimeFromProgram(prog *Program, c *Checker, lim Limits, sb Sandbox, ar
 	} else {
 		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
 	}
-	r := &Runtime{Prog: prog, Checker: c, Funcs: c.Env.Functions, Args: append([]string(nil), args...), Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(), discordCache: newDiscordObjectCache(10_000, 30*time.Minute), discordAPIBaseURL: discordAPIBase, discordGateway: newDiscordGatewayState()}
+	r := &Runtime{Prog: prog, Checker: c, astOracle: true, Funcs: c.Env.Functions, Args: append([]string(nil), args...), Global: newRunScope(nil), Lim: lim, Sandbox: sb, Ctx: &ExecContext{Ctx: ctx, Cancel: cancel, Lim: lim}, Channels: nil, Threads: nil, Dispatch: map[string][]DispatchEntry{}, discordRates: newDiscordRateLimiter(), discordCache: newDiscordObjectCache(10_000, 30*time.Minute), discordAPIBaseURL: discordAPIBase, discordGateway: newDiscordGatewayState()}
 	return r, nil
 }
 func (r *Runtime) fail(e *Expr, format string, args ...any) *Diagnostic {
@@ -1150,6 +1153,9 @@ func returned(v Value) EvalResult         { return EvalResult{Code: evalReturn, 
 func control(c EvalCode) EvalResult       { return EvalResult{Code: c, Value: nilVal()} }
 func (r *Runtime) takePropagated() *Value { p := r.propagated; r.propagated = nil; return p }
 func (r *Runtime) run() (result *Diagnostic) {
+	if r.mir == nil && !r.astOracle {
+		return Diag(CatArtifact, nil, 1, 1, "interpreter execution requires validated MIR")
+	}
 	defer func() {
 		result = r.cleanup(result)
 		r.Ctx.Cancel()
@@ -4408,7 +4414,6 @@ func jsonObjectFieldsEmptyExcept(raw any, candidateFields, allowedFields, emptyA
 	}
 	return true
 }
-
 
 func validJSONFieldSet(fields string) bool {
 	if fields == "" {

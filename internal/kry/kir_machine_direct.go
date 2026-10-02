@@ -411,6 +411,9 @@ func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) e
 			continue
 		}
 		if err := validateBlock(function.Body); err != nil {
+			if isDirectELFUnsupportedResultErrorPayload(err) {
+				return err
+			}
 			return fmt.Errorf("function %q: %w", function.Name, err)
 		}
 	}

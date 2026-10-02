@@ -28,7 +28,7 @@ func compareKIRExecutionWithRuntimeAndSandbox(t *testing.T, source string, limit
 		t.Fatal(diagnostic)
 	}
 	var astOutput bytes.Buffer
-	astRuntime, diagnostic := newRuntimeFromProgram(program, checker, limits, sandbox, nil)
+	astRuntime, diagnostic := newASTOracleRuntime(program, checker, limits, sandbox, nil)
 	if diagnostic != nil {
 		t.Fatal(diagnostic)
 	}
@@ -408,7 +408,7 @@ println(twice(choose(21)))
 	if diagnostic != nil {
 		t.Fatal(diagnostic)
 	}
-	astRuntime, diagnostic := newRuntimeFromProgram(program, checker, DefaultLimits(), Sandbox{}, nil)
+	astRuntime, diagnostic := newASTOracleRuntime(program, checker, DefaultLimits(), Sandbox{}, nil)
 	if diagnostic != nil {
 		t.Fatal(diagnostic)
 	}
@@ -1116,7 +1116,7 @@ func TestKIRExecutorAcceptsDecodedKIRV3(t *testing.T) {
 		t.Fatalf("KIR v3 execution failed: %v", err)
 	}
 	var astOutput bytes.Buffer
-	astRuntime, diagnostic := newRuntimeFromProgram(program, checker, DefaultLimits(), Sandbox{}, nil)
+	astRuntime, diagnostic := newASTOracleRuntime(program, checker, DefaultLimits(), Sandbox{}, nil)
 	if diagnostic != nil {
 		t.Fatal(diagnostic)
 	}
@@ -1177,7 +1177,7 @@ if i == 3 { println("done") }
 				t.Fatal("generated ELF embeds the complete output instead of lowering KIR control flow for runtime execution")
 			}
 			var astOutput bytes.Buffer
-			astRuntime, diagnostic := newRuntimeFromProgram(program, checker, DefaultLimits(), Sandbox{}, nil)
+			astRuntime, diagnostic := newASTOracleRuntime(program, checker, DefaultLimits(), Sandbox{}, nil)
 			if diagnostic != nil {
 				t.Fatal(diagnostic)
 			}

@@ -55,6 +55,8 @@ func buildDirectELFFromMIR(mir *ValidatedMIR) ([]byte, error) {
 	subsetErr := validateKIRDirectELFValueSubset(mir)
 	if subsetErr == nil {
 		return buildDirectKIRELF(mir, mir.limits, mir.sources)
+	} else if isDirectELFUnsupportedResultErrorPayload(subsetErr) {
+		return nil, subsetErr
 	} else if !errors.Is(subsetErr, errKIRSubsetUnsupported) {
 		return nil, fmt.Errorf("direct backend rejected KIR: %w", subsetErr)
 	}

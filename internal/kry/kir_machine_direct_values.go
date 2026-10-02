@@ -2,9 +2,23 @@ package kry
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"strings"
 )
+
+type directELFUnsupportedResultErrorPayload struct {
+	typeName string
+}
+
+func (err *directELFUnsupportedResultErrorPayload) Error() string {
+	return fmt.Sprintf("direct ELF backend cannot report result_unwrap error payload type %s; supported error payload types are String, Int, UInt, and Bool", err.typeName)
+}
+
+func isDirectELFUnsupportedResultErrorPayload(err error) bool {
+	var payloadError *directELFUnsupportedResultErrorPayload
+	return errors.As(err, &payloadError)
+}
 
 func validateDirectKIRBuiltinCall(expression *KIRExpr, document *KIRDocument) error {
 	if expression == nil {
@@ -266,8 +280,11 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr, document *KIRDocument) er
 			return unsupported()
 		}
 		types, ok := container(args[0].Type, "Result", 2)
-		if !ok || expression.Type != types[0] || !supportedPrint(types[1]) {
+		if !ok || expression.Type != types[0] {
 			return unsupported()
+		}
+		if !supportedPrint(types[1]) {
+			return &directELFUnsupportedResultErrorPayload{typeName: types[1]}
 		}
 	case "result_error":
 		if !singleArg() {

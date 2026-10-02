@@ -102,7 +102,7 @@ func TestNativeMachineLowerersDoNotAcceptSourceAST(t *testing.T) {
 
 func TestRunForREPLRequiresValidatedMIR(t *testing.T) {
 	program, checker := testProgram(t, "let visible = 42")
-	runtime, diagnostic := newRuntimeFromProgram(program, checker, DefaultLimits(), Sandbox{}, nil)
+	runtime, diagnostic := newASTOracleRuntime(program, checker, DefaultLimits(), Sandbox{}, nil)
 	if diagnostic != nil {
 		t.Fatal(diagnostic)
 	}
@@ -115,6 +115,17 @@ func TestRunForREPLRequiresValidatedMIR(t *testing.T) {
 	}
 	if _, exists := runtime.Global.get("visible"); exists {
 		t.Fatal("RunForREPL executed the AST fallback despite missing MIR")
+	}
+}
+
+func TestRuntimeExecutionRequiresValidatedMIR(t *testing.T) {
+	runtime := &Runtime{}
+	diagnostic := runtime.run()
+	if diagnostic == nil {
+		t.Fatal("runtime without validated MIR executed")
+	}
+	if diagnostic.Category != CatArtifact || diagnostic.Message != "interpreter execution requires validated MIR" {
+		t.Fatalf("runtime without validated MIR returned %#v", diagnostic)
 	}
 }
 

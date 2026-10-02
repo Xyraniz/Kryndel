@@ -46,7 +46,7 @@ func runASTPath(t *testing.T, engine *Engine, path string, args []string) (strin
 	if diagnostic != nil {
 		t.Fatal(diagnostic.Message)
 	}
-	runtime, diagnostic := newRuntimeFromProgram(program, checker, engine.Limits, Sandbox{Root: engine.RestrictedRoot, Restricted: engine.RestrictedRoot != ""}, args)
+	runtime, diagnostic := newASTOracleRuntime(program, checker, engine.Limits, Sandbox{Root: engine.RestrictedRoot, Restricted: engine.RestrictedRoot != ""}, args)
 	if diagnostic != nil {
 		t.Fatal(diagnostic.Message)
 	}

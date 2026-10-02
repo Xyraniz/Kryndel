@@ -1310,7 +1310,9 @@ func (m *directMachine) emitMapRemoveRuntime() error {
 		return err
 	}
 	// r15 points at the key qword that precedes map_find's value pointer.
-	m.code = append(m.code, 0x48, 0x89, 0xc7, 0x48, 0x83, 0xef, 0x08)
+	// Keep it in a callee-saved register across arrayAlloc; rdi is reused for
+	// the allocation size and is clobbered by mmap.
+	m.code = append(m.code, 0x49, 0x89, 0xc7, 0x49, 0x83, 0xef, 0x08)
 	m.code = append(m.code, 0x49, 0x8b, 0x2c, 0x24, 0x48, 0x83, 0xed, 0x02, 0x48, 0x89, 0xef)
 	m.arrayRuntimeUsed = true
 	if err := m.emitLabelCall(m.arrayAllocLabel); err != nil {
@@ -1320,7 +1322,7 @@ func (m *directMachine) emitMapRemoveRuntime() error {
 		0x49, 0x89, 0xc6, // r14=new map
 		0x49, 0x8d, 0x5c, 0x24, 0x08, // rbx=source key pointer
 		0x4d, 0x8d, 0x46, 0x08, // r8=destination key pointer
-		0x48, 0x8b, 0x2c, 0x24, 0x48, 0xd1, 0xed, // rbp=pair count
+		0x48, 0xd1, 0xed, // rbp=(original word count - removed pair) / 2
 	)
 	if err := m.emitJump(copyLoop); err != nil {
 		return err

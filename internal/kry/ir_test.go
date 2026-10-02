@@ -100,7 +100,7 @@ func TestDecodedMIRRunsDirectlyInInterpreterAndPreservesLocations(t *testing.T) 
 	if err != nil {
 		t.Fatalf("decode diagnostic MIR: %v", err)
 	}
-	astRuntime, astDiagnostic := newRuntimeFromProgram(badProgram, badChecker, DefaultLimits(), Sandbox{}, nil)
+	astRuntime, astDiagnostic := newASTOracleRuntime(badProgram, badChecker, DefaultLimits(), Sandbox{}, nil)
 	if astDiagnostic != nil {
 		t.Fatalf("prepare AST diagnostic oracle: %s", astDiagnostic.Message)
 	}
