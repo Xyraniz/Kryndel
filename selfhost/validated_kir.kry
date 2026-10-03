@@ -46,6 +46,13 @@ fn bool_member(value: Json, key: String, label: String) -> Result[Bool, String] 
     return json_bool(item)
 }
 
+fn optional_bool_member_false(value: Json, key: String, label: String) -> Result[Bool, String] {
+    let found: Result[Json, String] = json_object_get(value, key)
+    if is_err(found) { return ok(false) }
+    if json_kind(result_unwrap(found)) != "bool" { return err(label + "." + key + " must be a Bool") }
+    return json_bool(result_unwrap(found))
+}
+
 fn int_member(value: Json, key: String, label: String) -> Result[Int, String] {
     let found: Result[Json, String] = member(value, key, label)
     if is_err(found) { return err(unwrap_or(result_error(found), label + " is malformed")) }
@@ -574,6 +581,18 @@ fn kir_operator_types_compatible(left: String, right: String) -> Bool {
         (right == "Array" || right == "Array[<unknown>]") && kir_is_array_type(left)
 }
 
+fn kir_iterable_element_type(encoded: String) -> Result[String, String] {
+    if encoded == "String" { return ok("String") }
+    if encoded == "Bytes" { return ok("Int") }
+    if encoded == "Array" || encoded == "Array[<unknown>]" { return ok("") }
+    let characters: Array[String] = string_chars(encoded)
+    let parsed: KIRTypeParse = parse_kir_type(characters, 0, {})
+    if !parsed.valid || parsed.next != len(characters) || parsed.name != "Array" && parsed.name != "Set" || parsed.argument_count != 1 {
+        return err("KIR for statement iterator has a non-iterable checked type")
+    }
+    return ok(kir_struct_type_argument(encoded, parsed.name, 0))
+}
+
 fn kir_type_contains_function(encoded: String) -> Bool {
     return contains(encoded, "fn(")
 }
@@ -1048,10 +1067,11 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
     if result_unwrap(kind) == "let" || result_unwrap(kind) == "const" {
         let name: Result[String, String] = string_member(statement, "name", label)
         let mutable: Result[Bool, String] = bool_member(statement, "mutable", label)
+        let is_const: Result[Bool, String] = optional_bool_member_false(statement, "const", label)
         let binding: Result[Json, String] = member(statement, "binding", label)
         let init: Result[Json, String] = member(statement, "init", label)
-        if is_err(name) || result_unwrap(name) == "" || is_err(mutable) || is_err(binding) || is_err(init) { return err(label + " is missing its name, binding, mutability, or initializer") }
-        if result_unwrap(kind) == "const" && result_unwrap(mutable) { return err("KIR const binding cannot be mutable") }
+        if is_err(name) || result_unwrap(name) == "" || is_err(mutable) || is_err(is_const) || is_err(binding) || is_err(init) { return err(label + " is missing its name, binding, flags, or initializer") }
+        if result_unwrap(is_const) != (result_unwrap(kind) == "const") || result_unwrap(is_const) && result_unwrap(mutable) { return err(label + " has inconsistent const or mutability flags") }
         let type_name: Result[String, String] = string_member(result_unwrap(init), "type", label + " initializer")
         if is_err(type_name) { return err(unwrap_or(result_error(type_name), label + " initializer has no type")) }
         let checked_binding: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(name), result_unwrap(type_name), str(result_unwrap(mutable)), label + " binding", strict_fields)
@@ -1104,15 +1124,23 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
     }
     if result_unwrap(kind) == "for" {
         let name: Result[String, String] = string_member(statement, "name", label)
+        let mutable: Result[Bool, String] = optional_bool_member_false(statement, "mutable", label)
+        let is_const: Result[Bool, String] = optional_bool_member_false(statement, "const", label)
         let iter: Result[Json, String] = member(statement, "iter", label)
         let binding: Result[Json, String] = member(statement, "binding", label)
-        if is_err(name) || result_unwrap(name) == "" || is_err(iter) || is_err(binding) { return err(label + " has incomplete loop binding data") }
+        if is_err(name) || result_unwrap(name) == "" || is_err(mutable) || is_err(is_const) || is_err(iter) || is_err(binding) { return err(label + " has incomplete loop binding data") }
+        if result_unwrap(mutable) || result_unwrap(is_const) { return err(label + " loop binding cannot be mutable or const") }
         let type_name: Result[String, String] = string_member(result_unwrap(binding), "type", label + " binding")
         if is_err(type_name) { return err(unwrap_or(result_error(type_name), label + " binding has no type")) }
         let checked_binding: Result[Bool, String] = validate_binding(result_unwrap(binding), result_unwrap(name), result_unwrap(type_name), "false", label + " binding", strict_fields)
         if is_err(checked_binding) { return checked_binding }
         let checked_iter: Result[Bool, String] = validate_expression(result_unwrap(iter), functions, types, strict_fields)
         if is_err(checked_iter) { return checked_iter }
+        let iterator_type: Result[String, String] = string_member(result_unwrap(iter), "type", label + " iterator")
+        if is_err(iterator_type) { return err(label + " iterator has no checked type") }
+        let element_type: Result[String, String] = kir_iterable_element_type(result_unwrap(iterator_type))
+        if is_err(element_type) { return err(unwrap_or(result_error(element_type), label + " iterator is not iterable")) }
+        if result_unwrap(element_type) != "" && !kir_operator_types_compatible(result_unwrap(type_name), result_unwrap(element_type)) { return err(label + " binding type does not match iterator element type") }
         return validate_statement_list(statement, "body", label, functions, types, strict_fields)
     }
     if result_unwrap(kind) == "return" {

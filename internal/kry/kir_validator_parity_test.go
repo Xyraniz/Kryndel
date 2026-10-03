@@ -86,6 +86,60 @@ fn main() -> Int {
 	if err != nil {
 		t.Fatal(err)
 	}
+	constFlagMismatch := emitValidatorCorpusKIR(t, limits, "validator-const-flags.kry", `
+fn main() -> Int {
+    let value: Int = 1
+    return value
+}
+`)
+	var constFlagDocument KIRDocument
+	if err := json.Unmarshal(constFlagMismatch, &constFlagDocument); err != nil {
+		t.Fatalf("decode const flag validator KIR: %v", err)
+	}
+	findKIRFunction(&constFlagDocument, "main").Body[0].Const = true
+	constFlagMismatch, err = json.Marshal(constFlagDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	forSource := emitValidatorCorpusKIR(t, limits, "validator-for-types.kry", `
+fn main() -> Nil {
+    for item in [1] {}
+}
+`)
+	forMissingFlagsBytes := omitMainStatementFields(t, forSource, "mutable", "const")
+	var forBindingMismatch KIRDocument
+	if err := json.Unmarshal(forSource, &forBindingMismatch); err != nil {
+		t.Fatalf("decode for binding validator KIR: %v", err)
+	}
+	forStatement := findKIRFunction(&forBindingMismatch, "main").Body[0]
+	if forStatement.Kind != "for" || forStatement.Binding == nil || forStatement.Iter == nil {
+		t.Fatal("for validator source did not emit the expected checked loop")
+	}
+	forStatement.Binding.Type = "String"
+	forBindingMismatchBytes, err := json.Marshal(forBindingMismatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forConstMismatch KIRDocument
+	if err := json.Unmarshal(forSource, &forConstMismatch); err != nil {
+		t.Fatalf("decode for flags validator KIR: %v", err)
+	}
+	findKIRFunction(&forConstMismatch, "main").Body[0].Const = true
+	forConstMismatchBytes, err := json.Marshal(forConstMismatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nonIterableFor KIRDocument
+	if err := json.Unmarshal(forSource, &nonIterableFor); err != nil {
+		t.Fatalf("decode for iterator validator KIR: %v", err)
+	}
+	loop := findKIRFunction(&nonIterableFor, "main").Body[0]
+	loop.Iter = &KIRExpr{Kind: "int", Source: loop.Iter.Source, Line: loop.Iter.Line, Column: loop.Iter.Column, Type: "Int", Const: &KIRValue{Kind: "int", Int: 1}, Int: 1}
+	nonIterableForBytes, err := json.Marshal(nonIterableFor)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var assignmentTypeMismatch KIRDocument
 	if err := json.Unmarshal(mutableSource, &assignmentTypeMismatch); err != nil {
 		t.Fatalf("decode assignment validator KIR: %v", err)
@@ -149,6 +203,11 @@ fn main() -> Nil {
 		{name: "unknown document field", encoded: unknownField},
 		{name: "immutable assignment", encoded: immutableAssignmentBytes},
 		{name: "immutable assignment target", encoded: immutableTargetBytes},
+		{name: "inconsistent let const flag", encoded: constFlagMismatch},
+		{name: "for binding type mismatch", encoded: forBindingMismatchBytes},
+		{name: "for const flag", encoded: forConstMismatchBytes},
+		{name: "non-iterable for expression", encoded: nonIterableForBytes},
+		{name: "for omitted false flags", encoded: forMissingFlagsBytes, accept: true},
 		{name: "assignment type mismatch", encoded: assignmentTypeMismatchBytes},
 		{name: "non-Boolean if condition", encoded: ifConditionTypeMismatch},
 		{name: "non-Boolean while condition", encoded: whileConditionTypeMismatch},
@@ -200,6 +259,42 @@ fn main() -> Nil {
 			}
 		})
 	}
+}
+
+func omitMainStatementFields(t *testing.T, encoded []byte, fields ...string) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatalf("decode KIR for omitted fields: %v", err)
+	}
+	functions, ok := document["functions"].([]any)
+	if !ok {
+		t.Fatal("KIR document has no function list")
+	}
+	for _, rawFunction := range functions {
+		function, ok := rawFunction.(map[string]any)
+		if !ok || function["name"] != "main" {
+			continue
+		}
+		body, ok := function["body"].([]any)
+		if !ok || len(body) == 0 {
+			t.Fatal("main function has no statement for omitted-field fixture")
+		}
+		statement, ok := body[0].(map[string]any)
+		if !ok || statement["kind"] != "for" {
+			t.Fatal("main function does not start with a for statement")
+		}
+		for _, field := range fields {
+			delete(statement, field)
+		}
+		malformed, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return malformed
+	}
+	t.Fatal("main function not found in KIR document")
+	return nil
 }
 
 func nonBooleanConditionKIR(t *testing.T, limits Limits, name, source, statementKind string) []byte {
