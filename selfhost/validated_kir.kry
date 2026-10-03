@@ -442,6 +442,7 @@ fn validate_nested_struct_type_constraints(encoded: String, type_constraints: Ma
     let characters: Array[String] = string_chars(encoded)
     let parsed: KIRTypeParse = parse_kir_type(characters, 0, {})
     if !parsed.valid || parsed.next != len(characters) { return err("KIR declaration has an invalid type expression") }
+    if !kir_type_is_known(encoded, types, type_constraints, depth + 1) { return err("KIR declaration refers to an unknown type") }
     if parsed.argument_count == 0 && map_contains_key(type_constraints, parsed.name) { return ok(true) }
     let declaration_option: Option[Json] = map_get(types.structs, parsed.name)
     if is_some(declaration_option) {

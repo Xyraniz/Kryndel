@@ -5,13 +5,13 @@
   "stage1_seed_path": "selfhost/bootstrap/linux-amd64/source-kir-compiler-stage1.elf",
   "host_go": "go1.27.1",
   "stage0_build": "CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o <tmp>/kry ./cmd/kry",
-  "source_compiler_kir_bytes": 139566532,
+  "source_compiler_kir_bytes": 139582698,
   "source_compiler_kir_max_bytes": 150994944,
   "source_compiler_kir_max_array_elements": 2000000,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
     "stage0-host-kry-linux-amd64": "246fb744f3195bb5e5242121eccdd3da9dd3ef973bfee5c4a50d4877ee55f4ef",
-    "source-compiler.kir": "bf91e1a9eaf48f99b6a5784c5b89e0826a1d028be0642062e05f952498925442",
+    "source-compiler.kir": "11703a8d1e717a90a072d984ef86e5264a9e18868b87785f1400d582a940aae4",
     "stage1-source-kir-compiler.elf": "6ae3e90ee0a017dd0ab95ab895911c63e3e301698cfacf6c0adbac6acf480b9b",
     "source_kir_compiler.kry": "d183217b90140046ed110ec80dba64c7e2308c8015f7b688789d6a4f3bb26577",
     "dynamic_backend.kry": "49068c9d821422a94ba1e2e85209fbd38cc90ac3f05975c0800044328d1f6c9c",
@@ -19,8 +19,8 @@
     "kir_backend.kry": "3a1be5137d9d8fa08f86e310adde81c83a3269ad156b89258f2a02fe1e37331a",
     "pe_backend.kry": "bd2cb230320f4c8a46f96b2daacf7ec177d054cdfb4901a16e7a18fcf4b37703",
     "bootstrap-fixture.kry": "eb24d52f08ffb85bba3946c15273abd8f2c85a2b3b2b91018e91800533206c0d",
-    "stage2-source-kir-compiler.elf": "e8260f0fcfeae45ffe79af4b3c8dc1af28baac38136b52fd80fc70cf84168499",
-    "stage3-source-kir-compiler.elf": "e8260f0fcfeae45ffe79af4b3c8dc1af28baac38136b52fd80fc70cf84168499",
+    "stage2-source-kir-compiler.elf": "17da5fe8d618907e67b8370fe0f1e622cf3bdb4b5cda7840afda8bedf4a5095b",
+    "stage3-source-kir-compiler.elf": "17da5fe8d618907e67b8370fe0f1e622cf3bdb4b5cda7840afda8bedf4a5095b",
     "enum-match-fixture.kry": "5716d11439c1e1ba98d848c09a3e94d938acd48f217e784fe01e6859e92734f6",
     "windows-ffi-propagation-fixture.kry": "6b8b020f4c02b3c05751c4551c3c7cb3cf56b5fa5f4994c44cc4ed52c58935dd"
   }
