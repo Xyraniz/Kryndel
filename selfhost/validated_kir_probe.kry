@@ -1,0 +1,22 @@
+import "validated_kir"
+
+fn main() -> Nil {
+    let args = process_args()
+    let input = fs_read_text(args[0])
+    if is_err(input) {
+        println("probe-error:read")
+        return nil
+    }
+    let parsed = json_parse(result_unwrap(input))
+    if is_err(parsed) {
+        println("probe-error:json")
+        return nil
+    }
+    let validation = validate_kir_document(result_unwrap(parsed))
+    if is_ok(validation) {
+        println("accepted")
+    } else {
+        println("rejected")
+    }
+    return nil
+}

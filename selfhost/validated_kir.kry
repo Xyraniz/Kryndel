@@ -165,6 +165,36 @@ fn enum_has_variant(declaration: Json, variant_name: String) -> Bool {
     return false
 }
 
+fn validate_enum_match_exhaustiveness(arms: Json, scrutinee_type: String, enums: Map[String, Json], label: String) -> Result[Bool, String] {
+    let declaration: Option[Json] = map_get(enums, scrutinee_type)
+    let arm_count: Int = result_unwrap(json_array_len(arms))
+    let mut seen: Map[String, Bool] = {}
+    let mut arm_index: Int = 0
+    while arm_index < arm_count {
+        let arm: Json = result_unwrap(array_item(arms, arm_index, label + " arms"))
+        let pattern: Json = result_unwrap(json_object_get(arm, "pattern"))
+        let pattern_kind: String = result_unwrap(json_string(result_unwrap(json_object_get(pattern, "kind"))))
+        if pattern_kind == "wildcard" { return ok(true) }
+        if pattern_kind == "enum" {
+            let enum_type: String = result_unwrap(json_string(result_unwrap(json_object_get(pattern, "type"))))
+            let variant: String = result_unwrap(json_string(result_unwrap(json_object_get(pattern, "variant"))))
+            if enum_type == scrutinee_type { seen = map_insert(seen, variant, true) }
+        }
+        arm_index = arm_index + 1
+    }
+    if is_none(declaration) { return err("KIR match for '" + scrutinee_type + "' is not exhaustive") }
+    let variants: Json = result_unwrap(json_object_get(unwrap_or(declaration, result_unwrap(json_parse("{}"))), "variants"))
+    let variant_count: Int = result_unwrap(json_array_len(variants))
+    if variant_count == 0 { return err("KIR match for '" + scrutinee_type + "' is not exhaustive") }
+    let mut variant_index: Int = 0
+    while variant_index < variant_count {
+        let variant: String = result_unwrap(json_string(result_unwrap(array_item(variants, variant_index, "KIR enum variants"))))
+        if !map_contains_key(seen, variant) { return err("KIR match for '" + scrutinee_type + "' is not exhaustive") }
+        variant_index = variant_index + 1
+    }
+    return ok(true)
+}
+
 fn struct_field_type(declaration: Json, field_name: String) -> String {
     let fields: Json = result_unwrap(json_object_get(declaration, "fields"))
     let count: Int = result_unwrap(json_array_len(fields))
@@ -1084,6 +1114,8 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         if is_err(scrutinee) || is_err(arms) || result_unwrap(json_array_len(result_unwrap(arms))) == 0 { return err(label + " has no scrutinee or match arms") }
         let checked_scrutinee: Result[Bool, String] = validate_expression(result_unwrap(scrutinee), functions, types, strict_fields)
         if is_err(checked_scrutinee) { return checked_scrutinee }
+        let scrutinee_type: Result[String, String] = string_member(result_unwrap(scrutinee), "type", label + " scrutinee")
+        if is_err(scrutinee_type) { return err(label + " has no checked scrutinee type") }
         let arm_count: Int = result_unwrap(json_array_len(result_unwrap(arms)))
         let mut arm_index: Int = 0
         while arm_index < arm_count {
@@ -1102,8 +1134,8 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
                 let variant: Result[String, String] = string_member(result_unwrap(pattern), "variant", label + " pattern")
                 if is_err(enum_type) || result_unwrap(enum_type) == "" || is_err(variant) || result_unwrap(variant) == "" { return err("KIR enum pattern is incomplete") }
                 let declaration: Option[Json] = map_get(types.enums, result_unwrap(enum_type))
-                let scrutinee_type: Result[String, String] = string_member(result_unwrap(scrutinee), "type", label + " scrutinee")
-                if is_none(declaration) || is_err(scrutinee_type) || result_unwrap(scrutinee_type) != result_unwrap(enum_type) { return err("KIR enum pattern references an unknown or mismatched enum type") }
+                let pattern_scrutinee_type: Result[String, String] = string_member(result_unwrap(scrutinee), "type", label + " scrutinee")
+                if is_none(declaration) || is_err(pattern_scrutinee_type) || result_unwrap(pattern_scrutinee_type) != result_unwrap(enum_type) { return err("KIR enum pattern references an unknown or mismatched enum type") }
                 if !enum_has_variant(unwrap_or(declaration, result_unwrap(json_parse("{}"))), result_unwrap(variant)) { return err("KIR enum pattern references an unknown enum variant") }
             } else if result_unwrap(pattern_kind) != "wildcard" {
                 return err("selfhost backends do not support KIR match pattern kind '" + result_unwrap(pattern_kind) + "'")
@@ -1114,6 +1146,8 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
             if is_err(checked_body) { return checked_body }
             arm_index = arm_index + 1
         }
+        let exhaustive: Result[Bool, String] = validate_enum_match_exhaustiveness(result_unwrap(arms), result_unwrap(scrutinee_type), types.enums, label)
+        if is_err(exhaustive) { return exhaustive }
         return ok(true)
     }
     return err("selfhost backends do not support KIR statement kind '" + result_unwrap(kind) + "'")

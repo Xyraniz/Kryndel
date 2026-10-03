@@ -97,6 +97,7 @@ This single in-memory lowering boundary applies to the Go toolchain. The
 self-hosted compiler currently emits and consumes serialized KIR JSON through
 its own `ValidatedKIR` wrapper and validator; that wrapper is not the Go
 `ValidatedMIR`, and the two validators are not generated from one schema yet.
-The self-hosted backends accept a documented subset of the KIR contract. Keep
-that boundary explicit when comparing backend parity or reporting bootstrap
-coverage.
+A differential corpus checks that both validators agree on representative
+valid and malformed core KIR documents, while the self-hosted backends accept
+only their documented subset of the KIR contract. Keep that boundary explicit
+when comparing backend parity or reporting bootstrap coverage.

@@ -19,16 +19,17 @@ Keep changes to these modes explicit: a Go version change must update the
 module declaration and relevant CI/release jobs, while a bootstrap lock change
 must be reproduced with its pinned host and target before it is accepted.
 
-The compiler and execution subsystems remain in `internal/kry`. Bounded camera and display capture live in `internal/platform`; generated C runtime fragments live in `internal/cruntime`. Both are leaf packages with no dependency on compiler or interpreter state. `internal/cruntime` assembles the standalone C runtime in dependency order, with separate source files for formatting, display, equality and arithmetic, collections, and host integrations. These extractions follow testable dependency boundaries instead of mechanically splitting files. Further compiler/runtime package extraction should use the same rule. Compiler and execution state is explicit per invocation; no mutable package-level program state is used.
+The compiler and execution subsystems remain in `internal/kry`. Bounded camera and display capture live in `internal/platform`; generated C runtime fragments live in `internal/cruntime`. Both are leaf packages with no dependency on compiler or interpreter state. `internal/cruntime` assembles the standalone C runtime in dependency order, with separate source files for formatting, display, equality and arithmetic, canonical JSON, collections, and host integrations. These extractions follow testable dependency boundaries instead of mechanically splitting files. Further compiler/runtime package extraction should use the same rule. Compiler and execution state is explicit per invocation; no mutable package-level program state is used.
 
 The frontend produces checker-annotated source trees and lowers them to an opaque, validated in-memory MIR/KIR. Production interpreter and native-build entrypoints receive this value; they do not lower the original source AST. The Engine interpreter evaluates typed KIR nodes directly and retains its executor and global scope across REPL snippets. C AOT, direct ELF, and direct PE lower their supported constructs from typed KIR and reject unsupported forms without an AST fallback. The bounded direct KIR entrypoint also supports differential and backend-subset tests, whose reference runtime uses the retained AST evaluator explicitly. The runtime carries an `ExecContext` with cancellation, instruction, wall-clock, call-depth, stack, memory, source, and output budgets. Every host-facing operation returns a typed error. Go panics are not used for language failures and are converted at the CLI boundary only for unexpected host failures.
 
 This Go `ValidatedMIR` boundary does not mean the self-hosted compiler shares
 the same in-memory value. The self-hosted compiler currently validates and
 lowers serialized KIR JSON with its own `ValidatedKIR` wrapper and validator;
-the two validators are not generated from a common schema, and its backends
-support a bounded subset. Treat Go-to-selfhost validation parity and full
-selfhost backend coverage as remaining work.
+the two validators are not generated from a common schema. A differential
+corpus checks agreement on representative valid and malformed core KIR
+documents, but schema drift and the selfhost backend's bounded feature subset
+remain work. Treat this test as a parity guard, not proof of full selfhosting.
 
 `Copy` analysis is memoized with `unknown`, `visiting`, `copyable`, and `non-copyable` states. Recursive structural values are conservatively non-copyable. Type equality, display, layout, and serialization use the same recursion/depth guard. Channel send APIs call one runtime and checker transferability predicate, including try and timed variants.
 
