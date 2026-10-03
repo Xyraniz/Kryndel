@@ -132,6 +132,15 @@ fn struct_field_type_document(target_os: String, field_type: String) -> String {
     return generated_document(target_os, declarations, "[]", "[]")
 }
 
+fn function_signature_type_document(target_os: String, parameter_type: String, return_type: String) -> String {
+    let mut os_json: String = "\"linux\""
+    if target_os == "windows" { os_json = "\"windows\"" }
+    let binding: String = "{\"name\":\"value\",\"type\":\"" + parameter_type + "\",\"mutable\":false,\"source\":\"bad.kry\",\"line\":1,\"column\":1}"
+    let parameter: String = "{\"name\":\"value\",\"type\":\"" + parameter_type + "\",\"default\":null,\"binding\":" + binding + "}"
+    let function: String = "{\"name\":\"accept\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"public\":false,\"worker\":false,\"unsafe\":false,\"trait\":\"\",\"module\":\"\",\"receiver\":null,\"return\":\"" + return_type + "\",\"type_params\":[],\"params\":[" + parameter + "],\"captures\":[],\"body\":[]}"
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[" + function + "],\"statements\":[]}"
+}
+
 fn unknown_enum_variant_document(target_os: String) -> String {
     let enums: String = "[{\"name\":\"Color\",\"public\":false,\"module\":\"\",\"variants\":[\"Red\"]}]"
     let expression: String = "{\"kind\":\"enum\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Color\",\"const\":null,\"enum_type\":\"Color\",\"enum_variant\":\"Blue\"}"
@@ -244,6 +253,9 @@ fn main() -> Nil {
     assert_eq(rejected_by_generated_path(nested_generic_constraint_document("windows", "Copy")), true)
     assert_eq(valid_generated_kir(struct_field_type_document("linux", "Array[FFIBuffer]")), true)
     assert_eq(rejected_before_lowering(struct_field_type_document("linux", "MadeUp")), true)
+    assert_eq(valid_generated_kir(function_signature_type_document("linux", "FFIBuffer", "Nil")), true)
+    assert_eq(rejected_before_lowering(function_signature_type_document("linux", "MadeUp", "Nil")), true)
+    assert_eq(rejected_before_lowering(function_signature_type_document("linux", "Int", "MadeUp")), true)
     assert_eq(rejected_before_lowering(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[String]")), true)
     assert_eq(rejected_by_generated_path(malformed_generic_struct_document("windows", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[String]")), true)
     assert_eq(rejected_by_generated_path(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[Int, String]")), true)

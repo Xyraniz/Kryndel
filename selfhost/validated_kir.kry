@@ -1189,6 +1189,7 @@ fn validate_functions(values: Json, symbols: Map[String, KIRFunctionSignature], 
         let captures: Result[Json, String] = array_member(item, "captures", label)
         let body: Result[Json, String] = array_member(item, "body", label)
         if is_err(name) || result_unwrap(name) == "" || is_err(source) || result_unwrap(source) == "" || is_err(line) || result_unwrap(line) < 1 || is_err(column) || result_unwrap(column) < 1 || is_err(return_type) || result_unwrap(return_type) == "" || is_err(is_public) || is_err(worker) || is_err(is_unsafe) || is_err(type_params) || is_err(params) || is_err(captures) || is_err(body) { return err("KIR function declaration is missing required v5 metadata") }
+        if !kir_type_is_known(result_unwrap(return_type), types, {}, 0) { return err("KIR function has an unknown return type") }
         if result_unwrap(worker) || result_unwrap(is_unsafe) { return err("selfhost backends reject worker and unsafe function declarations") }
         if result_unwrap(json_array_len(result_unwrap(type_params))) != 0 { return err("selfhost backends reject generic function declarations") }
         if result_unwrap(json_array_len(result_unwrap(captures))) != 0 { return err("selfhost backends reject captured functions") }
@@ -1202,6 +1203,7 @@ fn validate_functions(values: Json, symbols: Map[String, KIRFunctionSignature], 
             let parameter_name: Result[String, String] = string_member(parameter, "name", label + " parameter")
             let parameter_type: Result[String, String] = string_member(parameter, "type", label + " parameter")
             if is_err(parameter_name) || result_unwrap(parameter_name) == "" || is_err(parameter_type) || result_unwrap(parameter_type) == "" { return err(label + " has an incomplete parameter") }
+            if !kir_type_is_known(result_unwrap(parameter_type), types, {}, 0) { return err(label + " has an unknown parameter type") }
             let default: Result[Json, String] = json_object_get(parameter, "default")
             if is_err(default) { return err(label + " parameter is missing its default field") }
             let binding: Result[Json, String] = member(parameter, "binding", label + " parameter")
