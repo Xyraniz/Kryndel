@@ -47,6 +47,21 @@ println(State::Ready)
 	if err != nil {
 		t.Fatalf("MIR C lowering failed: %v", err)
 	}
+	encoded, err := mir.MarshalKIR()
+	if err != nil {
+		t.Fatalf("MIR serialization failed: %v", err)
+	}
+	decoded, err := DecodeMIR(encoded, DefaultLimits())
+	if err != nil {
+		t.Fatalf("MIR decoding failed: %v", err)
+	}
+	decodedGenerated, err := generateCFromValidatedKIR(decoded, DefaultLimits(), false)
+	if err != nil {
+		t.Fatalf("decoded MIR C lowering failed: %v", err)
+	}
+	if decodedGenerated != generated {
+		t.Fatal("C lowering differs between source-compiled and decoded MIR")
+	}
 	for _, want := range []string{"Box[Int]", "State", "kfn_identity_g", "kfn_show_", "kv_enum("} {
 		if !strings.Contains(generated, want) {
 			t.Errorf("generated C does not contain %q", want)

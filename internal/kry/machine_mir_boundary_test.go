@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -49,21 +50,39 @@ func TestProductionLoweringEntrypointsUseValidatedMIR(t *testing.T) {
 	}
 
 	checkCalls("runtime.go", "NewRuntimeWithArgs", "CompileMIR", "newRuntimeFromMIR")
+	checkCalls("runtime.go", "NewRuntime", "NewRuntimeWithArgs")
 	checkCalls("runtime.go", "RunForREPL", "runValidatedMIR")
 	checkCalls("codegen.go", "GenerateC", "generateC")
 	checkCalls("codegen.go", "GenerateCObfuscated", "generateC")
 	checkCalls("codegen.go", "generateC", "CompileMIR", "generateCFromValidatedKIR")
 	checkCalls("engine.go", "RunPathWithArgs", "CompileMIR", "newRuntimeFromMIR")
+	checkCalls("engine.go", "RunPath", "RunPathWithArgs")
 	checkCalls("engine.go", "DebugPathWithArgs", "CompileMIR", "newRuntimeFromMIR")
 	checkCalls("machine.go", "BuildDirectELF", "CompileMIR", "buildDirectELFFromMIR")
 	checkCalls("machine_pe.go", "BuildDirectPE", "CompileMIR", "lowerDirectPEKIR")
+	checkCalls("native.go", "BuildNative", "BuildNativeOpts")
+	checkCalls("native.go", "BuildNativeOpts", "BuildNativeWithPolicyOpts")
 	checkCalls("native.go", "BuildNativeWithPolicyOpts", "CompileMIR", "generateCFromValidatedKIR")
+	checkCalls("native.go", "EmitC", "GenerateC")
 }
 
 func TestNativeMachineLowerersDoNotAcceptSourceAST(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
+	}
+	loweringFiles := map[string]bool{
+		"kir_codegen.go": true, "kir_exec.go": true, "machine_code.go": true, "machine_kir.go": true,
+	}
+	machineFiles, err := filepath.Glob("kir_machine*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fileName := range machineFiles {
+		if strings.HasSuffix(fileName, "_test.go") {
+			continue
+		}
+		loweringFiles[fileName] = true
 	}
 	legacyEntryPoints := map[string]bool{
 		"buildDirectDynamicELF":   true,
@@ -85,7 +104,7 @@ func TestNativeMachineLowerersDoNotAcceptSourceAST(t *testing.T) {
 			if legacyEntryPoints[function.Name.Name] {
 				t.Errorf("legacy AST lowering entrypoint %s remains in %s", function.Name.Name, fileName)
 			}
-			if !isDirectMachineMethod(function) || function.Type.Params == nil {
+			if (!isDirectMachineMethod(function) && !loweringFiles[fileName]) || function.Type.Params == nil {
 				continue
 			}
 			ast.Inspect(function.Type.Params, func(node ast.Node) bool {

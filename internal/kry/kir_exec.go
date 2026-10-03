@@ -3679,20 +3679,3 @@ func kirExecContainsString(values []string, want string) bool {
 	}
 	return false
 }
-
-func kirSourceMap(program *Program) map[string]*Source {
-	if program == nil {
-		return nil
-	}
-	paths := newKIRPathNames(program)
-	sources := make(map[string]*Source, len(program.Sources)+1)
-	if program.Source != nil {
-		sources[paths.source(program.Source)] = program.Source
-	}
-	for _, source := range program.Sources {
-		if source != nil {
-			sources[paths.source(source)] = source
-		}
-	}
-	return sources
-}

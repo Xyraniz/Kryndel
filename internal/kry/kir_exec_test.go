@@ -13,6 +13,26 @@ import (
 	"testing"
 )
 
+// kirSourceMap is retained only by differential tests that compare the KIR
+// executor with the legacy AST oracle. Production KIR execution gets source
+// metadata from ValidatedMIR.
+func kirSourceMap(program *Program) map[string]*Source {
+	if program == nil {
+		return nil
+	}
+	paths := newKIRPathNames(program)
+	sources := make(map[string]*Source, len(program.Sources)+1)
+	if program.Source != nil {
+		sources[paths.source(program.Source)] = program.Source
+	}
+	for _, source := range program.Sources {
+		if source != nil {
+			sources[paths.source(source)] = source
+		}
+	}
+	return sources
+}
+
 func compareKIRExecutionWithRuntime(t *testing.T, source string, limits Limits) (*Program, *Checker, kirExecResult, *Diagnostic) {
 	return compareKIRExecutionWithRuntimeAndSandbox(t, source, limits, Sandbox{})
 }
