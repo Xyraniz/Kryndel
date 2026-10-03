@@ -10,7 +10,7 @@
   "source_compiler_kir_max_array_elements": 2000000,
   "command": "scripts/bootstrap-stage3.sh",
   "sha256": {
-    "stage0-host-kry-linux-amd64": "246fb744f3195bb5e5242121eccdd3da9dd3ef973bfee5c4a50d4877ee55f4ef",
+    "stage0-host-kry-linux-amd64": "2c0c165600f8d91d80b542a2d48f42a66474ec28e859e88734974d38bc6644ba",
     "source-compiler.kir": "5c64c61c373d42d2d7f8765123b13261af0cf74208d0bed83cd83e29ce3ba45a",
     "stage1-source-kir-compiler.elf": "6ae3e90ee0a017dd0ab95ab895911c63e3e301698cfacf6c0adbac6acf480b9b",
     "source_kir_compiler.kry": "d183217b90140046ed110ec80dba64c7e2308c8015f7b688789d6a4f3bb26577",
