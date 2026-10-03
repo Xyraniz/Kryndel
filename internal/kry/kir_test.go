@@ -1516,6 +1516,25 @@ func TestKIRTypeSubstitutionUsesOneInstantiationMap(t *testing.T) {
 	}
 }
 
+func TestKIRTypeParserAcceptsSelfhostEncodings(t *testing.T) {
+	for _, test := range []struct {
+		encoded string
+		want    string
+	}{
+		{encoded: "Result[Int,String]", want: "Result[Int, String]"},
+		{encoded: "Map[String,Array[Int]]", want: "Map[String, Array[Int]]"},
+		{encoded: "Array[@kry_enum_module_root_TrafficLight]", want: "Array[@kry_enum_module_root_TrafficLight]"},
+	} {
+		parsed, ok := parseKIRTypeExpression(test.encoded)
+		if !ok {
+			t.Fatalf("KIR type parser rejected selfhost encoding %q", test.encoded)
+		}
+		if got := TypeSpecString(parsed); got != test.want {
+			t.Errorf("parsed type %q = %q, want %q", test.encoded, got, test.want)
+		}
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})

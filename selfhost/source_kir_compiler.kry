@@ -938,7 +938,7 @@ fn apply_empty_type(expression: SourceExpr, expected: String) -> SourceExpr {
         return SourceExpr{ json: expression.location + "\"kind\":\"map\",\"type\":" + json_quote(expected) + ",\"const\":null,\"map_keys\":[],\"values\":[]}", type_name: expected, known: expression.known, display: expression.display, location: expression.location, empty_kind: "map" }
     }
     if is_result_type(expected) && is_result_type(expression.type_name) && generic_error(expected) == generic_error(expression.type_name) && expression.display != "" {
-        let updated_json: String = expression.location + "\"kind\":\"call\",\"type\":" + json_quote(expected) + ",\"const\":null,\"name\":\"err\",\"call_target\":\"builtin:err\",\"args\":" + expression.display + "}"
+        let updated_json: String = expression.location + "\"kind\":\"call\",\"type\":" + json_quote(expected) + ",\"const\":null,\"name\":\"err\",\"call_target\":\"builtin:err\",\"builtin_id\":\"err\",\"args\":" + expression.display + "}"
         return SourceExpr{ json: updated_json, type_name: expected, known: expression.known, display: "", location: expression.location, empty_kind: "" }
     }
     return expression
@@ -1433,7 +1433,9 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             }
             let closed: Result[SourceParser, String] = expect(current, ")")
             if is_err(closed) { return err(parser_error(closed)) }
-            let json: String = prefix + "\"kind\":\"call\",\"type\":" + json_quote(return_type) + ",\"const\":null,\"name\":" + json_quote(call_name) + ",\"call_target\":" + json_quote(call_target) + ",\"args\":" + args + "]}"
+            let mut builtin_identity: String = ""
+            if starts_with(call_target, "builtin:") { builtin_identity = ",\"builtin_id\":" + json_quote(result_unwrap(substring(call_target, 8, len(string_chars(call_target)) - 8))) }
+            let json: String = prefix + "\"kind\":\"call\",\"type\":" + json_quote(return_type) + ",\"const\":null,\"name\":" + json_quote(call_name) + ",\"call_target\":" + json_quote(call_target) + builtin_identity + ",\"args\":" + args + "]}"
             let mut display: String = ""
             if token.text == "err" { display = args + "]" }
             return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: return_type, known: false, display: display, location: prefix, empty_kind: "" } })
@@ -1803,7 +1805,7 @@ fn parse_output(parser: SourceParser) -> Result[ParsedStatements, String] {
     if is_err(closed) { return err(parser_error(closed)) }
     let separated: Result[SourceParser, String] = finish_statement(result_unwrap(closed))
     if is_err(separated) { return err(parser_error(separated)) }
-    let expression: String = prefix + "\"kind\":\"call\",\"type\":\"Nil\",\"const\":null,\"name\":" + json_quote(name) + ",\"call_target\":\"builtin:" + name + "\",\"args\":[" + parsed.expression.json + "]}"
+    let expression: String = prefix + "\"kind\":\"call\",\"type\":\"Nil\",\"const\":null,\"name\":" + json_quote(name) + ",\"call_target\":\"builtin:" + name + "\",\"builtin_id\":" + json_quote(name) + ",\"args\":[" + parsed.expression.json + "]}"
     return ok(ParsedStatements{ parser: result_unwrap(separated), json: statement_json("expr", "\"expr\":" + expression, token) })
 }
 

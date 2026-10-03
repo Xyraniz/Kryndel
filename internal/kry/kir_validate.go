@@ -1884,17 +1884,64 @@ func validKIRTypeVariables(encoded string, parameters map[string]bool) bool {
 }
 
 func parseKIRTypeExpression(encoded string) (*TypeSpec, bool) {
+	characters := []rune(encoded)
+	var normalized strings.Builder
+	replacements := make(map[string]string)
+	for index := 0; index < len(characters); {
+		if characters[index] == '@' {
+			if index > 0 && !strings.ContainsRune("[(, ", characters[index-1]) {
+				return nil, false
+			}
+			end := index + 1
+			for end < len(characters) && !strings.ContainsRune("[](), \t\r\n", characters[end]) {
+				end++
+			}
+			if end == index+1 {
+				return nil, false
+			}
+			internalName := string(characters[index:end])
+			placeholder := "KIRInternalType" + string(characters[index+1:end])
+			for suffix := 0; strings.Contains(encoded, placeholder); suffix++ {
+				placeholder = "KIRInternalType" + string(characters[index+1:end]) + "X" + fmt.Sprint(suffix)
+			}
+			replacements[placeholder] = internalName
+			normalized.WriteString(placeholder)
+			index = end
+			continue
+		}
+		character := characters[index]
+		normalized.WriteRune(character)
+		if character == ',' && (index+1 == len(characters) || characters[index+1] != ' ') {
+			normalized.WriteByte(' ')
+		}
+		index++
+	}
+	parseText := normalized.String()
 	limits := DefaultLimits()
-	source := &Source{Name: "<KIR type>", Text: encoded}
+	source := &Source{Name: "<KIR type>", Text: parseText}
 	tokens, diagnostic := Lex(source, limits)
 	if diagnostic != nil {
 		return nil, false
 	}
 	parser := &Parser{Tokens: tokens, Lim: limits}
 	spec := parser.typeSpec()
-	if parser.Err != nil || !parser.check(EOF) || TypeSpecString(spec) != encoded {
+	if parser.Err != nil || !parser.check(EOF) || TypeSpecString(spec) != parseText {
 		return nil, false
 	}
+	var restore func(*TypeSpec)
+	restore = func(current *TypeSpec) {
+		if current == nil {
+			return
+		}
+		if original := replacements[current.Name]; original != "" {
+			current.Name = original
+		}
+		for _, parameter := range current.Params {
+			restore(parameter)
+		}
+		restore(current.Return)
+	}
+	restore(spec)
 	return spec, true
 }
 

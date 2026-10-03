@@ -206,6 +206,8 @@ fn main() -> Nil {
     assert_eq(rejected_by_generated_path(invalid_operator_document("windows", false)), true)
     assert_eq(accepted_by_generated_path(valid_struct_document()), true)
     assert_eq(valid_generated_kir(valid_generic_struct_document()), true)
+    assert_eq(rejected_before_lowering(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[String]")), true)
+    assert_eq(rejected_by_generated_path(malformed_generic_struct_document("windows", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[String]")), true)
     assert_eq(rejected_by_generated_path(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[Int, String]")), true)
     assert_eq(rejected_by_generated_path(malformed_generic_struct_document("windows", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T[Int]", "Envelope[Int]")), true)
     assert_eq(rejected_by_generated_path(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"Mystery\"}]", "T", "Envelope[Int]")), true)

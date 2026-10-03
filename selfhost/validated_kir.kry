@@ -274,6 +274,64 @@ fn valid_struct_instance_type(encoded: String, name: String, parameter_count: In
     return parsed.valid && parsed.next == len(chars) && parsed.name == name && parsed.argument_count == parameter_count
 }
 
+fn kir_struct_type_argument(encoded: String, name: String, argument_index: Int) -> String {
+    let prefix: String = name + "["
+    if argument_index < 0 || !starts_with(encoded, prefix) { return "" }
+    let characters: Array[String] = string_chars(encoded)
+    let prefix_length: Int = len(string_chars(prefix))
+    let mut depth: Int = 0
+    let mut round_depth: Int = 0
+    let mut current_argument: Int = 0
+    let mut start: Int = prefix_length
+    let mut index: Int = prefix_length
+    while index < len(characters) {
+        let character: String = unwrap_or(array_get(characters, index), "")
+        if character == "[" {
+            depth = depth + 1
+        } else if character == "]" {
+            if depth == 0 {
+                if round_depth != 0 { return "" }
+                if current_argument == argument_index { return result_unwrap(substring(encoded, start, index - start)) }
+                return ""
+            }
+            depth = depth - 1
+        } else if character == "(" {
+            round_depth = round_depth + 1
+        } else if character == ")" {
+            if round_depth == 0 { return "" }
+            round_depth = round_depth - 1
+        } else if character == "," && depth == 0 && round_depth == 0 {
+            if current_argument == argument_index { return result_unwrap(substring(encoded, start, index - start)) }
+            current_argument = current_argument + 1
+            start = index + 1
+        }
+        index = index + 1
+    }
+    return ""
+}
+
+fn kir_substitute_type_parameters(encoded: String, substitutions: Map[String, String]) -> String {
+    let characters: Array[String] = string_chars(encoded)
+    let mut output: String = ""
+    let mut index: Int = 0
+    while index < len(characters) {
+        let character: String = unwrap_or(array_get(characters, index), "")
+        if kir_type_identifier_start(character) {
+            let mut name: String = character
+            index = index + 1
+            while index < len(characters) && kir_type_identifier_continue(unwrap_or(array_get(characters, index), "")) {
+                name = name + unwrap_or(array_get(characters, index), "")
+                index = index + 1
+            }
+            output = output + unwrap_or(map_get(substitutions, name), name)
+        } else {
+            output = output + character
+            index = index + 1
+        }
+    }
+    return output
+}
+
 fn validate_constant_uint(value: Json, label: String) -> Result[Bool, String] {
     let raw: Result[Json, String] = member(value, "uint", label)
     let bits_result: Result[Int, String] = int_member(value, "uint_bits", label)
@@ -560,11 +618,9 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
             let builtin_name: String = result_unwrap(substring(result_unwrap(target), 8, len(string_chars(result_unwrap(target))) - 8))
             if builtin_name == "" || builtin_name != result_unwrap(name) || !recognized_builtin(builtin_name) { return err(label + " has an unknown or mismatched builtin target") }
             let builtin_id: Result[Json, String] = json_object_get(expression, "builtin_id")
-            if is_ok(builtin_id) {
-                if json_kind(result_unwrap(builtin_id)) != "string" { return err(label + " builtin identity must be a String") }
-                let identity: String = result_unwrap(json_string(result_unwrap(builtin_id)))
-                if identity != "" && identity != builtin_name { return err(label + " builtin identity does not match its target") }
-            }
+            if is_err(builtin_id) || json_kind(result_unwrap(builtin_id)) != "string" { return err(label + " is missing its builtin identity") }
+            let identity: String = result_unwrap(json_string(result_unwrap(builtin_id)))
+            if identity != builtin_name { return err(label + " builtin identity does not match its target") }
         } else {
             return err(label + " target must use the KIR v5 function: or builtin: form")
         }
@@ -611,18 +667,27 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         if field_count != result_unwrap(json_array_len(result_unwrap(values))) { return err(label + " field and value counts differ") }
         let declaration_fields: Json = result_unwrap(json_object_get(structure, "fields"))
         if field_count != result_unwrap(json_array_len(declaration_fields)) { return err(label + " has missing or extra fields") }
+        let mut substitutions: Map[String, String] = {}
+        let mut type_parameter_index: Int = 0
+        while type_parameter_index < type_parameter_count {
+            let parameter: Json = result_unwrap(array_item(result_unwrap(type_params), type_parameter_index, "KIR struct type parameters"))
+            let parameter_name: String = result_unwrap(json_string(result_unwrap(json_object_get(parameter, "name"))))
+            let argument: String = kir_struct_type_argument(instance_type, result_unwrap(name), type_parameter_index)
+            if argument == "" { return err(label + " has an incomplete generic struct type") }
+            substitutions = map_insert(substitutions, parameter_name, argument)
+            type_parameter_index = type_parameter_index + 1
+        }
         let mut seen_fields: Map[String, Bool] = {}
         let mut field_index: Int = 0
         while field_index < field_count {
             let field_name: String = result_unwrap(json_string(result_unwrap(array_item(result_unwrap(fields), field_index, label + ".fields"))))
             if map_contains_key(seen_fields, field_name) { return err(label + " has duplicate field '" + field_name + "'") }
-            let expected_type: String = struct_field_type(structure, field_name)
-            if expected_type == "" { return err(label + " references unknown field '" + field_name + "'") }
+            let declared_type: String = struct_field_type(structure, field_name)
+            if declared_type == "" { return err(label + " references unknown field '" + field_name + "'") }
+            let expected_type: String = kir_substitute_type_parameters(declared_type, substitutions)
             let value: Json = result_unwrap(array_item(result_unwrap(values), field_index, label + ".values"))
-            if type_parameter_count == 0 {
-                let actual_type: Result[String, String] = string_member(value, "type", label + " field value")
-                if is_err(actual_type) || result_unwrap(actual_type) != expected_type { return err(label + " field '" + field_name + "' has an incompatible value type") }
-            }
+            let actual_type: Result[String, String] = string_member(value, "type", label + " field value")
+            if is_err(actual_type) || result_unwrap(actual_type) != expected_type { return err(label + " field '" + field_name + "' has an incompatible value type") }
             seen_fields = map_insert(seen_fields, field_name, true)
             field_index = field_index + 1
         }
