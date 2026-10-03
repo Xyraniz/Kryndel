@@ -313,6 +313,69 @@ fn unwrap_box(box: Wrap[Array[Int]]) -> Option[Array[Int]] {
     return box.value
 }
 `)
+	validArrayIndex := emitValidatorCorpusKIR(t, limits, "validator-array-index.kry", `
+fn first(values: Array[Int]) -> Int {
+    return values[0]
+}
+`)
+	var wrongIndexResult KIRDocument
+	if err := json.Unmarshal(validArrayIndex, &wrongIndexResult); err != nil {
+		t.Fatalf("decode array-index validator KIR: %v", err)
+	}
+	arrayIndex := findKIRFunction(&wrongIndexResult, "first").Body[0].Return
+	if arrayIndex == nil || arrayIndex.Kind != "index" {
+		t.Fatal("array-index source did not emit an index expression return")
+	}
+	arrayIndex.Type = "String"
+	wrongIndexResultBytes, err := json.Marshal(wrongIndexResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var validArrayIndexDocument KIRDocument
+	if err := json.Unmarshal(validArrayIndex, &validArrayIndexDocument); err != nil {
+		t.Fatalf("decode array-index validator KIR: %v", err)
+	}
+	nonIndexableBase := cloneKIRDocument(t, validArrayIndexDocument)
+	nonIndexableIndex := findKIRFunction(nonIndexableBase, "first").Body[0].Return
+	integerLiteral := *nonIndexableIndex.Left
+	nonIndexableIndex.Base = &integerLiteral
+	nonIndexableBaseBytes, err := json.Marshal(nonIndexableBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validMapIndex := emitValidatorCorpusKIR(t, limits, "validator-map-index.kry", `
+fn lookup(values: Map[String, Int], key: String) -> Int {
+    return values[key]
+}
+`)
+	validStringIndex := emitValidatorCorpusKIR(t, limits, "validator-string-index.kry", `
+fn first(text: String) -> String {
+    return text[0]
+}
+`)
+	validBytesIndex := emitValidatorCorpusKIR(t, limits, "validator-bytes-index.kry", `
+fn first(data: Bytes) -> Int {
+    return data[0]
+}
+`)
+	validBuiltinArity := emitValidatorCorpusKIR(t, limits, "validator-builtin-arity.kry", `
+fn text_length(text: String) -> Int {
+    return len(text)
+}
+`)
+	var wrongBuiltinArity KIRDocument
+	if err := json.Unmarshal(validBuiltinArity, &wrongBuiltinArity); err != nil {
+		t.Fatalf("decode builtin-arity validator KIR: %v", err)
+	}
+	lenCall := findKIRFunction(&wrongBuiltinArity, "text_length").Body[0].Return
+	if lenCall == nil || lenCall.CallTarget != "builtin:len" {
+		t.Fatal("builtin-arity source did not emit the len call")
+	}
+	lenCall.Args = nil
+	wrongBuiltinArityBytes, err := json.Marshal(wrongBuiltinArity)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name    string
@@ -346,6 +409,14 @@ fn unwrap_box(box: Wrap[Array[Int]]) -> Option[Array[Int]] {
 		{name: "struct field read type mismatch", encoded: wrongFieldTypeBytes},
 		{name: "valid generic struct field read", encoded: validGenericFieldAccess, accept: true},
 		{name: "valid nested generic struct field read", encoded: validNestedGenericFieldAccess, accept: true},
+		{name: "valid Array index", encoded: validArrayIndex, accept: true},
+		{name: "index result type mismatch", encoded: wrongIndexResultBytes},
+		{name: "non-indexable checked base", encoded: nonIndexableBaseBytes},
+		{name: "valid Map index", encoded: validMapIndex, accept: true},
+		{name: "valid String index", encoded: validStringIndex, accept: true},
+		{name: "valid Bytes index", encoded: validBytesIndex, accept: true},
+		{name: "valid builtin arity", encoded: validBuiltinArity, accept: true},
+		{name: "builtin arity mismatch", encoded: wrongBuiltinArityBytes},
 		{name: "assignment type mismatch", encoded: assignmentTypeMismatchBytes},
 		{name: "non-Boolean if condition", encoded: ifConditionTypeMismatch},
 		{name: "non-Boolean while condition", encoded: whileConditionTypeMismatch},

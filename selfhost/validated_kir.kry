@@ -29,6 +29,12 @@ struct KIRTypeParse {
     valid_variables: Bool,
 }
 
+struct KIRIndexTypes {
+    valid: Bool,
+    index: String,
+    result: String,
+}
+
 fn member(value: Json, key: String, label: String) -> Result[Json, String] {
     if json_kind(value) != "object" { return err(label + " must be an object") }
     let found: Result[Json, String] = json_object_get(value, key)
@@ -140,6 +146,15 @@ fn validate_coordinates(value: Json, label: String) -> Result[Bool, String] {
 
 fn recognized_builtin(name: String) -> Bool {
     return name == "print" || name == "println" || name == "len" || name == "bytes" || name == "string_to_bytes" || name == "array_push" || name == "int" || name == "str" || name == "assert" || name == "assert_eq" || name == "contains" || name == "starts_with" || name == "ends_with" || name == "string_chars" || name == "codepoints" || name == "substring" || name == "some" || name == "none" || name == "ok" || name == "err" || name == "is_some" || name == "is_none" || name == "is_ok" || name == "is_err" || name == "unwrap_or" || name == "result_unwrap" || name == "result_error" || name == "array_get" || name == "array_concat" || name == "array_indices" || name == "array_set" || name == "array_slice" || name == "bytes_from_u8" || name == "u8_array" || name == "process_args" || name == "fs_read_text" || name == "fs_write_bytes" || name == "json_parse" || name == "json_stringify" || name == "json_kind" || name == "json_array_len" || name == "json_object_get" || name == "json_object_keys" || name == "json_object_keys_allowed" || name == "json_object_fields_empty_except" || name == "json_array_get" || name == "json_string" || name == "json_bool" || name == "json_int" || name == "json_uint" || name == "map_get" || name == "map_insert" || name == "map_contains_key" || name == "map_remove" || name == "ffi_library_open" || name == "ffi_library_close" || name == "ffi_symbol" || name == "ffi_call" || name == "ffi_buffer_new" || name == "ffi_buffer_new_sized" || name == "ffi_buffer_address" || name == "ffi_buffer_read" || name == "ffi_buffer_close" || name == "ffi_thread_pin" || name == "ffi_thread_unpin" || name == "u8" || name == "u16" || name == "u32" || name == "u64"
+}
+
+fn kir_builtin_arity(name: String) -> Int {
+    if name == "ffi_thread_pin" || name == "ffi_thread_unpin" || name == "none" || name == "process_args" { return 0 }
+    if name == "array_indices" || name == "assert" || name == "bytes" || name == "bytes_from_u8" || name == "codepoints" || name == "err" || name == "ffi_buffer_address" || name == "ffi_buffer_close" || name == "ffi_buffer_new" || name == "ffi_buffer_new_sized" || name == "ffi_buffer_read" || name == "ffi_library_close" || name == "ffi_library_open" || name == "fs_read_text" || name == "int" || name == "is_err" || name == "is_none" || name == "is_ok" || name == "is_some" || name == "json_array_len" || name == "json_bool" || name == "json_int" || name == "json_kind" || name == "json_object_keys" || name == "json_parse" || name == "json_string" || name == "json_stringify" || name == "json_uint" || name == "len" || name == "ok" || name == "print" || name == "println" || name == "result_error" || name == "result_unwrap" || name == "some" || name == "str" || name == "string_chars" || name == "string_to_bytes" || name == "u16" || name == "u32" || name == "u64" || name == "u8" || name == "u8_array" { return 1 }
+    if name == "array_concat" || name == "array_get" || name == "array_push" || name == "assert_eq" || name == "contains" || name == "ends_with" || name == "ffi_symbol" || name == "fs_write_bytes" || name == "json_array_get" || name == "json_object_get" || name == "json_object_keys_allowed" || name == "map_contains_key" || name == "map_get" || name == "map_remove" || name == "starts_with" || name == "unwrap_or" { return 2 }
+    if name == "array_set" || name == "array_slice" || name == "ffi_call" || name == "map_insert" || name == "substring" { return 3 }
+    if name == "json_object_fields_empty_except" { return 4 }
+    return -1
 }
 
 fn validate_string_array(values: Json, label: String) -> Result[Bool, String] {
@@ -352,6 +367,22 @@ fn kir_struct_type_argument(encoded: String, name: String, argument_index: Int) 
         index = index + 1
     }
     return ""
+}
+
+fn kir_index_types(encoded: String) -> KIRIndexTypes {
+    if encoded == "String" { return KIRIndexTypes{ valid: true, index: "Int", result: "String" } }
+    if encoded == "Bytes" { return KIRIndexTypes{ valid: true, index: "Int", result: "Int" } }
+    if encoded == "Array" || encoded == "Array[<unknown>]" { return KIRIndexTypes{ valid: true, index: "Int", result: "" } }
+    let characters: Array[String] = string_chars(encoded)
+    let parsed: KIRTypeParse = parse_kir_type(characters, 0, {})
+    if !parsed.valid || parsed.next != len(characters) || parsed.name == "fn" { return KIRIndexTypes{ valid: false, index: "", result: "" } }
+    if parsed.name == "Array" && parsed.argument_count == 1 {
+        return KIRIndexTypes{ valid: true, index: "Int", result: kir_struct_type_argument(encoded, "Array", 0) }
+    }
+    if parsed.name == "Map" && parsed.argument_count == 2 {
+        return KIRIndexTypes{ valid: true, index: kir_struct_type_argument(encoded, "Map", 0), result: kir_struct_type_argument(encoded, "Map", 1) }
+    }
+    return KIRIndexTypes{ valid: false, index: "", result: "" }
 }
 
 fn kir_return_type_compatible(expected: String, value: Json) -> Bool {
@@ -983,6 +1014,11 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
             if is_err(builtin_id) || json_kind(result_unwrap(builtin_id)) != "string" { return err(label + " is missing its builtin identity") }
             let identity: String = result_unwrap(json_string(result_unwrap(builtin_id)))
             if identity != builtin_name { return err(label + " builtin identity does not match its target") }
+            let expected_arity: Int = kir_builtin_arity(builtin_name)
+            let args: Result[Json, String] = array_member(expression, "args", label)
+            if expected_arity < 0 || is_err(args) { return err(label + " has malformed builtin arguments") }
+            let argument_count: Int = result_unwrap(json_array_len(result_unwrap(args)))
+            if argument_count != expected_arity { return err(label + " builtin '" + builtin_name + "' has " + str(argument_count) + " arguments, want " + str(expected_arity)) }
         } else {
             return err(label + " target must use the KIR v5 function: or builtin: form")
         }
@@ -997,7 +1033,17 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         if is_err(base) || is_err(index) { return err(label + " is missing its base or index") }
         let checked_base: Result[Bool, String] = validate_expression(result_unwrap(base), functions, types, strict_fields)
         if is_err(checked_base) { return checked_base }
-        return validate_expression(result_unwrap(index), functions, types, strict_fields)
+        let checked_index: Result[Bool, String] = validate_expression(result_unwrap(index), functions, types, strict_fields)
+        if is_err(checked_index) { return checked_index }
+        let base_type: Result[String, String] = string_member(result_unwrap(base), "type", label + " base")
+        let index_type: Result[String, String] = string_member(result_unwrap(index), "type", label + " index")
+        let result_type: Result[String, String] = string_member(expression, "type", label)
+        if is_err(base_type) || is_err(index_type) || is_err(result_type) { return err(label + " has a malformed checked type") }
+        let expected: KIRIndexTypes = kir_index_types(result_unwrap(base_type))
+        if !expected.valid { return err(label + " has a non-indexable checked base type '" + result_unwrap(base_type) + "'") }
+        if !kir_operator_types_compatible(expected.index, result_unwrap(index_type)) { return err(label + " index type does not match its checked base type") }
+        if expected.result != "" && !kir_operator_types_compatible(expected.result, result_unwrap(result_type)) { return err(label + " result type does not match its checked base type") }
+        return ok(true)
     }
     if result_unwrap(kind) == "field" {
         let base: Result[Json, String] = member(expression, "base", label)
