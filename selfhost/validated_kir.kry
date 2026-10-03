@@ -304,6 +304,7 @@ fn kir_struct_type_argument(encoded: String, name: String, argument_index: Int) 
             if current_argument == argument_index { return result_unwrap(substring(encoded, start, index - start)) }
             current_argument = current_argument + 1
             start = index + 1
+            while start < len(characters) && unwrap_or(array_get(characters, start), "") == " " { start = start + 1 }
         }
         index = index + 1
     }

@@ -20,7 +20,10 @@ locked_hash() {
 }
 
 sha256() {
-  sha256sum "$1" | sed 's/ .*//'
+  case "$1" in
+    *.kry) tr -d '\r' < "$1" | sha256sum | sed 's/ .*//' ;;
+    *) sha256sum "$1" | sed 's/ .*//' ;;
+  esac
 }
 
 verify_hash() {

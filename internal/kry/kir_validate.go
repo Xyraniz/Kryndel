@@ -406,8 +406,14 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if len(expression.Type) > limits.MaxSourceBytes && limits.MaxSourceBytes > 0 {
 			return fmt.Errorf("expression type exceeds configured string limit")
 		}
-		if err := kirValidateTypeInstantiationConstraints(expression.Type, structs, genericConstraints, document); err != nil {
-			return fmt.Errorf("%s checked type: %w", expression.Kind, err)
+		// The source checker uses Array[<unknown>] for an unparameterized Array
+		// binding. It is a valid checked type on expressions (notably variable
+		// reads), while declaration signatures and fields must still use fully
+		// valid type expressions.
+		if !isKIRUnspecifiedArray(expression.Type) {
+			if err := kirValidateTypeInstantiationConstraints(expression.Type, structs, genericConstraints, document); err != nil {
+				return fmt.Errorf("%s checked type: %w", expression.Kind, err)
+			}
 		}
 		if document.Version < 3 && (expression.Binding != nil || expression.Callee != nil || expression.Lambda != nil) {
 			return fmt.Errorf("function values and resolved expression bindings require KIR version 3")

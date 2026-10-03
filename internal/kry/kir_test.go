@@ -1535,6 +1535,58 @@ func TestKIRTypeParserAcceptsSelfhostEncodings(t *testing.T) {
 	}
 }
 
+func TestKIRAllowsUnknownArrayOnlyInCheckedExpressions(t *testing.T) {
+	program, checker := testProgram(t, `let values: Array = [1, 2]
+let extended: Array = array_push(values, 3)
+`)
+	data, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document KIRDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateKIRDocument(&document, DefaultLimits()); err != nil {
+		t.Fatalf("checked expressions with an inferred Array[<unknown>] type were rejected: %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*KIRDocument)
+	}{
+		{
+			name: "function parameter",
+			mutate: func(document *KIRDocument) {
+				document.Functions[0].Params[0].Type = "Array[<unknown>]"
+				document.Functions[0].Params[0].Binding.Type = "Array[<unknown>]"
+			},
+		},
+		{
+			name: "function return",
+			mutate: func(document *KIRDocument) {
+				document.Functions[0].Return = "Array[<unknown>]"
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			functionProgram, functionChecker := testProgram(t, "fn identity(value: Int) -> Int { return value }\n")
+			functionData, err := EmitKIR(functionProgram, functionChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var functionDocument KIRDocument
+			if err := json.Unmarshal(functionData, &functionDocument); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&functionDocument)
+			if err := validateKIRDocument(&functionDocument, DefaultLimits()); err == nil {
+				t.Fatal("KIR validator accepted Array[<unknown>] in a function declaration")
+			}
+		})
+	}
+}
+
 func TestKIRRejectsMalformedTreesAndResourceLimits(t *testing.T) {
 	p, c := testProgram(t, "let value: Int = 1\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})

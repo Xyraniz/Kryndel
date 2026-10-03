@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -904,6 +905,7 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if err := json.Unmarshal(kir, &header); err != nil {
 		t.Fatalf("source compiler KIR is not valid JSON: %v", err)
 	}
+	kirSize := len(kir)
 	if header.Format != KIRFormat || header.Version != KIRVersion || header.LanguageVersion != LanguageVersion || header.Target.OS != "linux" || header.Target.Arch != "amd64" {
 		t.Fatalf("unexpected source compiler KIR header: %#v", header)
 	}
@@ -915,6 +917,12 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	t.Logf("source compiler KIR size=%d bytes; bootstrap input limit=%d bytes; headroom=%d bytes", len(kir), lock.SourceCompilerKIRMaxBytes, lock.SourceCompilerKIRMaxBytes-len(kir))
 	verifyBootstrapHash(t, lock, verifiedHashes, "source-compiler.kir", kir)
+	// The next bootstrap stage can require nearly all available RAM while it
+	// compiles the complete selfhost module graph. Drop the large Stage 0 KIR
+	// payload before launching it so this test process does not retain it.
+	kir = nil
+	runtime.GC()
+	debug.FreeOSMemory()
 
 	generatedCompiler := filepath.Join(dir, "source-kir-compiler")
 	maxWallMS := "720000"
@@ -931,7 +939,12 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if output, err := runBackend.CombinedOutput(); err != nil {
 		t.Fatalf("Stage 0 failed to run kir_backend.kry on source compiler KIR: %v; output: %s", err, output)
 	}
-	t.Logf("stage35 generated compiler ELF from %d-byte KIR", len(kir))
+	if err := os.Remove(kirFile); err != nil {
+		t.Fatalf("release the consumed source compiler KIR payload: %v", err)
+	}
+	runtime.GC()
+	debug.FreeOSMemory()
+	t.Logf("stage35 generated compiler ELF from %d-byte KIR", kirSize)
 	compilerELF, err := os.ReadFile(generatedCompiler)
 	if err != nil {
 		t.Fatalf("stage35 dynamic backend did not write compiler ELF: %v", err)
