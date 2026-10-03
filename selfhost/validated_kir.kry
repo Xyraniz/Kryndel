@@ -1003,6 +1003,33 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         let base: Result[Json, String] = member(expression, "base", label)
         let field_name: Result[String, String] = string_member(expression, "field", label)
         if is_err(base) || is_err(field_name) || result_unwrap(field_name) == "" { return err(label + " is missing its base or field name") }
+        let base_type: Result[String, String] = string_member(result_unwrap(base), "type", label + " base")
+        if is_err(base_type) { return err(label + " base is missing its checked type") }
+        let base_type_chars: Array[String] = string_chars(result_unwrap(base_type))
+        let parsed_base_type: KIRTypeParse = parse_kir_type(base_type_chars, 0, {})
+        if !parsed_base_type.valid || parsed_base_type.next != len(base_type_chars) || parsed_base_type.name == "fn" { return err(label + " base has a non-struct checked type") }
+        let declaration_option: Option[Json] = map_get(types.structs, parsed_base_type.name)
+        if is_none(declaration_option) { return err(label + " base has a non-struct checked type") }
+        let declaration: Json = unwrap_or(declaration_option, result_unwrap(json_parse("{}")))
+        let type_params: Result[Json, String] = array_member(declaration, "type_params", "KIR struct")
+        if is_err(type_params) { return err(label + " base references a malformed struct declaration") }
+        let parameter_count: Int = result_unwrap(json_array_len(result_unwrap(type_params)))
+        if !valid_struct_instance_type(result_unwrap(base_type), parsed_base_type.name, parameter_count) { return err(label + " base has an invalid struct instance type") }
+        let declared_field_type: String = struct_field_type(declaration, result_unwrap(field_name))
+        if declared_field_type == "" { return err(label + " references unknown field '" + result_unwrap(field_name) + "' on " + result_unwrap(base_type)) }
+        let mut substitutions: Map[String, String] = {}
+        let mut type_parameter_index: Int = 0
+        while type_parameter_index < parameter_count {
+            let parameter: Json = result_unwrap(array_item(result_unwrap(type_params), type_parameter_index, "KIR struct type parameters"))
+            let parameter_name: String = result_unwrap(json_string(result_unwrap(json_object_get(parameter, "name"))))
+            let argument: String = kir_struct_type_argument(result_unwrap(base_type), parsed_base_type.name, type_parameter_index)
+            if argument == "" { return err(label + " base has an incomplete generic struct type") }
+            substitutions = map_insert(substitutions, parameter_name, argument)
+            type_parameter_index = type_parameter_index + 1
+        }
+        let expected_field_type: String = kir_substitute_type_parameters(declared_field_type, substitutions)
+        let result_type: Result[String, String] = string_member(expression, "type", label)
+        if is_err(result_type) || !kir_operator_types_compatible(expected_field_type, result_unwrap(result_type)) { return err(label + " field type does not match its struct declaration") }
         return validate_expression(result_unwrap(base), functions, types, strict_fields)
     }
     if result_unwrap(kind) == "struct" {

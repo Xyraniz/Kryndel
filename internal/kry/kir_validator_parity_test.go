@@ -273,6 +273,46 @@ fn unwrap_option(input: Option[Int]) -> Option[Int] {
     return input?
 }
 `)
+	fieldAccessSource := emitValidatorCorpusKIR(t, limits, "validator-field-access.kry", `
+struct Point { x: Int }
+fn main() -> Int {
+    let point: Point = Point { x: 1 }
+    return point.x
+}
+`)
+	var unknownFieldAccess KIRDocument
+	if err := json.Unmarshal(fieldAccessSource, &unknownFieldAccess); err != nil {
+		t.Fatalf("decode field-access validator KIR: %v", err)
+	}
+	fieldReturn := findKIRFunction(&unknownFieldAccess, "main").Body[1].Return
+	if fieldReturn == nil || fieldReturn.Kind != "field" {
+		t.Fatal("field-access source did not emit a field expression return")
+	}
+	fieldReturn.Field = "ghost"
+	unknownFieldAccessBytes, err := json.Marshal(unknownFieldAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongFieldType := cloneKIRDocument(t, unknownFieldAccess)
+	findKIRFunction(wrongFieldType, "main").Body[1].Return.Field = "x"
+	findKIRFunction(wrongFieldType, "main").Body[1].Return.Type = "String"
+	wrongFieldTypeBytes, err := json.Marshal(wrongFieldType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validGenericFieldAccess := emitValidatorCorpusKIR(t, limits, "validator-generic-field-access.kry", `
+struct Box[T] { value: T }
+fn main() -> Int {
+    let item: Box[Int] = Box[Int] { value: 1 }
+    return item.value
+}
+`)
+	validNestedGenericFieldAccess := emitValidatorCorpusKIR(t, limits, "validator-nested-generic-field-access.kry", `
+struct Wrap[T] { value: Option[T] }
+fn unwrap_box(box: Wrap[Array[Int]]) -> Option[Array[Int]] {
+    return box.value
+}
+`)
 
 	cases := []struct {
 		name    string
@@ -302,6 +342,10 @@ fn unwrap_option(input: Option[Int]) -> Option[Int] {
 		{name: "valid propagated return", encoded: validPropagationReturn, accept: true},
 		{name: "incompatible propagated return", encoded: incompatiblePropagationBytes},
 		{name: "valid Option propagated return", encoded: validOptionPropagationReturn, accept: true},
+		{name: "unknown struct field read", encoded: unknownFieldAccessBytes},
+		{name: "struct field read type mismatch", encoded: wrongFieldTypeBytes},
+		{name: "valid generic struct field read", encoded: validGenericFieldAccess, accept: true},
+		{name: "valid nested generic struct field read", encoded: validNestedGenericFieldAccess, accept: true},
 		{name: "assignment type mismatch", encoded: assignmentTypeMismatchBytes},
 		{name: "non-Boolean if condition", encoded: ifConditionTypeMismatch},
 		{name: "non-Boolean while condition", encoded: whileConditionTypeMismatch},
