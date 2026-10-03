@@ -1,2 +1,4 @@
 let prefix: String = "hello from self-hosted backend: "
 println(prefix + str(40 + 2))
+let enabled: Bool = true
+println(enabled)

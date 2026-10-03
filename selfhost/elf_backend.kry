@@ -148,6 +148,65 @@ pub fn eval_display(expression: Json, bindings: Map[String, String]) -> Result[S
     return err("expression is not statically displayable")
 }
 
+fn elf_kir_expression(expressions: Array[ELFKIRExpression], index: Int) -> ELFKIRExpression {
+    return unwrap_or(array_get(expressions, index), ELFKIRExpression{ kind: "", type_name: "", int_value: 0, float_text: "", bool_value: false, string_value: "", name: "", operator: "", call_target: "", left: -1, right: -1, argument: -1 })
+}
+
+fn eval_elf_int(index: Int, expressions: Array[ELFKIRExpression], bindings: Map[String, String]) -> Result[Int, String] {
+    let expression: ELFKIRExpression = elf_kir_expression(expressions, index)
+    if expression.kind == "int" { return ok(expression.int_value) }
+    if expression.kind == "var" {
+        if is_none(map_get(bindings, expression.name)) { return err("unknown static binding: " + expression.name) }
+        return ok(int(unwrap_or(map_get(bindings, expression.name), "")))
+    }
+    if expression.kind == "binary" {
+        let left_result: Result[Int, String] = eval_elf_int(expression.left, expressions, bindings)
+        if is_err(left_result) { return err(unwrap_or(result_error(left_result), "expression is not a static Int")) }
+        let right_result: Result[Int, String] = eval_elf_int(expression.right, expressions, bindings)
+        if is_err(right_result) { return err(unwrap_or(result_error(right_result), "expression is not a static Int")) }
+        let left: Int = result_unwrap(left_result)
+        let right: Int = result_unwrap(right_result)
+        if expression.operator == "+" { return ok(left + right) }
+        if expression.operator == "-" { return ok(left - right) }
+        if expression.operator == "*" { return ok(left * right) }
+        if expression.operator == "/" { return ok(left / right) }
+        if expression.operator == "%" { return ok(left % right) }
+        return err("unsupported static integer operator: " + expression.operator)
+    }
+    return err("expression is not a static Int")
+}
+
+fn eval_elf_display(index: Int, expressions: Array[ELFKIRExpression], bindings: Map[String, String]) -> Result[String, String] {
+    let expression: ELFKIRExpression = elf_kir_expression(expressions, index)
+    if expression.kind == "string" { return ok(expression.string_value) }
+    if expression.kind == "int" { return ok(str(result_unwrap(eval_elf_int(index, expressions, bindings)))) }
+    if expression.kind == "float" { return ok(expression.float_text) }
+    if expression.kind == "bool" {
+        if expression.bool_value { return ok("true") }
+        return ok("false")
+    }
+    if expression.kind == "var" {
+        if is_none(map_get(bindings, expression.name)) { return err("unknown static binding: " + expression.name) }
+        return ok(unwrap_or(map_get(bindings, expression.name), ""))
+    }
+    if expression.kind == "binary" {
+        if expression.type_name == "Int" { return ok(str(result_unwrap(eval_elf_int(index, expressions, bindings)))) }
+        if expression.operator == "+" {
+            let left: Result[String, String] = eval_elf_display(expression.left, expressions, bindings)
+            if is_err(left) { return err(unwrap_or(result_error(left), "expression is not statically displayable")) }
+            let right: Result[String, String] = eval_elf_display(expression.right, expressions, bindings)
+            if is_err(right) { return err(unwrap_or(result_error(right), "expression is not statically displayable")) }
+            return ok(result_unwrap(left) + result_unwrap(right))
+        }
+        return err("unsupported static binary expression")
+    }
+    if expression.kind == "call" {
+        if expression.call_target == "builtin:str" { return eval_elf_display(expression.argument, expressions, bindings) }
+        return err("unsupported static call: " + expression.call_target)
+    }
+    return err("expression is not statically displayable")
+}
+
 pub fn emit_elf(payload: Array[UInt8]) -> Bytes {
     // ELF header (64 bytes), program header (56 bytes), code (33 bytes), data.
     let file_size: Int = 153 + len(payload)
@@ -191,35 +250,31 @@ pub fn emit_elf(payload: Array[UInt8]) -> Bytes {
 }
 
 pub fn compile_kir(kir: ValidatedKIR) -> Result[Bytes, String] {
-    let document: Json = validated_kir_document(kir)
-    let statements: Json = json_field(document, "statements")
+    let slice: ELFKIRSlice = validated_kir_elf_slice(kir)
+    let statements: Array[ELFKIRStatement] = slice.statements
+    let expressions: Array[ELFKIRExpression] = slice.expressions
     let mut payload: Array[UInt8] = []
     let mut bindings: Map[String, String] = {}
-    // The first implementation uses a bounded index loop. KIR v5 always
-    // exposes a JSON array length, and the empty case is handled explicitly.
-    let count: Int = result_unwrap(json_array_len(statements))
+    let count: Int = len(statements)
     let mut index: Int = 0
     while index < count {
-        let statement: Json = result_unwrap(json_array_get(statements, index))
-        let kind: String = json_text(json_field(statement, "kind"))
+        let statement: ELFKIRStatement = unwrap_or(array_get(statements, index), ELFKIRStatement{ kind: "", name: "", expression: -1 })
+        let kind: String = statement.kind
 		if kind == "let" || kind == "const" {
-			let name: String = json_text(json_field(statement, "name"))
-			let value: String = result_unwrap(eval_display(json_field(statement, "init"), bindings))
-			bindings = map_insert(bindings, name, value)
+			let value: String = result_unwrap(eval_elf_display(statement.expression, expressions, bindings))
+			bindings = map_insert(bindings, statement.name, value)
 			index = index + 1
 			continue
 		}
         if kind != "expr" {
             return err("stage1 ELF backend accepts only expression statements")
         }
-        let expression: Json = json_field(statement, "expr")
-        let target: String = json_text(json_field(expression, "call_target"))
+        let expression: ELFKIRExpression = elf_kir_expression(expressions, statement.expression)
+        let target: String = expression.call_target
         if target != "builtin:print" && target != "builtin:println" {
             return err("stage1 ELF backend accepts only print and println")
         }
-        let arguments: Json = json_field(expression, "args")
-        let argument: Json = result_unwrap(json_array_get(arguments, 0))
-        let value: String = result_unwrap(eval_display(argument, bindings))
+        let value: String = result_unwrap(eval_elf_display(expression.argument, expressions, bindings))
         payload = append_bytes(payload, u8_array(string_to_bytes(value)))
         if target == "builtin:println" {
             payload = append_u8(payload, u8(10))

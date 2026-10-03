@@ -273,6 +273,71 @@ func TestStage1KryndelBackendMatchesDirectELFOracle(t *testing.T) {
 		if _, err := InspectNative(stage1); err != nil {
 			t.Fatal(err)
 		}
+		oraclePath := filepath.Join(dir, "direct-elf-oracle")
+		if err := os.WriteFile(oraclePath, oracle, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(outputPath, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		got, err := exec.Command(outputPath).CombinedOutput()
+		if err != nil {
+			t.Fatalf("stage1 ELF failed to execute: %v; output=%q", err, got)
+		}
+		want, err := exec.Command(oraclePath).CombinedOutput()
+		if err != nil {
+			t.Fatalf("direct ELF oracle failed to execute: %v; output=%q", err, want)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("stage1 ELF output %q does not match direct ELF oracle %q", got, want)
+		}
+	}
+}
+
+func TestStage1KryndelBackendFormatsStaticFloat(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("self-hosted Stage 1 emits Linux amd64 ELF")
+	}
+	program, checker := testProgram(t, "println(1.25)\n")
+	kir, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	backendProgram, diagnostic := LoadProgram(backend, DefaultLimits(), "")
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	backendChecker, diagnostic := Check(backendProgram, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "input.kir")
+	outputPath := filepath.Join(dir, "static-float")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime, diagnostic := NewRuntimeWithArgs(backendProgram, backendChecker, DefaultLimits(), Sandbox{}, []string{kirPath, outputPath})
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	if diagnostic = runtime.run(); diagnostic != nil {
+		t.Fatalf("stage1 backend failed: %s", diagnostic.Message)
+	}
+	if err := os.Chmod(outputPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(outputPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage1 float ELF failed to execute: %v; output=%q", err, output)
+	}
+	if string(output) != "1.25\n" {
+		t.Fatalf("stage1 float ELF output %q, want %q", output, "1.25\n")
 	}
 }
 
