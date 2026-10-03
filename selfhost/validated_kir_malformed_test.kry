@@ -141,6 +141,16 @@ fn function_signature_type_document(target_os: String, parameter_type: String, r
     return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[" + function + "],\"statements\":[]}"
 }
 
+fn malformed_literal_type_document(target_os: String, kind: String, type_name: String, payload: String) -> String {
+    let expression: String = "{\"kind\":\"" + kind + "\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + type_name + "\",\"const\":null," + payload + "}"
+    return generated_document(target_os, "[]", "[]", generated_expression_statement(expression))
+}
+
+fn collection_type_document(type_name: String, items: String) -> String {
+    let expression: String = "{\"kind\":\"array\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + type_name + "\",\"const\":null,\"items\":[" + items + "]}"
+    return generated_document("linux", "[]", "[]", generated_expression_statement(expression))
+}
+
 fn unknown_enum_variant_document(target_os: String) -> String {
     let enums: String = "[{\"name\":\"Color\",\"public\":false,\"module\":\"\",\"variants\":[\"Red\"]}]"
     let expression: String = "{\"kind\":\"enum\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Color\",\"const\":null,\"enum_type\":\"Color\",\"enum_variant\":\"Blue\"}"
@@ -256,6 +266,15 @@ fn main() -> Nil {
     assert_eq(valid_generated_kir(function_signature_type_document("linux", "FFIBuffer", "Nil")), true)
     assert_eq(rejected_before_lowering(function_signature_type_document("linux", "MadeUp", "Nil")), true)
     assert_eq(rejected_before_lowering(function_signature_type_document("linux", "Int", "MadeUp")), true)
+    assert_eq(valid_generated_kir(malformed_literal_type_document("linux", "int", "String", "\"int\":1")), false)
+    assert_eq(valid_generated_kir(malformed_literal_type_document("linux", "float", "Int", "\"float\":1.5")), false)
+    assert_eq(valid_generated_kir(malformed_literal_type_document("linux", "bool", "Int", "\"bool\":true")), false)
+    assert_eq(valid_generated_kir(malformed_literal_type_document("linux", "string", "Bool", "\"string\":\"x\"")), false)
+    assert_eq(valid_generated_kir(malformed_literal_type_document("linux", "nil", "Int", "")), false)
+    assert_eq(valid_generated_kir(collection_type_document("Array[Int]", generated_int_expression(1))), true)
+    assert_eq(valid_generated_kir(collection_type_document("Array[Int]", generated_string_expression())), false)
+    assert_eq(valid_generated_kir(collection_type_document("String", generated_int_expression(1))), false)
+    assert_eq(valid_generated_kir(collection_type_document("Array", "")), true)
     assert_eq(rejected_before_lowering(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[String]")), true)
     assert_eq(rejected_by_generated_path(malformed_generic_struct_document("windows", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[String]")), true)
     assert_eq(rejected_by_generated_path(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[Int, String]")), true)

@@ -535,6 +535,36 @@ fn validate_expression_list(owner: Json, key: String, label: String, functions: 
     return ok(true)
 }
 
+fn validate_collection_expression(expression: Json, kind: String, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
+    let label: String = kind + " expression"
+    let encoded: Result[String, String] = string_member(expression, "type", label)
+    if is_err(encoded) { return err(label + " has no checked collection type") }
+    let mut expected_name: String = "Array"
+    if kind == "set" { expected_name = "Set" }
+    let mut element_type: String = ""
+    if result_unwrap(encoded) != expected_name {
+        let characters: Array[String] = string_chars(result_unwrap(encoded))
+        let parsed: KIRTypeParse = parse_kir_type(characters, 0, {})
+        if !parsed.valid || parsed.next != len(characters) || parsed.name != expected_name || parsed.argument_count != 1 { return err(label + " has an incompatible checked collection type") }
+        element_type = kir_struct_type_argument(result_unwrap(encoded), expected_name, 0)
+        if element_type == "" { return err(label + " has an incomplete element type") }
+    }
+    let items: Result[Json, String] = array_member(expression, "items", label)
+    if is_err(items) { return err(label + " has malformed items") }
+    let count: Int = result_unwrap(json_array_len(result_unwrap(items)))
+    let mut index: Int = 0
+    while index < count {
+        let item: Json = result_unwrap(array_item(result_unwrap(items), index, label + " items"))
+        let checked: Result[Bool, String] = validate_expression(item, functions, types, strict_fields)
+        if is_err(checked) { return checked }
+        let actual_type: String = result_unwrap(string_member(item, "type", label + " item"))
+        if element_type == "" { element_type = actual_type }
+        else if actual_type != element_type && !(element_type == "Array" && starts_with(actual_type, "Array[")) && !(actual_type == "Array" && starts_with(element_type, "Array[")) { return err(label + " item type does not match its checked element type") }
+        index = index + 1
+    }
+    return ok(true)
+}
+
 fn reject_unexpected_expression_child(expression: Json, key: String, allowed: Bool, label: String) -> Result[Bool, String] {
     if allowed { return ok(true) }
     let child: Result[Json, String] = json_object_get(expression, key)
@@ -700,6 +730,7 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
     let child_shape: Result[Bool, String] = reject_unexpected_expression_children(expression, result_unwrap(kind), label)
     if is_err(child_shape) { return child_shape }
     if result_unwrap(kind) == "int" {
+        if result_unwrap(type_name) != "Int" { return err("integer literal has a non-Int checked type") }
         let value: Result[Int, String] = int_member(expression, "int", label)
         if is_err(value) { return err(unwrap_or(result_error(value), label + " has no integer value")) }
         return ok(true)
@@ -712,21 +743,27 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         return ok(true)
     }
     if result_unwrap(kind) == "float" {
+        if result_unwrap(type_name) != "Float" { return err("floating-point literal has a non-Float checked type") }
         let value: Result[Json, String] = member(expression, "float", label)
         if is_err(value) || json_kind(result_unwrap(value)) != "number" { return err(label + " has no floating-point value") }
         return ok(true)
     }
     if result_unwrap(kind) == "bool" {
+        if result_unwrap(type_name) != "Bool" { return err("boolean literal has a non-Bool checked type") }
         let value: Result[Bool, String] = bool_member(expression, "bool", label)
         if is_err(value) { return err(unwrap_or(result_error(value), label + " has no boolean value")) }
         return ok(true)
     }
     if result_unwrap(kind) == "string" {
+        if result_unwrap(type_name) != "String" { return err("string literal has a non-String checked type") }
         let value: Result[String, String] = string_member(expression, "string", label)
         if is_err(value) { return err(unwrap_or(result_error(value), label + " has no string value")) }
         return ok(true)
     }
-    if result_unwrap(kind) == "nil" { return ok(true) }
+    if result_unwrap(kind) == "nil" {
+        if result_unwrap(type_name) != "Nil" { return err("nil literal has a non-Nil checked type") }
+        return ok(true)
+    }
     if result_unwrap(kind) == "var" {
         let name: Result[String, String] = string_member(expression, "name", label)
         if is_err(name) || result_unwrap(name) == "" { return err(label + " has no variable name") }
@@ -798,7 +835,7 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         return validate_expression_list(expression, "args", label, functions, types, strict_fields)
     }
     if result_unwrap(kind) == "array" || result_unwrap(kind) == "set" {
-        return validate_expression_list(expression, "items", label, functions, types, strict_fields)
+        return validate_collection_expression(expression, result_unwrap(kind), functions, types, strict_fields)
     }
     if result_unwrap(kind) == "index" {
         let base: Result[Json, String] = member(expression, "base", label)
