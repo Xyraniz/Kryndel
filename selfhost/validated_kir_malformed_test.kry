@@ -59,6 +59,14 @@ fn generated_int_expression(value: Int) -> String {
     return "{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"const\":null,\"int\":" + str(value) + "}"
 }
 
+fn generated_string_expression() -> String {
+    return "{\"kind\":\"string\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"String\",\"const\":null,\"string\":\"bad\"}"
+}
+
+fn generated_variable_expression(type_name: String) -> String {
+    return "{\"kind\":\"var\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + type_name + "\",\"const\":null,\"name\":\"value\",\"binding\":{\"name\":\"value\",\"type\":\"" + type_name + "\",\"mutable\":false,\"source\":\"bad.kry\",\"line\":1,\"column\":1}}"
+}
+
 fn malformed_constant_document(target_os: String, constant: String) -> String {
     let expression: String = "{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"UInt8\",\"const\":" + constant + ",\"int\":1}"
     return generated_document(target_os, "[]", "[]", generated_expression_statement(expression))
@@ -106,6 +114,17 @@ fn malformed_generic_struct_document(target_os: String, type_params: String, fie
     let declaration: String = "[{\"name\":\"Envelope\",\"public\":false,\"module\":\"\",\"type_params\":" + type_params + ",\"fields\":[{\"name\":\"payload\",\"public\":false,\"type\":\"" + field_type + "\"}]}]"
     let expression: String = "{\"kind\":\"struct\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + instance_type + "\",\"const\":null,\"struct_name\":\"Envelope\",\"struct_type\":\"" + instance_type + "\",\"fields\":[\"payload\"],\"values\":[" + generated_int_expression(1) + "]}"
     return generated_document(target_os, declaration, "[]", generated_expression_statement(expression))
+}
+
+fn constrained_generic_struct_document(target_os: String, constraint: String, instance_type: String, value: String) -> String {
+    let declaration: String = "[{\"name\":\"Number\",\"public\":false,\"module\":\"\",\"type_params\":[{\"name\":\"T\",\"constraint\":\"" + constraint + "\"}],\"fields\":[{\"name\":\"value\",\"public\":false,\"type\":\"T\"}]}]"
+    let expression: String = "{\"kind\":\"struct\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + instance_type + "\",\"const\":null,\"struct_name\":\"Number\",\"struct_type\":\"" + instance_type + "\",\"fields\":[\"value\"],\"values\":[" + value + "]}"
+    return generated_document(target_os, declaration, "[]", generated_expression_statement(expression))
+}
+
+fn nested_generic_constraint_document(target_os: String, outer_constraint: String) -> String {
+    let declarations: String = "[{\"name\":\"Inner\",\"public\":false,\"module\":\"\",\"type_params\":[{\"name\":\"T\",\"constraint\":\"Numeric\"}],\"fields\":[{\"name\":\"value\",\"public\":false,\"type\":\"T\"}]},{\"name\":\"Outer\",\"public\":false,\"module\":\"\",\"type_params\":[{\"name\":\"T\",\"constraint\":\"" + outer_constraint + "\"}],\"fields\":[{\"name\":\"inner\",\"public\":false,\"type\":\"Inner[T]\"}]}]"
+    return generated_document(target_os, declarations, "[]", "[]")
 }
 
 fn unknown_enum_variant_document(target_os: String) -> String {
@@ -206,6 +225,18 @@ fn main() -> Nil {
     assert_eq(rejected_by_generated_path(invalid_operator_document("windows", false)), true)
     assert_eq(accepted_by_generated_path(valid_struct_document()), true)
     assert_eq(valid_generated_kir(valid_generic_struct_document()), true)
+    assert_eq(valid_generated_kir(constrained_generic_struct_document("linux", "Numeric", "Number[Int]", generated_int_expression(1))), true)
+    assert_eq(valid_generated_kir(constrained_generic_struct_document("linux", "Any", "Number[FFIBuffer]", generated_variable_expression("FFIBuffer"))), true)
+    assert_eq(valid_generated_kir(constrained_generic_struct_document("linux", "Any", "Number[Array[FFIBuffer]]", generated_variable_expression("Array[FFIBuffer]"))), true)
+    assert_eq(rejected_before_lowering(constrained_generic_struct_document("linux", "Any", "Number[MadeUp]", generated_variable_expression("MadeUp"))), true)
+    assert_eq(rejected_before_lowering(constrained_generic_struct_document("linux", "Numeric", "Number[String]", generated_string_expression())), true)
+    assert_eq(rejected_by_generated_path(constrained_generic_struct_document("windows", "Numeric", "Number[String]", generated_string_expression())), true)
+    assert_eq(valid_generated_kir(constrained_generic_struct_document("linux", "Copy", "Number[Array[Int]]", generated_variable_expression("Array[Int]"))), true)
+    assert_eq(valid_generated_kir(constrained_generic_struct_document("linux", "Copy", "Number[Map[String,Int]]", generated_variable_expression("Map[String,Int]"))), true)
+    assert_eq(rejected_before_lowering(constrained_generic_struct_document("linux", "Copy", "Number[FFIBuffer]", generated_variable_expression("FFIBuffer"))), true)
+    assert_eq(valid_generated_kir(nested_generic_constraint_document("linux", "Numeric")), true)
+    assert_eq(rejected_before_lowering(nested_generic_constraint_document("linux", "Copy")), true)
+    assert_eq(rejected_by_generated_path(nested_generic_constraint_document("windows", "Copy")), true)
     assert_eq(rejected_before_lowering(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[String]")), true)
     assert_eq(rejected_by_generated_path(malformed_generic_struct_document("windows", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[String]")), true)
     assert_eq(rejected_by_generated_path(malformed_generic_struct_document("linux", "[{\"name\":\"T\",\"constraint\":\"\"}]", "T", "Envelope[Int, String]")), true)

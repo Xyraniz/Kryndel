@@ -226,8 +226,8 @@ fn parse_kir_type(chars: Array[String], start: Int, variables: Map[String, Bool]
                 argument_count = argument_count + 1
                 index = argument.next
                 if index < count && unwrap_or(array_get(chars, index), "") == "," {
-                    if !kir_type_text_at(chars, index, ", ") { return invalid_kir_type_parse() }
-                    index = index + 2
+                    index = index + 1
+                    if index < count && unwrap_or(array_get(chars, index), "") == " " { index = index + 1 }
                 } else { break }
             }
         }
@@ -257,8 +257,8 @@ fn parse_kir_type(chars: Array[String], start: Int, variables: Map[String, Bool]
             argument_count = argument_count + 1
             index = argument.next
             if index < count && unwrap_or(array_get(chars, index), "") == "," {
-                if !kir_type_text_at(chars, index, ", ") { return invalid_kir_type_parse() }
-                index = index + 2
+                index = index + 1
+                if index < count && unwrap_or(array_get(chars, index), "") == " " { index = index + 1 }
             } else { break }
         }
         if index >= count || unwrap_or(array_get(chars, index), "") != "]" { return invalid_kir_type_parse() }
@@ -330,6 +330,176 @@ fn kir_substitute_type_parameters(encoded: String, substitutions: Map[String, St
         }
     }
     return output
+}
+
+fn kir_constraint_implies(provided: String, required: String) -> Bool {
+    if required == "" || required == "Any" || provided == required { return true }
+    if provided == "Integer" { return required == "Numeric" || required == "Comparable" || required == "Copy" }
+    if provided == "Numeric" { return required == "Comparable" || required == "Copy" }
+    if provided == "Comparable" { return required == "Copy" }
+    return false
+}
+
+fn kir_type_is_known(encoded: String, types: KIRTypeDeclarations, type_constraints: Map[String, String], depth: Int) -> Bool {
+    if depth > 128 || encoded == "" { return false }
+    let characters: Array[String] = string_chars(encoded)
+    let parsed: KIRTypeParse = parse_kir_type(characters, 0, {})
+    if !parsed.valid || parsed.next != len(characters) || !parsed.valid_variables { return false }
+    if parsed.argument_count == 0 && map_contains_key(type_constraints, parsed.name) { return true }
+    if parsed.argument_count == 0 && (encoded == "Int" || encoded == "Float" || encoded == "Bool" || encoded == "String" || encoded == "Nil" || encoded == "UInt8" || encoded == "UInt16" || encoded == "UInt32" || encoded == "UInt64" || encoded == "Bytes" || encoded == "Json" || encoded == "SQLite" || encoded == "WebSocket" || encoded == "Regex" || encoded == "Random" || encoded == "TcpSocket" || encoded == "TcpListener" || encoded == "UdpSocket" || encoded == "FFILibrary" || encoded == "FFISymbol" || encoded == "FFIBuffer" || encoded == "TaskGroup") { return true }
+    if parsed.name == "fn" { return true }
+    if parsed.argument_count == 0 && map_contains_key(types.enums, encoded) { return true }
+    let declaration_option: Option[Json] = map_get(types.structs, parsed.name)
+    if is_some(declaration_option) {
+        let declaration: Json = unwrap_or(declaration_option, result_unwrap(json_parse("{}")))
+        let parameters: Json = result_unwrap(json_object_get(declaration, "type_params"))
+        let parameter_count: Int = result_unwrap(json_array_len(parameters))
+        if !valid_struct_instance_type(encoded, parsed.name, parameter_count) { return false }
+        let mut index: Int = 0
+        while index < parameter_count {
+            let argument: String = kir_struct_type_argument(encoded, parsed.name, index)
+            if !kir_type_is_known(argument, types, type_constraints, depth + 1) { return false }
+            index = index + 1
+        }
+        return true
+    }
+    let mut expected_arguments: Int = 0
+    if parsed.name == "Array" || parsed.name == "Option" || parsed.name == "Set" || parsed.name == "Channel" || parsed.name == "Thread" || parsed.name == "Actor" || parsed.name == "Shared" { expected_arguments = 1 }
+    if parsed.name == "Map" || parsed.name == "Result" { expected_arguments = 2 }
+    if expected_arguments == 0 || parsed.argument_count != expected_arguments { return false }
+    let mut index: Int = 0
+    while index < expected_arguments {
+        let argument: String = kir_struct_type_argument(encoded, parsed.name, index)
+        if !kir_type_is_known(argument, types, type_constraints, depth + 1) { return false }
+        index = index + 1
+    }
+    return true
+}
+
+fn kir_type_satisfies_constraint(encoded: String, constraint: String, types: KIRTypeDeclarations, type_constraints: Map[String, String], visiting: Map[String, Bool], depth: Int) -> Bool {
+    if depth > 128 || encoded == "" { return false }
+    let characters: Array[String] = string_chars(encoded)
+    let parsed: KIRTypeParse = parse_kir_type(characters, 0, {})
+    if !parsed.valid || parsed.next != len(characters) || !parsed.valid_variables { return false }
+    if constraint == "" || constraint == "Any" { return kir_type_is_known(encoded, types, type_constraints, depth + 1) }
+    if parsed.argument_count == 0 && map_contains_key(type_constraints, parsed.name) {
+        return kir_constraint_implies(unwrap_or(map_get(type_constraints, parsed.name), ""), constraint)
+    }
+    let unsigned: Bool = encoded == "UInt8" || encoded == "UInt16" || encoded == "UInt32" || encoded == "UInt64"
+    if constraint == "Numeric" { return encoded == "Int" || encoded == "Float" || unsigned }
+    if constraint == "Integer" { return encoded == "Int" || unsigned }
+    if constraint == "Comparable" {
+        return encoded == "Int" || unsigned || encoded == "Float" || encoded == "Bool" || encoded == "String" || encoded == "Nil" || encoded == "Bytes" || map_contains_key(types.enums, encoded)
+    }
+    if constraint != "Copy" { return false }
+    if encoded == "Int" || unsigned || encoded == "Float" || encoded == "Bool" || encoded == "String" || encoded == "Nil" || encoded == "Bytes" || encoded == "Json" || map_contains_key(types.enums, encoded) { return true }
+    if map_contains_key(visiting, encoded) { return false }
+    let mut expected_arguments: Int = 0
+    if parsed.name == "Array" || parsed.name == "Option" || parsed.name == "Set" { expected_arguments = 1 }
+    if parsed.name == "Map" || parsed.name == "Result" { expected_arguments = 2 }
+    if expected_arguments != 0 {
+        if parsed.argument_count != expected_arguments { return false }
+        let mut index: Int = 0
+        while index < expected_arguments {
+            let argument: String = kir_struct_type_argument(encoded, parsed.name, index)
+            if !kir_type_satisfies_constraint(argument, "Copy", types, type_constraints, visiting, depth + 1) { return false }
+            index = index + 1
+        }
+        return true
+    }
+    let declaration_option: Option[Json] = map_get(types.structs, parsed.name)
+    if is_none(declaration_option) { return false }
+    let declaration: Json = unwrap_or(declaration_option, result_unwrap(json_parse("{}")))
+    let type_params: Json = result_unwrap(json_object_get(declaration, "type_params"))
+    let parameter_count: Int = result_unwrap(json_array_len(type_params))
+    if !valid_struct_instance_type(encoded, parsed.name, parameter_count) { return false }
+    let mut substitutions: Map[String, String] = {}
+    let mut parameter_index: Int = 0
+    while parameter_index < parameter_count {
+        let parameter: Json = result_unwrap(array_item(type_params, parameter_index, "KIR struct type parameters"))
+        let parameter_name: String = result_unwrap(json_string(result_unwrap(json_object_get(parameter, "name"))))
+        let argument: String = kir_struct_type_argument(encoded, parsed.name, parameter_index)
+        if argument == "" { return false }
+        substitutions = map_insert(substitutions, parameter_name, argument)
+        parameter_index = parameter_index + 1
+    }
+    let fields: Json = result_unwrap(json_object_get(declaration, "fields"))
+    let field_count: Int = result_unwrap(json_array_len(fields))
+    let next_visiting: Map[String, Bool] = map_insert(visiting, encoded, true)
+    let mut field_index: Int = 0
+    while field_index < field_count {
+        let field: Json = result_unwrap(array_item(fields, field_index, "KIR struct fields"))
+        let field_type: String = result_unwrap(json_string(result_unwrap(json_object_get(field, "type"))))
+        let instantiated: String = kir_substitute_type_parameters(field_type, substitutions)
+        if !kir_type_satisfies_constraint(instantiated, "Copy", types, type_constraints, next_visiting, depth + 1) { return false }
+        field_index = field_index + 1
+    }
+    return true
+}
+
+fn validate_nested_struct_type_constraints(encoded: String, type_constraints: Map[String, String], types: KIRTypeDeclarations, depth: Int) -> Result[Bool, String] {
+    if depth > 128 { return err("KIR type expression exceeds the nesting limit") }
+    let characters: Array[String] = string_chars(encoded)
+    let parsed: KIRTypeParse = parse_kir_type(characters, 0, {})
+    if !parsed.valid || parsed.next != len(characters) { return err("KIR declaration has an invalid type expression") }
+    if parsed.argument_count == 0 && map_contains_key(type_constraints, parsed.name) { return ok(true) }
+    let declaration_option: Option[Json] = map_get(types.structs, parsed.name)
+    if is_some(declaration_option) {
+        let declaration: Json = unwrap_or(declaration_option, result_unwrap(json_parse("{}")))
+        let parameters: Json = result_unwrap(json_object_get(declaration, "type_params"))
+        let parameter_count: Int = result_unwrap(json_array_len(parameters))
+        if !valid_struct_instance_type(encoded, parsed.name, parameter_count) { return err("generic struct type has the wrong number of arguments") }
+        let mut index: Int = 0
+        while index < parameter_count {
+            let parameter: Json = result_unwrap(array_item(parameters, index, "KIR struct type parameters"))
+            let constraint: String = result_unwrap(json_string(result_unwrap(json_object_get(parameter, "constraint"))))
+            let argument: String = kir_struct_type_argument(encoded, parsed.name, index)
+            if !kir_type_satisfies_constraint(argument, constraint, types, type_constraints, {}, depth + 1) { return err("nested generic struct type argument does not satisfy its constraint") }
+            index = index + 1
+        }
+    }
+    if parsed.name == "fn" { return ok(true) }
+    let mut argument_index: Int = 0
+    while argument_index < parsed.argument_count {
+        let argument: String = kir_struct_type_argument(encoded, parsed.name, argument_index)
+        if argument == "" { return err("KIR type expression has an incomplete generic argument") }
+        let checked: Result[Bool, String] = validate_nested_struct_type_constraints(argument, type_constraints, types, depth + 1)
+        if is_err(checked) { return checked }
+        argument_index = argument_index + 1
+    }
+    return ok(true)
+}
+
+fn validate_struct_field_constraints(structs: Json, types: KIRTypeDeclarations) -> Result[Bool, String] {
+    let count: Int = result_unwrap(json_array_len(structs))
+    let mut index: Int = 0
+    while index < count {
+        let declaration: Json = result_unwrap(array_item(structs, index, "KIR structs"))
+        let parameters: Json = result_unwrap(json_object_get(declaration, "type_params"))
+        let parameter_count: Int = result_unwrap(json_array_len(parameters))
+        let mut constraints: Map[String, String] = {}
+        let mut parameter_index: Int = 0
+        while parameter_index < parameter_count {
+            let parameter: Json = result_unwrap(array_item(parameters, parameter_index, "KIR struct type parameters"))
+            let parameter_name: String = result_unwrap(json_string(result_unwrap(json_object_get(parameter, "name"))))
+            let constraint: String = result_unwrap(json_string(result_unwrap(json_object_get(parameter, "constraint"))))
+            constraints = map_insert(constraints, parameter_name, constraint)
+            parameter_index = parameter_index + 1
+        }
+        let fields: Json = result_unwrap(json_object_get(declaration, "fields"))
+        let field_count: Int = result_unwrap(json_array_len(fields))
+        let mut field_index: Int = 0
+        while field_index < field_count {
+            let field: Json = result_unwrap(array_item(fields, field_index, "KIR struct fields"))
+            let field_name: String = result_unwrap(json_string(result_unwrap(json_object_get(field, "name"))))
+            let field_type: String = result_unwrap(json_string(result_unwrap(json_object_get(field, "type"))))
+            let checked: Result[Bool, String] = validate_nested_struct_type_constraints(field_type, constraints, types, 0)
+            if is_err(checked) { return err("KIR struct field '" + field_name + "': " + unwrap_or(result_error(checked), "invalid generic type constraint")) }
+            field_index = field_index + 1
+        }
+        index = index + 1
+    }
+    return ok(true)
 }
 
 fn validate_constant_uint(value: Json, label: String) -> Result[Bool, String] {
@@ -672,8 +842,10 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         while type_parameter_index < type_parameter_count {
             let parameter: Json = result_unwrap(array_item(result_unwrap(type_params), type_parameter_index, "KIR struct type parameters"))
             let parameter_name: String = result_unwrap(json_string(result_unwrap(json_object_get(parameter, "name"))))
+            let constraint: String = result_unwrap(json_string(result_unwrap(json_object_get(parameter, "constraint"))))
             let argument: String = kir_struct_type_argument(instance_type, result_unwrap(name), type_parameter_index)
             if argument == "" { return err(label + " has an incomplete generic struct type") }
+            if !kir_type_satisfies_constraint(argument, constraint, types, {}, {}, 0) { return err(label + " generic type argument does not satisfy its struct constraint") }
             substitutions = map_insert(substitutions, parameter_name, argument)
             type_parameter_index = type_parameter_index + 1
         }
@@ -1100,6 +1272,8 @@ fn validate_kir_document_mode(document: Json, strict_fields: Bool) -> Result[Val
     let distinct_types: Result[Bool, String] = validate_distinct_type_names(result_unwrap(structs), result_unwrap(enums))
     if is_err(distinct_types) { return err(unwrap_or(result_error(distinct_types), "KIR type declaration names conflict")) }
     let types: KIRTypeDeclarations = KIRTypeDeclarations{ structs: index_named_declarations(result_unwrap(structs), "KIR structs"), enums: index_named_declarations(result_unwrap(enums), "KIR enums") }
+    let checked_struct_constraints: Result[Bool, String] = validate_struct_field_constraints(result_unwrap(structs), types)
+    if is_err(checked_struct_constraints) { return err(unwrap_or(result_error(checked_struct_constraints), "invalid KIR struct field type constraints")) }
     let unique_functions: Result[Bool, String] = validate_unique_function_names(result_unwrap(functions))
     if is_err(unique_functions) { return err(unwrap_or(result_error(unique_functions), "malformed KIR functions")) }
     let function_symbols: Map[String, KIRFunctionSignature] = build_function_symbols(result_unwrap(functions))
