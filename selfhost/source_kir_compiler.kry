@@ -931,11 +931,19 @@ fn literal_string(value: String, token: SourceToken) -> SourceExpr {
 }
 
 fn apply_empty_type(expression: SourceExpr, expected: String) -> SourceExpr {
+    if is_option_type(expected) && is_option_type(expression.type_name) && expression.display == "[]" {
+        let updated_json: String = expression.location + "\"kind\":\"call\",\"type\":" + json_quote(expected) + ",\"const\":null,\"name\":\"none\",\"call_target\":\"builtin:none\",\"builtin_id\":\"none\",\"args\":[]}"
+        return SourceExpr{ json: updated_json, type_name: expected, known: expression.known, display: expression.display, location: expression.location, empty_kind: "" }
+    }
     if is_array_type(expected) && expression.empty_kind == "array" {
         return SourceExpr{ json: expression.location + "\"kind\":\"array\",\"type\":" + json_quote(expected) + ",\"const\":null,\"items\":[]}", type_name: expected, known: expression.known, display: expression.display, location: expression.location, empty_kind: "array" }
     }
     if starts_with(expected, "Map[") && expression.empty_kind == "map" {
         return SourceExpr{ json: expression.location + "\"kind\":\"map\",\"type\":" + json_quote(expected) + ",\"const\":null,\"map_keys\":[],\"values\":[]}", type_name: expected, known: expression.known, display: expression.display, location: expression.location, empty_kind: "map" }
+    }
+    if is_result_type(expected) && is_result_type(expression.type_name) && generic_inner(expected, "Result[") == generic_inner(expression.type_name, "Result[") && expression.display != "" && starts_with(expression.json, expression.location + "\"kind\":\"call\",\"type\":") && contains(expression.json, "\"name\":\"ok\"") {
+        let updated_json: String = expression.location + "\"kind\":\"call\",\"type\":" + json_quote(expected) + ",\"const\":null,\"name\":\"ok\",\"call_target\":\"builtin:ok\",\"builtin_id\":\"ok\",\"args\":" + expression.display + "}"
+        return SourceExpr{ json: updated_json, type_name: expected, known: expression.known, display: expression.display, location: expression.location, empty_kind: "" }
     }
     if is_result_type(expected) && is_result_type(expression.type_name) && generic_error(expected) == generic_error(expression.type_name) && expression.display != "" {
         let updated_json: String = expression.location + "\"kind\":\"call\",\"type\":" + json_quote(expected) + ",\"const\":null,\"name\":\"err\",\"call_target\":\"builtin:err\",\"builtin_id\":\"err\",\"args\":" + expression.display + "}"
@@ -1437,7 +1445,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             if starts_with(call_target, "builtin:") { builtin_identity = ",\"builtin_id\":" + json_quote(result_unwrap(substring(call_target, 8, len(string_chars(call_target)) - 8))) }
             let json: String = prefix + "\"kind\":\"call\",\"type\":" + json_quote(return_type) + ",\"const\":null,\"name\":" + json_quote(call_name) + ",\"call_target\":" + json_quote(call_target) + builtin_identity + ",\"args\":" + args + "]}"
             let mut display: String = ""
-            if token.text == "err" { display = args + "]" }
+            if token.text == "none" || token.text == "ok" || token.text == "err" { display = args + "]" }
             return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: return_type, known: false, display: display, location: prefix, empty_kind: "" } })
         }
         if current_token(after_name).text == "{" && map_contains_key(parser.structs, token.text) {
@@ -1891,7 +1899,7 @@ fn parse_return(parser: SourceParser) -> Result[ParsedStatements, String] {
         let parsed: Result[ParsedExpr, String] = parse_expression(current)
         if is_err(parsed) { return err(source_expression_error(parsed)) }
         let result: ParsedExpr = result_unwrap(parsed)
-        value = result.expression
+        value = apply_empty_type(result.expression, parser.return_type)
         current = result.parser
     }
     let separated: Result[SourceParser, String] = finish_statement(current)

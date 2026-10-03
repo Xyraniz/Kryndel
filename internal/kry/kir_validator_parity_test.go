@@ -191,6 +191,89 @@ fn main() -> Nil {
 		t.Fatal(err)
 	}
 
+	wrongReturnType := emitValidatorCorpusKIR(t, limits, "validator-return-type.kry", `
+fn main() -> Int { return 1 }
+`)
+	var wrongReturnDocument KIRDocument
+	if err := json.Unmarshal(wrongReturnType, &wrongReturnDocument); err != nil {
+		t.Fatalf("decode return type validator KIR: %v", err)
+	}
+	findKIRFunction(&wrongReturnDocument, "main").Body[0].Return = &KIRExpr{
+		Kind: "string", Source: "validator-return-type.kry", Line: 1, Column: 24,
+		Type: "String", Const: &KIRValue{Kind: "string", String: "bad"}, String: "bad",
+	}
+	wrongReturnTypeBytes, err := json.Marshal(wrongReturnDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var missingIntReturn KIRDocument
+	if err := json.Unmarshal(emitValidatorCorpusKIR(t, limits, "validator-missing-return.kry", `
+fn main() -> Int { return 1 }
+`), &missingIntReturn); err != nil {
+		t.Fatalf("decode missing return validator KIR: %v", err)
+	}
+	findKIRFunction(&missingIntReturn, "main").Body[0].Return = nil
+	missingIntReturnBytes, err := json.Marshal(missingIntReturn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validNilReturn := emitValidatorCorpusKIR(t, limits, "validator-nil-return.kry", `
+fn main() -> Nil { return }
+`)
+	var topLevelReturn KIRDocument
+	if err := json.Unmarshal(validNilReturn, &topLevelReturn); err != nil {
+		t.Fatalf("decode top-level return validator KIR: %v", err)
+	}
+	topLevelReturn.Statements = append(topLevelReturn.Statements, &KIRStmt{Kind: "return", Source: topLevelReturn.Source, Line: 1, Column: 1})
+	topLevelReturnBytes, err := json.Marshal(topLevelReturn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var breakOutsideLoop KIRDocument
+	if err := json.Unmarshal(validNilReturn, &breakOutsideLoop); err != nil {
+		t.Fatalf("decode loop control validator KIR: %v", err)
+	}
+	breakOutsideLoop.Statements = append(breakOutsideLoop.Statements, &KIRStmt{Kind: "break", Source: breakOutsideLoop.Source, Line: 1, Column: 1})
+	breakOutsideLoopBytes, err := json.Marshal(breakOutsideLoop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	continueOutsideLoop := cloneKIRDocument(t, breakOutsideLoop)
+	continueOutsideLoop.Statements[len(continueOutsideLoop.Statements)-1].Kind = "continue"
+	continueOutsideLoopBytes, err := json.Marshal(continueOutsideLoop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validBreak := emitValidatorCorpusKIR(t, limits, "validator-valid-break.kry", `
+fn main() -> Nil {
+    while true { break }
+}
+`)
+	validContinue := emitValidatorCorpusKIR(t, limits, "validator-valid-continue.kry", `
+fn main() -> Nil {
+    for item in [1] { continue }
+}
+`)
+	validPropagationReturn := emitValidatorCorpusKIR(t, limits, "validator-propagation-return.kry", `
+fn unwrap_result(input: Result[Int, String]) -> Result[Int, String] {
+    return input?
+}
+`)
+	var incompatiblePropagationDocument KIRDocument
+	if err := json.Unmarshal(validPropagationReturn, &incompatiblePropagationDocument); err != nil {
+		t.Fatalf("decode propagation return validator KIR: %v", err)
+	}
+	incompatiblePropagationDocument.Functions[0].Return = "Result[String, String]"
+	incompatiblePropagationBytes, err := json.Marshal(incompatiblePropagationDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validOptionPropagationReturn := emitValidatorCorpusKIR(t, limits, "validator-option-propagation-return.kry", `
+fn unwrap_option(input: Option[Int]) -> Option[Int] {
+    return input?
+}
+`)
+
 	cases := []struct {
 		name    string
 		encoded []byte
@@ -208,6 +291,17 @@ fn main() -> Nil {
 		{name: "for const flag", encoded: forConstMismatchBytes},
 		{name: "non-iterable for expression", encoded: nonIterableForBytes},
 		{name: "for omitted false flags", encoded: forMissingFlagsBytes, accept: true},
+		{name: "wrong return type", encoded: wrongReturnTypeBytes},
+		{name: "missing non-Nil return value", encoded: missingIntReturnBytes},
+		{name: "top-level return", encoded: topLevelReturnBytes},
+		{name: "break outside loop", encoded: breakOutsideLoopBytes},
+		{name: "continue outside loop", encoded: continueOutsideLoopBytes},
+		{name: "valid Nil return", encoded: validNilReturn, accept: true},
+		{name: "valid break inside loop", encoded: validBreak, accept: true},
+		{name: "valid continue inside loop", encoded: validContinue, accept: true},
+		{name: "valid propagated return", encoded: validPropagationReturn, accept: true},
+		{name: "incompatible propagated return", encoded: incompatiblePropagationBytes},
+		{name: "valid Option propagated return", encoded: validOptionPropagationReturn, accept: true},
 		{name: "assignment type mismatch", encoded: assignmentTypeMismatchBytes},
 		{name: "non-Boolean if condition", encoded: ifConditionTypeMismatch},
 		{name: "non-Boolean while condition", encoded: whileConditionTypeMismatch},

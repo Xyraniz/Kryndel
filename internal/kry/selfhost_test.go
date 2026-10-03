@@ -1265,6 +1265,9 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 		"  next = next + 1\n" +
 		"  return next\n" +
 		"}\n" +
+		"fn fail() -> Result[Json, String] { return err(\"failure\") }\n" +
+		"fn empty_text() -> Option[String] { return none() }\n" +
+		"fn json_success() -> Result[Int, Json] { return ok(1) }\n" +
 		"fn main() -> Nil {\n" +
 		"  for item in [increment(2)] {\n" +
 		"    println(item)\n" +
@@ -1293,20 +1296,56 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 	if document.Version != KIRVersion {
 		t.Fatalf("self-hosted KIR version = %d, want %d", document.Version, KIRVersion)
 	}
-	if len(document.Functions) != 2 {
-		t.Fatalf("self-hosted KIR has %d functions, want 2", len(document.Functions))
+	if len(document.Functions) != 5 {
+		t.Fatalf("self-hosted KIR has %d functions, want 5", len(document.Functions))
 	}
-	var increment, main *KIRFunction
+	var increment, fail, emptyText, jsonSuccess, main *KIRFunction
 	for _, function := range document.Functions {
 		if strings.HasSuffix(function.Name, "increment") {
 			increment = function
+		}
+		if strings.HasSuffix(function.Name, "fail") {
+			fail = function
+		}
+		if strings.HasSuffix(function.Name, "empty_text") {
+			emptyText = function
+		}
+		if strings.HasSuffix(function.Name, "json_success") {
+			jsonSuccess = function
 		}
 		if function.Name == "main" {
 			main = function
 		}
 	}
-	if increment == nil || main == nil {
+	if increment == nil || fail == nil || emptyText == nil || jsonSuccess == nil || main == nil {
 		t.Fatalf("self-hosted KIR is missing expected functions: %#v", document.Functions)
+	}
+	if fail.Return != "Result[Json,String]" || len(fail.Body) != 1 || fail.Body[0].Return == nil || fail.Body[0].Return.Type != fail.Return {
+		t.Fatalf("self-hosted return err(...) type = %#v, want %s", fail, "Result[Json,String]")
+	}
+	if emptyText.Return != "Option[String]" || len(emptyText.Body) != 1 || emptyText.Body[0].Return == nil || emptyText.Body[0].Return.Type != emptyText.Return {
+		t.Fatalf("self-hosted return none() type = %#v, want Option[String]", emptyText)
+	}
+	if jsonSuccess.Return != "Result[Int,Json]" || len(jsonSuccess.Body) != 1 || jsonSuccess.Body[0].Return == nil || jsonSuccess.Body[0].Return.Type != jsonSuccess.Return {
+		t.Fatalf("self-hosted return ok(...) type = %#v, want Result[Int,Json]", jsonSuccess)
+	}
+	badSourcePath := filepath.Join(dir, "bad-return.kry")
+	if err := os.WriteFile(badSourcePath, []byte("fn bad() -> Result[Json, String] { return err(1) }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	badKIRPath := filepath.Join(dir, "bad-return.kir")
+	badRuntime, diagnostic := NewRuntimeWithArgs(compiler, checker, DefaultLimits(), Sandbox{}, []string{"--emit-kir", badSourcePath, badKIRPath})
+	if diagnostic != nil {
+		t.Fatalf("create self-hosted compiler runtime for mismatched err payload: %s", diagnostic.Message)
+	}
+	if diagnostic := badRuntime.run(); diagnostic == nil {
+		badKIR, err := os.ReadFile(badKIRPath)
+		if err != nil {
+			t.Fatalf("read KIR with mismatched err payload: %v", err)
+		}
+		if _, err := DecodeMIR(badKIR, DefaultLimits()); err == nil {
+			t.Fatal("DecodeMIR accepted err payload with a type incompatible with the declared return")
+		}
 	}
 	if increment.Source != sourcePath || increment.Line != 1 || increment.Column != 1 {
 		t.Fatalf("increment source location = %s:%d:%d, want %s:1:1", increment.Source, increment.Line, increment.Column, sourcePath)
@@ -1318,14 +1357,14 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 	if parameterBinding.Name != "value" || parameterBinding.Type != "Int" || parameterBinding.Mutable || parameterBinding.Source != sourcePath || parameterBinding.Line != 1 || parameterBinding.Column != 14 {
 		t.Fatalf("increment parameter binding metadata is incorrect: %#v", parameterBinding)
 	}
-	if main.Line != 6 || main.Column != 1 {
-		t.Fatalf("main source location = %s:%d:%d, want %s:6:1", main.Source, main.Line, main.Column, sourcePath)
+	if main.Line != 9 || main.Column != 1 {
+		t.Fatalf("main source location = %s:%d:%d, want %s:9:1", main.Source, main.Line, main.Column, sourcePath)
 	}
 	if len(main.Body) != 1 || main.Body[0].Kind != "for" || main.Body[0].Binding == nil {
 		t.Fatalf("main loop has no resolved declaration binding: %#v", main.Body)
 	}
 	loopBinding := main.Body[0].Binding
-	if loopBinding.Name != "item" || loopBinding.Type != "Int" || loopBinding.Mutable || loopBinding.Source != sourcePath || loopBinding.Line != 7 || loopBinding.Column != 7 {
+	if loopBinding.Name != "item" || loopBinding.Type != "Int" || loopBinding.Mutable || loopBinding.Source != sourcePath || loopBinding.Line != 10 || loopBinding.Column != 7 {
 		t.Fatalf("loop binding metadata is incorrect: %#v", loopBinding)
 	}
 	fixtures := []string{

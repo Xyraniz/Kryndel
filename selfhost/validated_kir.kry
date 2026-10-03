@@ -10,6 +10,12 @@ struct KIRFunctionSignature {
     return_type: String,
 }
 
+struct KIRValidationContext {
+    return_type: String,
+    loop_depth: Int,
+    strict_fields: Bool,
+}
+
 struct KIRTypeDeclarations {
     structs: Map[String, Json],
     enums: Map[String, Json],
@@ -346,6 +352,29 @@ fn kir_struct_type_argument(encoded: String, name: String, argument_index: Int) 
         index = index + 1
     }
     return ""
+}
+
+fn kir_return_type_compatible(expected: String, value: Json) -> Bool {
+    let kind: Result[String, String] = string_member(value, "kind", "KIR return value")
+    let value_type: Result[String, String] = string_member(value, "type", "KIR return value")
+    if is_err(kind) || is_err(value_type) { return false }
+    if result_unwrap(kind) != "propagate" { return kir_operator_types_compatible(expected, result_unwrap(value_type)) }
+    let operand: Result[Json, String] = member(value, "operand", "KIR propagate return")
+    if is_err(operand) { return false }
+    let operand_type: Result[String, String] = string_member(result_unwrap(operand), "type", "KIR propagate operand")
+    if is_err(operand_type) { return false }
+    let expected_chars: Array[String] = string_chars(expected)
+    let operand_chars: Array[String] = string_chars(result_unwrap(operand_type))
+    let expected_parse: KIRTypeParse = parse_kir_type(expected_chars, 0, {})
+    let operand_parse: KIRTypeParse = parse_kir_type(operand_chars, 0, {})
+    if !expected_parse.valid || expected_parse.next != len(expected_chars) || !operand_parse.valid || operand_parse.next != len(operand_chars) || expected_parse.name != operand_parse.name || expected_parse.argument_count != operand_parse.argument_count { return false }
+    if expected_parse.name == "Option" && expected_parse.argument_count == 1 {
+        return kir_operator_types_compatible(kir_struct_type_argument(expected, "Option", 0), result_unwrap(value_type)) && kir_operator_types_compatible(kir_struct_type_argument(expected, "Option", 0), kir_struct_type_argument(result_unwrap(operand_type), "Option", 0))
+    }
+    if expected_parse.name == "Result" && expected_parse.argument_count == 2 {
+        return kir_operator_types_compatible(kir_struct_type_argument(expected, "Result", 0), result_unwrap(value_type)) && kir_operator_types_compatible(kir_struct_type_argument(expected, "Result", 1), kir_struct_type_argument(result_unwrap(operand_type), "Result", 1))
+    }
+    return false
 }
 
 fn kir_substitute_type_parameters(encoded: String, substitutions: Map[String, String]) -> String {
@@ -725,7 +754,8 @@ fn validate_kir_value(value: Json, strict_fields: Bool) -> Result[Bool, String] 
     return ok(true)
 }
 
-fn validate_statement_array(values: Json, label: String, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
+fn validate_statement_array(values: Json, label: String, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, context: KIRValidationContext) -> Result[Bool, String] {
+    let strict_fields: Bool = context.strict_fields
     if json_kind(values) != "array" { return err(label + " must be an array") }
     let count: Result[Int, String] = json_array_len(values)
     if is_err(count) { return err(label + " must be an array") }
@@ -733,17 +763,17 @@ fn validate_statement_array(values: Json, label: String, functions: Map[String, 
     while index < result_unwrap(count) {
         let item: Result[Json, String] = array_item(values, index, label)
         if is_err(item) { return err(unwrap_or(result_error(item), label + " contains an invalid statement")) }
-        let checked: Result[Bool, String] = validate_statement(result_unwrap(item), functions, types, strict_fields)
+        let checked: Result[Bool, String] = validate_statement(result_unwrap(item), functions, types, context)
         if is_err(checked) { return err(unwrap_or(result_error(checked), label + " contains an invalid statement")) }
         index = index + 1
     }
     return ok(true)
 }
 
-fn validate_statement_list(owner: Json, key: String, label: String, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
+fn validate_statement_list(owner: Json, key: String, label: String, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, context: KIRValidationContext) -> Result[Bool, String] {
     let values: Result[Json, String] = array_member(owner, key, label)
     if is_err(values) { return err(unwrap_or(result_error(values), label + " has a malformed " + key)) }
-    return validate_statement_array(result_unwrap(values), label + "." + key, functions, types, strict_fields)
+    return validate_statement_array(result_unwrap(values), label + "." + key, functions, types, context)
 }
 
 fn reject_unexpected_statement_child(statement: Json, key: String, allowed: Bool, label: String) -> Result[Bool, String] {
@@ -1053,7 +1083,8 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
     return err("selfhost backends do not support KIR expression kind '" + result_unwrap(kind) + "'")
 }
 
-fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
+fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, context: KIRValidationContext) -> Result[Bool, String] {
+    let strict_fields: Bool = context.strict_fields
     if json_kind(statement) != "object" { return err("KIR statement must be an object") }
     let shape: Result[Bool, String] = validate_object_fields_if(statement, "|kind|source|line|column|name|binding|mutable|const|annotation|init|expr|target|value|cond|then|else|body|iter|return|scrutinee|arms|", "KIR statement", strict_fields)
     if is_err(shape) { return shape }
@@ -1109,9 +1140,9 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         if is_err(checked) { return checked }
         let condition_type: Result[String, String] = string_member(result_unwrap(cond), "type", label + " condition")
         if is_err(condition_type) || result_unwrap(condition_type) != "Bool" { return err(label + " condition must have type Bool") }
-        let then_result: Result[Bool, String] = validate_statement_list(statement, "then", label, functions, types, strict_fields)
+        let then_result: Result[Bool, String] = validate_statement_list(statement, "then", label, functions, types, context)
         if is_err(then_result) { return then_result }
-        return validate_statement_list(statement, "else", label, functions, types, strict_fields)
+        return validate_statement_list(statement, "else", label, functions, types, context)
     }
     if result_unwrap(kind) == "while" {
         let cond: Result[Json, String] = member(statement, "cond", label)
@@ -1120,7 +1151,7 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         if is_err(checked) { return checked }
         let condition_type: Result[String, String] = string_member(result_unwrap(cond), "type", label + " condition")
         if is_err(condition_type) || result_unwrap(condition_type) != "Bool" { return err(label + " condition must have type Bool") }
-        return validate_statement_list(statement, "body", label, functions, types, strict_fields)
+        return validate_statement_list(statement, "body", label, functions, types, KIRValidationContext{ return_type: context.return_type, loop_depth: context.loop_depth + 1, strict_fields: strict_fields })
     }
     if result_unwrap(kind) == "for" {
         let name: Result[String, String] = string_member(statement, "name", label)
@@ -1141,14 +1172,28 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         let element_type: Result[String, String] = kir_iterable_element_type(result_unwrap(iterator_type))
         if is_err(element_type) { return err(unwrap_or(result_error(element_type), label + " iterator is not iterable")) }
         if result_unwrap(element_type) != "" && !kir_operator_types_compatible(result_unwrap(type_name), result_unwrap(element_type)) { return err(label + " binding type does not match iterator element type") }
-        return validate_statement_list(statement, "body", label, functions, types, strict_fields)
+        return validate_statement_list(statement, "body", label, functions, types, KIRValidationContext{ return_type: context.return_type, loop_depth: context.loop_depth + 1, strict_fields: strict_fields })
     }
     if result_unwrap(kind) == "return" {
+        if context.return_type == "" { return err("KIR return statement appears outside a function") }
         let value: Result[Json, String] = json_object_get(statement, "return")
-        if is_err(value) || json_kind(result_unwrap(value)) == "null" { return ok(true) }
-        return validate_expression(result_unwrap(value), functions, types, strict_fields)
+        if is_err(value) || json_kind(result_unwrap(value)) == "null" {
+            if context.return_type == "Nil" { return ok(true) }
+            return err("KIR return value is missing for a non-Nil function")
+        }
+        let checked: Result[Bool, String] = validate_expression(result_unwrap(value), functions, types, strict_fields)
+        if is_err(checked) { return checked }
+        if !kir_return_type_compatible(context.return_type, result_unwrap(value)) {
+            let return_kind: Result[String, String] = string_member(result_unwrap(value), "kind", label + " value")
+            let return_value_type: Result[String, String] = string_member(result_unwrap(value), "type", label + " value")
+            return err("KIR return value of kind " + result_unwrap(return_kind) + " has checked type " + result_unwrap(return_value_type) + "; function expects " + context.return_type)
+        }
+        return ok(true)
     }
-    if result_unwrap(kind) == "break" || result_unwrap(kind) == "continue" { return ok(true) }
+    if result_unwrap(kind) == "break" || result_unwrap(kind) == "continue" {
+        if context.loop_depth == 0 { return err("KIR " + result_unwrap(kind) + " statement appears outside a loop") }
+        return ok(true)
+    }
     if result_unwrap(kind) == "match" {
         let scrutinee: Result[Json, String] = member(statement, "scrutinee", label)
         let arms: Result[Json, String] = array_member(statement, "arms", label)
@@ -1183,7 +1228,7 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
             }
             let pattern_coordinates: Result[Bool, String] = validate_coordinates(result_unwrap(pattern), "KIR match pattern")
             if is_err(pattern_coordinates) { return pattern_coordinates }
-            let checked_body: Result[Bool, String] = validate_statement_array(result_unwrap(body), label + " arm body", functions, types, strict_fields)
+            let checked_body: Result[Bool, String] = validate_statement_array(result_unwrap(body), label + " arm body", functions, types, context)
             if is_err(checked_body) { return checked_body }
             arm_index = arm_index + 1
         }
@@ -1408,7 +1453,8 @@ fn validate_functions(values: Json, symbols: Map[String, KIRFunctionSignature], 
             }
             param_index = param_index + 1
         }
-        let checked_body: Result[Bool, String] = validate_statement_list(item, "body", label + " '" + result_unwrap(name) + "'", symbols, types, strict_fields)
+        let function_context: KIRValidationContext = KIRValidationContext{ return_type: result_unwrap(return_type), loop_depth: 0, strict_fields: strict_fields }
+        let checked_body: Result[Bool, String] = validate_statement_list(item, "body", label + " '" + result_unwrap(name) + "'", symbols, types, function_context)
         if is_err(checked_body) { return checked_body }
         index = index + 1
     }
@@ -1469,7 +1515,8 @@ fn validate_kir_document_mode(document: Json, strict_fields: Bool) -> Result[Val
     let function_symbols: Map[String, KIRFunctionSignature] = build_function_symbols(result_unwrap(functions))
     let checked_functions: Result[Bool, String] = validate_functions(result_unwrap(functions), function_symbols, types, strict_fields)
     if is_err(checked_functions) { return err(unwrap_or(result_error(checked_functions), "malformed KIR functions")) }
-    let checked_statements: Result[Bool, String] = validate_statement_array(result_unwrap(statements), "KIR document statements", function_symbols, types, strict_fields)
+    let top_level_context: KIRValidationContext = KIRValidationContext{ return_type: "", loop_depth: 0, strict_fields: strict_fields }
+    let checked_statements: Result[Bool, String] = validate_statement_array(result_unwrap(statements), "KIR document statements", function_symbols, types, top_level_context)
     if is_err(checked_statements) { return err(unwrap_or(result_error(checked_statements), "malformed KIR statements")) }
     return ok(ValidatedKIR{ document: document })
 }
