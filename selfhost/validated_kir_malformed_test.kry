@@ -59,6 +59,22 @@ fn generated_int_expression(value: Int) -> String {
     return "{\"kind\":\"int\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Int\",\"const\":null,\"int\":" + str(value) + "}"
 }
 
+fn generated_bool_expression(value: Bool) -> String {
+    return "{\"kind\":\"bool\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"Bool\",\"const\":null,\"bool\":" + str(value) + "}"
+}
+
+fn generated_uint_expression(value: Int) -> String {
+    return "{\"kind\":\"uint\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"UInt8\",\"const\":null,\"uint\":" + str(value) + ",\"uint_bits\":8}"
+}
+
+fn generated_binary_expression(operator: String, result_type: String, left: String, right: String) -> String {
+    return "{\"kind\":\"binary\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + result_type + "\",\"const\":null,\"operator\":\"" + operator + "\",\"left\":" + left + ",\"right\":" + right + "}"
+}
+
+fn generated_unary_expression(operator: String, result_type: String, operand: String) -> String {
+    return "{\"kind\":\"unary\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + result_type + "\",\"const\":null,\"operator\":\"" + operator + "\",\"operand\":" + operand + "}"
+}
+
 fn generated_string_expression() -> String {
     return "{\"kind\":\"string\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"String\",\"const\":null,\"string\":\"bad\"}"
 }
@@ -280,6 +296,26 @@ fn main() -> Nil {
     assert_eq(valid_generated_kir(malformed_literal_type_document("linux", "bool", "Int", "\"bool\":true")), false)
     assert_eq(valid_generated_kir(malformed_literal_type_document("linux", "string", "Bool", "\"string\":\"x\"")), false)
     assert_eq(valid_generated_kir(malformed_literal_type_document("linux", "nil", "Int", "")), false)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("+", "Int", generated_int_expression(1), generated_int_expression(2))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("+", "String", generated_string_expression(), generated_string_expression())))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("&&", "Bool", generated_bool_expression(true), generated_bool_expression(false))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_unary_expression("-", "Int", generated_int_expression(1))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_unary_expression("!", "Bool", generated_bool_expression(true))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_unary_expression("~", "UInt8", generated_uint_expression(1))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("==", "Bool", generated_int_expression(1), generated_int_expression(2))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("<", "Bool", generated_int_expression(1), generated_int_expression(2))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("%", "Int", generated_int_expression(5), generated_int_expression(2))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("&", "UInt8", generated_uint_expression(1), generated_uint_expression(2))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("<<", "UInt8", generated_uint_expression(1), generated_int_expression(2))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("+", "Array[Int]", generated_variable_expression("Array[Int]"), generated_variable_expression("Array[Int]"))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("+", "String", generated_int_expression(1), generated_int_expression(2))))), false)
+    assert_eq(rejected_by_generated_path(generated_document("windows", "[]", "[]", generated_expression_statement(generated_binary_expression("+", "String", generated_int_expression(1), generated_int_expression(2))))), true)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_unary_expression("!", "Bool", generated_int_expression(1))))), false)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("<", "Bool", generated_string_expression(), generated_string_expression())))), false)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("==", "Bool", generated_int_expression(1), generated_string_expression())))), false)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("&", "Int", generated_int_expression(1), generated_int_expression(2))))), false)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("<<", "UInt8", generated_int_expression(1), generated_int_expression(2))))), false)
+    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("%", "Int", generated_int_expression(1), generated_string_expression())))), false)
     assert_eq(valid_generated_kir(collection_type_document("Array[Int]", generated_int_expression(1))), true)
     assert_eq(valid_generated_kir(collection_type_document("Array[Int]", generated_string_expression())), false)
     assert_eq(valid_generated_kir(collection_type_document("String", generated_int_expression(1))), false)

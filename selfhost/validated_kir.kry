@@ -519,6 +519,35 @@ fn validate_constant_uint(value: Json, label: String) -> Result[Bool, String] {
     return ok(true)
 }
 
+fn kir_is_uint_type(encoded: String) -> Bool {
+    return encoded == "UInt8" || encoded == "UInt16" || encoded == "UInt32" || encoded == "UInt64"
+}
+
+fn kir_is_numeric_type(encoded: String) -> Bool {
+    return encoded == "Int" || encoded == "Float" || kir_is_uint_type(encoded)
+}
+
+fn kir_is_integer_type(encoded: String) -> Bool {
+    return encoded == "Int" || kir_is_uint_type(encoded)
+}
+
+fn kir_is_array_type(encoded: String) -> Bool {
+    if encoded == "Array" || encoded == "Array[<unknown>]" { return true }
+    let characters: Array[String] = string_chars(encoded)
+    let parsed: KIRTypeParse = parse_kir_type(characters, 0, {})
+    return parsed.valid && parsed.next == len(characters) && parsed.name == "Array" && parsed.argument_count == 1
+}
+
+fn kir_operator_types_compatible(left: String, right: String) -> Bool {
+    if left == right { return true }
+    return (left == "Array" || left == "Array[<unknown>]") && kir_is_array_type(right) ||
+        (right == "Array" || right == "Array[<unknown>]") && kir_is_array_type(left)
+}
+
+fn kir_type_contains_function(encoded: String) -> Bool {
+    return contains(encoded, "fn(")
+}
+
 fn validate_expression_list(owner: Json, key: String, label: String, functions: Map[String, KIRFunctionSignature], types: KIRTypeDeclarations, strict_fields: Bool) -> Result[Bool, String] {
     let values: Result[Json, String] = array_member(owner, key, label)
     if is_err(values) { return err(unwrap_or(result_error(values), label + " has a malformed " + key)) }
@@ -783,7 +812,20 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         let operand: Result[Json, String] = member(expression, "operand", label)
         if is_err(operator) || is_err(operand) { return err(label + " is missing its operator or operand") }
         if result_unwrap(operator) != "+" && result_unwrap(operator) != "-" && result_unwrap(operator) != "!" && result_unwrap(operator) != "~" { return err(label + " has an invalid unary operator") }
-        return validate_expression(result_unwrap(operand), functions, types, strict_fields)
+        let checked: Result[Bool, String] = validate_expression(result_unwrap(operand), functions, types, strict_fields)
+        if is_err(checked) { return checked }
+        let operand_type: Result[String, String] = string_member(result_unwrap(operand), "type", label + " operand")
+        if is_err(operand_type) { return err(label + " operand has no checked type") }
+        if result_unwrap(operator) == "+" {
+            if !kir_is_numeric_type(result_unwrap(operand_type)) || result_unwrap(type_name) != result_unwrap(operand_type) { return err("unary operator + requires a numeric operand and matching result type") }
+        } else if result_unwrap(operator) == "-" {
+            if (result_unwrap(operand_type) != "Int" && result_unwrap(operand_type) != "Float") || result_unwrap(type_name) != result_unwrap(operand_type) { return err("unary operator - requires an Int or Float operand and matching result type") }
+        } else if result_unwrap(operator) == "!" {
+            if result_unwrap(operand_type) != "Bool" || result_unwrap(type_name) != "Bool" { return err("unary operator ! requires Bool operand and result") }
+        } else if !kir_is_uint_type(result_unwrap(operand_type)) || result_unwrap(type_name) != result_unwrap(operand_type) {
+            return err("unary operator ~ requires a UInt operand and matching result type")
+        }
+        return ok(true)
     }
     if result_unwrap(kind) == "binary" {
         let operator: Result[String, String] = string_member(expression, "operator", label)
@@ -793,7 +835,39 @@ fn validate_expression(expression: Json, functions: Map[String, KIRFunctionSigna
         if result_unwrap(operator) != "+" && result_unwrap(operator) != "-" && result_unwrap(operator) != "*" && result_unwrap(operator) != "/" && result_unwrap(operator) != "%" && result_unwrap(operator) != "==" && result_unwrap(operator) != "!=" && result_unwrap(operator) != "<" && result_unwrap(operator) != "<=" && result_unwrap(operator) != ">" && result_unwrap(operator) != ">=" && result_unwrap(operator) != "&&" && result_unwrap(operator) != "||" && result_unwrap(operator) != "&" && result_unwrap(operator) != "|" && result_unwrap(operator) != "^" && result_unwrap(operator) != "<<" && result_unwrap(operator) != ">>" { return err(label + " has an invalid binary operator") }
         let checked_left: Result[Bool, String] = validate_expression(result_unwrap(left), functions, types, strict_fields)
         if is_err(checked_left) { return checked_left }
-        return validate_expression(result_unwrap(right), functions, types, strict_fields)
+        let checked_right: Result[Bool, String] = validate_expression(result_unwrap(right), functions, types, strict_fields)
+        if is_err(checked_right) { return checked_right }
+        let left_type: Result[String, String] = string_member(result_unwrap(left), "type", label + " left operand")
+        let right_type: Result[String, String] = string_member(result_unwrap(right), "type", label + " right operand")
+        if is_err(left_type) || is_err(right_type) { return err(label + " operand has no checked type") }
+        let left_name: String = result_unwrap(left_type)
+        let right_name: String = result_unwrap(right_type)
+        let operator_name: String = result_unwrap(operator)
+        if operator_name == "&&" || operator_name == "||" {
+            if left_name != "Bool" || right_name != "Bool" || result_unwrap(type_name) != "Bool" { return err("logical operator requires Bool operands and result") }
+        }
+        if operator_name == "==" || operator_name == "!=" {
+            if result_unwrap(type_name) != "Bool" { return err("equality operator requires Bool result") }
+            if !kir_operator_types_compatible(left_name, right_name) { return err("equality operator requires matching operand types") }
+            if kir_type_contains_function(left_name) { return err("equality operator does not support function values") }
+        } else if operator_name == "<" || operator_name == "<=" || operator_name == ">" || operator_name == ">=" {
+            if result_unwrap(type_name) != "Bool" { return err("ordered comparison requires Bool result") }
+            if left_name != right_name || !kir_is_numeric_type(left_name) { return err("ordered comparison requires matching numeric operands") }
+        } else if operator_name == "&" || operator_name == "|" || operator_name == "^" {
+            if !kir_is_uint_type(left_name) || right_name != left_name || result_unwrap(type_name) != left_name { return err("bitwise operator requires matching UInt operands and result") }
+        } else if operator_name == "<<" || operator_name == ">>" {
+            if !kir_is_uint_type(left_name) || right_name != "Int" || result_unwrap(type_name) != left_name { return err("shift operator requires a UInt value, Int count, and matching result") }
+        } else if operator_name == "+" || operator_name == "-" || operator_name == "*" || operator_name == "/" || operator_name == "%" {
+            if !kir_operator_types_compatible(left_name, right_name) || result_unwrap(type_name) != left_name { return err("arithmetic operator requires matching operand and result types") }
+            if operator_name == "+" {
+                if left_name != "String" && left_name != "Bytes" && !kir_is_array_type(left_name) && !kir_is_numeric_type(left_name) { return err("operator + has an unsupported checked type") }
+            } else if operator_name == "%" {
+                if !kir_is_integer_type(left_name) { return err("operator % requires Int or UInt operands") }
+            } else if !kir_is_numeric_type(left_name) {
+                return err("arithmetic operator requires numeric operands")
+            }
+        }
+        return ok(true)
     }
     if result_unwrap(kind) == "call" {
         let name: Result[String, String] = string_member(expression, "name", label)

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -848,6 +849,13 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("Stage 3 bootstrap hashes are target-specific; run the locked bootstrap on linux-amd64")
 	}
+	if available, ok := linuxAvailableMemoryAndSwapBytes(); ok && available < 14<<30 {
+		message := fmt.Sprintf("Stage 3 source graph bootstrap needs at least 14 GiB of available memory and swap; host reports %d MiB", available>>20)
+		if os.Getenv("KRY_REQUIRE_LOCKED_BOOTSTRAP") == "1" {
+			t.Fatal(message)
+		}
+		t.Skip(message)
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -1187,6 +1195,47 @@ fn mode_name(mode: Mode) -> String {
 		t.Fatalf("verified %d bootstrap hashes, but lock contains %d", len(verifiedHashes), len(lock.SHA256))
 	}
 	t.Logf("stage3 second-level compiler rebuilt itself byte-for-byte; sha256=%x", sha256.Sum256(thirdCompilerELF))
+}
+
+func linuxAvailableMemoryAndSwapBytes() (uint64, bool) {
+	meminfo, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, false
+	}
+	var availableMemory, freeSwap uint64
+	foundMemory, foundSwap := false, false
+	for _, line := range strings.Split(string(meminfo), "\n") {
+		if !strings.HasPrefix(line, "MemAvailable:") && !strings.HasPrefix(line, "SwapFree:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 3 || fields[2] != "kB" {
+			return 0, false
+		}
+		kib, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil || kib > ^uint64(0)/1024 {
+			return 0, false
+		}
+		if fields[0] == "MemAvailable:" {
+			availableMemory, foundMemory = kib*1024, true
+		} else {
+			freeSwap, foundSwap = kib*1024, true
+		}
+	}
+	if !foundMemory || !foundSwap || availableMemory > ^uint64(0)-freeSwap {
+		return 0, false
+	}
+	return availableMemory + freeSwap, true
+}
+
+func TestLinuxAvailableMemoryAndSwapBytes(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux memory information is only available on Linux")
+	}
+	available, ok := linuxAvailableMemoryAndSwapBytes()
+	if !ok || available == 0 {
+		t.Fatal("could not read positive MemAvailable and SwapFree values from /proc/meminfo")
+	}
 }
 
 func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
