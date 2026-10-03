@@ -50,6 +50,9 @@ func TestProductionLoweringEntrypointsUseValidatedMIR(t *testing.T) {
 
 	checkCalls("runtime.go", "NewRuntimeWithArgs", "CompileMIR", "newRuntimeFromMIR")
 	checkCalls("runtime.go", "RunForREPL", "runValidatedMIR")
+	checkCalls("codegen.go", "GenerateC", "generateC")
+	checkCalls("codegen.go", "GenerateCObfuscated", "generateC")
+	checkCalls("codegen.go", "generateC", "CompileMIR", "generateCFromValidatedKIR")
 	checkCalls("engine.go", "RunPathWithArgs", "CompileMIR", "newRuntimeFromMIR")
 	checkCalls("engine.go", "DebugPathWithArgs", "CompileMIR", "newRuntimeFromMIR")
 	checkCalls("machine.go", "BuildDirectELF", "CompileMIR", "buildDirectELFFromMIR")
