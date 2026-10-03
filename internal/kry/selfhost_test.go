@@ -1009,6 +1009,12 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	backendText := strings.ReplaceAll(string(backendSource), "\r\n", "\n")
 	verifyBootstrapHash(t, lock, verifiedHashes, "dynamic_backend.kry", []byte(backendText))
+	validatorSource, err := os.ReadFile(filepath.Join(selfhost, "validated_kir.kry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	validatorText := strings.ReplaceAll(string(validatorSource), "\r\n", "\n")
+	verifyBootstrapHash(t, lock, verifiedHashes, "validated_kir.kry", []byte(validatorText))
 	const backendImports = "import \"elf_backend\"\nimport \"pe_backend\"\n"
 	if !strings.HasPrefix(backendText, backendImports) {
 		t.Fatalf("dynamic backend no longer starts with expected backend imports %q", backendImports)

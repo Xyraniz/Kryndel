@@ -1071,13 +1071,24 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         if is_err(target_kind) || result_unwrap(target_kind) != "var" { return err(label + " target must be a variable") }
         let checked_target: Result[Bool, String] = validate_expression(result_unwrap(target), functions, types, strict_fields)
         if is_err(checked_target) { return checked_target }
-        return validate_expression(result_unwrap(value), functions, types, strict_fields)
+        let target_binding: Result[Json, String] = member(result_unwrap(target), "binding", label + " target")
+        if is_err(target_binding) { return err(label + " target has no resolved binding") }
+        let target_mutable: Result[Bool, String] = bool_member(result_unwrap(target_binding), "mutable", label + " target binding")
+        if is_err(target_mutable) || !result_unwrap(target_mutable) { return err(label + " assignment target is immutable") }
+        let checked_value: Result[Bool, String] = validate_expression(result_unwrap(value), functions, types, strict_fields)
+        if is_err(checked_value) { return checked_value }
+        let target_type: Result[String, String] = string_member(result_unwrap(target), "type", label + " target")
+        let value_type: Result[String, String] = string_member(result_unwrap(value), "type", label + " value")
+        if is_err(target_type) || is_err(value_type) || !kir_operator_types_compatible(result_unwrap(target_type), result_unwrap(value_type)) { return err(label + " assignment target and value have incompatible types") }
+        return ok(true)
     }
     if result_unwrap(kind) == "if" {
         let cond: Result[Json, String] = member(statement, "cond", label)
         if is_err(cond) { return err(label + " has no condition") }
         let checked: Result[Bool, String] = validate_expression(result_unwrap(cond), functions, types, strict_fields)
         if is_err(checked) { return checked }
+        let condition_type: Result[String, String] = string_member(result_unwrap(cond), "type", label + " condition")
+        if is_err(condition_type) || result_unwrap(condition_type) != "Bool" { return err(label + " condition must have type Bool") }
         let then_result: Result[Bool, String] = validate_statement_list(statement, "then", label, functions, types, strict_fields)
         if is_err(then_result) { return then_result }
         return validate_statement_list(statement, "else", label, functions, types, strict_fields)
@@ -1087,6 +1098,8 @@ fn validate_statement(statement: Json, functions: Map[String, KIRFunctionSignatu
         if is_err(cond) { return err(label + " has no condition") }
         let checked: Result[Bool, String] = validate_expression(result_unwrap(cond), functions, types, strict_fields)
         if is_err(checked) { return checked }
+        let condition_type: Result[String, String] = string_member(result_unwrap(cond), "type", label + " condition")
+        if is_err(condition_type) || result_unwrap(condition_type) != "Bool" { return err(label + " condition must have type Bool") }
         return validate_statement_list(statement, "body", label, functions, types, strict_fields)
     }
     if result_unwrap(kind) == "for" {

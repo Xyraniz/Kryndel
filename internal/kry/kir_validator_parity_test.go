@@ -73,6 +73,45 @@ fn main() -> Int {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var immutableTarget KIRDocument
+	if err := json.Unmarshal(mutableSource, &immutableTarget); err != nil {
+		t.Fatalf("decode immutable target validator KIR: %v", err)
+	}
+	immutableTargetAssignment := findKIRFunction(&immutableTarget, "main").Body[1]
+	if immutableTargetAssignment.Target == nil || immutableTargetAssignment.Target.Binding == nil {
+		t.Fatal("mutability validator assignment did not emit a resolved target binding")
+	}
+	immutableTargetAssignment.Target.Binding.Mutable = false
+	immutableTargetBytes, err := json.Marshal(immutableTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assignmentTypeMismatch KIRDocument
+	if err := json.Unmarshal(mutableSource, &assignmentTypeMismatch); err != nil {
+		t.Fatalf("decode assignment validator KIR: %v", err)
+	}
+	assignment := findKIRFunction(&assignmentTypeMismatch, "main").Body[1]
+	assignment.Value = &KIRExpr{
+		Kind: "string", Source: assignment.Value.Source, Line: assignment.Value.Line,
+		Column: assignment.Value.Column, Type: "String", Const: &KIRValue{Kind: "string", String: "bad"}, String: "bad",
+	}
+	assignmentTypeMismatchBytes, err := json.Marshal(assignmentTypeMismatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ifConditionTypeMismatch := nonBooleanConditionKIR(t, limits, "validator-if-condition.kry", `
+fn main() -> Nil {
+    let condition: Bool = true
+    if condition { println("yes") }
+}
+`, "if")
+	whileConditionTypeMismatch := nonBooleanConditionKIR(t, limits, "validator-while-condition.kry", `
+fn main() -> Nil {
+    let condition: Bool = true
+    while condition { break }
+}
+`, "while")
 
 	matchSource := emitValidatorCorpusKIR(t, limits, "validator-match.kry", `
 enum TrafficLight { Red, Yellow, Green }
@@ -109,6 +148,10 @@ fn main() -> Nil {
 		{name: "wrong call arity", encoded: wrongCallArityBytes},
 		{name: "unknown document field", encoded: unknownField},
 		{name: "immutable assignment", encoded: immutableAssignmentBytes},
+		{name: "immutable assignment target", encoded: immutableTargetBytes},
+		{name: "assignment type mismatch", encoded: assignmentTypeMismatchBytes},
+		{name: "non-Boolean if condition", encoded: ifConditionTypeMismatch},
+		{name: "non-Boolean while condition", encoded: whileConditionTypeMismatch},
 		{name: "valid exhaustive enum match", encoded: matchSource, accept: true},
 		{name: "non-exhaustive enum match", encoded: nonExhaustiveMatchBytes},
 	}
@@ -157,6 +200,34 @@ fn main() -> Nil {
 			}
 		})
 	}
+}
+
+func nonBooleanConditionKIR(t *testing.T, limits Limits, name, source, statementKind string) []byte {
+	t.Helper()
+	encoded := emitValidatorCorpusKIR(t, limits, name, source)
+	var document KIRDocument
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatalf("decode %s validator KIR: %v", statementKind, err)
+	}
+	main := findKIRFunction(&document, "main")
+	if main == nil || len(main.Body) != 2 || main.Body[0].Binding == nil || main.Body[0].Init == nil || main.Body[1].Kind != statementKind || main.Body[1].Cond == nil {
+		t.Fatalf("%s validator source did not emit the expected checked condition", statementKind)
+	}
+	main.Body[0].Binding.Type = "Int"
+	main.Body[0].Init = &KIRExpr{
+		Kind: "int", Source: main.Body[0].Init.Source, Line: main.Body[0].Init.Line,
+		Column: main.Body[0].Init.Column, Type: "Int", Const: &KIRValue{Kind: "int", Int: 1}, Int: 1,
+	}
+	main.Body[1].Cond.Type = "Int"
+	if main.Body[1].Cond.Binding == nil {
+		t.Fatalf("%s condition is not bound to its local declaration", statementKind)
+	}
+	main.Body[1].Cond.Binding.Type = "Int"
+	malformed, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return malformed
 }
 
 func emitValidatorCorpusKIR(t *testing.T, limits Limits, name, source string) []byte {
