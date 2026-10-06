@@ -15,7 +15,7 @@ func buildKIRArenaFromCheckedSource(program *Program, checker *Checker, target N
 	arena := &KIRArena{
 		Format: metadata.Format, Version: metadata.Version, LanguageVersion: metadata.LanguageVersion,
 		Module: metadata.Module, Source: metadata.Source, Target: metadata.Target,
-		Imports: cloneKIRStrings(metadata.Imports), Sources: cloneKIRStrings(metadata.Sources),
+		Imports: cloneKIRStrings(metadata.Imports), ImportRecords: cloneKIRImports(metadata.ImportRecords), Sources: cloneKIRStrings(metadata.Sources),
 		Structs: cloneKIRStructs(metadata.Structs), Enums: cloneKIREnums(metadata.Enums),
 		Traits: cloneKIRTraits(metadata.Traits), TraitImpls: cloneKIRTraitImpls(metadata.TraitImpls),
 	}
@@ -46,6 +46,7 @@ type KIRMetadata struct {
 	Version                                 int
 	Target                                  KIRTarget
 	Imports, Sources                        []string
+	ImportRecords                           []*KIRImport
 	Structs                                 []*KIRStruct
 	Enums                                   []*KIREnum
 	Traits                                  []*KIRTrait
@@ -62,35 +63,40 @@ func buildKIRMetadata(program *Program, target NativeTarget) (KIRMetadata, error
 	metadata := KIRMetadata{
 		Format: KIRFormat, Version: KIRVersion, LanguageVersion: LanguageVersion, Module: paths.name(program.Module),
 		Source: paths.source(program.Source), Target: KIRTarget{OS: target.OS, Arch: target.Arch, GUI: target.GUI},
-		Imports: make([]string, 0, len(program.Imports)), Sources: make([]string, 0, len(program.Sources)),
+		Imports: make([]string, 0, len(program.Imports)), ImportRecords: make([]*KIRImport, 0, len(program.Imports)), Sources: make([]string, 0, len(program.Sources)),
 		Structs: make([]*KIRStruct, 0, len(program.Structs)), Enums: make([]*KIREnum, 0, len(program.Enums)),
 		Traits: make([]*KIRTrait, 0, len(program.Traits)), TraitImpls: make([]*KIRTraitImpl, 0, len(program.TraitImpls)),
 	}
 	for _, item := range program.Imports {
 		metadata.Imports = append(metadata.Imports, item.Path)
+		metadata.ImportRecords = append(metadata.ImportRecords, &KIRImport{Path: item.Path, Source: paths.tokenSource(item.Tok), Line: item.Tok.Line, Column: item.Tok.Column, Span: kirTokenSpan(item.Tok)})
 	}
 	for _, source := range program.Sources {
 		metadata.Sources = append(metadata.Sources, paths.source(source))
 	}
 	for _, declaration := range program.Structs {
-		structure := &KIRStruct{Name: declaration.Name, Public: declaration.Public, Module: paths.name(declaration.Module), TypeParams: make([]*KIRTypeParam, 0, len(declaration.TypeParams)), Fields: make([]*KIRField, 0, len(declaration.Fields))}
+		structure := &KIRStruct{Name: declaration.Name, Source: paths.tokenSource(declaration.Tok), Line: declaration.Tok.Line, Column: declaration.Tok.Column, Span: kirSourceSpan(declaration.Tok, declaration.EndToken), Public: declaration.Public, Module: paths.name(declaration.Module), TypeParams: make([]*KIRTypeParam, 0, len(declaration.TypeParams)), Fields: make([]*KIRField, 0, len(declaration.Fields))}
 		for _, parameter := range declaration.TypeParams {
-			structure.TypeParams = append(structure.TypeParams, &KIRTypeParam{Name: parameter.Name, Constraint: parameter.Constraint})
+			structure.TypeParams = append(structure.TypeParams, &KIRTypeParam{Name: parameter.Name, Constraint: parameter.Constraint, Source: paths.tokenSource(parameter.Tok), Line: parameter.Tok.Line, Column: parameter.Tok.Column, Span: kirTokenSpan(parameter.Tok)})
 		}
 		for _, field := range declaration.Fields {
-			structure.Fields = append(structure.Fields, &KIRField{Name: field.Name, Public: field.Public, Type: typeString(field.Type, field.Spec)})
+			structure.Fields = append(structure.Fields, &KIRField{Name: field.Name, Source: paths.tokenSource(field.Tok), Line: field.Tok.Line, Column: field.Tok.Column, Span: kirTokenSpan(field.Tok), Public: field.Public, Type: typeString(field.Type, field.Spec)})
 		}
 		metadata.Structs = append(metadata.Structs, structure)
 	}
 	for _, declaration := range program.Enums {
-		metadata.Enums = append(metadata.Enums, &KIREnum{Name: declaration.Name, Public: declaration.Public, Module: paths.name(declaration.Module), Variants: append([]string(nil), declaration.Variants...)})
+		enumeration := &KIREnum{Name: declaration.Name, Source: paths.tokenSource(declaration.Tok), Line: declaration.Tok.Line, Column: declaration.Tok.Column, Span: kirSourceSpan(declaration.Tok, declaration.EndToken), Public: declaration.Public, Module: paths.name(declaration.Module), Variants: append([]string(nil), declaration.Variants...), VariantSpans: make([]*KIRSourceSpan, 0, len(declaration.VariantTokens))}
+		for _, token := range declaration.VariantTokens {
+			enumeration.VariantSpans = append(enumeration.VariantSpans, kirTokenSpan(token))
+		}
+		metadata.Enums = append(metadata.Enums, enumeration)
 	}
 	for _, declaration := range program.Traits {
-		trait := &KIRTrait{Name: declaration.Name, Public: declaration.Public, Module: paths.name(declaration.Module), Methods: make([]*KIRTraitMethod, 0, len(declaration.Methods))}
+		trait := &KIRTrait{Name: declaration.Name, Source: paths.tokenSource(declaration.Tok), Line: declaration.Tok.Line, Column: declaration.Tok.Column, Span: kirSourceSpan(declaration.Tok, declaration.EndToken), Public: declaration.Public, Module: paths.name(declaration.Module), Methods: make([]*KIRTraitMethod, 0, len(declaration.Methods))}
 		for _, method := range declaration.Methods {
-			entry := &KIRTraitMethod{Name: method.Name, Return: typeSpecString(method.Return), Params: make([]*KIRParam, 0, len(method.Params))}
+			entry := &KIRTraitMethod{Name: method.Name, Source: paths.tokenSource(method.Tok), Line: method.Tok.Line, Column: method.Tok.Column, Span: kirSourceSpan(method.Tok, method.EndToken), Return: typeSpecString(method.Return), Params: make([]*KIRParam, 0, len(method.Params))}
 			for _, parameter := range method.Params {
-				entry.Params = append(entry.Params, &KIRParam{Name: parameter.Name, Type: typeSpecString(parameter.Type)})
+				entry.Params = append(entry.Params, &KIRParam{Name: parameter.Name, Type: typeSpecString(parameter.Type), Source: paths.tokenSource(parameter.Tok), Line: parameter.Tok.Line, Column: parameter.Tok.Column, Span: kirSourceSpan(parameter.Tok, parameter.EndToken)})
 			}
 			trait.Methods = append(trait.Methods, entry)
 		}
@@ -98,7 +104,7 @@ func buildKIRMetadata(program *Program, target NativeTarget) (KIRMetadata, error
 	}
 	functionTargets := kirFunctionTargets(program, paths)
 	for _, implementation := range program.TraitImpls {
-		entry := &KIRTraitImpl{Trait: implementation.Trait, For: typeSpecString(implementation.Target), Module: paths.name(implementation.Module), Methods: make([]*KIRTraitImplMethod, 0, len(implementation.Methods))}
+		entry := &KIRTraitImpl{Trait: implementation.Trait, Source: paths.tokenSource(implementation.Tok), Line: implementation.Tok.Line, Column: implementation.Tok.Column, Span: kirSourceSpan(implementation.Tok, implementation.EndToken), For: typeSpecString(implementation.Target), Module: paths.name(implementation.Module), Methods: make([]*KIRTraitImplMethod, 0, len(implementation.Methods))}
 		for _, method := range implementation.Methods {
 			entry.Methods = append(entry.Methods, &KIRTraitImplMethod{Name: method.Name, Target: "function:" + functionTargets[method]})
 		}
@@ -289,7 +295,7 @@ func (builder *kirArenaBuilder) statement(statement *Stmt) (MIRRef, error) {
 		return MIRRef{}, nil
 	}
 	index := MIRIndex(len(builder.arena.Statements))
-	value := KIRStmt{Kind: stmtName(statement.Kind), Source: builder.paths.tokenSource(statement.Tok), Line: statement.Tok.Line, Column: statement.Tok.Column, Name: statement.Name, Mutable: statement.Mutable, Const: statement.Const, Annotation: typeSpecString(statement.Annotation)}
+	value := KIRStmt{Kind: stmtName(statement.Kind), Source: builder.paths.tokenSource(statement.Tok), Line: statement.Tok.Line, Column: statement.Tok.Column, Span: kirSourceSpan(statement.Tok, statement.EndToken), Name: statement.Name, Mutable: statement.Mutable, Const: statement.Const, Annotation: typeSpecString(statement.Annotation)}
 	builder.arena.Statements = append(builder.arena.Statements, MIRStatement{Value: value})
 	if statement.Kind == StLet || statement.Kind == StConst || statement.Kind == StFor {
 		binding := kirBinding(statement.Name, typeString(statement.Type, statement.Annotation), statement.Mutable, statement.NameToken, builder.paths)
@@ -364,7 +370,12 @@ func (builder *kirArenaBuilder) statement(statement *Stmt) (MIRRef, error) {
 		if err != nil {
 			return MIRRef{}, err
 		}
-		builder.arena.Arms[armIndex] = MIRArm{Pattern: pattern, Body: builder.addStatementRefs(body)}
+		endToken := arm.Pattern.EndToken
+		if len(arm.Body) != 0 {
+			endToken = arm.Body[len(arm.Body)-1].EndToken
+		}
+		value := KIRArm{Source: builder.paths.tokenSource(arm.Pattern.Tok), Span: kirSourceSpan(arm.Pattern.Tok, endToken)}
+		builder.arena.Arms[armIndex] = MIRArm{Value: value, Pattern: pattern, Body: builder.addStatementRefs(body)}
 		armIndices = append(armIndices, armIndex)
 	}
 	builder.arena.Statements[index].Arms = builder.addArmRefs(armIndices)
@@ -372,7 +383,7 @@ func (builder *kirArenaBuilder) statement(statement *Stmt) (MIRRef, error) {
 }
 
 func (builder *kirArenaBuilder) pattern(pattern Pattern) MIRRef {
-	value := KIRPattern{Kind: patternName(pattern.Kind), Source: builder.paths.tokenSource(pattern.Tok), Line: pattern.Tok.Line, Column: pattern.Tok.Column, Bool: pattern.Bool, Int: pattern.Int, String: pattern.Str, Type: pattern.TypeName, Variant: pattern.Variant, Binding: pattern.Binding, Present: pattern.Present, OK: pattern.OK}
+	value := KIRPattern{Kind: patternName(pattern.Kind), Source: builder.paths.tokenSource(pattern.Tok), Line: pattern.Tok.Line, Column: pattern.Tok.Column, Span: kirSourceSpan(pattern.Tok, pattern.EndToken), Bool: pattern.Bool, Int: pattern.Int, String: pattern.Str, Type: pattern.TypeName, Variant: pattern.Variant, Binding: pattern.Binding, Present: pattern.Present, OK: pattern.OK}
 	ref := MIRRef{}
 	if pattern.Binding != "" {
 		ref = builder.binding(kirBinding(pattern.Binding, typeString(pattern.BindingType, nil), false, pattern.BindingTok, builder.paths))
@@ -387,12 +398,12 @@ func (builder *kirArenaBuilder) function(function *Function, captures []Capture,
 		return 0, fmt.Errorf("checked function is missing")
 	}
 	index := MIRIndex(len(builder.arena.Functions))
-	value := KIRFunction{Name: function.Name, Source: builder.paths.tokenSource(function.Tok), Line: function.Tok.Line, Column: function.Tok.Column, Worker: function.Worker, Unsafe: function.Unsafe, Module: builder.paths.name(function.Module), Return: typeSpecString(function.Return), TypeParams: make([]*KIRTypeParam, 0, len(function.TypeParams))}
+	value := KIRFunction{Name: function.Name, Source: builder.paths.tokenSource(function.Tok), Line: function.Tok.Line, Column: function.Tok.Column, Span: kirSourceSpan(function.Tok, function.EndToken), Worker: function.Worker, Unsafe: function.Unsafe, Module: builder.paths.name(function.Module), Return: typeSpecString(function.Return), TypeParams: make([]*KIRTypeParam, 0, len(function.TypeParams))}
 	if topLevel {
 		value.Public, value.Trait, value.Receiver = function.Public, function.Trait, typeSpecString(function.Receiver)
 	}
 	for _, parameter := range function.TypeParams {
-		value.TypeParams = append(value.TypeParams, &KIRTypeParam{Name: parameter.Name, Constraint: parameter.Constraint})
+		value.TypeParams = append(value.TypeParams, &KIRTypeParam{Name: parameter.Name, Constraint: parameter.Constraint, Source: builder.paths.tokenSource(parameter.Tok), Line: parameter.Tok.Line, Column: parameter.Tok.Column, Span: kirTokenSpan(parameter.Tok)})
 	}
 	builder.arena.Functions = append(builder.arena.Functions, MIRFunction{Value: value})
 	parameterIndices := make([]MIRIndex, 0, len(function.Params))
@@ -402,7 +413,7 @@ func (builder *kirArenaBuilder) function(function *Function, captures []Capture,
 		if err != nil {
 			return 0, err
 		}
-		param := KIRParam{Name: parameter.Name, Type: typeSpecString(parameter.Type)}
+		param := KIRParam{Name: parameter.Name, Type: typeSpecString(parameter.Type), Source: builder.paths.tokenSource(parameter.Tok), Line: parameter.Tok.Line, Column: parameter.Tok.Column, Span: kirSourceSpan(parameter.Tok, parameter.EndToken)}
 		if topLevel {
 			param.Binding = nil
 		}

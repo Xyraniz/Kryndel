@@ -131,6 +131,33 @@ func TestKIRV1DefaultsLanguageVersion(t *testing.T) {
 	}
 }
 
+func TestLegacyKIRDecodeReconstructsBindingIDsWithoutSpans(t *testing.T) {
+	program, checker := testProgram(t, "fn main() -> Int { let value: Int = 2\n return value }\n")
+	encoded, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := DecodeKIR(encoded, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := DecodeKIR(encoded, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	declaration := first.Functions[0].Body[0].Binding
+	use := first.Functions[0].Body[1].Return.Binding
+	if declaration == nil || use == nil || declaration.ID == "" || declaration.ID != use.ID {
+		t.Fatalf("legacy binding references did not receive one reconstructed ID: declaration=%#v use=%#v", declaration, use)
+	}
+	if declaration.Span != nil || use.Span != nil {
+		t.Fatalf("legacy KIR must preserve unknown byte ranges instead of inventing them: declaration=%#v use=%#v", declaration.Span, use.Span)
+	}
+	if second.Functions[0].Body[0].Binding.ID != declaration.ID {
+		t.Fatalf("legacy binding identity is not deterministic: %q != %q", second.Functions[0].Body[0].Binding.ID, declaration.ID)
+	}
+}
+
 func TestKIRV2RemainsReadable(t *testing.T) {
 	p, c := testProgram(t, "fn twice(value: Int) -> Int { return value * 2 }\nlet result: Int = twice(4)\n")
 	data, err := EmitKIR(p, c, NativeTarget{OS: "linux", Arch: "amd64"})

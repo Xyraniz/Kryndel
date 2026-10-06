@@ -129,7 +129,7 @@ func (p *Parser) node(t Token, k ExprKind) *Expr {
 		p.exprs = append(p.exprs, make([]Expr, 0, parserNodeChunkSize))
 	}
 	block := p.exprs[len(p.exprs)-1]
-	block = append(block, Expr{Kind: k, Tok: t})
+	block = append(block, Expr{Kind: k, Tok: t, StartToken: t, EndToken: t})
 	p.exprs[len(p.exprs)-1] = block
 	return &block[len(block)-1]
 }
@@ -206,6 +206,7 @@ func (p *Parser) function(pub bool) *Function {
 			} else if seenDefault {
 				p.fail(pt, "required parameter '%s' cannot follow a parameter with a default value", pt.Text())
 			}
+			param.EndToken = p.prev()
 			f.Params = append(f.Params, param)
 			if !p.match(COMMA) {
 				break
@@ -312,6 +313,7 @@ func (p *Parser) traitMethod(trait string) *Function {
 			if p.match(EQUAL) {
 				p.fail(p.prev(), "trait method parameters cannot have defaults")
 			}
+			param.EndToken = p.prev()
 			f.Params = append(f.Params, param)
 			if !p.match(COMMA) {
 				break
@@ -325,6 +327,7 @@ func (p *Parser) traitMethod(trait string) *Function {
 	if p.check(LBRACE) {
 		p.fail(p.peek(), "default trait method bodies are not supported")
 	}
+	f.EndToken = p.prev()
 	return f
 }
 
@@ -356,6 +359,9 @@ func (p *Parser) implDecl() ([]*Function, *TraitImplDecl) {
 		p.end()
 	}
 	p.expect(RBRACE, "expected '}' after impl block")
+	if traitImpl != nil {
+		traitImpl.EndToken = p.prev()
+	}
 	return out, traitImpl
 }
 func (p *Parser) enumDecl(pub bool) *EnumDecl {
@@ -498,6 +504,12 @@ func (p *Parser) matchStmt(t Token) *Stmt {
 	return s
 }
 func (p *Parser) pattern() Pattern {
+	pattern := p.patternNode()
+	pattern.EndToken = p.prev()
+	return pattern
+}
+
+func (p *Parser) patternNode() Pattern {
 	t := p.peek()
 	pat := Pattern{Kind: PatWildcard, Tok: t}
 	if p.match(ID) {
@@ -599,10 +611,14 @@ func (p *Parser) precedence(min int) *Expr {
 		op := p.advance()
 		right := p.precedence(precedence(op.Kind) + 1)
 		e := p.node(op, ExBinary)
+		e.StartToken = left.StartToken
 		e.Op = op.Kind
 		e.Left = left
 		e.Right = right
 		left = e
+	}
+	if left != nil {
+		left.EndToken = p.prev()
 	}
 	return left
 }
@@ -623,7 +639,11 @@ func (p *Parser) unary() *Expr {
 	e := p.primary()
 	for p.Err == nil {
 		if p.match(LPAREN) {
+			if p.Pos >= 2 {
+				e.EndToken = p.Tokens[p.Pos-2]
+			}
 			c := p.node(p.prev(), ExCall)
+			c.StartToken = e.StartToken
 			c.Callee = e
 			if e.Kind == ExVar {
 				c.Name = e.Name
@@ -638,17 +658,27 @@ func (p *Parser) unary() *Expr {
 				}
 			}
 			p.expect(RPAREN, "expected ')' after arguments")
+			c.EndToken = p.prev()
 			e = c
 		} else if p.match(LBRACKET) {
+			if p.Pos >= 2 {
+				e.EndToken = p.Tokens[p.Pos-2]
+			}
 			x := p.node(p.prev(), ExIndex)
+			x.StartToken = e.StartToken
 			x.Base = e
 			x.Left = p.expression()
 			p.expect(RBRACKET, "expected ']' after index")
+			x.EndToken = p.prev()
 			e = x
 		} else if p.match(DOT) {
+			if p.Pos >= 2 {
+				e.EndToken = p.Tokens[p.Pos-2]
+			}
 			ft := p.expect(ID, "expected a field or method name after '.'")
 			if p.match(LPAREN) {
 				x := p.node(ft, ExCall)
+				x.StartToken = e.StartToken
 				x.Name = ft.Text()
 				x.NameToken = ft
 				x.Receiver = e
@@ -661,16 +691,23 @@ func (p *Parser) unary() *Expr {
 					}
 				}
 				p.expect(RPAREN, "expected ')' after method arguments")
+				x.EndToken = p.prev()
 				e = x
 			} else {
 				x := p.node(ft, ExField)
+				x.StartToken = e.StartToken
 				x.Base = e
 				x.Field = ft.Text()
 				e = x
 			}
 		} else if p.match(QUESTION) {
+			if p.Pos >= 2 {
+				e.EndToken = p.Tokens[p.Pos-2]
+			}
 			x := p.node(p.prev(), ExPropagate)
+			x.StartToken = e.StartToken
 			x.Operand = e
+			x.EndToken = p.prev()
 			e = x
 		} else {
 			break
@@ -752,6 +789,8 @@ func (p *Parser) primary() *Expr {
 	case p.match(LPAREN):
 		e := p.expression()
 		p.expect(RPAREN, "expected ')' after expression")
+		e.StartToken = t
+		e.EndToken = p.prev()
 		return e
 	case p.match(LBRACKET):
 		e := p.node(t, ExArray)
@@ -862,6 +901,7 @@ func (p *Parser) lambda() *Expr {
 				p.fail(p.prev(), "closure parameters cannot have default values")
 				_ = p.expression()
 			}
+			param.EndToken = p.prev()
 			f.Params = append(f.Params, param)
 			if !p.match(COMMA) {
 				break

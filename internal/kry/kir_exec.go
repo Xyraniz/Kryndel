@@ -188,7 +188,7 @@ func (document *KIRDocument) asKIRMetadata() KIRMetadata {
 	return KIRMetadata{
 		Format: document.Format, Version: document.Version, LanguageVersion: document.LanguageVersion,
 		Module: document.Module, Source: document.Source, Target: document.Target,
-		Imports: document.Imports, Sources: document.Sources, Structs: document.Structs,
+		Imports: document.Imports, ImportRecords: document.ImportRecords, Sources: document.Sources, Structs: document.Structs,
 		Enums: document.Enums, Traits: document.Traits, TraitImpls: document.TraitImpls,
 	}
 }
@@ -259,7 +259,7 @@ func executeKIRArenaWithOptions(arena *KIRArena, limits Limits, sources map[stri
 	metadata := KIRMetadata{
 		Format: arena.Format, Version: arena.Version, LanguageVersion: arena.LanguageVersion,
 		Module: arena.Module, Source: arena.Source, Target: arena.Target,
-		Imports: arena.Imports, Sources: arena.Sources, Structs: arena.Structs, Enums: arena.Enums,
+		Imports: arena.Imports, ImportRecords: arena.ImportRecords, Sources: arena.Sources, Structs: arena.Structs, Enums: arena.Enums,
 		Traits: arena.Traits, TraitImpls: arena.TraitImpls,
 	}
 	var cancel context.CancelFunc

@@ -39,6 +39,8 @@ const (
 type Expr struct {
 	Kind                  ExprKind
 	Tok                   Token
+	StartToken            Token
+	EndToken              Token
 	NameToken             Token
 	Definition            Token
 	Int                   int64
@@ -130,6 +132,7 @@ const (
 type Pattern struct {
 	Kind                       PatternKind
 	Tok                        Token
+	EndToken                   Token
 	BindingTok                 Token
 	BindingType                *Type
 	Bool                       bool
@@ -144,9 +147,10 @@ type MatchArm struct {
 	Body    []*Stmt
 }
 type Param struct {
-	Name string
-	Type *TypeSpec
-	Tok  Token
+	Name     string
+	Type     *TypeSpec
+	Tok      Token
+	EndToken Token
 	// Default is the expression used when the caller omits this argument. It is
 	// nil for required parameters. Defaults must be trailing.
 	Default *Expr
@@ -222,6 +226,7 @@ type TraitImplDecl struct {
 	Target          *TypeSpec
 	Methods         []*Function
 	Tok             Token
+	EndToken        Token
 	Module          string
 	VisibilityScope string
 }

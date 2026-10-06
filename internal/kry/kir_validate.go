@@ -2045,6 +2045,9 @@ func kirBindingIdentity(binding *KIRBinding) string {
 	if binding == nil {
 		return ""
 	}
+	if binding.ID != "" {
+		return "id:" + binding.ID
+	}
 	return fmt.Sprintf("%s:%d:%d:%s", binding.Source, binding.Line, binding.Column, binding.Name)
 }
 

@@ -12,7 +12,7 @@ func kirMetadataFromArena(arena *KIRArena) KIRMetadata {
 	return KIRMetadata{
 		Format: arena.Format, Version: arena.Version, LanguageVersion: arena.LanguageVersion,
 		Module: arena.Module, Source: arena.Source, Target: arena.Target,
-		Imports: arena.Imports, Sources: arena.Sources, Structs: arena.Structs,
+		Imports: arena.Imports, ImportRecords: arena.ImportRecords, Sources: arena.Sources, Structs: arena.Structs,
 		Enums: arena.Enums, Traits: arena.Traits, TraitImpls: arena.TraitImpls,
 	}
 }

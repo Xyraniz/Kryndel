@@ -2,6 +2,7 @@ package kry
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,85 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestCompileMIRPreservesUTF8ByteSpansAndStableBindingIDs(t *testing.T) {
+	source := "import \"lib/math\"\nenum Sample { First, Second }\nfn main() -> Int {\n    let mut word: String = \"ñ\"\n    word = word + \"!\"\n    return len(word)\n}\n"
+	program, checker := testProgram(t, source)
+	mir, err := CompileMIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatalf("compile checked source: %v", err)
+	}
+	document, err := mir.arena.toKIRDocument()
+	if err != nil {
+		t.Fatalf("read typed arena for contract check: %v", err)
+	}
+	if len(document.Functions) != 1 || document.Functions[0].Span == nil {
+		t.Fatalf("function span was not retained: %#v", document.Functions)
+	}
+	assertSpan := func(label string, span *KIRSourceSpan) {
+		t.Helper()
+		if span == nil || span.Start < 0 || span.End < span.Start || span.End > len(source) {
+			t.Fatalf("%s has an invalid byte range: %#v", label, span)
+		}
+	}
+	if len(document.ImportRecords) != 1 || document.ImportRecords[0].Span == nil || document.ImportRecords[0].Path != "lib/math" {
+		t.Fatalf("import source metadata was not retained in the typed arena: %#v", document.ImportRecords)
+	}
+	if len(document.Enums) != 1 || document.Enums[0].Span == nil || len(document.Enums[0].VariantSpans) != 2 || document.Enums[0].VariantSpans[0] == nil {
+		t.Fatalf("enum declaration and variant spans were not retained: %#v", document.Enums)
+	}
+	assertSpan("enum declaration", document.Enums[0].Span)
+	assertSpan("enum variant", document.Enums[0].VariantSpans[0])
+	if got := source[document.Enums[0].VariantSpans[0].Start:document.Enums[0].VariantSpans[0].End]; got != "First" {
+		t.Fatalf("enum variant span = %q, want First", got)
+	}
+	functionSpan := document.Functions[0].Span
+	assertSpan("function", functionSpan)
+	if got := source[functionSpan.Start:functionSpan.End]; !strings.HasPrefix(got, "fn main()") || !strings.HasSuffix(got, "}") {
+		t.Fatalf("function span does not cover its full declaration: %q", got)
+	}
+	if len(document.Functions[0].Body) != 3 {
+		t.Fatalf("unexpected function body size: %d", len(document.Functions[0].Body))
+	}
+	literal := document.Functions[0].Body[0].Init
+	if literal == nil || literal.Span == nil {
+		t.Fatal("string literal span was not retained")
+	}
+	assertSpan("string literal", literal.Span)
+	if got := source[literal.Span.Start:literal.Span.End]; got != "\"ñ\"" {
+		t.Fatalf("UTF-8 literal span = %q, want quoted literal with byte offsets", got)
+	}
+	if literal.Span.End-literal.Span.Start != len("\"ñ\"") {
+		t.Fatalf("UTF-8 span length = %d, want %d source bytes", literal.Span.End-literal.Span.Start, len("\"ñ\""))
+	}
+	binary := document.Functions[0].Body[1].Value
+	if binary == nil || binary.Span == nil {
+		t.Fatal("binary expression span was not retained")
+	}
+	assertSpan("binary expression", binary.Span)
+	if got := source[binary.Span.Start:binary.Span.End]; got != "word + \"!\"" {
+		t.Fatalf("binary expression span = %q, want its complete source text", got)
+	}
+
+	identities := map[string]string{}
+	for index, binding := range mir.arena.Bindings {
+		if binding.ID == "" || binding.Span == nil {
+			t.Fatalf("arena binding %d is missing stable identity or span: %#v", index, binding)
+		}
+		decoded, err := hex.DecodeString(binding.ID)
+		if err != nil || len(decoded) != 32 {
+			t.Fatalf("arena binding %d has a malformed SHA-256 identity %q", index, binding.ID)
+		}
+		if binding.Span.End-binding.Span.Start != len(binding.Name) {
+			t.Fatalf("binding %q has a span inconsistent with its source token: %#v", binding.Name, binding.Span)
+		}
+		identity := kirBindingIdentity(&binding)
+		if prior, found := identities[identity]; found && prior != binding.ID {
+			t.Fatalf("binding references for %s have different IDs: %s and %s", identity, prior, binding.ID)
+		}
+		identities[identity] = binding.ID
+	}
+}
 
 func TestValidateASTLimitsRejectsExceededInstructionLimit(t *testing.T) {
 	p, _ := testProgram(t, "let value: Int = 1\n")

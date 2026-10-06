@@ -41,7 +41,7 @@ func TestSelfhostValidatorContractsMatchSupportedKIRWireFields(t *testing.T) {
 	// nested declaration shapes; those nested object types have no field contract.
 	allowedFields := selfhostKIRAllowedFields()
 	validatorOwners := selfhostKIRValidatorOwners()
-	unsupportedTypes := map[string]bool{"KIRTrait": true, "KIRTraitMethod": true, "KIRTraitImpl": true, "KIRTraitImplMethod": true, "KIRCapture": true}
+	unsupportedTypes := map[string]bool{"KIRTrait": true, "KIRTraitMethod": true, "KIRTraitImpl": true, "KIRTraitImplMethod": true, "KIRCapture": true, "KIRImport": true, "KIRSourceSpan": true}
 	for _, declaration := range kirFile.Decls {
 		general, ok := declaration.(*ast.GenDecl)
 		if !ok {

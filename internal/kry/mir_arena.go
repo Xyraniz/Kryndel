@@ -31,6 +31,7 @@ type KIRArena struct {
 	Source          string
 	Target          KIRTarget
 	Imports         []string
+	ImportRecords   []*KIRImport
 	Sources         []string
 	Structs         []*KIRStruct
 	Enums           []*KIREnum
@@ -114,6 +115,7 @@ type MIRPattern struct {
 }
 
 type MIRArm struct {
+	Value   KIRArm
 	Pattern MIRRef
 	Body    MIRNodeRefList
 }
@@ -134,7 +136,7 @@ func (arena *KIRArena) toKIRDocument() (*KIRDocument, error) {
 	document := &KIRDocument{
 		Format: arena.Format, Version: arena.Version, LanguageVersion: arena.LanguageVersion,
 		Module: arena.Module, Source: arena.Source, Target: arena.Target,
-		Imports: cloneKIRStrings(arena.Imports), Sources: cloneKIRStrings(arena.Sources),
+		Imports: cloneKIRStrings(arena.Imports), ImportRecords: cloneKIRImports(arena.ImportRecords), Sources: cloneKIRStrings(arena.Sources),
 		Structs: cloneKIRStructs(arena.Structs), Enums: cloneKIREnums(arena.Enums),
 		Traits: cloneKIRTraits(arena.Traits), TraitImpls: cloneKIRTraitImpls(arena.TraitImpls),
 	}
@@ -157,6 +159,7 @@ func (arena *KIRArena) expression(ref MIRRef) (*KIRExpr, error) {
 	}
 	row := arena.Expressions[ref.Index]
 	value := row.Value
+	value.Span = cloneKIRSourceSpan(row.Value.Span)
 	value.GenericArguments = cloneKIRStrings(row.Value.GenericArguments)
 	value.Fields = cloneKIRStrings(row.Value.Fields)
 	var err error
@@ -226,6 +229,7 @@ func (arena *KIRArena) statement(ref MIRRef) (*KIRStmt, error) {
 	}
 	row := arena.Statements[ref.Index]
 	value := row.Value
+	value.Span = cloneKIRSourceSpan(row.Value.Span)
 	var err error
 	if value.Binding, err = arena.binding(row.Binding); err != nil {
 		return nil, err
@@ -293,6 +297,7 @@ func (arena *KIRArena) function(ref MIRRef) (*KIRFunction, error) {
 	}
 	row := arena.Functions[ref.Index]
 	value := row.Value
+	value.Span = cloneKIRSourceSpan(row.Value.Span)
 	value.TypeParams = cloneKIRTypeParams(row.Value.TypeParams)
 	var err error
 	if value.Body, err = arena.statementList(row.Body); err != nil {
@@ -334,6 +339,7 @@ func (arena *KIRArena) parameterList(list MIRNodeRefList) ([]*KIRParam, error) {
 		}
 		row := arena.Parameters[index]
 		value := row.Value
+		value.Span = cloneKIRSourceSpan(row.Value.Span)
 		if value.Default, err = arena.expression(row.Default); err != nil {
 			return nil, err
 		}
@@ -383,7 +389,10 @@ func (arena *KIRArena) armList(list MIRNodeRefList) ([]*KIRArm, error) {
 		if err != nil {
 			return nil, err
 		}
-		values[i] = &KIRArm{Pattern: pattern, Body: body}
+		value := row.Value
+		value.Span = cloneKIRSourceSpan(value.Span)
+		value.Pattern, value.Body = pattern, body
+		values[i] = &value
 	}
 	return values, nil
 }
@@ -458,7 +467,7 @@ func newKIRArena(document *KIRDocument) (*KIRArena, error) {
 	arena := &KIRArena{
 		Format: document.Format, Version: document.Version, LanguageVersion: document.LanguageVersion,
 		Module: document.Module, Source: document.Source, Target: document.Target,
-		Imports: cloneKIRStrings(document.Imports), Sources: cloneKIRStrings(document.Sources),
+		Imports: cloneKIRStrings(document.Imports), ImportRecords: cloneKIRImports(document.ImportRecords), Sources: cloneKIRStrings(document.Sources),
 		Structs: cloneKIRStructs(document.Structs), Enums: cloneKIREnums(document.Enums),
 		Traits: cloneKIRTraits(document.Traits), TraitImpls: cloneKIRTraitImpls(document.TraitImpls),
 	}
@@ -707,6 +716,7 @@ func (arena *KIRArena) appendParameterList(parameters []*KIRParam) (MIRNodeRefLi
 		}
 		index := MIRIndex(len(arena.Parameters))
 		node := MIRParameter{Value: *parameter}
+		node.Value.Span = cloneKIRSourceSpan(parameter.Span)
 		node.Value.Default, node.Value.Binding = nil, nil
 		arena.Parameters = append(arena.Parameters, node)
 		if parameter.Default != nil {
@@ -745,6 +755,7 @@ func (arena *KIRArena) appendPattern(pattern *KIRPattern) (MIRRef, error) {
 	}
 	index := MIRIndex(len(arena.Patterns))
 	node := MIRPattern{Value: *pattern}
+	node.Value.Span = cloneKIRSourceSpan(pattern.Span)
 	node.Value.ResolvedBinding = nil
 	arena.Patterns = append(arena.Patterns, node)
 	arena.Patterns[index].Binding = arena.appendBinding(pattern.ResolvedBinding)
@@ -767,7 +778,10 @@ func (arena *KIRArena) appendArmList(arms []*KIRArm) (MIRNodeRefList, error) {
 		if err != nil {
 			return MIRNodeRefList{}, err
 		}
-		arena.Arms[index] = MIRArm{Pattern: pattern, Body: body}
+		value := *arm
+		value.Pattern, value.Body = nil, nil
+		value.Span = cloneKIRSourceSpan(value.Span)
+		arena.Arms[index] = MIRArm{Value: value, Pattern: pattern, Body: body}
 		indexes = append(indexes, index)
 	}
 	start := len(arena.ArmRefs)
@@ -945,6 +959,7 @@ func cloneKIRTypeParams(values []*KIRTypeParam) []*KIRTypeParam {
 	for index, value := range values {
 		if value != nil {
 			copy := *value
+			copy.Span = cloneKIRSourceSpan(value.Span)
 			output[index] = &copy
 		}
 	}
@@ -958,11 +973,13 @@ func cloneKIRStructs(values []*KIRStruct) []*KIRStruct {
 			continue
 		}
 		copy := *value
+		copy.Span = cloneKIRSourceSpan(value.Span)
 		copy.TypeParams = cloneKIRTypeParams(value.TypeParams)
 		copy.Fields = make([]*KIRField, len(value.Fields))
 		for fieldIndex, field := range value.Fields {
 			if field != nil {
 				item := *field
+				item.Span = cloneKIRSourceSpan(field.Span)
 				copy.Fields[fieldIndex] = &item
 			}
 		}
@@ -976,7 +993,12 @@ func cloneKIREnums(values []*KIREnum) []*KIREnum {
 	for index, value := range values {
 		if value != nil {
 			copy := *value
+			copy.Span = cloneKIRSourceSpan(value.Span)
 			copy.Variants = cloneKIRStrings(value.Variants)
+			copy.VariantSpans = make([]*KIRSourceSpan, len(value.VariantSpans))
+			for spanIndex, span := range value.VariantSpans {
+				copy.VariantSpans[spanIndex] = cloneKIRSourceSpan(span)
+			}
 			output[index] = &copy
 		}
 	}
@@ -989,6 +1011,18 @@ func cloneKIRStrings(values []string) []string {
 	}
 	output := make([]string, len(values))
 	copy(output, values)
+	return output
+}
+
+func cloneKIRImports(values []*KIRImport) []*KIRImport {
+	output := make([]*KIRImport, len(values))
+	for index, value := range values {
+		if value != nil {
+			copy := *value
+			copy.Span = cloneKIRSourceSpan(value.Span)
+			output[index] = &copy
+		}
+	}
 	return output
 }
 
@@ -1008,16 +1042,19 @@ func cloneKIRTraits(values []*KIRTrait) []*KIRTrait {
 			continue
 		}
 		copy := *value
+		copy.Span = cloneKIRSourceSpan(value.Span)
 		copy.Methods = make([]*KIRTraitMethod, len(value.Methods))
 		for methodIndex, method := range value.Methods {
 			if method == nil {
 				continue
 			}
 			methodCopy := *method
+			methodCopy.Span = cloneKIRSourceSpan(method.Span)
 			methodCopy.Params = make([]*KIRParam, len(method.Params))
 			for paramIndex, param := range method.Params {
 				if param != nil {
 					paramCopy := *param
+					paramCopy.Span = cloneKIRSourceSpan(param.Span)
 					paramCopy.Default = nil
 					paramCopy.Binding = nil
 					methodCopy.Params[paramIndex] = &paramCopy
@@ -1037,6 +1074,7 @@ func cloneKIRTraitImpls(values []*KIRTraitImpl) []*KIRTraitImpl {
 			continue
 		}
 		copy := *value
+		copy.Span = cloneKIRSourceSpan(value.Span)
 		copy.Methods = make([]*KIRTraitImplMethod, len(value.Methods))
 		for methodIndex, method := range value.Methods {
 			if method != nil {

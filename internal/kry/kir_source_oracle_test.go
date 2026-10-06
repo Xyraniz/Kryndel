@@ -17,18 +17,18 @@ func buildKIRDocument(p *Program, c *Checker, target NativeTarget) (*KIRDocument
 	d := &KIRDocument{
 		Format: metadata.Format, Version: metadata.Version, LanguageVersion: metadata.LanguageVersion, Module: metadata.Module,
 		Source: metadata.Source, Target: metadata.Target,
-		Imports: cloneKIRStrings(metadata.Imports), Sources: cloneKIRStrings(metadata.Sources),
+		Imports: cloneKIRStrings(metadata.Imports), ImportRecords: cloneKIRImports(metadata.ImportRecords), Sources: cloneKIRStrings(metadata.Sources),
 		Structs: cloneKIRStructs(metadata.Structs), Enums: cloneKIREnums(metadata.Enums), Traits: cloneKIRTraits(metadata.Traits), TraitImpls: cloneKIRTraitImpls(metadata.TraitImpls),
 		Functions: make([]*KIRFunction, 0, len(p.Functions)), Statements: make([]*KIRStmt, 0, len(p.Statements)),
 	}
 	functionTargets := kirFunctionTargets(p, paths)
 	for _, x := range p.Functions {
-		f := &KIRFunction{Name: x.Name, Source: paths.tokenSource(x.Tok), Line: x.Tok.Line, Column: x.Tok.Column, Public: x.Public, Worker: x.Worker, Unsafe: x.Unsafe, Trait: x.Trait, Module: paths.name(x.Module), Receiver: typeSpecString(x.Receiver), Return: typeSpecString(x.Return), TypeParams: make([]*KIRTypeParam, 0, len(x.TypeParams)), Params: make([]*KIRParam, 0, len(x.Params)), Captures: []*KIRCapture{}, Body: kirStmts(x.Body, c, functionTargets, paths)}
+		f := &KIRFunction{Name: x.Name, Source: paths.tokenSource(x.Tok), Line: x.Tok.Line, Column: x.Tok.Column, Span: kirSourceSpan(x.Tok, x.EndToken), Public: x.Public, Worker: x.Worker, Unsafe: x.Unsafe, Trait: x.Trait, Module: paths.name(x.Module), Receiver: typeSpecString(x.Receiver), Return: typeSpecString(x.Return), TypeParams: make([]*KIRTypeParam, 0, len(x.TypeParams)), Params: make([]*KIRParam, 0, len(x.Params)), Captures: []*KIRCapture{}, Body: kirStmts(x.Body, c, functionTargets, paths)}
 		for _, tp := range x.TypeParams {
-			f.TypeParams = append(f.TypeParams, &KIRTypeParam{Name: tp.Name, Constraint: tp.Constraint})
+			f.TypeParams = append(f.TypeParams, &KIRTypeParam{Name: tp.Name, Constraint: tp.Constraint, Source: paths.tokenSource(tp.Tok), Line: tp.Tok.Line, Column: tp.Tok.Column, Span: kirTokenSpan(tp.Tok)})
 		}
 		for _, param := range x.Params {
-			f.Params = append(f.Params, &KIRParam{Name: param.Name, Type: typeSpecString(param.Type), Default: kirExpr(param.Default, c, functionTargets, paths), Binding: kirBinding(param.Name, typeSpecString(param.Type), false, param.Tok, paths)})
+			f.Params = append(f.Params, &KIRParam{Name: param.Name, Type: typeSpecString(param.Type), Source: paths.tokenSource(param.Tok), Line: param.Tok.Line, Column: param.Tok.Column, Span: kirSourceSpan(param.Tok, param.EndToken), Default: kirExpr(param.Default, c, functionTargets, paths), Binding: kirBinding(param.Name, typeSpecString(param.Type), false, param.Tok, paths)})
 		}
 		d.Functions = append(d.Functions, f)
 	}
@@ -50,19 +50,23 @@ func kirStmt(s *Stmt, c *Checker, functionTargets map[*Function]string, paths ki
 	if s == nil {
 		return nil
 	}
-	k := &KIRStmt{Kind: stmtName(s.Kind), Source: paths.tokenSource(s.Tok), Line: s.Tok.Line, Column: s.Tok.Column, Name: s.Name, Mutable: s.Mutable, Const: s.Const, Annotation: typeSpecString(s.Annotation), Init: kirExpr(s.Init, c, functionTargets, paths), Expr: kirExpr(s.Expr, c, functionTargets, paths), Target: kirExpr(s.Target, c, functionTargets, paths), Value: kirExpr(s.Value, c, functionTargets, paths), Cond: kirExpr(s.Cond, c, functionTargets, paths), Then: kirStmts(s.Then, c, functionTargets, paths), Else: kirStmts(s.Else, c, functionTargets, paths), Body: kirStmts(s.Body, c, functionTargets, paths), Iter: kirExpr(s.Iter, c, functionTargets, paths), Return: kirExpr(s.Return, c, functionTargets, paths), Scrutinee: kirExpr(s.Scrutinee, c, functionTargets, paths), Arms: make([]*KIRArm, 0, len(s.Arms))}
+	k := &KIRStmt{Kind: stmtName(s.Kind), Source: paths.tokenSource(s.Tok), Line: s.Tok.Line, Column: s.Tok.Column, Span: kirSourceSpan(s.Tok, s.EndToken), Name: s.Name, Mutable: s.Mutable, Const: s.Const, Annotation: typeSpecString(s.Annotation), Init: kirExpr(s.Init, c, functionTargets, paths), Expr: kirExpr(s.Expr, c, functionTargets, paths), Target: kirExpr(s.Target, c, functionTargets, paths), Value: kirExpr(s.Value, c, functionTargets, paths), Cond: kirExpr(s.Cond, c, functionTargets, paths), Then: kirStmts(s.Then, c, functionTargets, paths), Else: kirStmts(s.Else, c, functionTargets, paths), Body: kirStmts(s.Body, c, functionTargets, paths), Iter: kirExpr(s.Iter, c, functionTargets, paths), Return: kirExpr(s.Return, c, functionTargets, paths), Scrutinee: kirExpr(s.Scrutinee, c, functionTargets, paths), Arms: make([]*KIRArm, 0, len(s.Arms))}
 	if s.Kind == StLet || s.Kind == StConst || s.Kind == StFor {
 		typ := typeString(s.Type, s.Annotation)
 		k.Binding = kirBinding(s.Name, typ, s.Mutable, s.NameToken, paths)
 	}
 	for _, arm := range s.Arms {
-		k.Arms = append(k.Arms, &KIRArm{Pattern: kirPattern(arm.Pattern, paths), Body: kirStmts(arm.Body, c, functionTargets, paths)})
+		endToken := arm.Pattern.EndToken
+		if len(arm.Body) > 0 {
+			endToken = arm.Body[len(arm.Body)-1].EndToken
+		}
+		k.Arms = append(k.Arms, &KIRArm{Source: paths.tokenSource(arm.Pattern.Tok), Span: kirSourceSpan(arm.Pattern.Tok, endToken), Pattern: kirPattern(arm.Pattern, paths), Body: kirStmts(arm.Body, c, functionTargets, paths)})
 	}
 	return k
 }
 
 func kirPattern(p Pattern, paths kirPathNames) *KIRPattern {
-	k := &KIRPattern{Kind: patternName(p.Kind), Source: paths.tokenSource(p.Tok), Line: p.Tok.Line, Column: p.Tok.Column, Bool: p.Bool, Int: p.Int, String: p.Str, Type: p.TypeName, Variant: p.Variant, Binding: p.Binding, Present: p.Present, OK: p.OK}
+	k := &KIRPattern{Kind: patternName(p.Kind), Source: paths.tokenSource(p.Tok), Line: p.Tok.Line, Column: p.Tok.Column, Span: kirSourceSpan(p.Tok, p.EndToken), Bool: p.Bool, Int: p.Int, String: p.Str, Type: p.TypeName, Variant: p.Variant, Binding: p.Binding, Present: p.Present, OK: p.OK}
 	if p.Binding != "" {
 		k.ResolvedBinding = kirBinding(p.Binding, typeString(p.BindingType, nil), false, p.BindingTok, paths)
 	}
@@ -113,9 +117,9 @@ func kirLambda(function *Function, captures []Capture, c *Checker, functionTarge
 	if function == nil {
 		return nil
 	}
-	k := &KIRFunction{Name: function.Name, Source: paths.tokenSource(function.Tok), Line: function.Tok.Line, Column: function.Tok.Column, Worker: false, Unsafe: function.Unsafe, Module: paths.name(function.Module), Return: typeSpecString(function.Return), TypeParams: []*KIRTypeParam{}, Params: make([]*KIRParam, 0, len(function.Params)), Captures: make([]*KIRCapture, 0, len(captures)), Body: kirStmts(function.Body, c, functionTargets, paths)}
+	k := &KIRFunction{Name: function.Name, Source: paths.tokenSource(function.Tok), Line: function.Tok.Line, Column: function.Tok.Column, Span: kirSourceSpan(function.Tok, function.EndToken), Worker: false, Unsafe: function.Unsafe, Module: paths.name(function.Module), Return: typeSpecString(function.Return), TypeParams: []*KIRTypeParam{}, Params: make([]*KIRParam, 0, len(function.Params)), Captures: make([]*KIRCapture, 0, len(captures)), Body: kirStmts(function.Body, c, functionTargets, paths)}
 	for _, parameter := range function.Params {
-		k.Params = append(k.Params, &KIRParam{Name: parameter.Name, Type: typeSpecString(parameter.Type), Default: nil, Binding: kirBinding(parameter.Name, typeSpecString(parameter.Type), false, parameter.Tok, paths)})
+		k.Params = append(k.Params, &KIRParam{Name: parameter.Name, Type: typeSpecString(parameter.Type), Source: paths.tokenSource(parameter.Tok), Line: parameter.Tok.Line, Column: parameter.Tok.Column, Span: kirSourceSpan(parameter.Tok, parameter.EndToken), Default: nil, Binding: kirBinding(parameter.Name, typeSpecString(parameter.Type), false, parameter.Tok, paths)})
 	}
 	ordered := append([]Capture(nil), captures...)
 	sort.Slice(ordered, func(i, j int) bool {

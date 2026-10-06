@@ -6,9 +6,8 @@ import "fmt"
 // and native backends. Its canonical storage is a flat typed arena created
 // from checked source or validated KIR; callers cannot construct or mutate it
 // through the public Go API. CompileMIR fills this arena directly from checked
-// source. Some lowerer bodies still materialize a complete recursive
-// compatibility view and have not yet migrated to indexed access. The
-// source-compiled form also carries immutable source-text and package
+// source. Production lowering reads indexed arena edges. The source-compiled
+// form also carries immutable source-text and package
 // visibility sidecars. Decoded KIR retains source names and coordinates for
 // diagnostics but does not include source text or those sidecars.
 //
@@ -77,10 +76,9 @@ func CompileMIR(program *Program, checker *Checker, target NativeTarget) (*Valid
 	return &ValidatedMIR{arena: arena, limits: checker.Lim, sources: sources, visibilityScopes: visibilityScopes, hasSourceContext: true}, nil
 }
 
-// documentView creates a complete typed compatibility view from the canonical
-// arena. Wire encoding and the remaining legacy-shaped lowerer helpers use
-// this view while they are migrated to indexed node access. The view is never
-// retained by ValidatedMIR and cannot be used to mutate the validated value.
+// documentView creates the recursive KIR wire projection from the canonical
+// arena for serialization. Production lowerers consume indexed arena edges;
+// this temporary view is never retained by ValidatedMIR.
 func (mir *ValidatedMIR) documentView() (*KIRDocument, error) {
 	if mir == nil || mir.arena == nil {
 		return nil, fmt.Errorf("missing validated MIR")

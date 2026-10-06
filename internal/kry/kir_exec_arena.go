@@ -293,7 +293,10 @@ func (view *kirExecArenaView) arm(ref MIRIndex) *KIRArm {
 		return value
 	}
 	row := view.arena.Arms[ref]
-	value := &KIRArm{Pattern: view.pattern(row.Pattern)}
+	copy := row.Value
+	copy.Span = cloneKIRSourceSpan(row.Value.Span)
+	copy.Pattern, copy.Body = view.pattern(row.Pattern), nil
+	value := &copy
 	view.arms[ref] = value
 	view.armIndex[value] = ref
 	return value
