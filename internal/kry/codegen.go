@@ -833,9 +833,10 @@ func (g *cgen) stmt(s *KIRStmt, indent string) {
 	default:
 		g.fail("unsupported statement kind %q", s.Kind)
 	}
-	if g.topLevel {
-		fmt.Fprintf(&g.buf, "%sk_check_wall_time();\n", indent)
-	}
+	// A host operation may consume most of the remaining wall-time budget.
+	// Check after every statement so a timeout cannot be followed by more
+	// user code before the next periodic instruction check.
+	fmt.Fprintf(&g.buf, "%sk_check_wall_time();\n", indent)
 }
 
 func (g *cgen) emitUnwind(indent string) {

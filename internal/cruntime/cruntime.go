@@ -10,9 +10,11 @@ import "strings"
 // indexing and collections, host APIs, then extended cryptography.
 var cRuntimeParts = [...]string{
 	cRuntimePrelude,
-	cRuntimeFormatting,
+	cRuntimeStrings,
+	cRuntimeFloat,
 	cRuntimeDisplay,
-	cRuntimeEqualityArithmetic,
+	cRuntimeEquality,
+	cRuntimeArithmetic,
 	cRuntimeOutput,
 	cRuntimeBuiltins,
 	cRuntimeIndex,

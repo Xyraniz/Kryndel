@@ -10,9 +10,11 @@ func TestSourceAssemblesRuntimePartsOnceInDependencyOrder(t *testing.T) {
 	// caught even if cRuntimeParts and Source are changed together.
 	wantParts := []string{
 		cRuntimePrelude,
-		cRuntimeFormatting,
+		cRuntimeStrings,
+		cRuntimeFloat,
 		cRuntimeDisplay,
-		cRuntimeEqualityArithmetic,
+		cRuntimeEquality,
+		cRuntimeArithmetic,
 		cRuntimeOutput,
 		cRuntimeBuiltins,
 		cRuntimeIndex,

@@ -138,7 +138,12 @@ static int k_tcp_wait_connected(KSocketFD fd, unsigned long long deadline) {
             }
             return 1;
         }
-        if (ready==0) return 0;
+        if (ready==0) {
+            // select may round a sub-millisecond remainder down. Re-check the
+            // absolute deadline before reporting a timeout.
+            if (k_tcp_deadline_reached(k_tcp_now_ms(),deadline)) return 0;
+            continue;
+        }
         int error=k_tcp_socket_error();
         if (!K_TCP_INTERRUPTED(error)) return -1;
     }
@@ -170,8 +175,13 @@ static int k_tcp_wait_io(KSocketFD fd, int writing, unsigned long long deadline)
 #endif
         if (selected>0) return 1;
         if (selected==0) {
-            k_tcp_set_timeout_error();
-            return 0;
+            // Do not let select's timeval rounding end an operation before
+            // its absolute deadline. Loop until the monotonic clock confirms it.
+            if (k_tcp_deadline_reached(k_tcp_now_ms(),deadline)) {
+                k_tcp_set_timeout_error();
+                return 0;
+            }
+            continue;
         }
         int error=k_tcp_socket_error();
         if (!K_TCP_INTERRUPTED(error)) return -1;
