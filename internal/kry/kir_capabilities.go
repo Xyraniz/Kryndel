@@ -8,8 +8,12 @@ import (
 // validateMIRNativeBuiltinSupport applies the native builtin inventory to
 // builtin call targets in validated KIR without rebuilding a checked AST.
 func validateMIRNativeBuiltinSupport(mir *ValidatedMIR, format string, target NativeTarget) error {
-	if mir == nil || mir.document == nil {
+	if mir == nil || mir.arena == nil {
 		return fmt.Errorf("missing validated MIR")
+	}
+	document, err := mir.documentView()
+	if err != nil {
+		return err
 	}
 
 	var walkExpr func(*KIRExpr) error
@@ -78,12 +82,12 @@ func validateMIRNativeBuiltinSupport(mir *ValidatedMIR, format string, target Na
 		return walkStmts(function.Body)
 	}
 
-	for _, statement := range mir.document.Statements {
+	for _, statement := range document.Statements {
 		if err := walkStmts([]*KIRStmt{statement}); err != nil {
 			return err
 		}
 	}
-	for _, function := range mir.document.Functions {
+	for _, function := range document.Functions {
 		if err := walkFunction(function); err != nil {
 			return err
 		}
@@ -94,7 +98,7 @@ func validateMIRNativeBuiltinSupport(mir *ValidatedMIR, format string, target Na
 // validateMIRNativeFeatureSupport checks the language constructs represented
 // by KIR v5 against the existing backend capability inventories.
 func validateMIRNativeFeatureSupport(mir *ValidatedMIR, format string, target NativeTarget) error {
-	if mir == nil || mir.document == nil {
+	if mir == nil || mir.arena == nil {
 		return fmt.Errorf("missing validated MIR")
 	}
 	// Report unsupported builtins before their opaque handle types, matching
@@ -103,7 +107,10 @@ func validateMIRNativeFeatureSupport(mir *ValidatedMIR, format string, target Na
 		return err
 	}
 
-	document := mir.document
+	document, err := mir.documentView()
+	if err != nil {
+		return err
+	}
 	var walkExpr func(*KIRExpr, map[string]struct{}, bool) error
 	var walkStmts func([]*KIRStmt, map[string]struct{}) error
 	var walkFunction func(*KIRFunction) error
@@ -280,10 +287,14 @@ func validateMIRNativeFeatureSupport(mir *ValidatedMIR, format string, target Na
 // validateMIRFunctionValueSupport rejects function values and closures using
 // KIR's encoded types, call targets, lambda nodes, and capture metadata.
 func validateMIRFunctionValueSupport(mir *ValidatedMIR, format string) error {
-	if mir == nil || mir.document == nil {
+	if mir == nil || mir.arena == nil {
 		return fmt.Errorf("missing MIR")
 	}
-	if kirDocumentUsesFunctionValue(mir.document) {
+	document, err := mir.documentView()
+	if err != nil {
+		return err
+	}
+	if kirDocumentUsesFunctionValue(document) {
 		return fmt.Errorf("%s backend does not support function values or closures; use the interpreter", format)
 	}
 	return nil

@@ -64,10 +64,10 @@ func (e *Engine) checkPathWithKIR(path string) (*Program, *Checker, *ValidatedMI
 			}
 			target := NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH}
 			if a.Target == "portable/any" {
-				if embeddedKIR.document.Target.OS != "portable" || embeddedKIR.document.Target.Arch != "any" || embeddedKIR.document.Target.GUI {
+				if embeddedKIR.arena.Target.OS != "portable" || embeddedKIR.arena.Target.Arch != "any" || embeddedKIR.arena.Target.GUI {
 					return nil, nil, nil, Diag(CatArtifact, p.Source, 1, 1, "malformed native artifact: portable KIR has an incompatible target")
 				}
-				target = NativeTarget{OS: embeddedKIR.document.Target.OS, Arch: embeddedKIR.document.Target.Arch, GUI: embeddedKIR.document.Target.GUI}
+				target = NativeTarget{OS: embeddedKIR.arena.Target.OS, Arch: embeddedKIR.arena.Target.Arch, GUI: embeddedKIR.arena.Target.GUI}
 			}
 			compiled, err := CompileMIR(p, c, target)
 			if err != nil {

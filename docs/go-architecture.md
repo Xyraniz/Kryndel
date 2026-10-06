@@ -21,15 +21,16 @@ must be reproduced with its pinned host and target before it is accepted.
 
 The compiler and execution subsystems remain in `internal/kry`. Bounded camera and display capture live in `internal/platform`; generated C runtime fragments live in `internal/cruntime`. Both are leaf packages with no dependency on compiler or interpreter state. `internal/cruntime` assembles the standalone C runtime in dependency order, with separate source files for formatting, display, equality and arithmetic, canonical JSON, collections, and host integrations. These extractions follow testable dependency boundaries instead of mechanically splitting files. Further compiler/runtime package extraction should use the same rule. Compiler and execution state is explicit per invocation; no mutable package-level program state is used.
 
-The frontend produces checker-annotated source trees and lowers them to an opaque, validated in-memory MIR/KIR. Production interpreter and native-build entrypoints receive this value; they do not lower the original source AST. The Engine interpreter evaluates typed KIR nodes directly and retains its executor and global scope across REPL snippets. C AOT, direct ELF, and direct PE lower their supported constructs from typed KIR and reject unsupported forms without an AST fallback. The bounded direct KIR entrypoint also supports differential and backend-subset tests, whose reference runtime uses the retained AST evaluator explicitly. The runtime carries an `ExecContext` with cancellation, instruction, wall-clock, call-depth, stack, memory, source, and output budgets. Every host-facing operation returns a typed error. Go panics are not used for language failures and are converted at the CLI boundary only for unexpected host failures.
+The frontend produces checker-annotated source trees and lowers them to an opaque, validated in-memory MIR/KIR. `ValidatedMIR` now stores flat typed node tables with checked integer references; neither source compilation nor `DecodeMIR` retains its recursive wire document after validation. The current interpreter and native lowerer implementations still request a complete typed compatibility view from that arena, so direct indexed traversal is not finished. Production entrypoints still start from `ValidatedMIR`, and they do not lower the source AST. The Engine interpreter retains its executor and global scope across REPL snippets. C AOT, direct ELF, and direct PE reject unsupported forms without an AST fallback. The bounded direct KIR entrypoint also supports differential and backend-subset tests, whose reference runtime uses the retained AST evaluator explicitly. The runtime carries an `ExecContext` with cancellation, instruction, wall-clock, call-depth, stack, memory, source, and output budgets. Every host-facing operation returns a typed error. Go panics are not used for language failures and are converted at the CLI boundary only for unexpected host failures.
 
-This Go `ValidatedMIR` boundary does not mean the self-hosted compiler shares
-the same in-memory value. The self-hosted compiler currently validates and
-lowers serialized KIR JSON with its own `ValidatedKIR` wrapper and validator;
-the two validators are not generated from a common schema. A differential
-corpus checks agreement on representative valid and malformed core KIR
-documents, but schema drift and the selfhost backend's bounded feature subset
-remain work. Treat this test as a parity guard, not proof of full selfhosting.
+This Go `ValidatedMIR` storage change does not mean the self-hosted compiler
+shares the same in-memory value, and it does not finish the lowering boundary.
+Selfhost still validates and lowers serialized KIR JSON with its own
+`ValidatedKIR` wrapper and validator; the two validators are not generated from
+a common schema. A differential corpus checks agreement on representative
+valid and malformed core KIR documents, but direct arena traversal, KIR v6,
+schema parity, and the selfhost backend migration remain work. Treat this test
+as a parity guard, not proof of full selfhosting.
 
 `Copy` analysis is memoized with `unknown`, `visiting`, `copyable`, and `non-copyable` states. Recursive structural values are conservatively non-copyable. Type equality, display, layout, and serialization use the same recursion/depth guard. Channel send APIs call one runtime and checker transferability predicate, including try and timed variants.
 

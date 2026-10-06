@@ -32,10 +32,13 @@ type kirPEValidatedProgram struct {
 // traversal and storage model are KIR-native; directMachine is used only as a
 // Win64 instruction/label/data writer.
 func lowerDirectPEKIR(mir *ValidatedMIR, limits Limits) ([]byte, error) {
-	if mir == nil || mir.document == nil {
+	if mir == nil || mir.arena == nil {
 		return nil, fmt.Errorf("direct PE backend requires validated MIR")
 	}
-	document := mir.document
+	document, err := mir.documentView()
+	if err != nil {
+		return nil, err
+	}
 	if err := validateKIRDirectPEFunctionValues(document); err != nil {
 		return nil, err
 	}

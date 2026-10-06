@@ -233,9 +233,9 @@ type KIRValue struct {
 	OK       bool        `json:"ok"`
 }
 
-// EmitKIR serializes the validated in-memory representation into deterministic
-// KIR v5 JSON. Source compilation and in-process lowerers share CompileMIR and
-// do not need a JSON encode/decode round trip.
+// EmitKIR serializes the validated arena into deterministic KIR v5 JSON.
+// Source compilation and in-process lowerers share CompileMIR and do not need
+// a JSON encode/decode round trip.
 func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
 	mir, err := CompileMIR(p, c, target)
 	if err != nil {
@@ -310,13 +310,14 @@ func buildKIRDocument(p *Program, c *Checker, target NativeTarget) (*KIRDocument
 	return d, nil
 }
 
-// MarshalKIR encodes a validated representation using the deterministic wire
-// format used by `emit` and portable artifacts.
+// MarshalKIR encodes the validated arena using the deterministic wire format
+// used by `emit` and portable artifacts.
 func (mir *ValidatedMIR) MarshalKIR() ([]byte, error) {
-	if mir == nil || mir.document == nil {
-		return nil, fmt.Errorf("missing validated MIR")
+	document, err := mir.documentView()
+	if err != nil {
+		return nil, err
 	}
-	data, err := json.MarshalIndent(mir.document, "", "  ")
+	data, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode KIR: %w", err)
 	}
@@ -576,15 +577,19 @@ func DecodeKIR(data []byte, lim Limits) (*KIRDocument, error) {
 	return &d, nil
 }
 
-// DecodeMIR constructs a validated, context-free in-memory representation
-// from the interchange document. The interpreter and native lowerers consume
-// this same typed document directly. KIR preserves source names and coordinates
-// for diagnostics; source text and package visibility sidecars are not part of
-// its portable wire format.
+// DecodeMIR constructs a validated, context-free in-memory arena from the
+// interchange document. KIR preserves source names and coordinates for
+// diagnostics; source text and visibility sidecars are not part of its portable
+// wire format. Current lowerer bodies receive complete typed compatibility
+// views materialized from the arena while direct indexed traversal is migrated.
 func DecodeMIR(data []byte, lim Limits) (*ValidatedMIR, error) {
 	document, err := DecodeKIR(data, lim)
 	if err != nil {
 		return nil, err
 	}
-	return &ValidatedMIR{document: document, limits: lim}, nil
+	arena, err := newKIRArena(document)
+	if err != nil {
+		return nil, fmt.Errorf("build validated MIR arena: %w", err)
+	}
+	return &ValidatedMIR{arena: arena, limits: lim}, nil
 }

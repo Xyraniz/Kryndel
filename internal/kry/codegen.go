@@ -105,10 +105,13 @@ func generateC(p *Program, c *Checker, obfuscate bool) (string, error) {
 }
 
 func generateCFromValidatedKIR(mir *ValidatedMIR, limits Limits, obfuscate bool) (string, error) {
-	if mir == nil || mir.document == nil {
+	if mir == nil || mir.arena == nil {
 		return "", fmt.Errorf("missing validated MIR")
 	}
-	document := mir.document
+	document, err := mir.documentView()
+	if err != nil {
+		return "", err
+	}
 	if kirDocumentUsesFunctionValues(document) {
 		return "", fmt.Errorf("C backend does not support function values or closures; use the interpreter")
 	}

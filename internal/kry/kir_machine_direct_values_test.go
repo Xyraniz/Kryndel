@@ -2,6 +2,7 @@ package kry
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -455,7 +456,10 @@ func TestDirectKIRPreflightRejectsAlteredUnsignedCastType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document := mir.document
+	document, err := mir.documentView()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(document.Statements) != 1 || document.Statements[0].Expr == nil || len(document.Statements[0].Expr.Args) != 1 {
 		t.Fatal("test KIR has no expected println(u8(...)) call")
 	}
@@ -464,7 +468,15 @@ func TestDirectKIRPreflightRejectsAlteredUnsignedCastType(t *testing.T) {
 		t.Fatal("test KIR has no expected u8(...) expression")
 	}
 	cast.Type = "UInt16"
-	err = validateKIRDirectELFValueSubset(mir)
+	modified, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modifiedMIR, err := DecodeMIR(modified, checker.Env.Lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = validateKIRDirectELFValueSubset(modifiedMIR)
 	if !errors.Is(err, errKIRSubsetUnsupported) || !strings.Contains(err.Error(), `builtin "u8"`) {
 		t.Fatalf("altered u8 return type should be rejected by direct lowering preflight, got %v", err)
 	}

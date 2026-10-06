@@ -51,24 +51,27 @@ Lexical scopes are represented by parent-linked environments. A declaration is l
 ## Intermediate representation status
 
 `CompileMIR` converts the checker-annotated source tree into an opaque,
-validated `ValidatedMIR`. It checks that the supplied checker belongs to that
-tree, validates the KIR structure and resource bounds, and snapshots source
-text and package visibility as diagnostic sidecars. `EmitKIR` serializes the
-same document for interchange and portable artifacts; ordinary in-process
-lowering does not encode and decode JSON to cross this boundary.
+validated `ValidatedMIR` backed by flat typed node tables and checked indexes.
+It checks that the supplied checker belongs to that tree, validates the KIR
+structure and resource bounds, and snapshots source text and package
+visibility as diagnostic sidecars. `DecodeMIR` parses and validates the wire
+document once, then stores the same arena form. `EmitKIR` serializes from that
+arena; source compilation does not encode and decode JSON to reach it.
 
-All production run and native-build entrypoints begin from `ValidatedMIR`. C
-AOT, direct ELF, direct PE, and the interpreter consume its typed KIR document.
-The interpreter keeps its runtime state in a persistent KIR executor,
-including across REPL snippets; it no longer projects KIR back into an
-AST-shaped `interpreterProgram`. Direct ELF and PE lower their supported KIR
-subsets and reject unsupported constructs without an AST-derived fallback.
-The checked source AST is not a production lowering input. The same KIR
-executor also provides bounded direct KIR execution for differential tests.
+All production run and native-build entrypoints begin from `ValidatedMIR`.
+That value no longer retains the recursive wire document: its canonical state
+is the typed arena, including explicit optional references and bounded child
+ranges. Current Go lowerer implementations still request a complete typed
+compatibility view from that arena; migrating their recursive walkers to
+indexed access remains unfinished. This is a real intermediate step, not the
+final single-representation boundary. The interpreter keeps its runtime state
+in a persistent KIR executor, including across REPL snippets. Direct ELF and
+PE reject constructs outside their supported subsets without an AST-derived
+fallback.
 
 `DecodeMIR` validates the portable KIR document without source-text and package
-visibility sidecars. The interpreter and native lowerers can consume that same
-context-free value directly. KIR carries source names and coordinates, so
+visibility sidecars, then flattens it into the same arena used by
+`CompileMIR`. KIR carries source names and coordinates, so
 runtime diagnostics retain file, line, and column; decoded documents do not
 provide source excerpts. Artifact loading additionally checks the embedded
 source graph and recompiles the MIR before accepting the bundle.
@@ -93,11 +96,10 @@ before output bytes are emitted.
 Backend support limits and KIR version history are tracked in the
 [KIR reference](kry-ir.md).
 
-This single in-memory lowering boundary applies to the Go toolchain. The
-self-hosted compiler currently emits and consumes serialized KIR JSON through
-its own `ValidatedKIR` wrapper and validator; that wrapper is not the Go
-`ValidatedMIR`, and the two validators are not generated from one schema yet.
-A differential corpus checks that both validators agree on representative
-valid and malformed core KIR documents, while the self-hosted backends accept
-only their documented subset of the KIR contract. Keep that boundary explicit
-when comparing backend parity or reporting bootstrap coverage.
+The arena migration currently covers storage and construction in the Go
+toolchain, not every consumer's traversal. The self-hosted compiler still keeps
+serialized KIR JSON in `ValidatedKIR` and its dynamic backend lowers from that
+document; the Go and Kry validators are not generated from a common schema.
+The shared corpus remains a parity guard, not proof that the two compilers use
+one in-memory representation. KIR v6 binding IDs and full source ranges, direct
+indexed lowering in Go, and the self-hosted arena migration are still required.

@@ -1050,11 +1050,15 @@ func NewRuntimeWithArgs(prog *Program, c *Checker, lim Limits, sb Sandbox, args 
 }
 
 func newRuntimeFromMIR(mir *ValidatedMIR, lim Limits, sb Sandbox, args []string) (*Runtime, *Diagnostic) {
-	if mir == nil || mir.document == nil {
+	if mir == nil || mir.arena == nil {
 		return nil, Diag(CatArtifact, nil, 1, 1, "cannot prepare interpreter from missing validated MIR")
 	}
-	if err := validateKIRDocument(mir.document, lim); err != nil {
-		return nil, Diag(CatArtifact, mir.sources[mir.document.Source], 1, 1, "cannot prepare interpreter from invalid validated MIR: %v", err)
+	document, err := mir.documentView()
+	if err != nil {
+		return nil, Diag(CatArtifact, nil, 1, 1, "cannot prepare interpreter from invalid validated MIR: %v", err)
+	}
+	if err := validateKIRDocument(document, lim); err != nil {
+		return nil, Diag(CatArtifact, mir.sources[document.Source], 1, 1, "cannot prepare interpreter from invalid validated MIR: %v", err)
 	}
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -1063,9 +1067,9 @@ func newRuntimeFromMIR(mir *ValidatedMIR, lim Limits, sb Sandbox, args []string)
 	} else {
 		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
 	}
-	source := mir.sources[mir.document.Source]
-	if source == nil && mir.document.Source != "" {
-		source = &Source{Name: mir.document.Source}
+	source := mir.sources[document.Source]
+	if source == nil && document.Source != "" {
+		source = &Source{Name: document.Source}
 	}
 	// Keep only diagnostic metadata on the compatibility shell. Runtime
 	// execution below reads the validated KIR document directly.

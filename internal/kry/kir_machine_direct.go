@@ -83,10 +83,10 @@ func validateKIRDirectELFValueSubset(mir *ValidatedMIR) error {
 }
 
 func validatedMIRDocument(mir *ValidatedMIR) (*KIRDocument, error) {
-	if mir == nil || mir.document == nil {
+	if mir == nil || mir.arena == nil {
 		return nil, fmt.Errorf("direct ELF backend requires validated MIR")
 	}
-	return mir.document, nil
+	return mir.documentView()
 }
 
 // validateKIRDirectELFSubsetMode proves the accepted native slice using
@@ -496,10 +496,13 @@ func directKIRMapType(encoded string) ([]string, bool) {
 }
 
 func buildDirectKIRELF(mir *ValidatedMIR, limits Limits, sources map[string]*Source) ([]byte, error) {
-	if mir == nil || mir.document == nil {
+	if mir == nil || mir.arena == nil {
 		return nil, fmt.Errorf("direct ELF backend requires validated MIR")
 	}
-	document := mir.document
+	document, err := mir.documentView()
+	if err != nil {
+		return nil, err
+	}
 	if err := validateKIRDirectELFValueSubset(mir); err != nil {
 		return nil, err
 	}

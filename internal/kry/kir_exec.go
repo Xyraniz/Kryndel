@@ -189,10 +189,14 @@ type kirExecOptions struct {
 // must pass a decoded document; this function repeats structural validation
 // because it is also the boundary used by native code generation.
 func executeValidatedMIR(mir *ValidatedMIR, limits Limits, sources map[string]*Source, sandbox ...Sandbox) (kirExecResult, error) {
-	if mir == nil || mir.document == nil {
+	if mir == nil || mir.arena == nil {
 		return kirExecResult{}, fmt.Errorf("invalid MIR executable: missing validated document")
 	}
-	return executeKIRSubset(mir.document, limits, sources, sandbox...)
+	document, err := mir.documentView()
+	if err != nil {
+		return kirExecResult{}, err
+	}
+	return executeKIRSubset(document, limits, sources, sandbox...)
 }
 
 func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*Source, sandbox ...Sandbox) (kirExecResult, error) {
@@ -221,13 +225,17 @@ func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*
 // executeMIRRuntime drives the production interpreter from the validated KIR
 // graph. It accepts runtime lifecycle inputs without creating a frontend AST.
 func executeMIRRuntime(mir *ValidatedMIR, limits Limits, sources map[string]*Source, sandbox Sandbox, args []string, context *ExecContext, output io.Writer, repl bool, debugger *Debugger, global *kirExecScope, runtime *Runtime) (kirExecResult, error) {
-	if mir == nil || mir.document == nil {
+	if mir == nil || mir.arena == nil {
 		return kirExecResult{}, fmt.Errorf("invalid MIR executable: missing validated document")
 	}
 	if context == nil || context.Ctx == nil {
 		return kirExecResult{}, fmt.Errorf("invalid MIR executable: missing runtime context")
 	}
-	return executeKIRWithOptions(mir.document, limits, sources, kirExecOptions{sandbox: sandbox, args: args, context: context, output: output, repl: repl, debugger: debugger, global: global, allowArgs: true, runtime: runtime})
+	document, err := mir.documentView()
+	if err != nil {
+		return kirExecResult{}, err
+	}
+	return executeKIRWithOptions(document, limits, sources, kirExecOptions{sandbox: sandbox, args: args, context: context, output: output, repl: repl, debugger: debugger, global: global, allowArgs: true, runtime: runtime})
 }
 
 func executeKIRWithOptions(document *KIRDocument, limits Limits, sources map[string]*Source, options kirExecOptions) (kirExecResult, error) {

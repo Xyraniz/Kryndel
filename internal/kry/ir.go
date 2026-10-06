@@ -2,19 +2,21 @@ package kry
 
 import "fmt"
 
-// ValidatedMIR is the single in-memory lowering input for the interpreter and
-// native backends. It is created from checked source or decoded from validated
-// KIR; callers cannot construct or mutate it through the public Go API. The
+// ValidatedMIR is the opaque in-memory lowering boundary for the interpreter
+// and native backends. Its canonical storage is a flat typed arena created
+// from checked source or validated KIR; callers cannot construct or mutate it
+// through the public Go API. Lowerer bodies still materialize a complete
+// recursive compatibility view and have not yet migrated to indexed access. The
 // source-compiled form also carries immutable source-text and package
 // visibility sidecars. Decoded KIR retains source names and coordinates for
 // diagnostics but does not include source text or those sidecars.
 //
-// The canonical JSON KIR document remains the interchange and artifact format.
+// The recursive JSON KIR document remains the interchange and artifact format.
 // Keeping this wrapper separate makes the validation boundary explicit and
 // avoids serializing and decoding the document between in-process compiler
 // stages.
 type ValidatedMIR struct {
-	document         *KIRDocument
+	arena            *KIRArena
 	limits           Limits
 	sources          map[string]*Source
 	visibilityScopes map[string]string
@@ -44,6 +46,10 @@ func CompileMIR(program *Program, checker *Checker, target NativeTarget) (*Valid
 	if err := validateKIRDocument(document, checker.Lim); err != nil {
 		return nil, fmt.Errorf("invalid lowered MIR: %w", err)
 	}
+	arena, err := newKIRArena(document)
+	if err != nil {
+		return nil, fmt.Errorf("build validated MIR arena: %w", err)
+	}
 	paths := newKIRPathNames(program)
 	sources := make(map[string]*Source, len(program.Sources)+1)
 	visibilityScopes := make(map[string]string, len(program.Sources)+1)
@@ -67,7 +73,18 @@ func CompileMIR(program *Program, checker *Checker, target NativeTarget) (*Valid
 	for _, source := range program.Sources {
 		addSource(source)
 	}
-	return &ValidatedMIR{document: document, limits: checker.Lim, sources: sources, visibilityScopes: visibilityScopes, hasSourceContext: true}, nil
+	return &ValidatedMIR{arena: arena, limits: checker.Lim, sources: sources, visibilityScopes: visibilityScopes, hasSourceContext: true}, nil
+}
+
+// documentView creates a complete typed compatibility view from the canonical
+// arena. Wire encoding and the remaining legacy-shaped lowerer helpers use
+// this view while they are migrated to indexed node access. The view is never
+// retained by ValidatedMIR and cannot be used to mutate the validated value.
+func (mir *ValidatedMIR) documentView() (*KIRDocument, error) {
+	if mir == nil || mir.arena == nil {
+		return nil, fmt.Errorf("missing validated MIR")
+	}
+	return mir.arena.toKIRDocument()
 }
 
 // ValidateASTLimits bounds the checked source tree before it is lowered to

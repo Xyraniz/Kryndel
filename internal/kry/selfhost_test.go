@@ -1357,7 +1357,10 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeMIR rejected self-hosted KIR: %v", err)
 	}
-	document := mir.document
+	document, err := mir.documentView()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if document.Version != KIRVersion {
 		t.Fatalf("self-hosted KIR version = %d, want %d", document.Version, KIRVersion)
 	}
@@ -1462,8 +1465,12 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 			if err != nil {
 				t.Fatalf("DecodeMIR rejected self-hosted KIR: %v", err)
 			}
-			if decoded.document.Version != KIRVersion {
-				t.Fatalf("self-hosted KIR version = %d, want %d", decoded.document.Version, KIRVersion)
+			decodedDocument, err := decoded.documentView()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decodedDocument.Version != KIRVersion {
+				t.Fatalf("self-hosted KIR version = %d, want %d", decodedDocument.Version, KIRVersion)
 			}
 		})
 	}

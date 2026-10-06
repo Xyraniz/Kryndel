@@ -2,8 +2,10 @@ package kry
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -46,6 +48,80 @@ func TestCompileMIRRoundTripsToCanonicalKIR(t *testing.T) {
 	}
 	if !bytes.Equal(encoded, roundTrip) {
 		t.Fatal("in-memory and decoded MIR did not preserve canonical KIR bytes")
+	}
+}
+
+func TestValidatedMIRUsesCompleteFlatArena(t *testing.T) {
+	program, checker := testProgram(t, `struct Point { x: Int }
+enum Switch { On, Off }
+fn add(value: Int, extra: Int = 1) -> Int { return value + extra }
+fn main() -> Int {
+    let point: Point = Point { x: 1 }
+    let mut total: Int = point.x
+    for item in [2, 3] { total = total + add(item) }
+    if total > 3 { total = total + 1 } else { total = total - 1 }
+    match Switch::On {
+        Switch::On => { return total }
+        Switch::Off => { return 0 }
+    }
+}
+`)
+	mir, err := CompileMIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatalf("compile source to validated arena: %v", err)
+	}
+	if _, found := reflect.TypeOf(ValidatedMIR{}).FieldByName("document"); found {
+		t.Fatal("ValidatedMIR still retains a recursive wire document")
+	}
+	if mir.arena == nil {
+		t.Fatal("CompileMIR did not create an arena")
+	}
+	for label, count := range map[string]int{
+		"expressions": len(mir.arena.Expressions), "statements": len(mir.arena.Statements),
+		"functions": len(mir.arena.Functions), "parameters": len(mir.arena.Parameters),
+		"patterns": len(mir.arena.Patterns), "match arms": len(mir.arena.Arms),
+		"bindings": len(mir.arena.Bindings),
+	} {
+		if count == 0 {
+			t.Errorf("arena has no %s", label)
+		}
+	}
+	if err := mir.arena.validateReferences(); err != nil {
+		t.Fatalf("valid source produced invalid arena references: %v", err)
+	}
+
+	wire, err := mir.MarshalKIR()
+	if err != nil {
+		t.Fatalf("serialize arena: %v", err)
+	}
+	view, err := mir.documentView()
+	if err != nil {
+		t.Fatalf("make typed round-trip view: %v", err)
+	}
+	viewWire, err := json.MarshalIndent(view, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewWire = append(viewWire, '\n')
+	if !bytes.Equal(wire, viewWire) {
+		t.Fatal("arena to wire view lost KIR fields or child/argument order")
+	}
+
+	original := append([]byte(nil), wire...)
+	view.Functions[0].Body[0].Return.Int = 999
+	afterMutation, err := mir.MarshalKIR()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(original, afterMutation) {
+		t.Fatal("mutating a compatibility view changed ValidatedMIR")
+	}
+
+	broken := *mir.arena
+	broken.ExpressionRefs = append([]MIRIndex(nil), mir.arena.ExpressionRefs...)
+	broken.ExpressionRefs[0] = MIRIndex(len(broken.Expressions))
+	if err := broken.validateReferences(); err == nil {
+		t.Fatal("arena accepted an out-of-range child/argument reference")
 	}
 }
 
