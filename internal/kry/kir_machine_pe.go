@@ -46,6 +46,9 @@ func lowerDirectPEKIR(mir *ValidatedMIR, limits Limits) ([]byte, error) {
 	if err := validateMIRFunctionValueSupport(mir, "pe-direct"); err != nil {
 		return nil, err
 	}
+	if err := validateMIRNativeFeatureSupport(mir, "pe-direct", target); err != nil {
+		return nil, err
+	}
 	output, staticErr := directStaticOutputMIR(arena, limits.MaxOutputBytes)
 	if staticErr == nil {
 		image, err := buildDirectStaticPE(output, arena.Target.GUI, limits)

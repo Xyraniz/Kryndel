@@ -117,8 +117,8 @@ func TestDirectPEGUITargetUsesWindowsSubsystem(t *testing.T) {
 
 func TestDirectPERejectsUnsupportedProgramsAndTargets(t *testing.T) {
 	p, c := testProgram(t, "println([1, 2, 3])\n")
-	if _, err := BuildDirectPE(p, c, NativeTarget{OS: "windows", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), "direct PE dynamic subset") {
-		t.Fatalf("expected explicit dynamic-subset rejection, got %v", err)
+	if _, err := BuildDirectPE(p, c, NativeTarget{OS: "windows", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), `expression "ExArray" is not listed as supported by the pe-direct backend`) {
+		t.Fatalf("expected typed capability rejection before lowering, got %v", err)
 	}
 	if _, err := BuildDirectPE(p, c, NativeTarget{OS: "linux", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), "windows-amd64") {
 		t.Fatalf("expected target rejection, got %v", err)

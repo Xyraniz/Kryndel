@@ -50,6 +50,7 @@ func TestProductionLoweringEntrypointsUseValidatedMIR(t *testing.T) {
 	}
 
 	checkCalls("runtime.go", "NewRuntimeWithArgs", "CompileMIR", "newRuntimeFromMIR")
+	checkCalls("runtime.go", "newRuntimeFromMIR", "validateReferences")
 	checkCalls("runtime.go", "NewRuntime", "NewRuntimeWithArgs")
 	checkCalls("runtime.go", "RunForREPL", "runValidatedMIR")
 	checkCalls("codegen.go", "GenerateC", "generateC")
@@ -60,10 +61,44 @@ func TestProductionLoweringEntrypointsUseValidatedMIR(t *testing.T) {
 	checkCalls("engine.go", "DebugPathWithArgs", "CompileMIR", "newRuntimeFromMIR")
 	checkCalls("machine.go", "BuildDirectELF", "CompileMIR", "buildDirectELFFromMIR")
 	checkCalls("machine_pe.go", "BuildDirectPE", "CompileMIR", "lowerDirectPEKIR")
+	checkCalls("kir_machine_pe.go", "lowerDirectPEKIR", "validateMIRNativeFeatureSupport")
 	checkCalls("native.go", "BuildNative", "BuildNativeOpts")
 	checkCalls("native.go", "BuildNativeOpts", "BuildNativeWithPolicyOpts")
 	checkCalls("native.go", "BuildNativeWithPolicyOpts", "CompileMIR", "generateCFromValidatedKIR")
 	checkCalls("native.go", "EmitC", "GenerateC")
+}
+
+func TestRuntimePreparationDoesNotMaterializeRecursiveKIR(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "runtime.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Name.Name != "newRuntimeFromMIR" {
+			continue
+		}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := ""
+			switch callee := call.Fun.(type) {
+			case *ast.Ident:
+				name = callee.Name
+			case *ast.SelectorExpr:
+				name = callee.Sel.Name
+			}
+			switch name {
+			case "documentView", "toKIRDocument", "validateKIRDocument":
+				t.Errorf("runtime preparation calls %s after MIR validation", name)
+			}
+			return true
+		})
+		return
+	}
+	t.Fatal("runtime.go does not declare newRuntimeFromMIR")
 }
 
 func TestCAOTLoweringUsesFlatValidatedMIRRows(t *testing.T) {
@@ -235,6 +270,53 @@ func TestNativeCapabilityPreflightTraversesValidatedArena(t *testing.T) {
 				return true
 			})
 		}
+	}
+}
+
+func TestDirectPECapabilitiesAreCheckedBeforeAnyEmissionPath(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "kir_machine_pe.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lowerer *ast.FuncDecl
+	for _, declaration := range file.Decls {
+		candidate, ok := declaration.(*ast.FuncDecl)
+		if ok && candidate.Name.Name == "lowerDirectPEKIR" {
+			lowerer = candidate
+			break
+		}
+	}
+	if lowerer == nil {
+		t.Fatal("lowerDirectPEKIR is missing")
+	}
+	var preflight, staticLowering, recursiveView token.Pos
+	ast.Inspect(lowerer.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name := ""
+		switch callee := call.Fun.(type) {
+		case *ast.Ident:
+			name = callee.Name
+		case *ast.SelectorExpr:
+			name = callee.Sel.Name
+		}
+		switch name {
+		case "validateMIRNativeFeatureSupport":
+			preflight = call.Pos()
+		case "directStaticOutputMIR":
+			staticLowering = call.Pos()
+		case "documentView":
+			recursiveView = call.Pos()
+		}
+		return true
+	})
+	if preflight == token.NoPos || staticLowering == token.NoPos || preflight >= staticLowering {
+		t.Fatal("PE must validate supported language features from typed MIR before attempting output generation")
+	}
+	if recursiveView != token.NoPos && preflight >= recursiveView {
+		t.Fatal("PE capability preflight must happen before dynamic lowering materializes a recursive KIR view")
 	}
 }
 

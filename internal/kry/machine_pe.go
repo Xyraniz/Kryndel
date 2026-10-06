@@ -31,9 +31,6 @@ func BuildDirectPE(p *Program, c *Checker, target NativeTarget) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	if err := validateMIRNativeBuiltinSupport(mir, "pe-direct", target); err != nil {
-		return nil, err
-	}
 	return lowerDirectPEKIR(mir, mir.limits)
 }
 

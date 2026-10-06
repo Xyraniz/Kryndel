@@ -1053,12 +1053,8 @@ func newRuntimeFromMIR(mir *ValidatedMIR, lim Limits, sb Sandbox, args []string)
 	if mir == nil || mir.arena == nil {
 		return nil, Diag(CatArtifact, nil, 1, 1, "cannot prepare interpreter from missing validated MIR")
 	}
-	document, err := mir.documentView()
-	if err != nil {
-		return nil, Diag(CatArtifact, nil, 1, 1, "cannot prepare interpreter from invalid validated MIR: %v", err)
-	}
-	if err := validateKIRDocument(document, lim); err != nil {
-		return nil, Diag(CatArtifact, mir.sources[document.Source], 1, 1, "cannot prepare interpreter from invalid validated MIR: %v", err)
+	if err := mir.arena.validateReferences(); err != nil {
+		return nil, Diag(CatArtifact, nil, 1, 1, "cannot prepare interpreter from invalid validated MIR arena: %v", err)
 	}
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -1067,12 +1063,14 @@ func newRuntimeFromMIR(mir *ValidatedMIR, lim Limits, sb Sandbox, args []string)
 	} else {
 		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(lim.MaxWallTimeMS)*time.Millisecond)
 	}
-	source := mir.sources[document.Source]
-	if source == nil && document.Source != "" {
-		source = &Source{Name: document.Source}
+	sourceName := mir.arena.Source
+	source := mir.sources[sourceName]
+	if source == nil && sourceName != "" {
+		source = &Source{Name: sourceName}
 	}
 	// Keep only diagnostic metadata on the compatibility shell. Runtime
-	// execution below reads the validated KIR document directly.
+	// execution still materializes its recursive compatibility view from MIR;
+	// that interpreter path is being migrated to indexed arena access.
 	program := &Program{Source: source}
 	runtime := &Runtime{
 		Prog: program, mir: mir, Args: append([]string(nil), args...), Global: newRunScope(nil),
