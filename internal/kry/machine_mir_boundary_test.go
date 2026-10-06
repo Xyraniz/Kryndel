@@ -141,6 +141,16 @@ func TestCompileMIRBuildsFlatArenaWithoutRecursiveKIRDocument(t *testing.T) {
 	}
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		switch function.Name.Name {
+		case "buildKIRDocument", "kirExpr", "kirStmt", "kirStmts", "kirLambda", "kirValue":
+			t.Errorf("recursive source-to-wire builder %s remains in production", function.Name.Name)
+		}
+	}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
 		if !ok || function.Name.Name != "kirExprScalars" {
 			continue
 		}
