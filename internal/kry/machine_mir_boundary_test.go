@@ -122,6 +122,50 @@ func TestNativeMachineLowerersDoNotAcceptSourceAST(t *testing.T) {
 	}
 }
 
+func TestNativeCapabilityPreflightTraversesValidatedArena(t *testing.T) {
+	checks := map[string][]string{
+		"kir_capabilities.go":       {"validateMIRNativeBuiltinSupport", "validateMIRFunctionValueSupport", "kirArenaUsesFunctionValue"},
+		"kir_capabilities_arena.go": {"validateMIRNativeFeatureSupport"},
+	}
+	for fileName, functionNames := range checks {
+		file, err := parser.ParseFile(token.NewFileSet(), fileName, nil, parser.AllErrors)
+		if err != nil {
+			t.Fatalf("parse %s: %v", fileName, err)
+		}
+		for _, functionName := range functionNames {
+			var function *ast.FuncDecl
+			for _, declaration := range file.Decls {
+				candidate, ok := declaration.(*ast.FuncDecl)
+				if ok && candidate.Name.Name == functionName {
+					function = candidate
+					break
+				}
+			}
+			if function == nil || function.Body == nil {
+				t.Fatalf("%s does not declare %s", fileName, functionName)
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name := ""
+				switch callee := call.Fun.(type) {
+				case *ast.Ident:
+					name = callee.Name
+				case *ast.SelectorExpr:
+					name = callee.Sel.Name
+				}
+				switch name {
+				case "documentView", "toKIRDocument", "DecodeKIR":
+					t.Errorf("%s.%s uses recursive wire view %s during capability preflight", fileName, functionName, name)
+				}
+				return true
+			})
+		}
+	}
+}
+
 func TestRunForREPLRequiresValidatedMIR(t *testing.T) {
 	program, checker := testProgram(t, "let visible = 42")
 	runtime, diagnostic := newASTOracleRuntime(program, checker, DefaultLimits(), Sandbox{}, nil)

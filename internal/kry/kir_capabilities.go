@@ -11,274 +11,15 @@ func validateMIRNativeBuiltinSupport(mir *ValidatedMIR, format string, target Na
 	if mir == nil || mir.arena == nil {
 		return fmt.Errorf("missing validated MIR")
 	}
-	document, err := mir.documentView()
-	if err != nil {
-		return err
+	if err := mir.arena.validateReferences(); err != nil {
+		return fmt.Errorf("invalid validated MIR arena: %w", err)
 	}
-
-	var walkExpr func(*KIRExpr) error
-	var walkStmts func([]*KIRStmt) error
-	var walkFunction func(*KIRFunction) error
-	walkExpr = func(expression *KIRExpr) error {
-		if expression == nil {
-			return nil
-		}
-		if expression.Kind == "call" && strings.HasPrefix(expression.CallTarget, "builtin:") {
-			name := strings.TrimPrefix(expression.CallTarget, "builtin:")
+	for _, expression := range mir.arena.Expressions {
+		if expression.Value.Kind == "call" && strings.HasPrefix(expression.Value.CallTarget, "builtin:") {
+			name := strings.TrimPrefix(expression.Value.CallTarget, "builtin:")
 			if nativeBuiltinBackendStatus(name, format, target) == "unsupported" {
 				return fmt.Errorf("builtin %q is not listed as supported by the %s backend for %s-%s; use the interpreter for this feature", name, format, target.OS, target.Arch)
 			}
-		}
-		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
-			if err := walkExpr(child); err != nil {
-				return err
-			}
-		}
-		for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
-			for _, child := range list {
-				if err := walkExpr(child); err != nil {
-					return err
-				}
-			}
-		}
-		return walkFunction(expression.Lambda)
-	}
-	walkStmts = func(statements []*KIRStmt) error {
-		for _, statement := range statements {
-			if statement == nil {
-				continue
-			}
-			for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
-				if err := walkExpr(expression); err != nil {
-					return err
-				}
-			}
-			for _, block := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
-				if err := walkStmts(block); err != nil {
-					return err
-				}
-			}
-			for _, arm := range statement.Arms {
-				if arm != nil {
-					if err := walkStmts(arm.Body); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
-	walkFunction = func(function *KIRFunction) error {
-		if function == nil {
-			return nil
-		}
-		for _, parameter := range function.Params {
-			if parameter != nil {
-				if err := walkExpr(parameter.Default); err != nil {
-					return err
-				}
-			}
-		}
-		return walkStmts(function.Body)
-	}
-
-	for _, statement := range document.Statements {
-		if err := walkStmts([]*KIRStmt{statement}); err != nil {
-			return err
-		}
-	}
-	for _, function := range document.Functions {
-		if err := walkFunction(function); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateMIRNativeFeatureSupport checks the language constructs represented
-// by KIR v5 against the existing backend capability inventories.
-func validateMIRNativeFeatureSupport(mir *ValidatedMIR, format string, target NativeTarget) error {
-	if mir == nil || mir.arena == nil {
-		return fmt.Errorf("missing validated MIR")
-	}
-	// Report unsupported builtins before their opaque handle types, matching
-	// the source-AST preflight's diagnostic priority.
-	if err := validateMIRNativeBuiltinSupport(mir, format, target); err != nil {
-		return err
-	}
-
-	document, err := mir.documentView()
-	if err != nil {
-		return err
-	}
-	var walkExpr func(*KIRExpr, map[string]struct{}, bool) error
-	var walkStmts func([]*KIRStmt, map[string]struct{}) error
-	var walkFunction func(*KIRFunction) error
-	walkExpr = func(expression *KIRExpr, generics map[string]struct{}, allowDirectOutput bool) error {
-		if expression == nil {
-			return nil
-		}
-		if name := kirExpressionCapabilityName(expression.Kind); name == "" {
-			return fmt.Errorf("expression kind %q is not listed as supported by the %s backend for %s-%s", expression.Kind, format, target.OS, target.Arch)
-		} else if err := validateLanguageItem("expression", name, format, target); err != nil {
-			return err
-		}
-		if expression.Kind == "unary" || expression.Kind == "binary" {
-			category := "binary_operator"
-			if expression.Kind == "unary" {
-				category = "unary_operator"
-			}
-			if operator := kirOperatorCapabilityName(expression.Operator); operator == "" {
-				return fmt.Errorf("operator %q is not listed as supported by the %s backend for %s-%s", expression.Operator, format, target.OS, target.Arch)
-			} else if err := validateLanguageItem(category, operator, format, target); err != nil {
-				return err
-			}
-		}
-		if feature, skip := kirTypeCapabilityName(expression.Type, generics, document); !skip {
-			if feature == "" {
-				return fmt.Errorf("type kind %q is not listed as supported by the %s backend for %s-%s", expression.Type, format, target.OS, target.Arch)
-			}
-			if err := validateLanguageItem("type", feature, format, target); err != nil {
-				return err
-			}
-		}
-		if expression.Kind == "call" && strings.HasPrefix(expression.CallTarget, "builtin:") {
-			name := strings.TrimPrefix(expression.CallTarget, "builtin:")
-			status := nativeBuiltinBackendStatus(name, format, target)
-			if format == "elf-direct" && (name == "print" || name == "println") && (!allowDirectOutput || len(expression.Args) != 1) {
-				status = "unsupported"
-			}
-			if status == "unsupported" {
-				return fmt.Errorf("builtin %q is not listed as supported by the %s backend for %s-%s; use the interpreter for this feature", name, format, target.OS, target.Arch)
-			}
-		}
-
-		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
-			if err := walkExpr(child, generics, false); err != nil {
-				return err
-			}
-		}
-		for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
-			for _, child := range list {
-				if err := walkExpr(child, generics, false); err != nil {
-					return err
-				}
-			}
-		}
-		return walkFunction(expression.Lambda)
-	}
-	walkStmts = func(statements []*KIRStmt, generics map[string]struct{}) error {
-		for _, statement := range statements {
-			if statement == nil {
-				continue
-			}
-			if name := kirStatementCapabilityName(statement.Kind); name == "" {
-				return fmt.Errorf("statement kind %q is not listed as supported by the %s backend for %s-%s", statement.Kind, format, target.OS, target.Arch)
-			} else if err := validateLanguageItem("statement", name, format, target); err != nil {
-				return err
-			}
-			for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
-				if statement.Kind == "return" && expression == statement.Return && expression != nil && expression.Kind == "nil" {
-					// A source nil return is lowered as a no-value return.
-					continue
-				}
-				allowOutput := format == "elf-direct" && statement.Kind == "expr" && expression == statement.Expr
-				if err := walkExpr(expression, generics, allowOutput); err != nil {
-					return err
-				}
-			}
-			for _, block := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
-				if err := walkStmts(block, generics); err != nil {
-					return err
-				}
-			}
-			for _, arm := range statement.Arms {
-				if arm == nil {
-					continue
-				}
-				if arm.Pattern == nil {
-					return fmt.Errorf("pattern kind %q is not listed as supported by the %s backend for %s-%s", "<nil>", format, target.OS, target.Arch)
-				}
-				if name := kirPatternCapabilityName(arm.Pattern.Kind); name == "" {
-					return fmt.Errorf("pattern kind %q is not listed as supported by the %s backend for %s-%s", arm.Pattern.Kind, format, target.OS, target.Arch)
-				} else if err := validateLanguageItem("pattern", name, format, target); err != nil {
-					return err
-				}
-				if err := walkStmts(arm.Body, generics); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	walkFunction = func(function *KIRFunction) error {
-		if function == nil {
-			return nil
-		}
-		generics := kirFunctionTypeParameters(function)
-		if function.Receiver != "" {
-			if receiver, _, ok := kirExecStructType(document, function.Receiver); ok {
-				for _, parameter := range receiver.TypeParams {
-					if parameter != nil && parameter.Name != "" {
-						generics[parameter.Name] = struct{}{}
-					}
-				}
-			}
-		}
-		for _, parameter := range function.Params {
-			if parameter == nil {
-				continue
-			}
-			if feature, skip := kirTypeCapabilityName(parameter.Type, generics, document); !skip {
-				if feature == "" {
-					return fmt.Errorf("type kind %q is not listed as supported by the %s backend for %s-%s", parameter.Type, format, target.OS, target.Arch)
-				}
-				if err := validateLanguageItem("type", feature, format, target); err != nil {
-					return err
-				}
-			}
-			if err := walkExpr(parameter.Default, generics, false); err != nil {
-				return err
-			}
-		}
-		if feature, skip := kirTypeCapabilityName(function.Return, generics, document); !skip {
-			if feature == "" {
-				return fmt.Errorf("type kind %q is not listed as supported by the %s backend for %s-%s", function.Return, format, target.OS, target.Arch)
-			}
-			if err := validateLanguageItem("type", feature, format, target); err != nil {
-				return err
-			}
-		}
-		return walkStmts(function.Body, generics)
-	}
-
-	for _, statement := range document.Statements {
-		if err := walkStmts([]*KIRStmt{statement}, map[string]struct{}{}); err != nil {
-			return err
-		}
-	}
-	for _, structure := range document.Structs {
-		if structure == nil {
-			continue
-		}
-		generics := kirTypeParameterNames(structure.TypeParams)
-		for _, field := range structure.Fields {
-			if field == nil {
-				continue
-			}
-			if feature, skip := kirTypeCapabilityName(field.Type, generics, document); !skip {
-				if feature == "" {
-					return fmt.Errorf("type kind %q is not listed as supported by the %s backend for %s-%s", field.Type, format, target.OS, target.Arch)
-				}
-				if err := validateLanguageItem("type", feature, format, target); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	for _, function := range document.Functions {
-		if err := walkFunction(function); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -290,21 +31,20 @@ func validateMIRFunctionValueSupport(mir *ValidatedMIR, format string) error {
 	if mir == nil || mir.arena == nil {
 		return fmt.Errorf("missing MIR")
 	}
-	document, err := mir.documentView()
-	if err != nil {
-		return err
+	if err := mir.arena.validateReferences(); err != nil {
+		return fmt.Errorf("invalid validated MIR arena: %w", err)
 	}
-	if kirDocumentUsesFunctionValue(document) {
+	if kirArenaUsesFunctionValue(mir.arena) {
 		return fmt.Errorf("%s backend does not support function values or closures; use the interpreter", format)
 	}
 	return nil
 }
 
-func kirDocumentUsesFunctionValue(document *KIRDocument) bool {
-	if document == nil {
+func kirArenaUsesFunctionValue(arena *KIRArena) bool {
+	if arena == nil {
 		return false
 	}
-	for _, structure := range document.Structs {
+	for _, structure := range arena.Structs {
 		if structure == nil {
 			continue
 		}
@@ -314,7 +54,7 @@ func kirDocumentUsesFunctionValue(document *KIRDocument) bool {
 			}
 		}
 	}
-	for _, trait := range document.Traits {
+	for _, trait := range arena.Traits {
 		if trait == nil {
 			continue
 		}
@@ -332,101 +72,43 @@ func kirDocumentUsesFunctionValue(document *KIRDocument) bool {
 			}
 		}
 	}
-	for _, statement := range document.Statements {
-		if kirStmtUsesFunctionValue(statement) {
+	for _, expression := range arena.Expressions {
+		value := expression.Value
+		if value.Kind == "lambda" || value.Kind == "var" && strings.HasPrefix(value.CallTarget, "function:") || value.Kind == "call" && expression.Callee.Present || kirTypeContainsFunction(value.Type) || kirTypeContainsFunction(value.StructType) || kirTypeContainsFunction(bindingType(value.Binding)) {
 			return true
 		}
-	}
-	for _, function := range document.Functions {
-		if kirFunctionUsesFunctionValue(function) {
-			return true
-		}
-	}
-	return false
-}
-
-func kirFunctionUsesFunctionValue(function *KIRFunction) bool {
-	if function == nil {
-		return false
-	}
-	if len(function.Captures) != 0 || kirTypeContainsFunction(function.Return) || kirTypeContainsFunction(function.Receiver) {
-		return true
-	}
-	for _, parameter := range function.Params {
-		if parameter == nil {
-			continue
-		}
-		if kirTypeContainsFunction(parameter.Type) || kirExprUsesFunctionValue(parameter.Default) {
-			return true
-		}
-	}
-	for _, statement := range function.Body {
-		if kirStmtUsesFunctionValue(statement) {
-			return true
-		}
-	}
-	return false
-}
-
-func kirStmtUsesFunctionValue(statement *KIRStmt) bool {
-	if statement == nil {
-		return false
-	}
-	if kirTypeContainsFunction(statement.Annotation) || kirTypeContainsFunction(bindingType(statement.Binding)) {
-		return true
-	}
-	for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
-		if kirExprUsesFunctionValue(expression) {
-			return true
-		}
-	}
-	for _, block := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
-		for _, child := range block {
-			if kirStmtUsesFunctionValue(child) {
+		for _, typeName := range value.GenericArguments {
+			if kirTypeContainsFunction(typeName) {
 				return true
 			}
 		}
 	}
-	for _, arm := range statement.Arms {
-		if arm != nil {
-			if arm.Pattern != nil && kirTypeContainsFunction(arm.Pattern.Type) {
+	for _, statement := range arena.Statements {
+		if kirTypeContainsFunction(statement.Value.Annotation) || kirTypeContainsFunction(bindingType(statement.Value.Binding)) {
+			return true
+		}
+	}
+	for _, pattern := range arena.Patterns {
+		if kirTypeContainsFunction(pattern.Value.Type) {
+			return true
+		}
+	}
+	for _, function := range arena.Functions {
+		if kirTypeContainsFunction(function.Value.Return) || kirTypeContainsFunction(function.Value.Receiver) {
+			return true
+		}
+		if function.Captures.Count != 0 {
+			return true
+		}
+		parameters, _ := arena.indexList(arena.ParameterRefs, function.Params)
+		for _, index := range parameters {
+			parameter := arena.Parameters[index]
+			if kirTypeContainsFunction(parameter.Value.Type) {
 				return true
-			}
-			for _, child := range arm.Body {
-				if kirStmtUsesFunctionValue(child) {
-					return true
-				}
 			}
 		}
 	}
 	return false
-}
-
-func kirExprUsesFunctionValue(expression *KIRExpr) bool {
-	if expression == nil {
-		return false
-	}
-	if expression.Kind == "lambda" || expression.Kind == "var" && strings.HasPrefix(expression.CallTarget, "function:") || expression.Kind == "call" && expression.Callee != nil || kirTypeContainsFunction(expression.Type) || kirTypeContainsFunction(expression.StructType) || kirTypeContainsFunction(bindingType(expression.Binding)) {
-		return true
-	}
-	for _, typeName := range expression.GenericArguments {
-		if kirTypeContainsFunction(typeName) {
-			return true
-		}
-	}
-	for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
-		if kirExprUsesFunctionValue(child) {
-			return true
-		}
-	}
-	for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
-		for _, child := range list {
-			if kirExprUsesFunctionValue(child) {
-				return true
-			}
-		}
-	}
-	return kirFunctionUsesFunctionValue(expression.Lambda)
 }
 
 func bindingType(binding *KIRBinding) string {
@@ -460,7 +142,7 @@ func kirOperatorCapabilityName(operator string) string {
 	}[operator]
 }
 
-func kirTypeCapabilityName(encoded string, generics map[string]struct{}, document *KIRDocument) (feature string, skip bool) {
+func kirTypeCapabilityName(encoded string, generics map[string]struct{}) (feature string, skip bool) {
 	if encoded == "" {
 		return "", true
 	}
@@ -533,18 +215,6 @@ func kirTypeCapabilityName(encoded string, generics map[string]struct{}, documen
 		return "TyFFISymbol", false
 	case "FFIBuffer":
 		return "TyFFIBuffer", false
-	}
-	if document != nil {
-		for _, structure := range document.Structs {
-			if structure != nil && structure.Name == spec.Name {
-				return "TyStruct", false
-			}
-		}
-		for _, enum := range document.Enums {
-			if enum != nil && enum.Name == spec.Name {
-				return "TyEnum", false
-			}
-		}
 	}
 	return "", false
 }
