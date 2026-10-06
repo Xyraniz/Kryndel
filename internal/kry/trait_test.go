@@ -120,7 +120,7 @@ func TestTraitKIRV5RoundTripRetainsStaticDispatchAndFunctionLocations(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if document.Version != 5 || len(document.Traits) != 1 || len(document.TraitImpls) != 2 {
+	if document.Version != KIRVersion || len(document.Traits) != 1 || len(document.TraitImpls) != 2 {
 		t.Fatalf("unexpected trait KIR declarations: version=%d traits=%d impls=%d", document.Version, len(document.Traits), len(document.TraitImpls))
 	}
 	for _, function := range document.Functions {

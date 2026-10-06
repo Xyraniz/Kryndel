@@ -1,18 +1,116 @@
 package kry
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
 )
 
-// This drift check ensures that every KIR v5 wire field is accounted for by
+func TestKIRV6JSONSchemaMatchesGoWireFields(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "kir-v6.schema.json"))
+	if err != nil {
+		t.Fatalf("read KIR v6 JSON schema: %v", err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatalf("decode KIR v6 JSON schema: %v", err)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("KIR v6 JSON schema has no root properties")
+	}
+	version, ok := properties["version"].(map[string]any)
+	if !ok || version["const"] != float64(KIRVersion) {
+		t.Fatalf("KIR schema version = %#v, want %d", version, KIRVersion)
+	}
+
+	definitions, ok := schema["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("KIR v6 JSON schema has no $defs")
+	}
+	wireTypes := map[string]reflect.Type{
+		"target": reflect.TypeOf(KIRTarget{}), "span": reflect.TypeOf(KIRSourceSpan{}),
+		"import": reflect.TypeOf(KIRImport{}), "struct": reflect.TypeOf(KIRStruct{}),
+		"field": reflect.TypeOf(KIRField{}), "enum": reflect.TypeOf(KIREnum{}),
+		"trait": reflect.TypeOf(KIRTrait{}), "traitMethod": reflect.TypeOf(KIRTraitMethod{}),
+		"traitImpl": reflect.TypeOf(KIRTraitImpl{}), "traitImplMethod": reflect.TypeOf(KIRTraitImplMethod{}),
+		"typeParam": reflect.TypeOf(KIRTypeParam{}), "param": reflect.TypeOf(KIRParam{}),
+		"binding": reflect.TypeOf(KIRBinding{}), "value": reflect.TypeOf(KIRValue{}),
+		"pattern": reflect.TypeOf(KIRPattern{}), "arm": reflect.TypeOf(KIRArm{}),
+		"expression": reflect.TypeOf(KIRExpr{}), "statement": reflect.TypeOf(KIRStmt{}),
+		"function": reflect.TypeOf(KIRFunction{}),
+	}
+	for name, wireType := range wireTypes {
+		definition, ok := definitions[name].(map[string]any)
+		if !ok {
+			t.Errorf("KIR schema is missing definition %q", name)
+			continue
+		}
+		got := schemaPropertyNames(definition)
+		want := make(map[string]bool, wireType.NumField())
+		for index := 0; index < wireType.NumField(); index++ {
+			field := wireType.Field(index)
+			wireName := strings.Split(field.Tag.Get("json"), ",")[0]
+			if wireName == "" || wireName == "-" {
+				continue
+			}
+			want[wireName] = true
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("KIR schema definition %q properties = %v, want Go wire properties %v", name, sortedSchemaNames(got), sortedSchemaNames(want))
+		}
+	}
+	rootProperties := schemaPropertyNames(schema)
+	wantRootProperties := make(map[string]bool, reflect.TypeOf(KIRDocument{}).NumField())
+	for index := 0; index < reflect.TypeOf(KIRDocument{}).NumField(); index++ {
+		field := reflect.TypeOf(KIRDocument{}).Field(index)
+		wireName := strings.Split(field.Tag.Get("json"), ",")[0]
+		if wireName != "" && wireName != "-" {
+			wantRootProperties[wireName] = true
+		}
+	}
+	if !reflect.DeepEqual(rootProperties, wantRootProperties) {
+		t.Errorf("KIR schema root properties = %v, want Go wire properties %v", sortedSchemaNames(rootProperties), sortedSchemaNames(wantRootProperties))
+	}
+}
+
+func schemaPropertyNames(schema map[string]any) map[string]bool {
+	names := map[string]bool{}
+	if properties, ok := schema["properties"].(map[string]any); ok {
+		for name := range properties {
+			names[name] = true
+		}
+	}
+	if allOf, ok := schema["allOf"].([]any); ok {
+		for _, part := range allOf {
+			if definition, ok := part.(map[string]any); ok {
+				for name := range schemaPropertyNames(definition) {
+					names[name] = true
+				}
+			}
+		}
+	}
+	return names
+}
+
+func sortedSchemaNames(names map[string]bool) []string {
+	result := make([]string, 0, len(names))
+	for name := range names {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// This drift check ensures that every KIR v6 wire field is accounted for by
 // the selfhost validator; declaration-specific semantic validation stays in
 // each compiler and backend.
 func TestSelfhostValidatorContractsMatchSupportedKIRWireFields(t *testing.T) {
@@ -41,7 +139,7 @@ func TestSelfhostValidatorContractsMatchSupportedKIRWireFields(t *testing.T) {
 	// nested declaration shapes; those nested object types have no field contract.
 	allowedFields := selfhostKIRAllowedFields()
 	validatorOwners := selfhostKIRValidatorOwners()
-	unsupportedTypes := map[string]bool{"KIRTrait": true, "KIRTraitMethod": true, "KIRTraitImpl": true, "KIRTraitImplMethod": true, "KIRCapture": true, "KIRImport": true, "KIRSourceSpan": true}
+	unsupportedTypes := map[string]bool{"KIRTrait": true, "KIRTraitMethod": true, "KIRTraitImpl": true, "KIRTraitImplMethod": true, "KIRCapture": true}
 	for _, declaration := range kirFile.Decls {
 		general, ok := declaration.(*ast.GenDecl)
 		if !ok {
@@ -98,26 +196,29 @@ func TestSelfhostValidatorContractsMatchSupportedKIRWireFields(t *testing.T) {
 // an unrelated KIR object.
 func selfhostKIRAllowedFields() map[string]string {
 	return map[string]string{
-		"KIRTarget":    "|os|arch|gui|",
-		"KIRDocument":  "|format|version|language_version|module|source|target|imports|sources|structs|enums|traits|trait_impls|functions|statements|",
-		"KIRStruct":    "|name|public|module|type_params|fields|",
-		"KIRField":     "|name|public|type|",
-		"KIREnum":      "|name|public|module|variants|",
-		"KIRTypeParam": "|name|constraint|",
-		"KIRParam":     "|name|type|default|binding|",
-		"KIRBinding":   "|name|type|mutable|source|line|column|",
-		"KIRFunction":  "|name|source|line|column|public|worker|unsafe|trait|module|receiver|return|type_params|params|captures|body|",
-		"KIRExpr":      "|kind|source|line|column|type|const|int|uint|uint_bits|float|bool|string|name|operator|call_target|trait_name|builtin_id|left|right|operand|args|items|base|field|receiver|map_keys|struct_name|struct_type|generic_arguments|fields|values|enum_type|enum_variant|tail|callee|lambda|binding|",
-		"KIRStmt":      "|kind|source|line|column|name|binding|mutable|const|annotation|init|expr|target|value|cond|then|else|body|iter|return|scrutinee|arms|",
-		"KIRArm":       "|pattern|body|",
-		"KIRPattern":   "|kind|source|line|column|bool|int|string|type|variant|binding|present|ok|resolved_binding|",
-		"KIRValue":     "|kind|int|uint|uint_bits|float|bool|string|bytes|array|inner|present|ok|",
+		"KIRTarget":     "|os|arch|gui|",
+		"KIRSourceSpan": "|start|end|",
+		"KIRImport":     "|path|source|line|column|span|",
+		"KIRDocument":   "|format|version|language_version|module|source|target|imports|import_records|sources|structs|enums|traits|trait_impls|functions|statements|",
+		"KIRStruct":     "|name|source|line|column|span|public|module|type_params|fields|",
+		"KIRField":      "|name|source|line|column|span|public|type|",
+		"KIREnum":       "|name|source|line|column|span|public|module|variants|variant_spans|",
+		"KIRTypeParam":  "|name|constraint|source|line|column|span|",
+		"KIRParam":      "|name|type|source|line|column|span|default|binding|",
+		"KIRBinding":    "|id|name|type|mutable|source|line|column|span|",
+		"KIRFunction":   "|name|source|line|column|span|public|worker|unsafe|trait|module|receiver|return|type_params|params|captures|body|",
+		"KIRExpr":       "|kind|source|line|column|span|type|const|int|uint|uint_bits|float|bool|string|name|operator|call_target|trait_name|builtin_id|left|right|operand|args|items|base|field|receiver|map_keys|struct_name|struct_type|generic_arguments|fields|values|enum_type|enum_variant|tail|callee|lambda|binding|",
+		"KIRStmt":       "|kind|source|line|column|span|name|binding|mutable|const|annotation|init|expr|target|value|cond|then|else|body|iter|return|scrutinee|arms|",
+		"KIRArm":        "|source|line|column|span|pattern|body|",
+		"KIRPattern":    "|kind|source|line|column|span|bool|int|string|type|variant|binding|present|ok|resolved_binding|",
+		"KIRValue":      "|kind|int|uint|uint_bits|float|bool|string|bytes|array|inner|present|ok|",
 	}
 }
 
 func selfhostKIRValidatorOwners() map[string]string {
 	return map[string]string{
 		"KIRTarget": "validate_kir_document_mode", "KIRDocument": "validate_kir_document_mode",
+		"KIRSourceSpan": "validate_v6_span", "KIRImport": "validate_v6_metadata",
 		"KIRStruct": "validate_structs", "KIRField": "validate_structs", "KIRTypeParam": "validate_structs",
 		"KIREnum": "validate_enums", "KIRParam": "validate_functions", "KIRBinding": "validate_binding",
 		"KIRFunction": "validate_functions", "KIRExpr": "validate_expression", "KIRStmt": "validate_statement",

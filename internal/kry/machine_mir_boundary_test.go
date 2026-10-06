@@ -227,6 +227,9 @@ func TestInterpreterArenaAdaptersKeepEdgesOutsideRecursiveKIRNodes(t *testing.T)
 		if expression == nil {
 			t.Fatalf("arena expression adapter %d was not materialized", index)
 		}
+		if !expression.arenaRef.Present || expression.arenaRef.Index != MIRIndex(index) {
+			t.Fatalf("arena expression adapter %d has reference %+v", index, expression.arenaRef)
+		}
 		if expression.Left != nil || expression.Right != nil || expression.Operand != nil || expression.Base != nil || expression.Receiver != nil || expression.Callee != nil || expression.Lambda != nil || len(expression.Args) != 0 || len(expression.Items) != 0 || len(expression.MapKeys) != 0 || len(expression.Values) != 0 {
 			t.Fatalf("arena expression adapter %d contains recursive child data", index)
 		}
@@ -234,6 +237,9 @@ func TestInterpreterArenaAdaptersKeepEdgesOutsideRecursiveKIRNodes(t *testing.T)
 	for index, statement := range view.statements {
 		if statement == nil {
 			t.Fatalf("arena statement adapter %d was not materialized", index)
+		}
+		if !statement.arenaRef.Present || statement.arenaRef.Index != MIRIndex(index) {
+			t.Fatalf("arena statement adapter %d has reference %+v", index, statement.arenaRef)
 		}
 		if statement.Init != nil || statement.Expr != nil || statement.Target != nil || statement.Value != nil || statement.Cond != nil || statement.Iter != nil || statement.Return != nil || statement.Scrutinee != nil || len(statement.Then) != 0 || len(statement.Else) != 0 || len(statement.Body) != 0 || len(statement.Arms) != 0 {
 			t.Fatalf("arena statement adapter %d contains recursive child data", index)
@@ -243,8 +249,26 @@ func TestInterpreterArenaAdaptersKeepEdgesOutsideRecursiveKIRNodes(t *testing.T)
 		if function == nil {
 			t.Fatalf("arena function adapter %d was not materialized", index)
 		}
+		if !function.arenaRef.Present || function.arenaRef.Index != MIRIndex(index) {
+			t.Fatalf("arena function adapter %d has reference %+v", index, function.arenaRef)
+		}
 		if len(function.Body) != 0 {
 			t.Fatalf("arena function adapter %d contains recursive body data", index)
+		}
+	}
+	for index, parameter := range view.parameters {
+		if parameter == nil || !parameter.arenaRef.Present || parameter.arenaRef.Index != MIRIndex(index) {
+			t.Fatalf("arena parameter adapter %d has reference %+v", index, parameter)
+		}
+	}
+	for index, pattern := range view.patterns {
+		if pattern == nil || !pattern.arenaRef.Present || pattern.arenaRef.Index != MIRIndex(index) {
+			t.Fatalf("arena pattern adapter %d has reference %+v", index, pattern)
+		}
+	}
+	for index, arm := range view.arms {
+		if arm == nil || !arm.arenaRef.Present || arm.arenaRef.Index != MIRIndex(index) {
+			t.Fatalf("arena match-arm adapter %d has reference %+v", index, arm)
 		}
 	}
 }

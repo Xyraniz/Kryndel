@@ -1,66 +1,37 @@
-// Stage 1 self-hosted backend.
-//
-// This program consumes validated KIR v5 and emits a real Linux x86-64 ELF executable
-// for static print/println calls. It deliberately rejects dynamic constructs;
-// the rejection is part of the bootstrap contract and will shrink as the
-// frontend and lowering stages are ported to Kryndel.
+// Stage 1 self-hosted backend. It accepts only the validated flat KIR arena
+// and rejects unsupported nodes before constructing the output image.
 import "validated_kir"
+import "kir_typed_arena"
 
 fn u16_bytes(value: UInt16) -> Array[UInt8] {
-    return [
-        u8(value & u16(255)),
-        u8(value >> 8)
-    ]
+    return [u8(value & u16(255)), u8(value >> 8)]
 }
 
 fn u32_bytes(value: UInt32) -> Array[UInt8] {
-    return [
-        u8(value & u32(255)),
-        u8((value >> 8) & u32(255)),
-        u8((value >> 16) & u32(255)),
-        u8(value >> 24)
-    ]
+    return [u8(value & u32(255)), u8((value >> 8) & u32(255)), u8((value >> 16) & u32(255)), u8(value >> 24)]
 }
 
 fn u64_bytes(value: UInt64) -> Array[UInt8] {
-    return [
-        u8(value & u64(255)),
-        u8((value >> 8) & u64(255)),
-        u8((value >> 16) & u64(255)),
-        u8((value >> 24) & u64(255)),
-        u8((value >> 32) & u64(255)),
-        u8((value >> 40) & u64(255)),
-        u8((value >> 48) & u64(255)),
-        u8(value >> 56)
-    ]
+    return [u8(value & u64(255)), u8((value >> 8) & u64(255)), u8((value >> 16) & u64(255)), u8((value >> 24) & u64(255)), u8((value >> 32) & u64(255)), u8((value >> 40) & u64(255)), u8((value >> 48) & u64(255)), u8(value >> 56)]
 }
 
-fn append_u8(left: Array[UInt8], value: UInt8) -> Array[UInt8] {
-    return array_push(left, value)
+fn append_u8(left: Array[UInt8], value: UInt8) -> Array[UInt8] { return array_push(left, value) }
+fn append_bytes(left: Array[UInt8], right: Array[UInt8]) -> Array[UInt8] { return array_concat(left, right) }
+
+fn json_field(value: KIRTypedNodeView, key: String) -> KIRTypedNodeView {
+    return result_unwrap(kir_typed_object_get(value, key))
 }
 
-fn append_bytes(left: Array[UInt8], right: Array[UInt8]) -> Array[UInt8] {
-    return array_concat(left, right)
-}
+fn json_text(value: KIRTypedNodeView) -> String { return result_unwrap(kir_typed_string(value)) }
 
-fn json_field(value: Json, key: String) -> Json {
-    return result_unwrap(json_object_get(value, key))
-}
-
-fn json_text(value: Json) -> String {
-    return result_unwrap(json_string(value))
-}
-
-pub fn eval_int(expression: Json, bindings: Map[String, String]) -> Result[Int, String] {
+pub fn eval_int(expression: KIRTypedNodeView, bindings: Map[String, String]) -> Result[Int, String] {
     let kind: String = json_text(json_field(expression, "kind"))
-    if kind == "int" {
-        return ok(result_unwrap(json_int(json_field(expression, "int"))))
-    }
+    let checked_type: String = json_text(json_field(expression, "type"))
+    if checked_type != "Int" { return err("stage1 ELF backend expects a checked Int expression") }
+    if kind == "int" { return kir_typed_int(json_field(expression, "int")) }
     if kind == "var" {
         let name: String = json_text(json_field(expression, "name"))
-        if is_none(map_get(bindings, name)) {
-            return err("unknown static binding: " + name)
-        }
+        if is_none(map_get(bindings, name)) { return err("unknown static binding: " + name) }
         return ok(int(unwrap_or(map_get(bindings, name), "")))
     }
     if kind == "binary" {
@@ -71,19 +42,15 @@ pub fn eval_int(expression: Json, bindings: Map[String, String]) -> Result[Int, 
         if is_err(right_result) { return err(unwrap_or(result_error(right_result), "expression is not a static Int")) }
         let left: Int = result_unwrap(left_result)
         let right: Int = result_unwrap(right_result)
-        if operator == "+" {
-            return ok(left + right)
-        }
-        if operator == "-" {
-            return ok(left - right)
-        }
-        if operator == "*" {
-            return ok(left * right)
-        }
+        if operator == "+" { return ok(left + right) }
+        if operator == "-" { return ok(left - right) }
+        if operator == "*" { return ok(left * right) }
         if operator == "/" {
+            if right == 0 { return err("static integer division by zero") }
             return ok(left / right)
         }
         if operator == "%" {
+            if right == 0 { return err("static integer remainder by zero") }
             return ok(left % right)
         }
         return err("unsupported static integer operator: " + operator)
@@ -91,120 +58,47 @@ pub fn eval_int(expression: Json, bindings: Map[String, String]) -> Result[Int, 
     return err("expression is not a static Int")
 }
 
-pub fn eval_display(expression: Json, bindings: Map[String, String]) -> Result[String, String] {
+pub fn eval_display(expression: KIRTypedNodeView, bindings: Map[String, String]) -> Result[String, String] {
     let kind: String = json_text(json_field(expression, "kind"))
+    let checked_type: String = json_text(json_field(expression, "type"))
     if kind == "string" {
+        if checked_type != "String" { return err("stage1 ELF backend found a String literal with an inconsistent checked type") }
         return ok(json_text(json_field(expression, "string")))
     }
-    if kind == "int" {
-        return ok(str(result_unwrap(eval_int(expression, bindings))))
-    }
+    if kind == "int" { return ok(str(result_unwrap(eval_int(expression, bindings)))) }
     if kind == "float" {
-        // The KIR float field is already a validated JSON number. Keeping its
-        // textual representation avoids requiring the bootstrap ELF backend
-        // to implement a platform-dependent binary64 formatter just to print
-        // a compile-time display value.
-        return ok(json_stringify(json_field(expression, "float")))
+        if checked_type != "Float" { return err("stage1 ELF backend found a Float literal with an inconsistent checked type") }
+        return ok(kir_typed_number_text(json_field(expression, "float")))
     }
     if kind == "bool" {
-        if result_unwrap(json_bool(json_field(expression, "bool"))) {
-            return ok("true")
-        }
+        if checked_type != "Bool" { return err("stage1 ELF backend found a Bool literal with an inconsistent checked type") }
+        if result_unwrap(kir_typed_bool(json_field(expression, "bool"))) { return ok("true") }
         return ok("false")
     }
     if kind == "var" {
         let name: String = json_text(json_field(expression, "name"))
-        if is_none(map_get(bindings, name)) {
-            return err("unknown static binding: " + name)
-        }
+        if is_none(map_get(bindings, name)) { return err("unknown static binding: " + name) }
         return ok(unwrap_or(map_get(bindings, name), ""))
     }
     if kind == "binary" {
-        let operator: String = json_text(json_field(expression, "operator"))
-        let typ: String = json_text(json_field(expression, "type"))
-        if typ == "Int" {
-            let value: Result[Int, String] = eval_int(expression, bindings)
-            if is_err(value) { return err(unwrap_or(result_error(value), "expression is not a static Int")) }
-            return ok(str(result_unwrap(value)))
-        }
-        if operator == "+" {
-            let left_result: Result[String, String] = eval_display(json_field(expression, "left"), bindings)
-            if is_err(left_result) { return err(unwrap_or(result_error(left_result), "expression is not statically displayable")) }
-            let right_result: Result[String, String] = eval_display(json_field(expression, "right"), bindings)
-            if is_err(right_result) { return err(unwrap_or(result_error(right_result), "expression is not statically displayable")) }
-            return ok(result_unwrap(left_result) + result_unwrap(right_result))
-        }
-        return err("unsupported static binary expression")
-    }
-    if kind == "call" {
-        let target: String = json_text(json_field(expression, "call_target"))
-        if target == "builtin:str" {
-            let arguments: Json = json_field(expression, "args")
-            let argument: Json = result_unwrap(json_array_get(arguments, 0))
-            return eval_display(argument, bindings)
-        }
-        return err("unsupported static call: " + target)
-    }
-    return err("expression is not statically displayable")
-}
-
-fn elf_kir_expression(expressions: Array[ELFKIRExpression], index: Int) -> ELFKIRExpression {
-    return unwrap_or(array_get(expressions, index), ELFKIRExpression{ kind: "", type_name: "", int_value: 0, float_text: "", bool_value: false, string_value: "", name: "", operator: "", call_target: "", left: -1, right: -1, argument: -1 })
-}
-
-fn eval_elf_int(index: Int, expressions: Array[ELFKIRExpression], bindings: Map[String, String]) -> Result[Int, String] {
-    let expression: ELFKIRExpression = elf_kir_expression(expressions, index)
-    if expression.kind == "int" { return ok(expression.int_value) }
-    if expression.kind == "var" {
-        if is_none(map_get(bindings, expression.name)) { return err("unknown static binding: " + expression.name) }
-        return ok(int(unwrap_or(map_get(bindings, expression.name), "")))
-    }
-    if expression.kind == "binary" {
-        let left_result: Result[Int, String] = eval_elf_int(expression.left, expressions, bindings)
-        if is_err(left_result) { return err(unwrap_or(result_error(left_result), "expression is not a static Int")) }
-        let right_result: Result[Int, String] = eval_elf_int(expression.right, expressions, bindings)
-        if is_err(right_result) { return err(unwrap_or(result_error(right_result), "expression is not a static Int")) }
-        let left: Int = result_unwrap(left_result)
-        let right: Int = result_unwrap(right_result)
-        if expression.operator == "+" { return ok(left + right) }
-        if expression.operator == "-" { return ok(left - right) }
-        if expression.operator == "*" { return ok(left * right) }
-        if expression.operator == "/" { return ok(left / right) }
-        if expression.operator == "%" { return ok(left % right) }
-        return err("unsupported static integer operator: " + expression.operator)
-    }
-    return err("expression is not a static Int")
-}
-
-fn eval_elf_display(index: Int, expressions: Array[ELFKIRExpression], bindings: Map[String, String]) -> Result[String, String] {
-    let expression: ELFKIRExpression = elf_kir_expression(expressions, index)
-    if expression.kind == "string" { return ok(expression.string_value) }
-    if expression.kind == "int" { return ok(str(result_unwrap(eval_elf_int(index, expressions, bindings)))) }
-    if expression.kind == "float" { return ok(expression.float_text) }
-    if expression.kind == "bool" {
-        if expression.bool_value { return ok("true") }
-        return ok("false")
-    }
-    if expression.kind == "var" {
-        if is_none(map_get(bindings, expression.name)) { return err("unknown static binding: " + expression.name) }
-        return ok(unwrap_or(map_get(bindings, expression.name), ""))
-    }
-    if expression.kind == "binary" {
-        if expression.type_name == "Int" { return ok(str(result_unwrap(eval_elf_int(index, expressions, bindings)))) }
-        if expression.operator == "+" {
-            let left: Result[String, String] = eval_elf_display(expression.left, expressions, bindings)
+        if checked_type == "Int" { return ok(str(result_unwrap(eval_int(expression, bindings)))) }
+        if checked_type == "String" && json_text(json_field(expression, "operator")) == "+" {
+            let left: Result[String, String] = eval_display(json_field(expression, "left"), bindings)
             if is_err(left) { return err(unwrap_or(result_error(left), "expression is not statically displayable")) }
-            let right: Result[String, String] = eval_elf_display(expression.right, expressions, bindings)
+            let right: Result[String, String] = eval_display(json_field(expression, "right"), bindings)
             if is_err(right) { return err(unwrap_or(result_error(right), "expression is not statically displayable")) }
             return ok(result_unwrap(left) + result_unwrap(right))
         }
-        return err("unsupported static binary expression")
+        return err("unsupported static binary expression or checked type")
     }
-    if expression.kind == "call" {
-        if expression.call_target == "builtin:str" { return eval_elf_display(expression.argument, expressions, bindings) }
-        return err("unsupported static call: " + expression.call_target)
+    if kind == "call" {
+        let target: String = json_text(json_field(expression, "call_target"))
+        if target != "builtin:str" { return err("unsupported static call: " + target) }
+        let arguments: KIRTypedNodeView = json_field(expression, "args")
+        if result_unwrap(kir_typed_array_len(arguments)) != 1 { return err("stage1 ELF backend requires exactly one str argument") }
+        return eval_display(result_unwrap(kir_typed_array_get(arguments, 0)), bindings)
     }
-    return err("expression is not statically displayable")
+    return err("expression is not statically displayable: " + kind)
 }
 
 pub fn emit_elf(payload: Array[UInt8]) -> Bytes {
@@ -250,36 +144,52 @@ pub fn emit_elf(payload: Array[UInt8]) -> Bytes {
 }
 
 pub fn compile_kir(kir: ValidatedKIR) -> Result[Bytes, String] {
-    let slice: ELFKIRSlice = validated_kir_elf_slice(kir)
-    let statements: Array[ELFKIRStatement] = slice.statements
-    let expressions: Array[ELFKIRExpression] = slice.expressions
-    let mut payload: Array[UInt8] = []
+    let document: KIRTypedNodeView = validated_kir_typed_root(kir)
+    let target: KIRTypedNodeView = json_field(document, "target")
+    if json_text(json_field(target, "os")) != "linux" || json_text(json_field(target, "arch")) != "amd64" || result_unwrap(kir_typed_bool(json_field(target, "gui"))) {
+        return err("stage1 ELF backend requires a non-GUI linux-amd64 target")
+    }
+    if result_unwrap(kir_typed_array_len(json_field(document, "functions"))) != 0 { return err("stage1 ELF backend does not support function declarations") }
+
+    // Preflight and evaluate every source statement before constructing output bytes.
+    let statements: KIRTypedNodeView = json_field(document, "statements")
+    let statement_count: Int = result_unwrap(kir_typed_array_len(statements))
     let mut bindings: Map[String, String] = {}
-    let count: Int = len(statements)
+    let mut output_values: Array[String] = []
     let mut index: Int = 0
-    while index < count {
-        let statement: ELFKIRStatement = unwrap_or(array_get(statements, index), ELFKIRStatement{ kind: "", name: "", expression: -1 })
-        let kind: String = statement.kind
-		if kind == "let" || kind == "const" {
-			let value: String = result_unwrap(eval_elf_display(statement.expression, expressions, bindings))
-			bindings = map_insert(bindings, statement.name, value)
-			index = index + 1
-			continue
-		}
-        if kind != "expr" {
-            return err("stage1 ELF backend accepts only expression statements")
-        }
-        let expression: ELFKIRExpression = elf_kir_expression(expressions, statement.expression)
-        let target: String = expression.call_target
-        if target != "builtin:print" && target != "builtin:println" {
-            return err("stage1 ELF backend accepts only print and println")
-        }
-        let value: String = result_unwrap(eval_elf_display(expression.argument, expressions, bindings))
-        payload = append_bytes(payload, u8_array(string_to_bytes(value)))
-        if target == "builtin:println" {
-            payload = append_u8(payload, u8(10))
+    while index < statement_count {
+        let statement: KIRTypedNodeView = result_unwrap(kir_typed_array_get(statements, index))
+        let kind: String = json_text(json_field(statement, "kind"))
+        if kind == "let" || kind == "const" {
+            if result_unwrap(kir_typed_bool(json_field(statement, "mutable"))) { return err("stage1 ELF backend does not support mutable bindings") }
+            let name: String = json_text(json_field(statement, "name"))
+            let evaluated: Result[String, String] = eval_display(json_field(statement, "init"), bindings)
+            if is_err(evaluated) { return err(unwrap_or(result_error(evaluated), "cannot evaluate static binding")) }
+            bindings = map_insert(bindings, name, result_unwrap(evaluated))
+        } else if kind == "expr" {
+            let expression: KIRTypedNodeView = json_field(statement, "expr")
+            if json_text(json_field(expression, "kind")) != "call" { return err("stage1 ELF backend accepts only print and println expression statements") }
+            let target_name: String = json_text(json_field(expression, "call_target"))
+            if target_name != "builtin:print" && target_name != "builtin:println" { return err("stage1 ELF backend accepts only print and println") }
+            let arguments: KIRTypedNodeView = json_field(expression, "args")
+            if result_unwrap(kir_typed_array_len(arguments)) != 1 { return err("stage1 ELF backend requires exactly one print argument") }
+            let argument: KIRTypedNodeView = result_unwrap(kir_typed_array_get(arguments, 0))
+            let evaluated: Result[String, String] = eval_display(argument, bindings)
+            if is_err(evaluated) { return err(unwrap_or(result_error(evaluated), "print argument is not statically displayable")) }
+            let mut text: String = result_unwrap(evaluated)
+            if target_name == "builtin:println" { text = text + "\n" }
+            output_values = array_push(output_values, text)
+        } else {
+            return err("stage1 ELF backend does not support statement kind " + kind)
         }
         index = index + 1
+    }
+
+    let mut payload: Array[UInt8] = []
+    let mut output_index: Int = 0
+    while output_index < len(output_values) {
+        payload = append_bytes(payload, u8_array(string_to_bytes(unwrap_or(array_get(output_values, output_index), ""))))
+        output_index = output_index + 1
     }
     return ok(emit_elf(payload))
 }

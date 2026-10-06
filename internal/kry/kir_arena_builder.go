@@ -106,7 +106,7 @@ func buildKIRMetadata(program *Program, target NativeTarget) (KIRMetadata, error
 	for _, implementation := range program.TraitImpls {
 		entry := &KIRTraitImpl{Trait: implementation.Trait, Source: paths.tokenSource(implementation.Tok), Line: implementation.Tok.Line, Column: implementation.Tok.Column, Span: kirSourceSpan(implementation.Tok, implementation.EndToken), For: typeSpecString(implementation.Target), Module: paths.name(implementation.Module), Methods: make([]*KIRTraitImplMethod, 0, len(implementation.Methods))}
 		for _, method := range implementation.Methods {
-			entry.Methods = append(entry.Methods, &KIRTraitImplMethod{Name: method.Name, Target: "function:" + functionTargets[method]})
+			entry.Methods = append(entry.Methods, &KIRTraitImplMethod{Name: method.Name, Source: paths.tokenSource(method.Tok), Line: method.Tok.Line, Column: method.Tok.Column, Span: kirSourceSpan(method.Tok, method.EndToken), Target: "function:" + functionTargets[method]})
 		}
 		metadata.TraitImpls = append(metadata.TraitImpls, entry)
 	}
@@ -374,7 +374,7 @@ func (builder *kirArenaBuilder) statement(statement *Stmt) (MIRRef, error) {
 		if len(arm.Body) != 0 {
 			endToken = arm.Body[len(arm.Body)-1].EndToken
 		}
-		value := KIRArm{Source: builder.paths.tokenSource(arm.Pattern.Tok), Span: kirSourceSpan(arm.Pattern.Tok, endToken)}
+		value := KIRArm{Source: builder.paths.tokenSource(arm.Pattern.Tok), Line: arm.Pattern.Tok.Line, Column: arm.Pattern.Tok.Column, Span: kirSourceSpan(arm.Pattern.Tok, endToken)}
 		builder.arena.Arms[armIndex] = MIRArm{Value: value, Pattern: pattern, Body: builder.addStatementRefs(body)}
 		armIndices = append(armIndices, armIndex)
 	}

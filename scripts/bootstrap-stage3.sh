@@ -43,7 +43,10 @@ verify_hash stage1-source-kir-compiler.elf "$seed_path"
 verify_hash source_kir_compiler.kry selfhost/source_kir_compiler.kry
 verify_hash dynamic_backend.kry selfhost/dynamic_backend.kry
 verify_hash validated_kir.kry selfhost/validated_kir.kry
+verify_hash kir_arena.kry selfhost/kir_arena.kry
+verify_hash kir_typed_arena.kry selfhost/kir_typed_arena.kry
 verify_hash elf_backend.kry selfhost/elf_backend.kry
+verify_hash native_image.kry selfhost/native_image.kry
 verify_hash pe_backend.kry selfhost/pe_backend.kry
 verify_hash bootstrap-fixture.kry selfhost/fixtures/bootstrap_hello_stage27.kry
 verify_hash enum-match-fixture.kry selfhost/fixtures/source_enum_match_stage38.kry

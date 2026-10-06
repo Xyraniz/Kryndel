@@ -202,6 +202,25 @@ func TestMaxJSONCLIOverride(t *testing.T) {
 	}
 }
 
+func TestMaxMemoryCLIOverride(t *testing.T) {
+	if got := kry.DefaultLimits().MaxMemoryBytes; got != 256<<20 {
+		t.Fatalf("default MaxMemoryBytes = %d; want 256 MiB", got)
+	}
+	source := filepath.Join(t.TempDir(), "memory-limit.kry")
+	if err := os.WriteFile(source, []byte("let values: Array[Int] = [1]\nprintln(len(values))\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := run([]string{"--max-memory", "1", "run", source}); status == 0 {
+		t.Fatal("--max-memory 1 accepted a runtime array allocation")
+	}
+	if status := run([]string{"--max-memory", "1024", "run", source}); status != 0 {
+		t.Fatalf("--max-memory 1024 rejected a small runtime array with status %d", status)
+	}
+	if status := run([]string{"--max-memory", "bad", "run", source}); status != 2 {
+		t.Fatalf("invalid --max-memory value returned status %d, want 2", status)
+	}
+}
+
 func TestMaxArrayElementsCLIOverride(t *testing.T) {
 	if got := kry.DefaultLimits().MaxArrayElements; got != 1_000_000 {
 		t.Fatalf("default MaxArrayElements = %d; want 1,000,000", got)

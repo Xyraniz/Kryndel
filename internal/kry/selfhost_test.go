@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -147,6 +148,9 @@ type bootstrapLock struct {
 	SourceCompilerKIRBytes            int               `json:"source_compiler_kir_bytes"`
 	SourceCompilerKIRMaxBytes         int               `json:"source_compiler_kir_max_bytes"`
 	SourceCompilerKIRMaxArrayElements int               `json:"source_compiler_kir_max_array_elements"`
+	BootstrapMemoryBytes              int64             `json:"bootstrap_memory_bytes"`
+	BootstrapInstructionLimit         int64             `json:"bootstrap_instruction_limit"`
+	BootstrapWallMS                   int64             `json:"bootstrap_wall_ms"`
 	Command                           string            `json:"command"`
 	SHA256                            map[string]string `json:"sha256"`
 }
@@ -161,7 +165,7 @@ func loadBootstrapLock(t *testing.T, path string) bootstrapLock {
 	if err := json.Unmarshal(data, &lock); err != nil {
 		t.Fatalf("decode bootstrap lock %q: %v", path, err)
 	}
-	if lock.SchemaVersion != 3 || lock.Target != "linux-amd64" || lock.HostGo != "go1.27.1" || lock.Stage1SeedPath == "" || lock.SourceRevision == "" || lock.Stage0Build == "" || lock.SourceCompilerKIRBytes <= 0 || lock.SourceCompilerKIRMaxBytes <= lock.SourceCompilerKIRBytes || lock.SourceCompilerKIRMaxArrayElements < 2_000_000 || lock.Command == "" {
+	if lock.SchemaVersion != 3 || lock.Target != "linux-amd64" || lock.HostGo != "go1.27.1" || lock.Stage1SeedPath == "" || lock.SourceRevision == "" || lock.Stage0Build == "" || lock.SourceCompilerKIRBytes <= 0 || lock.SourceCompilerKIRMaxBytes <= lock.SourceCompilerKIRBytes || lock.SourceCompilerKIRMaxArrayElements < 2_000_000 || lock.BootstrapMemoryBytes <= 0 || lock.BootstrapInstructionLimit <= 0 || lock.BootstrapWallMS <= 0 || lock.Command == "" {
 		t.Fatalf("invalid bootstrap lock metadata: %#v", lock)
 	}
 	return lock
@@ -217,6 +221,23 @@ func TestStage0LinuxAMD64BuildMatchesBootstrapLockOnEveryHost(t *testing.T) {
 	}
 	_, binary := buildLockedLinuxAMD64Stage0(t, projectRoot)
 	verifyBootstrapHash(t, lock, make(map[string]bool), "stage0-host-kry-linux-amd64", binary)
+}
+
+func TestSelfhostArenaModulesAreCoveredByBootstrapLock(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectRoot := filepath.Clean(filepath.Join(root, "..", ".."))
+	selfhost := filepath.Join(projectRoot, "selfhost")
+	lock := loadBootstrapLock(t, filepath.Join(selfhost, "bootstrap.lock.json"))
+	for _, name := range []string{"kir_arena.kry", "kir_typed_arena.kry"} {
+		arenaSource, err := os.ReadFile(filepath.Join(selfhost, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		verifyBootstrapHash(t, lock, make(map[string]bool), name, []byte(strings.ReplaceAll(string(arenaSource), "\r\n", "\n")))
+	}
 }
 
 func TestStage1KryndelBackendMatchesDirectELFOracle(t *testing.T) {
@@ -291,6 +312,86 @@ func TestStage1KryndelBackendMatchesDirectELFOracle(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("stage1 ELF output %q does not match direct ELF oracle %q", got, want)
 		}
+	}
+}
+
+func TestStage1KryndelBackendRestoresWhileLocalScope(t *testing.T) {
+	program, checker := testProgram(t, `fn main() -> Nil {
+    let mut total: Int = 0
+    let mut first: Int = 0
+    while first < 1 {
+        let checked: Int = 7
+        total = total + checked
+        first = first + 1
+    }
+    let mut second: Int = 0
+    while second < 1 {
+        let checked: Int = 8
+        total = total + checked
+        second = second + 1
+    }
+    println(total)
+}
+`)
+	kir, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendPath := filepath.Join(root, "..", "..", "selfhost", "kir_backend.kry")
+	backendProgram, diagnostic := LoadProgram(backendPath, DefaultLimits(), "")
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	backendChecker, diagnostic := Check(backendProgram, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	dir := t.TempDir()
+	kirPath := filepath.Join(dir, "while-scope.kir")
+	outputPath := filepath.Join(dir, "while-scope")
+	if err := os.WriteFile(kirPath, kir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backendRuntime, diagnostic := NewRuntimeWithArgs(backendProgram, backendChecker, DefaultLimits(), Sandbox{}, []string{kirPath, outputPath})
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	if diagnostic = backendRuntime.run(); diagnostic != nil {
+		t.Fatalf("Stage 1 backend rejected sequential while-local scopes: %s", diagnostic.Message)
+	}
+	image, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNativeArtifact(t, image, "Stage 1 while-scope output")
+	interpreterOutput := &bytes.Buffer{}
+	interpreter, diagnostic := NewRuntime(program, checker, DefaultLimits(), Sandbox{})
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	interpreter.output = interpreterOutput
+	if diagnostic = interpreter.run(); diagnostic != nil {
+		t.Fatalf("interpreter rejected sequential while-local scopes: %s", diagnostic.Message)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("Stage 1 emits Linux amd64 ELF; execution is verified on Linux amd64")
+	}
+	if err := os.Chmod(outputPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := exec.Command(outputPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("Stage 1 while-scope ELF failed: %v; output=%q", err, actual)
+	}
+	if string(actual) != "15\n" {
+		t.Fatalf("Stage 1 while-scope output = %q, want %q", actual, "15\n")
+	}
+	if !bytes.Equal(actual, interpreterOutput.Bytes()) {
+		t.Fatalf("Stage 1 output %q differs from interpreter output %q", actual, interpreterOutput.Bytes())
 	}
 }
 
@@ -958,7 +1059,8 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 
 	dir := t.TempDir()
 	kirFile := filepath.Join(dir, "source-compiler.kir")
-	emitKIR := exec.Command(stage0Path, "emit", compilerPath, "--target=linux-x64", "--format=kry-ir", "-o", kirFile)
+	bootstrapMemoryLimit := fmt.Sprint(lock.BootstrapMemoryBytes)
+	emitKIR := exec.Command(stage0Path, "--max-memory", bootstrapMemoryLimit, "emit", compilerPath, "--target=linux-x64", "--format=kry-ir", "-o", kirFile)
 	if output, err := emitKIR.CombinedOutput(); err != nil {
 		t.Fatalf("Stage 0 failed to emit source compiler KIR: %v; output: %s", err, output)
 	}
@@ -998,17 +1100,14 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	debug.FreeOSMemory()
 
 	generatedCompiler := filepath.Join(dir, "source-kir-compiler")
-	maxWallMS := "720000"
-	maxInstructions := "200000000"
-	if os.Getenv("KRY_RACE") == "1" {
-		// The race instrumented interpreter is substantially slower during
-		// the large bootstrap, but it must still exercise the same checks.
-		maxWallMS = "1800000"
-		maxInstructions = "250000000"
-	}
+	// KIR v6 validates source metadata for every node after its semantic pass.
+	// Keep the measured limits in the lock so ordinary and race runs exercise
+	// the same bounded Stage 0 provenance command.
+	maxWallMS := fmt.Sprint(lock.BootstrapWallMS)
+	maxInstructions := fmt.Sprint(lock.BootstrapInstructionLimit)
 	bootstrapKIRLimit := fmt.Sprint(lock.SourceCompilerKIRMaxBytes)
 	bootstrapArrayLimit := fmt.Sprint(lock.SourceCompilerKIRMaxArrayElements)
-	runBackend := exec.Command(stage0Path, "--max-artifact", bootstrapKIRLimit, "--max-json", bootstrapKIRLimit, "--max-array-elements", bootstrapArrayLimit, "--max-instructions", maxInstructions, "--max-wall-ms", maxWallMS, "run", backendPath, kirFile, generatedCompiler)
+	runBackend := exec.Command(stage0Path, "--max-memory", bootstrapMemoryLimit, "--max-artifact", bootstrapKIRLimit, "--max-json", bootstrapKIRLimit, "--max-array-elements", bootstrapArrayLimit, "--max-instructions", maxInstructions, "--max-wall-ms", maxWallMS, "run", backendPath, kirFile, generatedCompiler)
 	if output, err := runBackend.CombinedOutput(); err != nil {
 		t.Fatalf("Stage 0 failed to run kir_backend.kry on source compiler KIR: %v; output: %s", err, output)
 	}
@@ -1080,7 +1179,16 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	validatorText := strings.ReplaceAll(string(validatorSource), "\r\n", "\n")
 	verifyBootstrapHash(t, lock, verifiedHashes, "validated_kir.kry", []byte(validatorText))
-	const backendImports = "import \"elf_backend\"\nimport \"pe_backend\"\n"
+	kirArenaSource, err := os.ReadFile(filepath.Join(selfhost, "kir_arena.kry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kirArenaText := strings.ReplaceAll(string(kirArenaSource), "\r\n", "\n")
+	verifyBootstrapHash(t, lock, verifiedHashes, "kir_arena.kry", []byte(kirArenaText))
+	if !strings.Contains(validatorText, "import \"kir_arena\"") {
+		t.Fatal("validated KIR no longer imports its locked arena module")
+	}
+	const backendImports = "import \"elf_backend\"\nimport \"native_image\"\nimport \"validated_kir\"\n"
 	if !strings.HasPrefix(backendText, backendImports) {
 		t.Fatalf("dynamic backend no longer starts with expected backend imports %q", backendImports)
 	}
@@ -1090,6 +1198,12 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	elfText := strings.ReplaceAll(string(elfSource), "\r\n", "\n")
 	verifyBootstrapHash(t, lock, verifiedHashes, "elf_backend.kry", []byte(elfText))
+	nativeImageSource, err := os.ReadFile(filepath.Join(selfhost, "native_image.kry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeImageText := strings.ReplaceAll(string(nativeImageSource), "\r\n", "\n")
+	verifyBootstrapHash(t, lock, verifiedHashes, "native_image.kry", []byte(nativeImageText))
 	peSource, err := os.ReadFile(filepath.Join(selfhost, "pe_backend.kry"))
 	if err != nil {
 		t.Fatal(err)
@@ -1309,7 +1423,7 @@ func TestLinuxAvailableMemoryAndSwapBytes(t *testing.T) {
 	}
 }
 
-func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
+func TestSelfhostSourceCompilerEmitsKIRv6AcceptedByDecodeMIR(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -1325,7 +1439,7 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 	}
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "main.kry")
-	const source = "fn increment(value: Int) -> Int {\n" +
+	const source = "fn increment(value: Int) -> Int { // π🙂 byte offsets\n" +
 		"  let mut next = value\n" +
 		"  next = next + 1\n" +
 		"  return next\n" +
@@ -1334,6 +1448,10 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 		"fn empty_text() -> Option[String] { return none() }\n" +
 		"fn json_success() -> Result[Int, Json] { return ok(1) }\n" +
 		"fn main() -> Nil {\n" +
+		"  let text_count: Int = len(\"π\")\n" +
+		"  let byte_count: Int = len(string_to_bytes(\"π\"))\n" +
+		"  println(text_count)\n" +
+		"  println(byte_count)\n" +
 		"  for item in [increment(2)] {\n" +
 		"    println(item)\n" +
 		"  }\n" +
@@ -1353,6 +1471,9 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read self-hosted KIR: %v", err)
 	}
+	if got := strings.Count(string(data), `"call_target":"builtin:len"`); got != 2 {
+		t.Fatalf("KIR has %d resolved len calls, want 2", got)
+	}
 	mir, err := DecodeMIR(data, DefaultLimits())
 	if err != nil {
 		t.Fatalf("DecodeMIR rejected self-hosted KIR: %v", err)
@@ -1363,6 +1484,49 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 	}
 	if document.Version != KIRVersion {
 		t.Fatalf("self-hosted KIR version = %d, want %d", document.Version, KIRVersion)
+	}
+	goProgram, diagnostic := Parse(&Source{Name: "main.kry", Text: source}, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("parse parity source with Go frontend: %s", diagnostic.Message)
+	}
+	goChecker, diagnostic := Check(goProgram, DefaultLimits())
+	if diagnostic != nil {
+		t.Fatalf("check parity source with Go frontend: %s", diagnostic.Message)
+	}
+	goMIR, err := CompileMIR(goProgram, goChecker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatalf("compile parity source directly to Go MIR: %v", err)
+	}
+	for index, expression := range goMIR.arena.Expressions {
+		if expression.Value.Kind != "unary" && expression.Value.Kind != "binary" && expression.Value.Operator != "" {
+			t.Errorf("Go KIR expression %d of kind %q has unexpected operator %q", index, expression.Value.Kind, expression.Value.Operator)
+		}
+	}
+	goDocument, err := goMIR.documentView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalizeKIRCrossCompilerView(reflect.ValueOf(goDocument))
+	normalizeKIRCrossCompilerView(reflect.ValueOf(document))
+	if !reflect.DeepEqual(goDocument, document) {
+		goJSON, _ := json.Marshal(goDocument)
+		selfhostJSON, _ := json.Marshal(document)
+		index := 0
+		for index < len(goJSON) && index < len(selfhostJSON) && goJSON[index] == selfhostJSON[index] {
+			index++
+		}
+		start := index - 80
+		if start < 0 {
+			start = 0
+		}
+		goEnd, selfhostEnd := index+160, index+160
+		if goEnd > len(goJSON) {
+			goEnd = len(goJSON)
+		}
+		if selfhostEnd > len(selfhostJSON) {
+			selfhostEnd = len(selfhostJSON)
+		}
+		t.Fatalf("Go checked-source lowering and self-hosted KIR decoding differ in the normalized KIR view (Go len %d, selfhost len %d, byte %d): Go %s; selfhost %s", len(goJSON), len(selfhostJSON), index, goJSON[start:goEnd], selfhostJSON[start:selfhostEnd])
 	}
 	if len(document.Functions) != 5 {
 		t.Fatalf("self-hosted KIR has %d functions, want 5", len(document.Functions))
@@ -1415,24 +1579,35 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 			t.Fatal("DecodeMIR accepted err payload with a type incompatible with the declared return")
 		}
 	}
-	if increment.Source != sourcePath || increment.Line != 1 || increment.Column != 1 {
-		t.Fatalf("increment source location = %s:%d:%d, want %s:1:1", increment.Source, increment.Line, increment.Column, sourcePath)
+	if increment.Source != "main.kry" || increment.Line != 1 || increment.Column != 1 {
+		t.Fatalf("increment source location = %s:%d:%d, want main.kry:1:1", increment.Source, increment.Line, increment.Column)
+	}
+	if increment.Span == nil || increment.Span.Start != 0 || increment.Span.End <= increment.Span.Start {
+		t.Fatalf("self-hosted function is missing its full byte span: %#v", increment.Span)
 	}
 	if len(increment.Params) != 1 || increment.Params[0].Binding == nil {
 		t.Fatalf("increment parameter has no resolved binding: %#v", increment.Params)
 	}
 	parameterBinding := increment.Params[0].Binding
-	if parameterBinding.Name != "value" || parameterBinding.Type != "Int" || parameterBinding.Mutable || parameterBinding.Source != sourcePath || parameterBinding.Line != 1 || parameterBinding.Column != 14 {
+	if parameterBinding.Name != "value" || parameterBinding.Type != "Int" || parameterBinding.Mutable || parameterBinding.Source != "main.kry" || parameterBinding.Line != 1 || parameterBinding.Column != 14 {
 		t.Fatalf("increment parameter binding metadata is incorrect: %#v", parameterBinding)
 	}
-	if main.Line != 9 || main.Column != 1 {
-		t.Fatalf("main source location = %s:%d:%d, want %s:9:1", main.Source, main.Line, main.Column, sourcePath)
+	if parameterBinding.Span == nil || parameterBinding.ID != kirBindingIDFromParts(parameterBinding.Name, parameterBinding.Source, parameterBinding.Span.Start, parameterBinding.Line, parameterBinding.Column) {
+		t.Fatalf("self-hosted parameter binding is missing its canonical v6 identity: %#v", parameterBinding)
 	}
-	if len(main.Body) != 1 || main.Body[0].Kind != "for" || main.Body[0].Binding == nil {
+	letStatement := increment.Body[0]
+	wantBindingStart := strings.Index(source, "next")
+	if letStatement.Span == nil || letStatement.Span.Start != strings.Index(source, "let mut next") || letStatement.Span.End <= letStatement.Span.Start || letStatement.Binding.Span == nil || letStatement.Binding.Span.Start != wantBindingStart {
+		t.Fatalf("self-hosted binding or statement byte spans are incorrect: statement=%#v binding=%#v", letStatement.Span, letStatement.Binding)
+	}
+	if main.Source != "main.kry" || main.Line != 9 || main.Column != 1 {
+		t.Fatalf("main source location = %s:%d:%d, want main.kry:9:1", main.Source, main.Line, main.Column)
+	}
+	if len(main.Body) != 5 || main.Body[4].Kind != "for" || main.Body[4].Binding == nil {
 		t.Fatalf("main loop has no resolved declaration binding: %#v", main.Body)
 	}
-	loopBinding := main.Body[0].Binding
-	if loopBinding.Name != "item" || loopBinding.Type != "Int" || loopBinding.Mutable || loopBinding.Source != sourcePath || loopBinding.Line != 10 || loopBinding.Column != 7 {
+	loopBinding := main.Body[4].Binding
+	if loopBinding.Name != "item" || loopBinding.Type != "Int" || loopBinding.Mutable || loopBinding.Source != "main.kry" || loopBinding.Line != 14 || loopBinding.Column != 7 {
 		t.Fatalf("loop binding metadata is incorrect: %#v", loopBinding)
 	}
 	fixtures := []string{
@@ -1474,6 +1649,65 @@ func TestSelfhostSourceCompilerEmitsKIRv5AcceptedByDecodeMIR(t *testing.T) {
 			}
 		})
 	}
+}
+
+func normalizeKIRCrossCompilerView(value reflect.Value) {
+	if !value.IsValid() {
+		return
+	}
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if !value.IsNil() {
+			normalizeKIRCrossCompilerView(value.Elem())
+		}
+	case reflect.Struct:
+		structureName := value.Type().Name()
+		for index := 0; index < value.NumField(); index++ {
+			field := value.Field(index)
+			if !field.CanSet() {
+				continue
+			}
+			fieldName := value.Type().Field(index).Name
+			if field.Kind() == reflect.String {
+				text := field.String()
+				switch fieldName {
+				case "Module":
+					text = ""
+				case "Name":
+					if structureName == "KIRFunction" {
+						text = strings.TrimPrefix(text, "kry_module_root_")
+					} else if structureName == "KIRExpr" && value.FieldByName("Kind").String() == "call" && strings.HasPrefix(value.FieldByName("CallTarget").String(), "function:kry_module_root_") {
+						text = strings.TrimPrefix(text, "kry_module_root_")
+					} else {
+						text = normalizeKIRTypeName(text)
+					}
+				case "CallTarget":
+					if strings.HasPrefix(text, "function:kry_module_root_") {
+						text = "function:" + strings.TrimPrefix(text, "function:kry_module_root_")
+					}
+				case "Type", "Return", "StructName", "StructType", "EnumType", "Trait":
+					text = normalizeKIRTypeName(text)
+				}
+				field.SetString(text)
+				continue
+			}
+			normalizeKIRCrossCompilerView(field)
+		}
+	case reflect.Slice:
+		if value.Len() == 0 {
+			value.Set(reflect.Zero(value.Type()))
+			return
+		}
+		for index := 0; index < value.Len(); index++ {
+			normalizeKIRCrossCompilerView(value.Index(index))
+		}
+	}
+}
+
+func normalizeKIRTypeName(value string) string {
+	value = strings.TrimPrefix(value, "@kry_type_module_root_")
+	value = strings.TrimPrefix(value, "@kry_enum_module_root_")
+	return strings.ReplaceAll(value, " ", "")
 }
 
 func TestSelfhostValidatorRejectsMalformedKIRFromGeneratedAPI(t *testing.T) {
@@ -3062,6 +3296,7 @@ func TestSourceCompilerJSONIsRejectedByELFDirect(t *testing.T) {
 	compilerLimits.MaxArtifactBytes = bootstrapLock.SourceCompilerKIRMaxBytes
 	compilerLimits.MaxJSONBytes = bootstrapLock.SourceCompilerKIRMaxBytes
 	compilerLimits.MaxArrayElements = bootstrapLock.SourceCompilerKIRMaxArrayElements
+	compilerLimits.MaxMemoryBytes = bootstrapLock.BootstrapMemoryBytes
 	compilerProgram, d := LoadProgram(compiler, compilerLimits, "")
 	if d != nil {
 		t.Fatal(d.Message)

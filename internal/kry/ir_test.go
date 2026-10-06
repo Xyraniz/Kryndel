@@ -2,7 +2,6 @@ package kry
 
 import (
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -75,9 +74,9 @@ func TestCompileMIRPreservesUTF8ByteSpansAndStableBindingIDs(t *testing.T) {
 		if binding.ID == "" || binding.Span == nil {
 			t.Fatalf("arena binding %d is missing stable identity or span: %#v", index, binding)
 		}
-		decoded, err := hex.DecodeString(binding.ID)
-		if err != nil || len(decoded) != 32 {
-			t.Fatalf("arena binding %d has a malformed SHA-256 identity %q", index, binding.ID)
+		wantID := kirBindingIDFromParts(binding.Name, binding.Source, binding.Span.Start, binding.Line, binding.Column)
+		if binding.ID != wantID {
+			t.Fatalf("arena binding %d has a non-canonical identity %q, want %q", index, binding.ID, wantID)
 		}
 		if binding.Span.End-binding.Span.Start != len(binding.Name) {
 			t.Fatalf("binding %q has a span inconsistent with its source token: %#v", binding.Name, binding.Span)
@@ -249,6 +248,18 @@ func TestCompileMIRRejectsCheckerThatDidNotComplete(t *testing.T) {
 	unvalidated.checked = false
 	if _, err := CompileMIR(program, &unvalidated, NativeTarget{OS: "linux", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), "checker has not completed successfully") {
 		t.Fatalf("CompileMIR accepted an unchecked Checker or returned the wrong error: %v", err)
+	}
+}
+
+func TestCompileMIRRejectsProgramMutatedAfterChecking(t *testing.T) {
+	program, checker := testProgram(t, "fn main() -> Int { return 1 }\n")
+	if len(program.Functions) != 1 || len(program.Functions[0].Body) != 1 || program.Functions[0].Body[0].Return == nil {
+		t.Fatal("test source did not produce the expected return expression")
+	}
+	program.Functions[0].Body[0].Return.Kind = ExString
+	program.Functions[0].Body[0].Return.Str = "not an Int"
+	if _, err := CompileMIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), "program no longer passes type checking") {
+		t.Fatalf("CompileMIR trusted stale checked-AST data after mutation: %v", err)
 	}
 }
 

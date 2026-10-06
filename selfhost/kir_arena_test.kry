@@ -1,0 +1,82 @@
+import "kir_arena"
+import "kir_typed_arena"
+import "validated_kir"
+
+fn main() -> Nil {
+    let typed_arena: KIRTypedArena = kir_typed_empty_arena()
+    let typed_counts: Array[Int] = kir_typed_arena_table_counts(typed_arena)
+    assert_eq(len(typed_counts), 22)
+    assert(kir_typed_arena_references_valid(typed_arena))
+    let mut typed_index: Int = 0
+    while typed_index < len(typed_counts) {
+        assert_eq(unwrap_or(array_get(typed_counts, typed_index), -1), 0)
+        typed_index = typed_index + 1
+    }
+
+    let direct_span: KIRTypedAppendRef = kir_typed_append_span(typed_arena, KIRTypedSourceSpan{ start: 0, end: 4 })
+    assert_eq(direct_span.reference.table, KIRTypedTable::KIRTableSpans)
+    assert_eq(direct_span.reference.index, 0)
+    let direct_edges: KIRTypedAppendRange = kir_typed_append_edges(direct_span.arena, [])
+    let direct_header: KIRTypedDocumentHeader = KIRTypedDocumentHeader{
+        format: "kry-ir", version: 6, language_version: "1.0.0", module: "arena.kry", source: "arena.kry",
+        target: KIRTypedTarget{ os: "linux", arch: "amd64", gui: false },
+        top_functions: kir_typed_empty_edges(), top_statements: kir_typed_empty_edges(),
+    }
+    let direct_document: KIRTypedArena = kir_typed_append_document_ranges(direct_edges.arena, direct_header)
+    assert(is_ok(kir_typed_source_arena_references_valid(direct_document)))
+    let invalid_edges: KIRTypedAppendRange = kir_typed_append_edges(direct_document, [kir_typed_ref(KIRTypedTable::KIRTableExpressions, 0)])
+    assert(is_err(kir_typed_source_arena_references_valid(invalid_edges.arena)))
+
+    let valid_kir_source: String = "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"arena.kry\",\"source\":\"arena.kry\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[\"arena.kry\"],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[{\"name\":\"main\",\"source\":\"arena.kry\",\"line\":1,\"column\":1,\"return\":\"Int\",\"public\":false,\"worker\":false,\"unsafe\":false,\"type_params\":[],\"params\":[],\"captures\":[],\"body\":[{\"kind\":\"return\",\"source\":\"arena.kry\",\"line\":2,\"column\":5,\"return\":{\"kind\":\"int\",\"source\":\"arena.kry\",\"line\":2,\"column\":12,\"type\":\"Int\",\"int\":1}}]}],\"statements\":[]}"
+    let valid_kir_document: Json = result_unwrap(json_parse(valid_kir_source))
+    let validated_kir: Result[ValidatedKIR, String] = validate_kir_document(valid_kir_document)
+    assert(is_ok(validated_kir))
+    let typed_document: KIRTypedArena = validated_kir_typed_arena(result_unwrap(validated_kir))
+    assert(kir_typed_arena_references_valid(typed_document))
+    let typed_document_counts: Array[Int] = kir_typed_arena_table_counts(typed_document)
+    assert_eq(unwrap_or(array_get(typed_document_counts, 11), 0), 1)
+    assert_eq(unwrap_or(array_get(typed_document_counts, 15), 1), 1)
+    assert_eq(unwrap_or(array_get(typed_document_counts, 16), 0), 1)
+    let typed_root: KIRTypedNodeView = kir_typed_root_view(typed_document)
+    let typed_functions: KIRTypedNodeView = result_unwrap(kir_typed_object_get(typed_root, "functions"))
+    assert_eq(result_unwrap(kir_typed_array_len(typed_functions)), 1)
+    let typed_function: KIRTypedNodeView = result_unwrap(kir_typed_array_get(typed_functions, 0))
+    assert_eq(result_unwrap(kir_typed_string(result_unwrap(kir_typed_object_get(typed_function, "name")))), "main")
+    let typed_body: KIRTypedNodeView = result_unwrap(kir_typed_object_get(typed_function, "body"))
+    let typed_return: KIRTypedNodeView = result_unwrap(kir_typed_array_get(typed_body, 0))
+    let typed_return_value: KIRTypedNodeView = result_unwrap(kir_typed_object_get(typed_return, "return"))
+    assert_eq(result_unwrap(kir_typed_int(result_unwrap(kir_typed_object_get(typed_return_value, "int")))), 1)
+    assert_eq(kir_typed_kind(result_unwrap(kir_typed_object_get(typed_function, "span"))), "null")
+
+    let malformed_kir: Json = result_unwrap(json_parse("{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"source\":\"arena.kry\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[\"arena.kry\"],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":[{\"kind\":\"unknown\",\"source\":\"arena.kry\",\"line\":1,\"column\":1}]}"))
+    assert(is_err(validate_kir_document(malformed_kir)))
+
+    let parsed: Json = result_unwrap(json_parse("{\"items\":[1,true,\"λ\",null,{\"u\":18446744073709551615}],\"fraction\":1.25,\"crossing\":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39]}"))
+    let arena: KIRArena = result_unwrap(kir_arena_from_json(parsed))
+    let root: KIRNodeRef = kir_arena_root(arena)
+    assert_eq(kir_kind(root), "object")
+
+    let items: KIRNodeRef = result_unwrap(kir_object_get(root, "items"))
+    assert_eq(result_unwrap(kir_array_len(items)), 5)
+    assert_eq(result_unwrap(kir_int(result_unwrap(kir_array_get(items, 0)))), 1)
+    assert_eq(result_unwrap(kir_bool(result_unwrap(kir_array_get(items, 1)))), true)
+    assert_eq(result_unwrap(kir_string(result_unwrap(kir_array_get(items, 2)))), "λ")
+    assert_eq(kir_kind(result_unwrap(kir_array_get(items, 3))), "null")
+
+    let object: KIRNodeRef = result_unwrap(kir_array_get(items, 4))
+    let unsigned: KIRNodeRef = result_unwrap(kir_object_get(object, "u"))
+    assert_eq(str(result_unwrap(kir_uint(unsigned))), "18446744073709551615")
+    assert_eq(kir_number_text(result_unwrap(kir_object_get(root, "fraction"))), "1.25")
+
+    let crossing: KIRNodeRef = result_unwrap(kir_object_get(root, "crossing"))
+    assert_eq(result_unwrap(kir_array_len(crossing)), 40)
+    assert_eq(result_unwrap(kir_int(result_unwrap(kir_array_get(crossing, 31)))), 31)
+    assert_eq(result_unwrap(kir_int(result_unwrap(kir_array_get(crossing, 32)))), 32)
+    assert_eq(result_unwrap(kir_int(result_unwrap(kir_array_get(crossing, 39)))), 39)
+
+    assert(is_err(kir_array_get(items, 5)))
+    assert(is_err(kir_int(result_unwrap(kir_array_get(items, 1)))))
+    assert(is_err(kir_uint(result_unwrap(kir_object_get(root, "fraction")))))
+    assert(is_err(kir_object_get(root, "missing")))
+    return nil
+}

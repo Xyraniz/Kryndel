@@ -1,0 +1,1512 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kryndel.dev/schemas/kir-v6.schema.json",
+  "title": "Kryndel KIR v6",
+  "description": "Portable checked KIR v6 wire contract. Cross-field invariants such as canonical binding IDs and import/source table agreement are enforced by the Go and selfhost validators.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "language_version",
+    "module",
+    "source",
+    "target",
+    "imports",
+    "sources",
+    "structs",
+    "enums",
+    "traits",
+    "trait_impls",
+    "functions",
+    "statements"
+  ],
+  "properties": {
+    "format": {
+      "const": "kry-ir"
+    },
+    "version": {
+      "const": 6
+    },
+    "language_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "module": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "imports": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "import_records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/import"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "structs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/struct"
+      }
+    },
+    "enums": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/enum"
+      }
+    },
+    "traits": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/trait"
+      }
+    },
+    "trait_impls": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/traitImpl"
+      }
+    },
+    "functions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/function"
+      }
+    },
+    "statements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/statement"
+      }
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "arch",
+        "gui"
+      ],
+      "properties": {
+        "os": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gui": {
+          "type": "boolean"
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "sourceNode": {
+      "type": "object",
+      "required": [
+        "source",
+        "line",
+        "column",
+        "span"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "span": {
+          "$ref": "#/$defs/span"
+        }
+      }
+    },
+    "import": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "path"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "binding": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "name",
+            "type",
+            "mutable",
+            "source",
+            "line",
+            "column",
+            "span"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "mutable": {
+              "type": "boolean"
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "typeParam": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "constraint",
+            "source",
+            "line",
+            "column",
+            "span"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "constraint": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "param": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "type",
+            "source",
+            "line",
+            "column",
+            "span",
+            "default",
+            "binding"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "default": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "binding": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/binding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "field": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "source",
+            "line",
+            "column",
+            "span",
+            "public",
+            "type"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "public": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "struct": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "source",
+            "line",
+            "column",
+            "span",
+            "public",
+            "module",
+            "type_params",
+            "fields"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "public": {
+              "type": "boolean"
+            },
+            "module": {
+              "type": "string"
+            },
+            "type_params": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/typeParam"
+              }
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/field"
+              }
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "enum": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "source",
+            "line",
+            "column",
+            "span",
+            "public",
+            "module",
+            "variants",
+            "variant_spans"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "public": {
+              "type": "boolean"
+            },
+            "module": {
+              "type": "string"
+            },
+            "variants": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "variant_spans": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/span"
+              }
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "traitMethod": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "source",
+            "line",
+            "column",
+            "span",
+            "params",
+            "return"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "params": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/param"
+              }
+            },
+            "return": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "trait": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "source",
+            "line",
+            "column",
+            "span",
+            "public",
+            "module",
+            "methods"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "public": {
+              "type": "boolean"
+            },
+            "module": {
+              "type": "string"
+            },
+            "methods": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/traitMethod"
+              }
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "traitImplMethod": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "source",
+            "line",
+            "column",
+            "span",
+            "target"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "target": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "traitImpl": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "trait",
+            "source",
+            "line",
+            "column",
+            "span",
+            "for",
+            "module",
+            "methods"
+          ],
+          "properties": {
+            "trait": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "for": {
+              "type": "string",
+              "minLength": 1
+            },
+            "module": {
+              "type": "string"
+            },
+            "methods": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/traitImplMethod"
+              }
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "int",
+        "uint",
+        "uint_bits",
+        "float",
+        "bool",
+        "string",
+        "bytes",
+        "array",
+        "inner",
+        "present",
+        "ok"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "int": {
+          "type": "integer"
+        },
+        "uint": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uint_bits": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "float": {
+          "type": "number"
+        },
+        "bool": {
+          "type": "boolean"
+        },
+        "string": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "contentEncoding": "base64"
+        },
+        "array": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/value"
+          }
+        },
+        "inner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/value"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    "pattern": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "source",
+            "line",
+            "column",
+            "span",
+            "bool",
+            "int",
+            "string",
+            "type",
+            "variant",
+            "binding",
+            "present",
+            "ok",
+            "resolved_binding"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "bool": {
+              "type": "boolean"
+            },
+            "int": {
+              "type": "integer"
+            },
+            "string": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "variant": {
+              "type": "string"
+            },
+            "binding": {
+              "type": "string"
+            },
+            "present": {
+              "type": "boolean"
+            },
+            "ok": {
+              "type": "boolean"
+            },
+            "resolved_binding": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/binding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "arm": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "source",
+            "line",
+            "column",
+            "span",
+            "pattern",
+            "body"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "pattern": {
+              "$ref": "#/$defs/pattern"
+            },
+            "body": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/statement"
+              }
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "expression": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "source",
+            "line",
+            "column",
+            "span",
+            "type",
+            "const",
+            "int",
+            "uint",
+            "uint_bits",
+            "float",
+            "bool",
+            "string",
+            "name",
+            "operator",
+            "call_target",
+            "trait_name",
+            "builtin_id",
+            "left",
+            "right",
+            "operand",
+            "args",
+            "items",
+            "base",
+            "field",
+            "receiver",
+            "map_keys",
+            "struct_name",
+            "struct_type",
+            "generic_arguments",
+            "fields",
+            "values",
+            "enum_type",
+            "enum_variant",
+            "tail",
+            "callee",
+            "lambda",
+            "binding"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "const": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/value"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "int": {
+              "type": "integer"
+            },
+            "uint": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "uint_bits": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "float": {
+              "type": "number"
+            },
+            "bool": {
+              "type": "boolean"
+            },
+            "string": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "operator": {
+              "type": "string"
+            },
+            "call_target": {
+              "type": "string"
+            },
+            "trait_name": {
+              "type": "string"
+            },
+            "builtin_id": {
+              "type": "string"
+            },
+            "left": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "right": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "operand": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/expression"
+              }
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/expression"
+              }
+            },
+            "base": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "field": {
+              "type": "string"
+            },
+            "receiver": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "map_keys": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/expression"
+              }
+            },
+            "struct_name": {
+              "type": "string"
+            },
+            "struct_type": {
+              "type": "string"
+            },
+            "generic_arguments": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "values": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/expression"
+              }
+            },
+            "enum_type": {
+              "type": "string"
+            },
+            "enum_variant": {
+              "type": "string"
+            },
+            "tail": {
+              "type": "boolean"
+            },
+            "callee": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lambda": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/function"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "binding": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/binding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "statement": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "source",
+            "line",
+            "column",
+            "span",
+            "name",
+            "binding",
+            "mutable",
+            "const",
+            "annotation",
+            "init",
+            "expr",
+            "target",
+            "value",
+            "cond",
+            "then",
+            "else",
+            "body",
+            "iter",
+            "return",
+            "scrutinee",
+            "arms"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "name": {
+              "type": "string"
+            },
+            "binding": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/binding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mutable": {
+              "type": "boolean"
+            },
+            "const": {
+              "type": "boolean"
+            },
+            "annotation": {
+              "type": "string"
+            },
+            "init": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "expr": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cond": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "then": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/statement"
+              }
+            },
+            "else": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/statement"
+              }
+            },
+            "body": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/statement"
+              }
+            },
+            "iter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "return": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "scrutinee": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "arms": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/arm"
+              }
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "function": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sourceNode"
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "source",
+            "line",
+            "column",
+            "span",
+            "public",
+            "worker",
+            "unsafe",
+            "trait",
+            "module",
+            "receiver",
+            "return",
+            "type_params",
+            "params",
+            "captures",
+            "body"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "span": {
+              "$ref": "#/$defs/span"
+            },
+            "public": {
+              "type": "boolean"
+            },
+            "worker": {
+              "type": "boolean"
+            },
+            "unsafe": {
+              "type": "boolean"
+            },
+            "trait": {
+              "type": "string"
+            },
+            "module": {
+              "type": "string"
+            },
+            "receiver": {
+              "type": "string"
+            },
+            "return": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type_params": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/typeParam"
+              }
+            },
+            "params": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/param"
+              }
+            },
+            "captures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "binding"
+                ],
+                "properties": {
+                  "binding": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/binding"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "body": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/statement"
+              }
+            }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    }
+  }
+}

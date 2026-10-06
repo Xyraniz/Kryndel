@@ -16,7 +16,7 @@ fn main() -> Nil {
     if is_ok(validation) {
         println("accepted")
     } else {
-        println("rejected")
+        println("rejected: " + unwrap_or(result_error(validation), "KIR validation failed without a diagnostic"))
     }
     return nil
 }

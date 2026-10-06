@@ -120,11 +120,11 @@ func validateDirectKIRValueArena(view *kirExecArenaView, metadata KIRMetadata, s
 			if expression == nil {
 				return nil
 			}
-			if index, ok := view.expressionIndex[expression]; ok {
-				if seenExpressions[index] {
+			if index := expression.arenaRef; index.Present {
+				if seenExpressions[index.Index] {
 					return nil
 				}
-				seenExpressions[index] = true
+				seenExpressions[index.Index] = true
 			}
 			if expression.Kind == "lambda" || executor.exprLambda(expression) != nil || strings.HasPrefix(expression.Type, "fn(") {
 				return fmt.Errorf("%w: direct ELF backend does not lower lambdas or captured bindings", errKIRSubsetUnsupported)
@@ -227,11 +227,11 @@ func validateDirectKIRValueArena(view *kirExecArenaView, metadata KIRMetadata, s
 		if expression == nil {
 			return nil
 		}
-		if index, ok := view.expressionIndex[expression]; ok {
-			if seenExpressions[index] {
+		if index := expression.arenaRef; index.Present {
+			if seenExpressions[index.Index] {
 				return nil
 			}
-			seenExpressions[index] = true
+			seenExpressions[index.Index] = true
 		}
 		if err := countNode(); err != nil {
 			return err
@@ -415,11 +415,11 @@ func validateDirectKIRValueArena(view *kirExecArenaView, metadata KIRMetadata, s
 			if statement == nil {
 				return fmt.Errorf("invalid KIR executable: direct ELF block contains a missing statement")
 			}
-			if index, ok := view.statementIndex[statement]; ok {
-				if seenStatements[index] {
+			if index := statement.arenaRef; index.Present {
+				if seenStatements[index.Index] {
 					continue
 				}
-				seenStatements[index] = true
+				seenStatements[index.Index] = true
 			}
 			if err := countNode(); err != nil {
 				return err

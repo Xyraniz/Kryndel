@@ -36,7 +36,7 @@ instantiated with all type arguments, such as `Box[Int]`. The checker enforces
 the declaration's constraints and substitutes arguments into field types.
 Methods in `impl Box[T]` share the receiver's substitutions and may declare
 additional method type parameters. Generic structs are serialized with their
-parameter and field metadata in KIR v5; generic enums and generic associated
+parameter and field metadata in KIR v6; generic enums and generic associated
 constants remain unsupported.
 
 Non-generic traits provide static method contracts. `impl Render for North`
@@ -51,7 +51,7 @@ monomorphizes generic functions and emits a direct call for that type.
 This does not add trait values or dynamic dispatch. Generic traits or methods,
 default methods, associated types or constants, generic or blanket impls,
 multiple bounds, and implementations for non-struct targets are unsupported.
-The frontend reports these forms with diagnostics. KIR v5 stores trait
+The frontend reports these forms with diagnostics. KIR v6 stores trait
 declarations, implementation targets, symbolic bound-method calls, and
 implementation function references; KRYNATIVE6 embeds this validated KIR next
 to its source bundle.

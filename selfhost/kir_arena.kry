@@ -1,0 +1,294 @@
+// Canonical flat storage for validated KIR consumed by self-hosted lowerers.
+// JSON is accepted only by kir_arena_from_json at the decoder boundary. The
+// arena stores tagged scalar cells and checked integer edges; it has no
+// recursive Json values. Tables are chunked so immutable array appends stay
+// bounded instead of copying a growing multi-million-element vector.
+pub struct KIRArena {
+    private cells: KIRCellTable,
+    private items: KIRIntTable,
+    private root: Int,
+}
+
+pub struct KIRNodeRef {
+    private cells: KIRCellTable,
+    private items: KIRIntTable,
+    private index: Int,
+    private cell: KIRArenaCell,
+}
+
+pub struct KIRArenaCell {
+    private kind: String,
+    private text: String,
+    private number_text: String,
+    private boolean: Bool,
+    private item_start: Int,
+    private item_count: Int,
+    private field_lookup: Map[String, Int],
+}
+
+pub struct KIRCellTable {
+    private chunks: Array[Array[KIRArenaCell]],
+    private tail: Array[KIRArenaCell],
+    private count: Int,
+}
+
+pub struct KIRIntTable {
+    private chunks: Array[Array[Int]],
+    private tail: Array[Int],
+    private count: Int,
+}
+
+struct KIRJsonQueue {
+    chunks: Array[Array[Json]],
+    tail: Array[Json],
+    chunk_count: Int,
+    count: Int,
+}
+
+fn empty_cell_table() -> KIRCellTable {
+    return KIRCellTable{ chunks: [], tail: [], count: 0 }
+}
+
+fn empty_int_table() -> KIRIntTable {
+    return KIRIntTable{ chunks: [], tail: [], count: 0 }
+}
+
+fn empty_json_queue() -> KIRJsonQueue {
+    return KIRJsonQueue{ chunks: [], tail: [], chunk_count: 0, count: 0 }
+}
+
+fn append_cell(table: KIRCellTable, value: KIRArenaCell) -> KIRCellTable {
+    let mut tail: Array[KIRArenaCell] = array_push(table.tail, value)
+    let mut chunks: Array[Array[KIRArenaCell]] = table.chunks
+    if len(tail) == 32 {
+        chunks = array_push(chunks, tail)
+        tail = []
+    }
+    return KIRCellTable{ chunks: chunks, tail: tail, count: table.count + 1 }
+}
+
+fn append_int(table: KIRIntTable, value: Int) -> KIRIntTable {
+    let mut tail: Array[Int] = array_push(table.tail, value)
+    let mut chunks: Array[Array[Int]] = table.chunks
+    if len(tail) == 32 {
+        chunks = array_push(chunks, tail)
+        tail = []
+    }
+    return KIRIntTable{ chunks: chunks, tail: tail, count: table.count + 1 }
+}
+
+fn append_json(queue: KIRJsonQueue, value: Json) -> KIRJsonQueue {
+    let mut tail: Array[Json] = array_push(queue.tail, value)
+    let mut chunks: Array[Array[Json]] = queue.chunks
+    let mut chunk_count: Int = queue.chunk_count
+    if len(tail) == 32 {
+        chunks = array_push(chunks, tail)
+        tail = []
+        chunk_count = chunk_count + 1
+    }
+    return KIRJsonQueue{ chunks: chunks, tail: tail, chunk_count: chunk_count, count: queue.count + 1 }
+}
+
+fn cell_at(table: KIRCellTable, index: Int) -> Option[KIRArenaCell] {
+    if index < 0 || index >= table.count { return none() }
+    let complete_count: Int = len(table.chunks)
+    if index < complete_count * 32 {
+        let chunk: Option[Array[KIRArenaCell]] = array_get(table.chunks, index / 32)
+        if is_none(chunk) { return none() }
+        return array_get(unwrap_or(chunk, []), index % 32)
+    }
+    return array_get(table.tail, index - complete_count * 32)
+}
+
+fn int_at(table: KIRIntTable, index: Int) -> Option[Int] {
+    if index < 0 || index >= table.count { return none() }
+    let complete_count: Int = len(table.chunks)
+    if index < complete_count * 32 {
+        let chunk: Option[Array[Int]] = array_get(table.chunks, index / 32)
+        if is_none(chunk) { return none() }
+        return array_get(unwrap_or(chunk, []), index % 32)
+    }
+    return array_get(table.tail, index - complete_count * 32)
+}
+
+fn invalid_cell() -> KIRArenaCell {
+    return KIRArenaCell{ kind: "invalid", text: "", number_text: "", boolean: false, item_start: 0, item_count: 0, field_lookup: {} }
+}
+
+
+pub fn kir_arena_from_json(document: Json) -> Result[KIRArena, String] {
+    // Reserve stable node ids at enqueue time. The queue and output tables
+    // append into fixed-size chunks to avoid persistent-vector path growth.
+    let mut pending: KIRJsonQueue = append_json(empty_json_queue(), document)
+    let mut cells: KIRCellTable = empty_cell_table()
+    let mut items: KIRIntTable = empty_int_table()
+    let mut node_index: Int = 0
+    let mut pending_chunk_index: Int = -1
+    let mut pending_read_chunk: Int = 0
+    let mut pending_read_offset: Int = 0
+    let mut pending_chunk_values: Array[Json] = []
+    while node_index < pending.count {
+        let mut pending_value: Option[Json] = none()
+        if pending_read_chunk < pending.chunk_count {
+            if pending_read_chunk != pending_chunk_index {
+                let chunk: Option[Array[Json]] = array_get(pending.chunks, pending_read_chunk)
+                if is_none(chunk) { return err("KIR arena decoder lost a queued JSON chunk") }
+                pending_chunk_values = unwrap_or(chunk, [])
+                pending_chunk_index = pending_read_chunk
+            }
+            pending_value = array_get(pending_chunk_values, pending_read_offset)
+        } else {
+            pending_value = array_get(pending.tail, pending_read_offset)
+        }
+        if is_none(pending_value) { return err("KIR arena decoder lost a queued JSON node") }
+        let value: Json = unwrap_or(pending_value, document)
+        let kind: String = json_kind(value)
+        let mut cell: KIRArenaCell = KIRArenaCell{ kind: kind, text: "", number_text: "", boolean: false, item_start: 0, item_count: 0, field_lookup: {} }
+
+        if kind == "object" {
+            let keys: Result[Array[String], String] = json_object_keys(value)
+            if is_err(keys) { return err("KIR arena decoder could not enumerate an object") }
+            let key_count: Int = len(result_unwrap(keys))
+            let mut own_lookup: Map[String, Int] = {}
+            let mut field_index: Int = 0
+            while field_index < key_count {
+                let key: String = unwrap_or(array_get(result_unwrap(keys), field_index), "")
+                if key == "" { return err("KIR arena decoder found an empty object key") }
+                let child_value: Result[Json, String] = json_object_get(value, key)
+                if is_err(child_value) { return err("KIR arena decoder found an unreadable object field") }
+                let child_index: Int = pending.count
+                pending = append_json(pending, result_unwrap(child_value))
+                own_lookup = map_insert(own_lookup, key, child_index)
+                field_index = field_index + 1
+            }
+            cell = KIRArenaCell{ kind: kind, text: "", number_text: "", boolean: false, item_start: 0, item_count: 0, field_lookup: own_lookup }
+        } else if kind == "array" {
+            let array_count: Result[Int, String] = json_array_len(value)
+            if is_err(array_count) { return err("KIR arena decoder found an unreadable array") }
+            let item_count: Int = result_unwrap(array_count)
+            cell = KIRArenaCell{ kind: kind, text: "", number_text: "", boolean: false, item_start: items.count, item_count: item_count, field_lookup: {} }
+            let mut item_index: Int = 0
+            while item_index < item_count {
+                let child_value: Result[Json, String] = json_array_get(value, item_index)
+                if is_err(child_value) { return err("KIR arena decoder found an unreadable array item") }
+                let child_index: Int = pending.count
+                pending = append_json(pending, result_unwrap(child_value))
+                items = append_int(items, child_index)
+                item_index = item_index + 1
+            }
+        } else if kind == "string" {
+            let decoded: Result[String, String] = json_string(value)
+            if is_err(decoded) { return err("KIR arena decoder found an invalid string") }
+            cell = KIRArenaCell{ kind: kind, text: result_unwrap(decoded), number_text: "", boolean: false, item_start: 0, item_count: 0, field_lookup: {} }
+        } else if kind == "number" {
+            cell = KIRArenaCell{ kind: kind, text: "", number_text: json_stringify(value), boolean: false, item_start: 0, item_count: 0, field_lookup: {} }
+        } else if kind == "bool" {
+            let decoded: Result[Bool, String] = json_bool(value)
+            if is_err(decoded) { return err("KIR arena decoder found an invalid Boolean") }
+            cell = KIRArenaCell{ kind: kind, text: "", number_text: "", boolean: result_unwrap(decoded), item_start: 0, item_count: 0, field_lookup: {} }
+        } else if kind != "null" {
+            return err("KIR arena decoder does not support JSON value kind " + kind)
+        }
+
+        cells = append_cell(cells, cell)
+        node_index = node_index + 1
+        pending_read_offset = pending_read_offset + 1
+        if pending_read_offset == 32 {
+            pending_read_offset = 0
+            pending_read_chunk = pending_read_chunk + 1
+        }
+    }
+    if cells.count == 0 || cells.count != pending.count { return err("KIR arena root reference is out of bounds") }
+    return ok(KIRArena{ cells: cells, items: items, root: 0 })
+}
+
+pub fn kir_arena_root(arena: KIRArena) -> KIRNodeRef {
+    let cell: KIRArenaCell = unwrap_or(cell_at(arena.cells, arena.root), invalid_cell())
+    return KIRNodeRef{ cells: arena.cells, items: arena.items, index: arena.root, cell: cell }
+}
+
+pub fn kir_empty_array() -> KIRNodeRef {
+    let empty: KIRArenaCell = KIRArenaCell{ kind: "array", text: "", number_text: "", boolean: false, item_start: 0, item_count: 0, field_lookup: {} }
+    return KIRNodeRef{ cells: append_cell(empty_cell_table(), empty), items: empty_int_table(), index: 0, cell: empty }
+}
+
+pub fn kir_kind(value: KIRNodeRef) -> String {
+    return value.cell.kind
+}
+
+pub fn kir_object_get(value: KIRNodeRef, key: String) -> Result[KIRNodeRef, String] {
+    if kir_kind(value) != "object" { return err("KIR arena value is not an object") }
+    let child: Option[Int] = map_get(value.cell.field_lookup, key)
+    if is_none(child) { return err("KIR arena object has no field " + key) }
+    let child_index: Int = unwrap_or(child, -1)
+    let child_cell: Option[KIRArenaCell] = cell_at(value.cells, child_index)
+    if is_none(child_cell) { return err("KIR arena object child reference is out of bounds") }
+    return ok(KIRNodeRef{ cells: value.cells, items: value.items, index: child_index, cell: unwrap_or(child_cell, invalid_cell()) })
+}
+
+pub fn kir_array_len(value: KIRNodeRef) -> Result[Int, String] {
+    if kir_kind(value) != "array" { return err("KIR arena value is not an array") }
+    let cell: KIRArenaCell = value.cell
+    if cell.item_start < 0 || cell.item_count < 0 || cell.item_start + cell.item_count > value.items.count { return err("KIR arena array item range is out of bounds") }
+    return ok(cell.item_count)
+}
+
+pub fn kir_array_get(value: KIRNodeRef, index: Int) -> Result[KIRNodeRef, String] {
+    let count: Result[Int, String] = kir_array_len(value)
+    if is_err(count) { return err(unwrap_or(result_error(count), "KIR arena value is not an array")) }
+    if index < 0 || index >= result_unwrap(count) { return err("KIR arena array index is out of bounds") }
+    let child: Option[Int] = int_at(value.items, value.cell.item_start + index)
+    if is_none(child) { return err("KIR arena array item reference is out of bounds") }
+    let child_index: Int = unwrap_or(child, -1)
+    let child_cell: Option[KIRArenaCell] = cell_at(value.cells, child_index)
+    if is_none(child_cell) { return err("KIR arena array child reference is out of bounds") }
+    return ok(KIRNodeRef{ cells: value.cells, items: value.items, index: child_index, cell: unwrap_or(child_cell, invalid_cell()) })
+}
+
+pub fn kir_string(value: KIRNodeRef) -> Result[String, String] {
+    if kir_kind(value) != "string" { return err("KIR arena value is not a string") }
+    return ok(value.cell.text)
+}
+
+pub fn kir_int(value: KIRNodeRef) -> Result[Int, String] {
+    if kir_kind(value) != "number" { return err("KIR arena value is not a number") }
+    let number_text: String = value.cell.number_text
+    if contains(number_text, ".") || contains(number_text, "e") || contains(number_text, "E") { return err("KIR arena number is not an integer") }
+    return ok(int(number_text))
+}
+
+fn parse_uint_text(number_text: String) -> Result[UInt64, String] {
+    if number_text == "" || starts_with(number_text, "-") || contains(number_text, ".") || contains(number_text, "e") || contains(number_text, "E") { return err("KIR arena number is not an unsigned integer") }
+    let characters: Array[String] = string_chars(number_text)
+    if len(characters) == 0 { return err("KIR arena number is empty") }
+    let maximum: UInt64 = u64(0) - u64(1)
+    let threshold: UInt64 = maximum / u64(10)
+    let final_digit: UInt64 = maximum % u64(10)
+    let mut result: UInt64 = u64(0)
+    let mut index: Int = 0
+    while index < len(characters) {
+        let character: String = unwrap_or(array_get(characters, index), "")
+        if character != "0" && character != "1" && character != "2" && character != "3" && character != "4" && character != "5" && character != "6" && character != "7" && character != "8" && character != "9" { return err("KIR arena number contains a non-digit") }
+        let digit: Int = int(character)
+        let digit_value: UInt64 = u64(digit)
+        if result > threshold || (result == threshold && digit_value > final_digit) { return err("KIR arena integer is outside the UInt64 range") }
+        result = result * u64(10) + digit_value
+        index = index + 1
+    }
+    return ok(result)
+}
+
+pub fn kir_uint(value: KIRNodeRef) -> Result[UInt64, String] {
+    if kir_kind(value) != "number" { return err("KIR arena value is not a number") }
+    return parse_uint_text(value.cell.number_text)
+}
+
+pub fn kir_bool(value: KIRNodeRef) -> Result[Bool, String] {
+    if kir_kind(value) != "bool" { return err("KIR arena value is not a Boolean") }
+    return ok(value.cell.boolean)
+}
+
+pub fn kir_number_text(value: KIRNodeRef) -> String {
+    if kir_kind(value) != "number" { return "" }
+    return value.cell.number_text
+}

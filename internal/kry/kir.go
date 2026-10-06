@@ -2,8 +2,6 @@ package kry
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,14 +17,14 @@ import (
 // so a Kryndel program can consume it using the standard Json value API.
 const (
 	KIRFormat  = "kry-ir"
-	KIRVersion = 5
+	KIRVersion = 6
 )
 
 // KIRSourceSpan is a byte range in the named source file. Its end offset is
 // exclusive. A nil span means the older wire version did not carry offsets.
 type KIRSourceSpan struct {
-	Start int `json:"-"`
-	End   int `json:"-"`
+	Start int `json:"start"`
+	End   int `json:"end"`
 }
 
 func cloneKIRSourceSpan(span *KIRSourceSpan) *KIRSourceSpan {
@@ -52,15 +50,11 @@ func kirBindingID(name string, token Token, paths kirPathNames) string {
 }
 
 func kirBindingIDFromParts(name, source string, start, line, column int) string {
-	identity := fmt.Sprintf("%s\x00%d\x00%d\x00%d\x00%s", source, start, line, column, name)
-	digest := sha256.Sum256([]byte(identity))
-	return hex.EncodeToString(digest[:])
+	return fmt.Sprintf("kry-binding-v1/%d/%d/%d/%d:%s/%d:%s", start, line, column, len([]byte(source)), source, len([]byte(name)), name)
 }
 
 func kirLegacyBindingID(binding *KIRBinding) string {
-	identity := fmt.Sprintf("legacy\x00%s\x00%d\x00%d\x00%s", binding.Source, binding.Line, binding.Column, binding.Name)
-	digest := sha256.Sum256([]byte(identity))
-	return hex.EncodeToString(digest[:])
+	return fmt.Sprintf("kry-binding-legacy-v1/%d/%d/%d:%s/%d:%s", binding.Line, binding.Column, len([]byte(binding.Source)), binding.Source, len([]byte(binding.Name)), binding.Name)
 }
 
 type KIRTarget struct {
@@ -77,7 +71,7 @@ type KIRDocument struct {
 	Source          string          `json:"source"`
 	Target          KIRTarget       `json:"target"`
 	Imports         []string        `json:"imports"`
-	ImportRecords   []*KIRImport    `json:"-"`
+	ImportRecords   []*KIRImport    `json:"import_records,omitempty"`
 	Sources         []string        `json:"sources"`
 	Structs         []*KIRStruct    `json:"structs"`
 	Enums           []*KIREnum      `json:"enums"`
@@ -88,19 +82,19 @@ type KIRDocument struct {
 }
 
 type KIRImport struct {
-	Path   string         `json:"-"`
-	Source string         `json:"-"`
-	Line   int            `json:"-"`
-	Column int            `json:"-"`
-	Span   *KIRSourceSpan `json:"-"`
+	Path   string         `json:"path"`
+	Source string         `json:"source,omitempty"`
+	Line   int            `json:"line,omitempty"`
+	Column int            `json:"column,omitempty"`
+	Span   *KIRSourceSpan `json:"span,omitempty"`
 }
 
 type KIRStruct struct {
 	Name       string          `json:"name"`
-	Source     string          `json:"-"`
-	Line       int             `json:"-"`
-	Column     int             `json:"-"`
-	Span       *KIRSourceSpan  `json:"-"`
+	Source     string          `json:"source,omitempty"`
+	Line       int             `json:"line,omitempty"`
+	Column     int             `json:"column,omitempty"`
+	Span       *KIRSourceSpan  `json:"span,omitempty"`
 	Public     bool            `json:"public"`
 	Module     string          `json:"module"`
 	TypeParams []*KIRTypeParam `json:"type_params"`
@@ -109,32 +103,32 @@ type KIRStruct struct {
 
 type KIRField struct {
 	Name   string         `json:"name"`
-	Source string         `json:"-"`
-	Line   int            `json:"-"`
-	Column int            `json:"-"`
-	Span   *KIRSourceSpan `json:"-"`
+	Source string         `json:"source,omitempty"`
+	Line   int            `json:"line,omitempty"`
+	Column int            `json:"column,omitempty"`
+	Span   *KIRSourceSpan `json:"span,omitempty"`
 	Public bool           `json:"public"`
 	Type   string         `json:"type"`
 }
 
 type KIREnum struct {
 	Name         string           `json:"name"`
-	Source       string           `json:"-"`
-	Line         int              `json:"-"`
-	Column       int              `json:"-"`
-	Span         *KIRSourceSpan   `json:"-"`
+	Source       string           `json:"source,omitempty"`
+	Line         int              `json:"line,omitempty"`
+	Column       int              `json:"column,omitempty"`
+	Span         *KIRSourceSpan   `json:"span,omitempty"`
 	Public       bool             `json:"public"`
 	Module       string           `json:"module"`
 	Variants     []string         `json:"variants"`
-	VariantSpans []*KIRSourceSpan `json:"-"`
+	VariantSpans []*KIRSourceSpan `json:"variant_spans,omitempty"`
 }
 
 type KIRTrait struct {
 	Name    string            `json:"name"`
-	Source  string            `json:"-"`
-	Line    int               `json:"-"`
-	Column  int               `json:"-"`
-	Span    *KIRSourceSpan    `json:"-"`
+	Source  string            `json:"source,omitempty"`
+	Line    int               `json:"line,omitempty"`
+	Column  int               `json:"column,omitempty"`
+	Span    *KIRSourceSpan    `json:"span,omitempty"`
 	Public  bool              `json:"public"`
 	Module  string            `json:"module"`
 	Methods []*KIRTraitMethod `json:"methods"`
@@ -142,59 +136,64 @@ type KIRTrait struct {
 
 type KIRTraitMethod struct {
 	Name   string         `json:"name"`
-	Source string         `json:"-"`
-	Line   int            `json:"-"`
-	Column int            `json:"-"`
-	Span   *KIRSourceSpan `json:"-"`
+	Source string         `json:"source,omitempty"`
+	Line   int            `json:"line,omitempty"`
+	Column int            `json:"column,omitempty"`
+	Span   *KIRSourceSpan `json:"span,omitempty"`
 	Params []*KIRParam    `json:"params"`
 	Return string         `json:"return"`
 }
 
 type KIRTraitImpl struct {
 	Trait   string                `json:"trait"`
-	Source  string                `json:"-"`
-	Line    int                   `json:"-"`
-	Column  int                   `json:"-"`
-	Span    *KIRSourceSpan        `json:"-"`
+	Source  string                `json:"source,omitempty"`
+	Line    int                   `json:"line,omitempty"`
+	Column  int                   `json:"column,omitempty"`
+	Span    *KIRSourceSpan        `json:"span,omitempty"`
 	For     string                `json:"for"`
 	Module  string                `json:"module"`
 	Methods []*KIRTraitImplMethod `json:"methods"`
 }
 
 type KIRTraitImplMethod struct {
-	Name   string `json:"name"`
-	Target string `json:"target"`
+	Name   string         `json:"name"`
+	Source string         `json:"source,omitempty"`
+	Line   int            `json:"line,omitempty"`
+	Column int            `json:"column,omitempty"`
+	Span   *KIRSourceSpan `json:"span,omitempty"`
+	Target string         `json:"target"`
 }
 
 type KIRTypeParam struct {
 	Name       string         `json:"name"`
 	Constraint string         `json:"constraint"`
-	Source     string         `json:"-"`
-	Line       int            `json:"-"`
-	Column     int            `json:"-"`
-	Span       *KIRSourceSpan `json:"-"`
+	Source     string         `json:"source,omitempty"`
+	Line       int            `json:"line,omitempty"`
+	Column     int            `json:"column,omitempty"`
+	Span       *KIRSourceSpan `json:"span,omitempty"`
 }
 
 type KIRParam struct {
-	Name    string         `json:"name"`
-	Type    string         `json:"type"`
-	Source  string         `json:"-"`
-	Line    int            `json:"-"`
-	Column  int            `json:"-"`
-	Span    *KIRSourceSpan `json:"-"`
-	Default *KIRExpr       `json:"default"`
-	Binding *KIRBinding    `json:"binding"`
+	Name     string         `json:"name"`
+	Type     string         `json:"type"`
+	Source   string         `json:"source,omitempty"`
+	Line     int            `json:"line,omitempty"`
+	Column   int            `json:"column,omitempty"`
+	Span     *KIRSourceSpan `json:"span,omitempty"`
+	Default  *KIRExpr       `json:"default"`
+	Binding  *KIRBinding    `json:"binding"`
+	arenaRef MIRRef
 }
 
 type KIRBinding struct {
-	ID      string         `json:"-"`
+	ID      string         `json:"id,omitempty"`
 	Name    string         `json:"name"`
 	Type    string         `json:"type"`
 	Mutable bool           `json:"mutable"`
 	Source  string         `json:"source"`
 	Line    int            `json:"line"`
 	Column  int            `json:"column"`
-	Span    *KIRSourceSpan `json:"-"`
+	Span    *KIRSourceSpan `json:"span,omitempty"`
 }
 
 type KIRFunction struct {
@@ -202,7 +201,7 @@ type KIRFunction struct {
 	Source     string          `json:"source"`
 	Line       int             `json:"line"`
 	Column     int             `json:"column"`
-	Span       *KIRSourceSpan  `json:"-"`
+	Span       *KIRSourceSpan  `json:"span,omitempty"`
 	Public     bool            `json:"public"`
 	Worker     bool            `json:"worker"`
 	Unsafe     bool            `json:"unsafe"`
@@ -214,6 +213,7 @@ type KIRFunction struct {
 	Params     []*KIRParam     `json:"params"`
 	Captures   []*KIRCapture   `json:"captures"`
 	Body       []*KIRStmt      `json:"body"`
+	arenaRef   MIRRef
 }
 
 type KIRCapture struct {
@@ -225,7 +225,7 @@ type KIRExpr struct {
 	Source           string         `json:"source"`
 	Line             int            `json:"line"`
 	Column           int            `json:"column"`
-	Span             *KIRSourceSpan `json:"-"`
+	Span             *KIRSourceSpan `json:"span,omitempty"`
 	Type             string         `json:"type"`
 	Const            *KIRValue      `json:"const"`
 	Int              int64          `json:"int"`
@@ -259,6 +259,7 @@ type KIRExpr struct {
 	Callee           *KIRExpr       `json:"callee"`
 	Lambda           *KIRFunction   `json:"lambda"`
 	Binding          *KIRBinding    `json:"binding"`
+	arenaRef         MIRRef
 }
 
 type KIRStmt struct {
@@ -266,7 +267,7 @@ type KIRStmt struct {
 	Source     string         `json:"source"`
 	Line       int            `json:"line"`
 	Column     int            `json:"column"`
-	Span       *KIRSourceSpan `json:"-"`
+	Span       *KIRSourceSpan `json:"span,omitempty"`
 	Name       string         `json:"name"`
 	Binding    *KIRBinding    `json:"binding"`
 	Mutable    bool           `json:"mutable"`
@@ -284,13 +285,17 @@ type KIRStmt struct {
 	Return     *KIRExpr       `json:"return"`
 	Scrutinee  *KIRExpr       `json:"scrutinee"`
 	Arms       []*KIRArm      `json:"arms"`
+	arenaRef   MIRRef
 }
 
 type KIRArm struct {
-	Source  string         `json:"-"`
-	Span    *KIRSourceSpan `json:"-"`
-	Pattern *KIRPattern    `json:"pattern"`
-	Body    []*KIRStmt     `json:"body"`
+	Source   string         `json:"source,omitempty"`
+	Line     int            `json:"line,omitempty"`
+	Column   int            `json:"column,omitempty"`
+	Span     *KIRSourceSpan `json:"span,omitempty"`
+	Pattern  *KIRPattern    `json:"pattern"`
+	Body     []*KIRStmt     `json:"body"`
+	arenaRef MIRRef
 }
 
 type KIRPattern struct {
@@ -298,7 +303,7 @@ type KIRPattern struct {
 	Source          string         `json:"source"`
 	Line            int            `json:"line"`
 	Column          int            `json:"column"`
-	Span            *KIRSourceSpan `json:"-"`
+	Span            *KIRSourceSpan `json:"span,omitempty"`
 	Bool            bool           `json:"bool"`
 	Int             int64          `json:"int"`
 	String          string         `json:"string"`
@@ -308,6 +313,7 @@ type KIRPattern struct {
 	Present         bool           `json:"present"`
 	OK              bool           `json:"ok"`
 	ResolvedBinding *KIRBinding    `json:"resolved_binding"`
+	arenaRef        MIRRef
 }
 
 type KIRValue struct {
@@ -325,7 +331,7 @@ type KIRValue struct {
 	OK       bool        `json:"ok"`
 }
 
-// EmitKIR serializes the validated arena into deterministic KIR v5 JSON.
+// EmitKIR serializes the validated arena into deterministic KIR v6 JSON.
 // Source compilation and in-process lowerers share CompileMIR and do not need
 // a JSON encode/decode round trip.
 func EmitKIR(p *Program, c *Checker, target NativeTarget) ([]byte, error) {
@@ -420,7 +426,15 @@ func kirExprScalars(e *Expr, c *Checker, functionTargets map[*Function]string, p
 	if e.StructType != nil {
 		structType = TypeSpecString(e.StructType)
 	}
-	k := &KIRExpr{Kind: exprName(e.Kind), Source: paths.tokenSource(e.Tok), Line: e.Tok.Line, Column: e.Tok.Column, Span: kirSourceSpan(e.StartToken, e.EndToken), Type: typeString(e.Type, nil), Int: e.Int, Float: e.Float, Bool: e.Bool, String: e.Str, Name: e.Name, Operator: opText(e.Op), CallTarget: "", TraitName: e.TraitName, Field: e.Field, StructName: e.StructName, StructType: structType, GenericArguments: genericArguments, Fields: append([]string(nil), e.Fields...), EnumType: e.EnumType, EnumVariant: e.EnumVariant, Tail: e.Tail}
+	// Preserve the AST's diagnostic token for runtime errors. Span.Start is
+	// separately recorded from StartToken, so the IR keeps both the full source
+	// range and the token the interpreter historically reports.
+	location := e.Tok
+	operator := ""
+	if e.Kind == ExUnary || e.Kind == ExBinary {
+		operator = opText(e.Op)
+	}
+	k := &KIRExpr{Kind: exprName(e.Kind), Source: paths.tokenSource(location), Line: location.Line, Column: location.Column, Span: kirSourceSpan(e.StartToken, e.EndToken), Type: typeString(e.Type, nil), Int: e.Int, Float: e.Float, Bool: e.Bool, String: e.Str, Name: e.Name, Operator: operator, CallTarget: "", TraitName: e.TraitName, Field: e.Field, StructName: e.StructName, StructType: structType, GenericArguments: genericArguments, Fields: append([]string(nil), e.Fields...), EnumType: e.EnumType, EnumVariant: e.EnumVariant, Tail: e.Tail}
 	if e.Kind == ExCall && e.Function == nil && e.Receiver == nil && e.Callee != nil {
 		if _, builtin := c.Env.Builtins[e.Name]; !builtin {
 			k.Name = ""
@@ -508,8 +522,10 @@ func DecodeKIR(data []byte, lim Limits) (*KIRDocument, error) {
 	if err := validateKIRDocument(&d, lim); err != nil {
 		return nil, fmt.Errorf("invalid KIR: %w", err)
 	}
-	if d.Version < 6 {
+	if d.Version < KIRVersion {
 		assignLegacyKIRBindingIDs(&d)
+	} else if err := validateKIRV6Metadata(&d); err != nil {
+		return nil, fmt.Errorf("invalid KIR: %w", err)
 	}
 	return &d, nil
 }
@@ -627,6 +643,11 @@ func DecodeMIR(data []byte, lim Limits) (*ValidatedMIR, error) {
 	arena, err := newKIRArena(document)
 	if err != nil {
 		return nil, fmt.Errorf("build validated MIR arena: %w", err)
+	}
+	if arena.Version == KIRVersion {
+		if err := validateKIRArenaV6Metadata(arena); err != nil {
+			return nil, fmt.Errorf("invalid typed KIR v6 arena: %w", err)
+		}
 	}
 	return &ValidatedMIR{arena: arena, limits: lim}, nil
 }

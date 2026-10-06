@@ -125,7 +125,7 @@ type ffiBufferHandle struct {
 // chunk tree makes the chunk index persistent too; copying a slice of every
 // chunk pointer on each update would merely move the same O(n^2) problem up a
 // level for large compiler state arrays.
-const persistentArrayChunkSize = 256
+const persistentArrayChunkSize = 32
 
 type persistentArrayTree struct {
 	left  *persistentArrayTree

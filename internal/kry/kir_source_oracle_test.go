@@ -60,7 +60,7 @@ func kirStmt(s *Stmt, c *Checker, functionTargets map[*Function]string, paths ki
 		if len(arm.Body) > 0 {
 			endToken = arm.Body[len(arm.Body)-1].EndToken
 		}
-		k.Arms = append(k.Arms, &KIRArm{Source: paths.tokenSource(arm.Pattern.Tok), Span: kirSourceSpan(arm.Pattern.Tok, endToken), Pattern: kirPattern(arm.Pattern, paths), Body: kirStmts(arm.Body, c, functionTargets, paths)})
+		k.Arms = append(k.Arms, &KIRArm{Source: paths.tokenSource(arm.Pattern.Tok), Line: arm.Pattern.Tok.Line, Column: arm.Pattern.Tok.Column, Span: kirSourceSpan(arm.Pattern.Tok, endToken), Pattern: kirPattern(arm.Pattern, paths), Body: kirStmts(arm.Body, c, functionTargets, paths)})
 	}
 	return k
 }

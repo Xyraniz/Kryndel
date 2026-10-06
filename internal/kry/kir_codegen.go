@@ -34,6 +34,9 @@ func substituteKIRType(encoded string, substitutions map[string]string) string {
 	if !ok || len(substitutions) == 0 {
 		return encoded
 	}
+	// Parsed type specs may be shared from the bounded cache. Substitution
+	// rewrites names in place, so it must operate on a private copy.
+	spec = cloneKIRTypeSpec(spec)
 	var visit func(*TypeSpec, int)
 	visit = func(current *TypeSpec, depth int) {
 		if current == nil || depth > 128 {

@@ -46,7 +46,7 @@ Lexical scopes are represented by parent-linked environments. A declaration is l
 
 ## Artifact format
 
-`build` accepts a source file, validates it, and writes a deterministic KRYNATIVE6 bundle with a fixed magic, format/compiler/language/target metadata, exact payload length, an ordered `<root>` plus imported source entries, package visibility scopes, a SHA-256 hash for every source, and canonical typed KIR with its own hash. The KIR uses the host-independent `portable/any` target, while native outputs keep their explicit OS and architecture. The reader rejects incompatible metadata, truncated or oversized fields, duplicate or unsafe paths, invalid hashes, trailing bytes, invalid KIR, and any embedded source that fails the ordinary lexer, parser, module, or checker pipeline. It regenerates KIR from the checked source graph using the embedded target and requires byte-for-byte agreement with the embedded IR, so the artifact cannot pair one checked representation with different source. Building the same source twice produces identical bytes. KRYNATIVE3 through KRYNATIVE5 artifacts remain readable; KRYNATIVE3 is interpreted as language version 1.0.0. `emit --format=kry-ir` exposes the checked program through deterministic KIR v5 JSON; the decoder accepts KIR v1 through v5. `--format=elf` uses the generated-C AOT backend, while `--format=elf-direct` lowers its supported KIR subset to Linux amd64 machine code and rejects unsupported constructs before emitting an executable.
+`build` accepts a source file, validates it, and writes a deterministic KRYNATIVE6 bundle with a fixed magic, format/compiler/language/target metadata, exact payload length, an ordered `<root>` plus imported source entries, package visibility scopes, a SHA-256 hash for every source, and canonical typed KIR with its own hash. The KIR uses the host-independent `portable/any` target, while native outputs keep their explicit OS and architecture. The reader rejects incompatible metadata, truncated or oversized fields, duplicate or unsafe paths, invalid hashes, trailing bytes, invalid KIR, and any embedded source that fails the ordinary lexer, parser, module, or checker pipeline. It regenerates KIR from the checked source graph using the embedded target and requires byte-for-byte agreement with the embedded IR, so the artifact cannot pair one checked representation with different source. Building the same source twice produces identical bytes. KRYNATIVE3 through KRYNATIVE5 artifacts remain readable; KRYNATIVE3 is interpreted as language version 1.0.0. `emit --format=kry-ir` exposes the checked program through deterministic KIR v6 JSON; the decoder accepts KIR v1 through v6. `--format=elf` uses the generated-C AOT backend, while `--format=elf-direct` lowers its supported KIR subset to Linux amd64 machine code and rejects unsupported constructs before emitting an executable.
 
 ## Intermediate representation status
 
@@ -81,9 +81,11 @@ source graph and recompiles the MIR before accepting the bundle.
 `ValidateASTLimits` only counts source-tree resource use before lowering; it is
 not a second instruction representation.
 
-KIR v5 retains checked types, resolved call targets, generic declarations and
+KIR v6 retains checked types, resolved call targets, generic declarations and
 instantiations, function values and captures, trait implementation targets,
-source locations, and target metadata. Direct ELF's KIR slices cover scalar
+canonical binding IDs, UTF-8 byte source spans, and target metadata. Versions
+1–5 remain readable; older documents receive reconstructed binding IDs and
+keep line/column locations without invented byte spans. Direct ELF's KIR slices cover scalar
 bindings, arithmetic and comparisons, Boolean logic, String equality,
 assignments, branches and loops, plus bounded function, immutable array,
 struct, and `Option`/`Result` paths. Direct PE also lowers its supported subset
@@ -99,10 +101,20 @@ before output bytes are emitted.
 Backend support limits and KIR version history are tracked in the
 [KIR reference](kry-ir.md).
 
-The arena migration currently covers storage and construction in the Go
-toolchain, not every consumer's traversal. The self-hosted compiler still keeps
-serialized KIR JSON in `ValidatedKIR` and its dynamic backend lowers from that
-document; the Go and Kry validators are not generated from a common schema.
-The shared corpus remains a parity guard, not proof that the two compilers use
-one in-memory representation. KIR v6 binding IDs and full source ranges, direct
-indexed lowering in Go, and the self-hosted arena migration are still required.
+The Go interpreter and native lowerers consume the indexed arena described
+above. Selfhost validates decoded portable JSON, converts it to schema-shaped
+typed tables for declarations, functions, bindings, expressions, statements,
+patterns, values, spans, and child references, and retains only those tables in
+`ValidatedKIR`; the ELF and dynamic ELF/PE lowerers consume typed arena views,
+not the recursive `Json` document or a lossy ELF projection. Go and Kry use
+separately implemented row types; the shared schema and corpus guard the wire
+contract and representative validator parity, but do not prove identical
+in-memory layouts. Selfhost source compilation still serializes generated KIR
+to JSON text and parses it before validation. The single validated-IR boundary
+is therefore still incomplete across toolchains.
+
+The self-hosted dynamic backend has an explicit `LoweredNativeImage` contract
+between lowering and serialization. It carries code, data, target, imports,
+and typed relocation/function-range rows; `native_image.kry` selects the ELF
+or PE writer without inspecting KIR. Lowering no longer traverses recursive
+JSON. The source frontend's JSON text round trip remains migration work.

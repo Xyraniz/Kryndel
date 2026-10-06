@@ -10,20 +10,55 @@ import (
 // recursive edge explicitly through KIRArena. Its node adapters never attach
 // expression or statement child pointers.
 type kirExecArenaView struct {
-	arena           *KIRArena
-	expressions     []*KIRExpr
-	expressionIndex map[*KIRExpr]MIRIndex
-	statements      []*KIRStmt
-	statementIndex  map[*KIRStmt]MIRIndex
-	functions       []*KIRFunction
-	functionIndex   map[*KIRFunction]MIRIndex
-	parameters      []*KIRParam
-	parameterIndex  map[*KIRParam]MIRIndex
-	patterns        []*KIRPattern
-	patternIndex    map[*KIRPattern]MIRIndex
-	arms            []*KIRArm
-	armIndex        map[*KIRArm]MIRIndex
+	arena       *KIRArena
+	expressions []*KIRExpr
+	statements  []*KIRStmt
+	functions   []*KIRFunction
+	parameters  []*KIRParam
+	patterns    []*KIRPattern
+	arms        []*KIRArm
 }
+
+type kirExprEdge uint8
+
+const (
+	kirExprLeft kirExprEdge = iota
+	kirExprRight
+	kirExprOperand
+	kirExprBase
+	kirExprReceiver
+	kirExprCallee
+)
+
+type kirExprList uint8
+
+const (
+	kirExprArgs kirExprList = iota
+	kirExprItems
+	kirExprMapKeys
+	kirExprValues
+)
+
+type kirStmtEdge uint8
+
+const (
+	kirStmtInit kirStmtEdge = iota
+	kirStmtExpr
+	kirStmtTarget
+	kirStmtValue
+	kirStmtCond
+	kirStmtIter
+	kirStmtReturn
+	kirStmtScrutinee
+)
+
+type kirStmtList uint8
+
+const (
+	kirStmtThen kirStmtList = iota
+	kirStmtElse
+	kirStmtBody
+)
 
 func newKIRExecArenaView(arena *KIRArena) (*kirExecArenaView, error) {
 	if arena == nil {
@@ -34,12 +69,12 @@ func newKIRExecArenaView(arena *KIRArena) (*kirExecArenaView, error) {
 	}
 	view := &kirExecArenaView{
 		arena:       arena,
-		expressions: make([]*KIRExpr, len(arena.Expressions)), expressionIndex: make(map[*KIRExpr]MIRIndex, len(arena.Expressions)),
-		statements: make([]*KIRStmt, len(arena.Statements)), statementIndex: make(map[*KIRStmt]MIRIndex, len(arena.Statements)),
-		functions: make([]*KIRFunction, len(arena.Functions)), functionIndex: make(map[*KIRFunction]MIRIndex, len(arena.Functions)),
-		parameters: make([]*KIRParam, len(arena.Parameters)), parameterIndex: make(map[*KIRParam]MIRIndex, len(arena.Parameters)),
-		patterns: make([]*KIRPattern, len(arena.Patterns)), patternIndex: make(map[*KIRPattern]MIRIndex, len(arena.Patterns)),
-		arms: make([]*KIRArm, len(arena.Arms)), armIndex: make(map[*KIRArm]MIRIndex, len(arena.Arms)),
+		expressions: make([]*KIRExpr, len(arena.Expressions)),
+		statements:  make([]*KIRStmt, len(arena.Statements)),
+		functions:   make([]*KIRFunction, len(arena.Functions)),
+		parameters:  make([]*KIRParam, len(arena.Parameters)),
+		patterns:    make([]*KIRPattern, len(arena.Patterns)),
+		arms:        make([]*KIRArm, len(arena.Arms)),
 	}
 	// Materialize scalar adapters before execution so the shared interpreter
 	// view is immutable while worker goroutines read it.
@@ -84,23 +119,39 @@ func (view *kirExecArenaView) expression(ref MIRRef) *KIRExpr {
 	value.GenericArguments = cloneKIRStrings(row.Value.GenericArguments)
 	value.Fields = cloneKIRStrings(row.Value.Fields)
 	value.Binding = view.binding(row.Binding)
+	value.arenaRef = ref
 	node := &value
 	view.expressions[ref.Index] = node
-	view.expressionIndex[node] = ref.Index
 	return node
 }
 
 func (view *kirExecArenaView) expressionRow(expression *KIRExpr) (*MIRExpression, bool) {
-	index, ok := view.expressionIndex[expression]
-	if !ok || uint64(index) >= uint64(len(view.arena.Expressions)) {
+	if expression == nil || !expression.arenaRef.Present || uint64(expression.arenaRef.Index) >= uint64(len(view.arena.Expressions)) {
 		return nil, false
 	}
-	return &view.arena.Expressions[index], true
+	return &view.arena.Expressions[expression.arenaRef.Index], true
 }
 
-func (view *kirExecArenaView) expressionEdge(expression *KIRExpr, edge func(MIRExpression) MIRRef) *KIRExpr {
+func (view *kirExecArenaView) expressionEdge(expression *KIRExpr, edge kirExprEdge) *KIRExpr {
 	if row, ok := view.expressionRow(expression); ok {
-		return view.expression(edge(*row))
+		var ref MIRRef
+		switch edge {
+		case kirExprLeft:
+			ref = row.Left
+		case kirExprRight:
+			ref = row.Right
+		case kirExprOperand:
+			ref = row.Operand
+		case kirExprBase:
+			ref = row.Base
+		case kirExprReceiver:
+			ref = row.Receiver
+		case kirExprCallee:
+			ref = row.Callee
+		default:
+			return nil
+		}
+		return view.expression(ref)
 	}
 	return nil
 }
@@ -117,9 +168,22 @@ func (view *kirExecArenaView) expressionList(list MIRNodeRefList) []*KIRExpr {
 	return values
 }
 
-func (view *kirExecArenaView) expressionEdges(expression *KIRExpr, edges func(MIRExpression) MIRNodeRefList) []*KIRExpr {
+func (view *kirExecArenaView) expressionEdges(expression *KIRExpr, edges kirExprList) []*KIRExpr {
 	if row, ok := view.expressionRow(expression); ok {
-		return view.expressionList(edges(*row))
+		var list MIRNodeRefList
+		switch edges {
+		case kirExprArgs:
+			list = row.Args
+		case kirExprItems:
+			list = row.Items
+		case kirExprMapKeys:
+			list = row.MapKeys
+		case kirExprValues:
+			list = row.Values
+		default:
+			return nil
+		}
+		return view.expressionList(list)
 	}
 	return nil
 }
@@ -134,23 +198,43 @@ func (view *kirExecArenaView) statement(ref MIRRef) *KIRStmt {
 	row := view.arena.Statements[ref.Index]
 	value := row.Value
 	value.Binding = view.binding(row.Binding)
+	value.arenaRef = ref
 	node := &value
 	view.statements[ref.Index] = node
-	view.statementIndex[node] = ref.Index
 	return node
 }
 
 func (view *kirExecArenaView) statementRow(statement *KIRStmt) (*MIRStatement, bool) {
-	index, ok := view.statementIndex[statement]
-	if !ok || uint64(index) >= uint64(len(view.arena.Statements)) {
+	if statement == nil || !statement.arenaRef.Present || uint64(statement.arenaRef.Index) >= uint64(len(view.arena.Statements)) {
 		return nil, false
 	}
-	return &view.arena.Statements[index], true
+	return &view.arena.Statements[statement.arenaRef.Index], true
 }
 
-func (view *kirExecArenaView) statementEdge(statement *KIRStmt, edge func(MIRStatement) MIRRef) *KIRExpr {
+func (view *kirExecArenaView) statementEdge(statement *KIRStmt, edge kirStmtEdge) *KIRExpr {
 	if row, ok := view.statementRow(statement); ok {
-		return view.expression(edge(*row))
+		var ref MIRRef
+		switch edge {
+		case kirStmtInit:
+			ref = row.Init
+		case kirStmtExpr:
+			ref = row.Expr
+		case kirStmtTarget:
+			ref = row.Target
+		case kirStmtValue:
+			ref = row.ValueExpr
+		case kirStmtCond:
+			ref = row.Cond
+		case kirStmtIter:
+			ref = row.Iter
+		case kirStmtReturn:
+			ref = row.Return
+		case kirStmtScrutinee:
+			ref = row.Scrutinee
+		default:
+			return nil
+		}
+		return view.expression(ref)
 	}
 	return nil
 }
@@ -167,9 +251,20 @@ func (view *kirExecArenaView) statementList(list MIRNodeRefList) []*KIRStmt {
 	return values
 }
 
-func (view *kirExecArenaView) statementEdges(statement *KIRStmt, edges func(MIRStatement) MIRNodeRefList) []*KIRStmt {
+func (view *kirExecArenaView) statementEdges(statement *KIRStmt, edges kirStmtList) []*KIRStmt {
 	if row, ok := view.statementRow(statement); ok {
-		return view.statementList(edges(*row))
+		var list MIRNodeRefList
+		switch edges {
+		case kirStmtThen:
+			list = row.Then
+		case kirStmtElse:
+			list = row.Else
+		case kirStmtBody:
+			list = row.Body
+		default:
+			return nil
+		}
+		return view.statementList(list)
 	}
 	return nil
 }
@@ -184,18 +279,17 @@ func (view *kirExecArenaView) parameter(ref MIRIndex) *KIRParam {
 	row := view.arena.Parameters[ref]
 	value := row.Value
 	value.Binding = view.binding(row.Binding)
+	value.arenaRef = MIRRef{Index: ref, Present: true}
 	node := &value
 	view.parameters[ref] = node
-	view.parameterIndex[node] = ref
 	return node
 }
 
 func (view *kirExecArenaView) parameterDefault(parameter *KIRParam) *KIRExpr {
-	index, ok := view.parameterIndex[parameter]
-	if !ok || uint64(index) >= uint64(len(view.arena.Parameters)) {
+	if parameter == nil || !parameter.arenaRef.Present || uint64(parameter.arenaRef.Index) >= uint64(len(view.arena.Parameters)) {
 		return nil
 	}
-	return view.expression(view.arena.Parameters[index].Default)
+	return view.expression(view.arena.Parameters[parameter.arenaRef.Index].Default)
 }
 
 func (view *kirExecArenaView) parameterList(list MIRNodeRefList) []*KIRParam {
@@ -222,18 +316,17 @@ func (view *kirExecArenaView) function(ref MIRRef) *KIRFunction {
 	value.TypeParams = append([]*KIRTypeParam(nil), row.Value.TypeParams...)
 	value.Params = view.parameterList(row.Params)
 	value.Captures = view.captureList(row.Captures)
+	value.arenaRef = ref
 	node := &value
 	view.functions[ref.Index] = node
-	view.functionIndex[node] = ref.Index
 	return node
 }
 
 func (view *kirExecArenaView) functionRow(function *KIRFunction) (*MIRFunction, bool) {
-	index, ok := view.functionIndex[function]
-	if !ok || uint64(index) >= uint64(len(view.arena.Functions)) {
+	if function == nil || !function.arenaRef.Present || uint64(function.arenaRef.Index) >= uint64(len(view.arena.Functions)) {
 		return nil, false
 	}
-	return &view.arena.Functions[index], true
+	return &view.arena.Functions[function.arenaRef.Index], true
 }
 
 func (view *kirExecArenaView) functionBody(function *KIRFunction) []*KIRStmt {
@@ -279,9 +372,9 @@ func (view *kirExecArenaView) pattern(ref MIRRef) *KIRPattern {
 	row := view.arena.Patterns[ref.Index]
 	value := row.Value
 	value.ResolvedBinding = view.binding(row.Binding)
+	value.arenaRef = ref
 	node := &value
 	view.patterns[ref.Index] = node
-	view.patternIndex[node] = ref.Index
 	return node
 }
 
@@ -296,9 +389,9 @@ func (view *kirExecArenaView) arm(ref MIRIndex) *KIRArm {
 	copy := row.Value
 	copy.Span = cloneKIRSourceSpan(row.Value.Span)
 	copy.Pattern, copy.Body = view.pattern(row.Pattern), nil
+	copy.arenaRef = MIRRef{Index: ref, Present: true}
 	value := &copy
 	view.arms[ref] = value
-	view.armIndex[value] = ref
 	return value
 }
 
@@ -315,11 +408,10 @@ func (view *kirExecArenaView) armList(list MIRNodeRefList) []*KIRArm {
 }
 
 func (view *kirExecArenaView) armBody(arm *KIRArm) []*KIRStmt {
-	index, ok := view.armIndex[arm]
-	if !ok || uint64(index) >= uint64(len(view.arena.Arms)) {
+	if arm == nil || !arm.arenaRef.Present || uint64(arm.arenaRef.Index) >= uint64(len(view.arena.Arms)) {
 		return nil
 	}
-	return view.statementList(view.arena.Arms[index].Body)
+	return view.statementList(view.arena.Arms[arm.arenaRef.Index].Body)
 }
 
 func (view *kirExecArenaView) statementArms(statement *KIRStmt) []*KIRArm {
@@ -329,37 +421,69 @@ func (view *kirExecArenaView) statementArms(statement *KIRStmt) []*KIRArm {
 	return nil
 }
 
-func (executor *kirExecutor) expressionEdge(expression *KIRExpr, edge func(MIRExpression) MIRRef, fallback func(*KIRExpr) *KIRExpr) *KIRExpr {
-	if executor.arenaView == nil {
-		return fallback(expression)
+func (executor *kirExecutor) expressionEdge(expression *KIRExpr, edge kirExprEdge) *KIRExpr {
+	if expression == nil {
+		return nil
 	}
-	return executor.arenaView.expressionEdge(expression, edge)
+	if executor.arenaView != nil {
+		return executor.arenaView.expressionEdge(expression, edge)
+	}
+	switch edge {
+	case kirExprLeft:
+		return expression.Left
+	case kirExprRight:
+		return expression.Right
+	case kirExprOperand:
+		return expression.Operand
+	case kirExprBase:
+		return expression.Base
+	case kirExprReceiver:
+		return expression.Receiver
+	case kirExprCallee:
+		return expression.Callee
+	default:
+		return nil
+	}
 }
 
-func (executor *kirExecutor) expressionList(expression *KIRExpr, edges func(MIRExpression) MIRNodeRefList, fallback func(*KIRExpr) []*KIRExpr) []*KIRExpr {
-	if executor.arenaView == nil {
-		return fallback(expression)
+func (executor *kirExecutor) expressionList(expression *KIRExpr, edges kirExprList) []*KIRExpr {
+	if expression == nil {
+		return nil
 	}
-	return executor.arenaView.expressionEdges(expression, edges)
+	if executor.arenaView != nil {
+		return executor.arenaView.expressionEdges(expression, edges)
+	}
+	switch edges {
+	case kirExprArgs:
+		return expression.Args
+	case kirExprItems:
+		return expression.Items
+	case kirExprMapKeys:
+		return expression.MapKeys
+	case kirExprValues:
+		return expression.Values
+	default:
+		return nil
+	}
 }
 
 func (executor *kirExecutor) exprLeft(value *KIRExpr) *KIRExpr {
-	return executor.expressionEdge(value, func(row MIRExpression) MIRRef { return row.Left }, func(node *KIRExpr) *KIRExpr { return node.Left })
+	return executor.expressionEdge(value, kirExprLeft)
 }
 func (executor *kirExecutor) exprRight(value *KIRExpr) *KIRExpr {
-	return executor.expressionEdge(value, func(row MIRExpression) MIRRef { return row.Right }, func(node *KIRExpr) *KIRExpr { return node.Right })
+	return executor.expressionEdge(value, kirExprRight)
 }
 func (executor *kirExecutor) exprOperand(value *KIRExpr) *KIRExpr {
-	return executor.expressionEdge(value, func(row MIRExpression) MIRRef { return row.Operand }, func(node *KIRExpr) *KIRExpr { return node.Operand })
+	return executor.expressionEdge(value, kirExprOperand)
 }
 func (executor *kirExecutor) exprBase(value *KIRExpr) *KIRExpr {
-	return executor.expressionEdge(value, func(row MIRExpression) MIRRef { return row.Base }, func(node *KIRExpr) *KIRExpr { return node.Base })
+	return executor.expressionEdge(value, kirExprBase)
 }
 func (executor *kirExecutor) exprReceiver(value *KIRExpr) *KIRExpr {
-	return executor.expressionEdge(value, func(row MIRExpression) MIRRef { return row.Receiver }, func(node *KIRExpr) *KIRExpr { return node.Receiver })
+	return executor.expressionEdge(value, kirExprReceiver)
 }
 func (executor *kirExecutor) exprCallee(value *KIRExpr) *KIRExpr {
-	return executor.expressionEdge(value, func(row MIRExpression) MIRRef { return row.Callee }, func(node *KIRExpr) *KIRExpr { return node.Callee })
+	return executor.expressionEdge(value, kirExprCallee)
 }
 func (executor *kirExecutor) exprLambda(value *KIRExpr) *KIRFunction {
 	if executor.arenaView == nil {
@@ -371,64 +495,98 @@ func (executor *kirExecutor) exprLambda(value *KIRExpr) *KIRFunction {
 	return nil
 }
 func (executor *kirExecutor) exprArgs(value *KIRExpr) []*KIRExpr {
-	return executor.expressionList(value, func(row MIRExpression) MIRNodeRefList { return row.Args }, func(node *KIRExpr) []*KIRExpr { return node.Args })
+	return executor.expressionList(value, kirExprArgs)
 }
 func (executor *kirExecutor) exprItems(value *KIRExpr) []*KIRExpr {
-	return executor.expressionList(value, func(row MIRExpression) MIRNodeRefList { return row.Items }, func(node *KIRExpr) []*KIRExpr { return node.Items })
+	return executor.expressionList(value, kirExprItems)
 }
 func (executor *kirExecutor) exprMapKeys(value *KIRExpr) []*KIRExpr {
-	return executor.expressionList(value, func(row MIRExpression) MIRNodeRefList { return row.MapKeys }, func(node *KIRExpr) []*KIRExpr { return node.MapKeys })
+	return executor.expressionList(value, kirExprMapKeys)
 }
 func (executor *kirExecutor) exprValues(value *KIRExpr) []*KIRExpr {
-	return executor.expressionList(value, func(row MIRExpression) MIRNodeRefList { return row.Values }, func(node *KIRExpr) []*KIRExpr { return node.Values })
+	return executor.expressionList(value, kirExprValues)
 }
 
-func (executor *kirExecutor) statementEdge(statement *KIRStmt, edge func(MIRStatement) MIRRef, fallback func(*KIRStmt) *KIRExpr) *KIRExpr {
-	if executor.arenaView == nil {
-		return fallback(statement)
+func (executor *kirExecutor) statementEdge(statement *KIRStmt, edge kirStmtEdge) *KIRExpr {
+	if statement == nil {
+		return nil
 	}
-	return executor.arenaView.statementEdge(statement, edge)
+	if executor.arenaView != nil {
+		return executor.arenaView.statementEdge(statement, edge)
+	}
+	switch edge {
+	case kirStmtInit:
+		return statement.Init
+	case kirStmtExpr:
+		return statement.Expr
+	case kirStmtTarget:
+		return statement.Target
+	case kirStmtValue:
+		return statement.Value
+	case kirStmtCond:
+		return statement.Cond
+	case kirStmtIter:
+		return statement.Iter
+	case kirStmtReturn:
+		return statement.Return
+	case kirStmtScrutinee:
+		return statement.Scrutinee
+	default:
+		return nil
+	}
 }
 
-func (executor *kirExecutor) statementList(statement *KIRStmt, edges func(MIRStatement) MIRNodeRefList, fallback func(*KIRStmt) []*KIRStmt) []*KIRStmt {
-	if executor.arenaView == nil {
-		return fallback(statement)
+func (executor *kirExecutor) statementList(statement *KIRStmt, edges kirStmtList) []*KIRStmt {
+	if statement == nil {
+		return nil
 	}
-	return executor.arenaView.statementEdges(statement, edges)
+	if executor.arenaView != nil {
+		return executor.arenaView.statementEdges(statement, edges)
+	}
+	switch edges {
+	case kirStmtThen:
+		return statement.Then
+	case kirStmtElse:
+		return statement.Else
+	case kirStmtBody:
+		return statement.Body
+	default:
+		return nil
+	}
 }
 
 func (executor *kirExecutor) stmtInit(value *KIRStmt) *KIRExpr {
-	return executor.statementEdge(value, func(row MIRStatement) MIRRef { return row.Init }, func(node *KIRStmt) *KIRExpr { return node.Init })
+	return executor.statementEdge(value, kirStmtInit)
 }
 func (executor *kirExecutor) stmtExpr(value *KIRStmt) *KIRExpr {
-	return executor.statementEdge(value, func(row MIRStatement) MIRRef { return row.Expr }, func(node *KIRStmt) *KIRExpr { return node.Expr })
+	return executor.statementEdge(value, kirStmtExpr)
 }
 func (executor *kirExecutor) stmtTarget(value *KIRStmt) *KIRExpr {
-	return executor.statementEdge(value, func(row MIRStatement) MIRRef { return row.Target }, func(node *KIRStmt) *KIRExpr { return node.Target })
+	return executor.statementEdge(value, kirStmtTarget)
 }
 func (executor *kirExecutor) stmtValue(value *KIRStmt) *KIRExpr {
-	return executor.statementEdge(value, func(row MIRStatement) MIRRef { return row.ValueExpr }, func(node *KIRStmt) *KIRExpr { return node.Value })
+	return executor.statementEdge(value, kirStmtValue)
 }
 func (executor *kirExecutor) stmtCond(value *KIRStmt) *KIRExpr {
-	return executor.statementEdge(value, func(row MIRStatement) MIRRef { return row.Cond }, func(node *KIRStmt) *KIRExpr { return node.Cond })
+	return executor.statementEdge(value, kirStmtCond)
 }
 func (executor *kirExecutor) stmtIter(value *KIRStmt) *KIRExpr {
-	return executor.statementEdge(value, func(row MIRStatement) MIRRef { return row.Iter }, func(node *KIRStmt) *KIRExpr { return node.Iter })
+	return executor.statementEdge(value, kirStmtIter)
 }
 func (executor *kirExecutor) stmtReturn(value *KIRStmt) *KIRExpr {
-	return executor.statementEdge(value, func(row MIRStatement) MIRRef { return row.Return }, func(node *KIRStmt) *KIRExpr { return node.Return })
+	return executor.statementEdge(value, kirStmtReturn)
 }
 func (executor *kirExecutor) stmtScrutinee(value *KIRStmt) *KIRExpr {
-	return executor.statementEdge(value, func(row MIRStatement) MIRRef { return row.Scrutinee }, func(node *KIRStmt) *KIRExpr { return node.Scrutinee })
+	return executor.statementEdge(value, kirStmtScrutinee)
 }
 func (executor *kirExecutor) stmtThen(value *KIRStmt) []*KIRStmt {
-	return executor.statementList(value, func(row MIRStatement) MIRNodeRefList { return row.Then }, func(node *KIRStmt) []*KIRStmt { return node.Then })
+	return executor.statementList(value, kirStmtThen)
 }
 func (executor *kirExecutor) stmtElse(value *KIRStmt) []*KIRStmt {
-	return executor.statementList(value, func(row MIRStatement) MIRNodeRefList { return row.Else }, func(node *KIRStmt) []*KIRStmt { return node.Else })
+	return executor.statementList(value, kirStmtElse)
 }
 func (executor *kirExecutor) stmtBody(value *KIRStmt) []*KIRStmt {
-	return executor.statementList(value, func(row MIRStatement) MIRNodeRefList { return row.Body }, func(node *KIRStmt) []*KIRStmt { return node.Body })
+	return executor.statementList(value, kirStmtBody)
 }
 func (executor *kirExecutor) stmtArms(value *KIRStmt) []*KIRArm {
 	if executor.arenaView == nil {
@@ -480,11 +638,11 @@ func (executor *kirExecutor) selfBinding(function *KIRFunction) (*KIRBinding, bo
 		if candidate == nil || !valid {
 			return
 		}
-		if index, ok := view.functionIndex[candidate]; ok {
-			if seenFunctions[index] {
+		if index := candidate.arenaRef; index.Present {
+			if seenFunctions[index.Index] {
 				return
 			}
-			seenFunctions[index] = true
+			seenFunctions[index.Index] = true
 		}
 		for _, capture := range candidate.Captures {
 			if capture != nil && capture.Binding != nil && capture.Binding.Name == "self" {
@@ -503,11 +661,11 @@ func (executor *kirExecutor) selfBinding(function *KIRFunction) (*KIRBinding, bo
 		if expression == nil || !valid {
 			return
 		}
-		if index, ok := view.expressionIndex[expression]; ok {
-			if seenExpressions[index] {
+		if index := expression.arenaRef; index.Present {
+			if seenExpressions[index.Index] {
 				return
 			}
-			seenExpressions[index] = true
+			seenExpressions[index.Index] = true
 		}
 		if expression.Kind == "var" && expression.Name == "self" {
 			if expression.Binding == nil || !validKIRBinding(expression.Binding) {
@@ -542,11 +700,11 @@ func (executor *kirExecutor) selfBinding(function *KIRFunction) (*KIRBinding, bo
 		if statement == nil || !valid {
 			return
 		}
-		if index, ok := view.statementIndex[statement]; ok {
-			if seenStatements[index] {
+		if index := statement.arenaRef; index.Present {
+			if seenStatements[index.Index] {
 				return
 			}
-			seenStatements[index] = true
+			seenStatements[index.Index] = true
 		}
 		visitExpr(executor.stmtInit(statement))
 		visitExpr(executor.stmtExpr(statement))

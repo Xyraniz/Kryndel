@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 )
 
 // validateKIRDocument enforces invariants that a backend may otherwise rely
@@ -1889,7 +1890,73 @@ func validKIRTypeVariables(encoded string, parameters map[string]bool) bool {
 	return visit(spec)
 }
 
+const (
+	kirTypeSpecCacheEntries  = 512
+	kirTypeSpecCacheMaxBytes = 256
+)
+
+var kirTypeSpecCache = struct {
+	sync.RWMutex
+	entries map[string]*TypeSpec
+	keys    []string
+	next    int
+}{entries: make(map[string]*TypeSpec, kirTypeSpecCacheEntries), keys: make([]string, 0, kirTypeSpecCacheEntries)}
+
 func parseKIRTypeExpression(encoded string) (*TypeSpec, bool) {
+	if len(encoded) <= kirTypeSpecCacheMaxBytes {
+		kirTypeSpecCache.RLock()
+		cached := kirTypeSpecCache.entries[encoded]
+		kirTypeSpecCache.RUnlock()
+		if cached != nil {
+			// Cached specs are immutable. Callers that need to rewrite a type
+			// must clone it first (substituteKIRType does this explicitly).
+			return cached, true
+		}
+	}
+	spec, ok := parseKIRTypeExpressionUncached(encoded)
+	if !ok || len(encoded) > kirTypeSpecCacheMaxBytes {
+		return spec, ok
+	}
+	kirTypeSpecCache.Lock()
+	if kirTypeSpecCache.entries[encoded] == nil {
+		if len(kirTypeSpecCache.entries) < kirTypeSpecCacheEntries {
+			kirTypeSpecCache.keys = append(kirTypeSpecCache.keys, encoded)
+		} else {
+			delete(kirTypeSpecCache.entries, kirTypeSpecCache.keys[kirTypeSpecCache.next])
+			kirTypeSpecCache.keys[kirTypeSpecCache.next] = encoded
+			kirTypeSpecCache.next = (kirTypeSpecCache.next + 1) % kirTypeSpecCacheEntries
+		}
+		kirTypeSpecCache.entries[encoded] = cloneKIRTypeSpec(spec)
+	}
+	kirTypeSpecCache.Unlock()
+	return spec, true
+}
+
+func cloneKIRTypeSpec(spec *TypeSpec) *TypeSpec {
+	return cloneKIRTypeSpecWithSource(spec, nil)
+}
+
+func cloneKIRTypeSpecWithSource(spec *TypeSpec, source *Source) *TypeSpec {
+	if spec == nil {
+		return nil
+	}
+	if source == nil && spec.Tok.Source != nil {
+		original := spec.Tok.Source
+		source = &Source{Name: original.Name, Text: original.Text, VisibilityScope: original.VisibilityScope}
+	}
+	copy := *spec
+	if copy.Tok.Source != nil {
+		copy.Tok.Source = source
+	}
+	copy.Params = make([]*TypeSpec, len(spec.Params))
+	for index, parameter := range spec.Params {
+		copy.Params[index] = cloneKIRTypeSpecWithSource(parameter, source)
+	}
+	copy.Return = cloneKIRTypeSpecWithSource(spec.Return, source)
+	return &copy
+}
+
+func parseKIRTypeExpressionUncached(encoded string) (*TypeSpec, bool) {
 	characters := []rune(encoded)
 	var normalized strings.Builder
 	replacements := make(map[string]string)

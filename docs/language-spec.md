@@ -315,8 +315,8 @@ the compiler must not reinterpret them as the current dialect. Each published
 language version must retain source, stdout, exit-status, and diagnostic fixtures
 under `tests/compat/<version>/`.
 
-The current compiler supports language version 1.0.0. New manifests, KIR v5,
+The current compiler supports language version 1.0.0. New manifests, KIR v6,
 and KRYNATIVE6 artifacts record it explicitly. For compatibility, manifests
-without the field, KIR v1 documents, and KRYNATIVE3 through KRYNATIVE5 artifacts
+without the field, KIR v1 through v5 documents, and KRYNATIVE3 through KRYNATIVE5 artifacts
 are interpreted as 1.0.0. Unknown or malformed versions are rejected instead
 of being silently treated as the current dialect.

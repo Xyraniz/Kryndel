@@ -36,9 +36,18 @@ func CompileMIR(program *Program, checker *Checker, target NativeTarget) (*Valid
 	if !checker.checked {
 		return nil, fmt.Errorf("checker has not completed successfully")
 	}
+	// The frontend AST is intentionally mutable for parser and editor users.
+	// Recheck it at the trust boundary so a caller cannot mutate a checked tree
+	// and reuse the checker's stale expression types or scopes to mint MIR.
 	if diagnostic := ValidateASTLimits(program, checker.Lim); diagnostic != nil {
 		return nil, fmt.Errorf("%s", diagnostic.Message)
 	}
+	clearProgramAnalysis(program)
+	checked, diagnostic := Check(program, checker.Lim)
+	if diagnostic != nil {
+		return nil, fmt.Errorf("program no longer passes type checking: %s", diagnostic.Message)
+	}
+	checker = checked
 	kirTarget := KIRTarget{OS: target.OS, Arch: target.Arch, GUI: target.GUI}
 	if !validKIRTarget(kirTarget) {
 		return nil, fmt.Errorf("invalid lowered MIR: unsupported target %s-%s", kirTarget.OS, kirTarget.Arch)
@@ -49,6 +58,11 @@ func CompileMIR(program *Program, checker *Checker, target NativeTarget) (*Valid
 	}
 	if err := arena.validateReferences(); err != nil {
 		return nil, fmt.Errorf("invalid lowered MIR arena: %w", err)
+	}
+	if arena.Version == KIRVersion {
+		if err := validateKIRArenaV6Metadata(arena); err != nil {
+			return nil, fmt.Errorf("invalid lowered KIR v6 metadata: %w", err)
+		}
 	}
 	paths := newKIRPathNames(program)
 	sources := make(map[string]*Source, len(program.Sources)+1)
@@ -74,6 +88,107 @@ func CompileMIR(program *Program, checker *Checker, target NativeTarget) (*Valid
 		addSource(source)
 	}
 	return &ValidatedMIR{arena: arena, limits: checker.Lim, sources: sources, visibilityScopes: visibilityScopes, hasSourceContext: true}, nil
+}
+
+// clearProgramAnalysis removes checker and constant-folding caches before the
+// fresh trust-boundary check. Those fields are derived from the mutable AST and
+// can otherwise make Check return stale results after a caller edits a node.
+func clearProgramAnalysis(program *Program) {
+	if program == nil {
+		return
+	}
+	var clearExpression func(*Expr)
+	var clearStatement func(*Stmt)
+	var clearFunction func(*Function)
+	clearExpression = func(expression *Expr) {
+		if expression == nil {
+			return
+		}
+		expression.Type = nil
+		expression.Scope = nil
+		expression.Function = nil
+		expression.GenericArguments = nil
+		expression.Captures = nil
+		expression.ConstValue = nil
+		for _, child := range []*Expr{expression.Left, expression.Right, expression.Operand, expression.Callee, expression.Base, expression.Receiver} {
+			clearExpression(child)
+		}
+		for _, list := range [][]*Expr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
+			for _, child := range list {
+				clearExpression(child)
+			}
+		}
+		if expression.Lambda != nil {
+			clearFunction(expression.Lambda)
+		}
+	}
+	clearStatement = func(statement *Stmt) {
+		if statement == nil {
+			return
+		}
+		statement.Type = nil
+		for _, expression := range []*Expr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
+			clearExpression(expression)
+		}
+		for _, list := range [][]*Stmt{statement.Then, statement.Else, statement.Body} {
+			for _, child := range list {
+				clearStatement(child)
+			}
+		}
+		for index := range statement.Arms {
+			statement.Arms[index].Pattern.BindingType = nil
+			for _, child := range statement.Arms[index].Body {
+				clearStatement(child)
+			}
+		}
+	}
+	clearFunction = func(function *Function) {
+		if function == nil {
+			return
+		}
+		for index := range function.Params {
+			clearExpression(function.Params[index].Default)
+		}
+		for _, statement := range function.Body {
+			clearStatement(statement)
+		}
+	}
+	for _, function := range program.Functions {
+		clearFunction(function)
+	}
+	for _, statement := range program.Statements {
+		clearStatement(statement)
+	}
+	for _, structure := range program.Structs {
+		if structure == nil {
+			continue
+		}
+		structure.Type = nil
+		for index := range structure.Fields {
+			structure.Fields[index].Type = nil
+		}
+	}
+	for _, enumeration := range program.Enums {
+		if enumeration != nil {
+			enumeration.Type = nil
+		}
+	}
+	for _, trait := range program.Traits {
+		if trait == nil {
+			continue
+		}
+		for _, method := range trait.Methods {
+			clearFunction(method)
+		}
+	}
+	for _, implementation := range program.TraitImpls {
+		if implementation == nil {
+			continue
+		}
+		for _, method := range implementation.Methods {
+			clearFunction(method)
+		}
+	}
 }
 
 // documentView creates the recursive KIR wire projection from the canonical
@@ -110,12 +225,23 @@ func ValidateASTLimits(program *Program, limits Limits) *Diagnostic {
 		visited++
 		return true
 	}
+	checkArrayLength := func(label string, count int) {
+		if limitFailure == "" && limits.MaxArrayElements > 0 && count > limits.MaxArrayElements {
+			limitFailure = "IR array element limit exceeded in " + label
+		}
+	}
 	var visitExpr func(*Expr, int)
 	var visitStmt func(*Stmt, int)
 	visitExpr = func(expression *Expr, depth int) {
 		if expression == nil || limitFailure != "" || !add(depth) {
 			return
 		}
+		checkArrayLength("expression arguments", len(expression.Args))
+		checkArrayLength("expression items", len(expression.Items))
+		checkArrayLength("expression values", len(expression.Values))
+		checkArrayLength("expression map keys", len(expression.MapKeys))
+		checkArrayLength("expression fields", len(expression.Fields))
+		checkArrayLength("generic arguments", len(expression.GenericArguments))
 		for _, child := range []*Expr{expression.Left, expression.Right, expression.Operand, expression.Base} {
 			visitExpr(child, depth+1)
 		}
@@ -137,6 +263,10 @@ func ValidateASTLimits(program *Program, limits Limits) *Diagnostic {
 		if statement == nil || limitFailure != "" {
 			return
 		}
+		checkArrayLength("then block", len(statement.Then))
+		checkArrayLength("else block", len(statement.Else))
+		checkArrayLength("statement body", len(statement.Body))
+		checkArrayLength("match arms", len(statement.Arms))
 		switch statement.Kind {
 		case StLet, StConst:
 			visitExpr(statement.Init, depth+1)
@@ -184,6 +314,9 @@ func ValidateASTLimits(program *Program, limits Limits) *Diagnostic {
 		if function == nil {
 			continue
 		}
+		checkArrayLength("function parameters", len(function.Params))
+		checkArrayLength("function type parameters", len(function.TypeParams))
+		checkArrayLength("function body", len(function.Body))
 		if !add(0) {
 			break
 		}
@@ -193,6 +326,35 @@ func ValidateASTLimits(program *Program, limits Limits) *Diagnostic {
 	}
 	for _, statement := range program.Statements {
 		visitStmt(statement, 0)
+	}
+	checkArrayLength("top-level functions", len(program.Functions))
+	checkArrayLength("top-level statements", len(program.Statements))
+	checkArrayLength("imports", len(program.Imports))
+	checkArrayLength("sources", len(program.Sources))
+	checkArrayLength("struct declarations", len(program.Structs))
+	checkArrayLength("enum declarations", len(program.Enums))
+	checkArrayLength("trait declarations", len(program.Traits))
+	checkArrayLength("trait implementations", len(program.TraitImpls))
+	for _, structure := range program.Structs {
+		if structure != nil {
+			checkArrayLength("struct fields", len(structure.Fields))
+			checkArrayLength("struct type parameters", len(structure.TypeParams))
+		}
+	}
+	for _, enumeration := range program.Enums {
+		if enumeration != nil {
+			checkArrayLength("enum variants", len(enumeration.Variants))
+		}
+	}
+	for _, trait := range program.Traits {
+		if trait != nil {
+			checkArrayLength("trait methods", len(trait.Methods))
+		}
+	}
+	for _, implementation := range program.TraitImpls {
+		if implementation != nil {
+			checkArrayLength("trait implementation methods", len(implementation.Methods))
+		}
 	}
 	if limitFailure != "" {
 		return Diag(CatResource, program.Source, 1, 1, "%s", limitFailure)

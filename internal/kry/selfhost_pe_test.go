@@ -1040,7 +1040,6 @@ fn main() -> Nil {
 	runSelfhostPEBackendExpectingOutput(t, source, "json-keys-dedup-escaped.exe", "2\nb\n💩\n")
 }
 
-
 func TestSelfhostPEBackendJSONArrayLengthAndGet(t *testing.T) {
 	source := `
 fn inspect_array(raw: String) -> Nil {
@@ -1294,6 +1293,10 @@ fn main() -> Nil {
 		t.Fatal(err)
 	}
 	limits := DefaultLimits()
+	// The source compiler now validates and traverses the schema-shaped typed
+	// KIR tables as well as parsing the compiler module graph. Keep a measured,
+	// finite budget for this larger self-hosted compile path.
+	limits.MaxInstructions = 8_000_000
 	limits.MaxWallTimeMS = 180_000
 	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, limits, Sandbox{}, []string{sourcePath, outputPath, "windows-amd64"})
 	if d != nil {
@@ -1306,6 +1309,7 @@ fn main() -> Nil {
 		}
 		t.Fatalf("selfhost source compiler failed at %s:%d:%d after %d/%d instructions: %s", diagnostic.Source, diagnostic.Line, diagnostic.Column, instructions, limits.MaxInstructions, diagnostic.Message)
 	}
+	t.Logf("selfhost source PE compilation used %d instructions", r.Ctx.Instructions)
 	image, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatal(err)

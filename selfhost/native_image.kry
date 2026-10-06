@@ -1,0 +1,149 @@
+import "elf_backend"
+import "pe_backend"
+
+// Contract between a validated KIR lowerer and native object writers. The
+// lowerer resolves all KIR nodes and capability checks before producing this
+// value; format writers only serialize these typed sections and relocations.
+pub struct LoweredNativeImage {
+    target_os: String,
+    target_arch: String,
+    gui: Bool,
+    code: Array[UInt8],
+    data: Array[UInt8],
+    imports: Array[NativeImageImport],
+    data_relocations: Array[NativeImageDataRelocation],
+    import_relocations: Array[NativeImageImportRelocation],
+    function_ranges: Array[NativeImageFunctionRange],
+}
+
+pub struct NativeImageImport {
+    library: String,
+    symbol: String,
+}
+
+pub struct NativeImageDataRelocation {
+    displacement: Int,
+    instruction_end: Int,
+    data_offset: Int,
+}
+
+pub struct NativeImageImportRelocation {
+    displacement: Int,
+    instruction_end: Int,
+    import_index: Int,
+}
+
+pub struct NativeImageFunctionRange {
+    start: Int,
+    end: Int,
+    stack_size: Int,
+}
+
+fn native_u16_bytes(value: UInt16) -> Array[UInt8] {
+    return [u8(value & u16(255)), u8(value >> 8)]
+}
+
+fn native_u32_bytes(value: UInt32) -> Array[UInt8] {
+    return [u8(value & u32(255)), u8((value >> 8) & u32(255)), u8((value >> 16) & u32(255)), u8(value >> 24)]
+}
+
+fn native_u64_bytes(value: UInt64) -> Array[UInt8] {
+    return [u8(value & u64(255)), u8((value >> 8) & u64(255)), u8((value >> 16) & u64(255)), u8((value >> 24) & u64(255)), u8((value >> 32) & u64(255)), u8((value >> 40) & u64(255)), u8((value >> 48) & u64(255)), u8(value >> 56)]
+}
+
+fn emit_linux_amd64_image(code: Array[UInt8], data: Array[UInt8]) -> Bytes {
+    let file_size: Int = 120 + len(code) + len(data)
+    let mut file: Array[UInt8] = []
+    file = array_concat(file, [u8(127), u8(69), u8(76), u8(70), u8(2), u8(1), u8(1), u8(0), u8(0), u8(0), u8(0), u8(0), u8(0), u8(0), u8(0), u8(0)])
+    file = array_concat(file, native_u16_bytes(u16(2)))
+    file = array_concat(file, native_u16_bytes(u16(62)))
+    file = array_concat(file, native_u32_bytes(u32(1)))
+    file = array_concat(file, native_u64_bytes(u64(4194424)))
+    file = array_concat(file, native_u64_bytes(u64(64)))
+    file = array_concat(file, native_u64_bytes(u64(0)))
+    file = array_concat(file, native_u32_bytes(u32(0)))
+    file = array_concat(file, native_u16_bytes(u16(64)))
+    file = array_concat(file, native_u16_bytes(u16(56)))
+    file = array_concat(file, native_u16_bytes(u16(1)))
+    file = array_concat(file, native_u16_bytes(u16(0)))
+    file = array_concat(file, native_u16_bytes(u16(0)))
+    file = array_concat(file, native_u16_bytes(u16(0)))
+    file = array_concat(file, native_u32_bytes(u32(1)))
+    file = array_concat(file, native_u32_bytes(u32(5)))
+    file = array_concat(file, native_u64_bytes(u64(0)))
+    file = array_concat(file, native_u64_bytes(u64(4194304)))
+    file = array_concat(file, native_u64_bytes(u64(4194304)))
+    file = array_concat(file, native_u64_bytes(u64(file_size)))
+    file = array_concat(file, native_u64_bytes(u64(file_size)))
+    file = array_concat(file, native_u64_bytes(u64(4096)))
+    file = array_concat(file, code)
+    file = array_concat(file, data)
+    return bytes_from_u8(file)
+}
+
+fn native_image_pe_imports(imports: Array[NativeImageImport]) -> Result[Array[Array[String]], String] {
+    let mut pairs: Array[Array[String]] = []
+    for index in array_indices(imports) {
+        let item_option: Option[NativeImageImport] = array_get(imports, index)
+        if is_none(item_option) { return err("native image import index is out of bounds") }
+        let item: NativeImageImport = unwrap_or(item_option, NativeImageImport{ library: "", symbol: "" })
+        if item.library == "" || item.symbol == "" { return err("native image contains an incomplete PE import") }
+        pairs = array_push(pairs, [item.library, item.symbol])
+    }
+    return ok(pairs)
+}
+
+fn native_image_pe_data_relocations(relocations: Array[NativeImageDataRelocation]) -> Result[Array[Array[Int]], String] {
+    let mut rows: Array[Array[Int]] = []
+    for index in array_indices(relocations) {
+        let item_option: Option[NativeImageDataRelocation] = array_get(relocations, index)
+        if is_none(item_option) { return err("native image data relocation index is out of bounds") }
+        let item: NativeImageDataRelocation = unwrap_or(item_option, NativeImageDataRelocation{ displacement: 0, instruction_end: 0, data_offset: 0 })
+        rows = array_push(rows, [item.displacement, item.instruction_end, item.data_offset])
+    }
+    return ok(rows)
+}
+
+fn native_image_pe_import_relocations(relocations: Array[NativeImageImportRelocation]) -> Result[Array[Array[Int]], String] {
+    let mut rows: Array[Array[Int]] = []
+    for index in array_indices(relocations) {
+        let item_option: Option[NativeImageImportRelocation] = array_get(relocations, index)
+        if is_none(item_option) { return err("native image import relocation index is out of bounds") }
+        let item: NativeImageImportRelocation = unwrap_or(item_option, NativeImageImportRelocation{ displacement: 0, instruction_end: 0, import_index: 0 })
+        rows = array_push(rows, [item.displacement, item.instruction_end, item.import_index])
+    }
+    return ok(rows)
+}
+
+fn native_image_pe_function_ranges(ranges: Array[NativeImageFunctionRange]) -> Result[Array[Array[Int]], String] {
+    let mut rows: Array[Array[Int]] = []
+    for index in array_indices(ranges) {
+        let item_option: Option[NativeImageFunctionRange] = array_get(ranges, index)
+        if is_none(item_option) { return err("native image function range index is out of bounds") }
+        let item: NativeImageFunctionRange = unwrap_or(item_option, NativeImageFunctionRange{ start: 0, end: 0, stack_size: 0 })
+        rows = array_push(rows, [item.start, item.end, item.stack_size])
+    }
+    return ok(rows)
+}
+
+pub fn emit_native_image(image: LoweredNativeImage) -> Result[Bytes, String] {
+    if image.target_os == "linux" && image.target_arch == "amd64" {
+        if image.gui || len(image.imports) != 0 || len(image.data_relocations) != 0 || len(image.import_relocations) != 0 || len(image.function_ranges) != 0 {
+            return err("ELF image has PE-only target metadata or relocations")
+        }
+        return ok(emit_linux_amd64_image(image.code, image.data))
+    }
+    if image.target_os != "windows" || image.target_arch != "amd64" {
+        return err("native image writer supports only linux-amd64 and windows-amd64")
+    }
+    let imports: Result[Array[Array[String]], String] = native_image_pe_imports(image.imports)
+    if is_err(imports) { return err(unwrap_or(result_error(imports), "native image imports are invalid")) }
+    let data_relocations: Result[Array[Array[Int]], String] = native_image_pe_data_relocations(image.data_relocations)
+    let import_relocations: Result[Array[Array[Int]], String] = native_image_pe_import_relocations(image.import_relocations)
+    let function_ranges: Result[Array[Array[Int]], String] = native_image_pe_function_ranges(image.function_ranges)
+    if is_err(data_relocations) || is_err(import_relocations) || is_err(function_ranges) { return err("native image has an invalid relocation or function-range index") }
+    if image.gui {
+        return emit_pe32plus_gui_with_imports_and_data_patches(image.code, image.data, result_unwrap(imports), result_unwrap(data_relocations), result_unwrap(import_relocations), result_unwrap(function_ranges))
+    }
+    return emit_pe32plus_with_imports_and_data_patches(image.code, image.data, result_unwrap(imports), result_unwrap(data_relocations), result_unwrap(import_relocations), result_unwrap(function_ranges))
+}

@@ -207,17 +207,15 @@ fn rejected_before_lowering(document_text: String) -> Bool {
 fn rejected_by_generated_path(document_text: String) -> Bool {
     let parsed: Result[Json, String] = json_parse(document_text)
     if is_err(parsed) { return false }
-    let compiled: Result[Bytes, String] = compile_generated_document(result_unwrap(parsed))
-    if is_ok(compiled) { return false }
-    return starts_with(unwrap_or(result_error(compiled), ""), "KIR validation failed:")
+    let validated: Result[ValidatedKIR, String] = validate_generated_kir_document(result_unwrap(parsed))
+    return is_err(validated)
 }
 
 fn accepted_by_generated_path(document_text: String) -> Bool {
     let parsed: Result[Json, String] = json_parse(document_text)
     if is_err(parsed) { return false }
-    let compiled: Result[Bytes, String] = compile_generated_document(result_unwrap(parsed))
-    if is_ok(compiled) { return true }
-    return !starts_with(unwrap_or(result_error(compiled), ""), "KIR validation failed:")
+    let validated: Result[ValidatedKIR, String] = validate_generated_kir_document(result_unwrap(parsed))
+    return is_ok(validated)
 }
 
 fn valid_generated_kir(document_text: String) -> Bool {

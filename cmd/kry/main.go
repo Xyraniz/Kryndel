@@ -67,6 +67,13 @@ func run(args []string) (status int) {
 			if i < 0 {
 				return 2
 			}
+		case "--max-memory":
+			v, n := nextInt(args, i)
+			if n < 0 {
+				return 2
+			}
+			e.Limits.MaxMemoryBytes = int64(v)
+			i = n
 		case "--max-array-elements":
 			i = takeLimit(args, i, "array-elements", &e.Limits.MaxArrayElements)
 			if i < 0 {
@@ -166,7 +173,7 @@ func run(args []string) (status int) {
 		fmt.Println("doctor: ready")
 		fmt.Println("implementation: Go standard library (minimum toolchain 1.27.1)")
 		fmt.Println("runtime: self-contained executable")
-		fmt.Printf("limits: source=%d artifact=%d json=%d instructions=%d\n", e.Limits.MaxSourceBytes, e.Limits.MaxArtifactBytes, e.Limits.MaxJSONBytes, e.Limits.MaxInstructions)
+		fmt.Printf("limits: source=%d artifact=%d json=%d memory=%d instructions=%d\n", e.Limits.MaxSourceBytes, e.Limits.MaxArtifactBytes, e.Limits.MaxJSONBytes, e.Limits.MaxMemoryBytes, e.Limits.MaxInstructions)
 		return 0
 	case "capabilities":
 		return capabilitiesCmd(rest, jsonMode)
@@ -1175,6 +1182,6 @@ func printHelp() {
 	fmt.Println("build options: -o OUT, --format F, --target T, --gui, --encrypt, --iterations N, --obfuscate, --no-external-toolchain")
 	fmt.Println("check options: -Werror, -Werror=KRYW002,KRYW004, -Wno=KRYW003")
 	fmt.Println("debug commands: break FILE:LINE, breakpoints, clear ID|all, locals, print NAME, stack, continue, step, next, finish, quit")
-	fmt.Println("global options: --help, --version, --json, --cpuprofile PATH (check/run), --restricted ROOT (deny unconfined host APIs), --max-source BYTES, --max-artifact BYTES, --max-json BYTES, --max-instructions N, --max-wall-ms N (0 disables the wall-time limit)")
+	fmt.Println("global options: --help, --version, --json, --cpuprofile PATH (check/run), --restricted ROOT (deny unconfined host APIs), --max-source BYTES, --max-artifact BYTES, --max-json BYTES, --max-memory BYTES, --max-instructions N, --max-wall-ms N (0 disables the wall-time limit)")
 	fmt.Println("sealed artifacts: --passphrase VALUE, --passphrase-file PATH (AES-256-GCM + PBKDF2-SHA256)")
 }

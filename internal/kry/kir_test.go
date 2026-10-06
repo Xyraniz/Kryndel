@@ -131,9 +131,64 @@ func TestKIRV1DefaultsLanguageVersion(t *testing.T) {
 	}
 }
 
+func TestKIRV6RejectsMissingSpansAndNonCanonicalBindingIDs(t *testing.T) {
+	program, checker := testProgram(t, `fn main() -> Int {
+    let value: Int = 2
+    return value
+}
+`)
+	encoded, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := DecodeKIR(encoded, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.Version != 6 {
+		t.Fatalf("emitter version = %d, want 6", base.Version)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*KIRDocument)
+		want   string
+	}{
+		{name: "missing expression span", mutate: func(document *KIRDocument) { document.Functions[0].Body[0].Init.Span = nil }, want: "missing or invalid source span"},
+		{name: "reversed statement span", mutate: func(document *KIRDocument) {
+			document.Functions[0].Body[0].Span.End = document.Functions[0].Body[0].Span.Start
+		}, want: "missing or invalid source span"},
+		{name: "forged binding id", mutate: func(document *KIRDocument) { document.Functions[0].Body[0].Binding.ID += "x" }, want: "non-canonical binding ID"},
+		{name: "binding reference id mismatch", mutate: func(document *KIRDocument) { document.Functions[0].Body[1].Return.Binding.ID += "x" }, want: "non-canonical binding ID"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document := cloneKIRDocument(t, *base)
+			test.mutate(document)
+			malformed, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeKIR(malformed, DefaultLimits()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("DecodeKIR error = %v, want diagnostic containing %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestLegacyKIRDecodeReconstructsBindingIDsWithoutSpans(t *testing.T) {
 	program, checker := testProgram(t, "fn main() -> Int { let value: Int = 2\n return value }\n")
 	encoded, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyWire any
+	if err := json.Unmarshal(encoded, &legacyWire); err != nil {
+		t.Fatal(err)
+	}
+	stripKIRV6WireFields(legacyWire)
+	legacyDocument := legacyWire.(map[string]any)
+	legacyDocument["version"] = float64(5)
+	encoded, err = json.Marshal(legacyDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +223,7 @@ func TestKIRV2RemainsReadable(t *testing.T) {
 	if err := json.Unmarshal(data, &legacy); err != nil {
 		t.Fatal(err)
 	}
+	stripKIRV6WireFields(legacy)
 	var stripV3Fields func(any)
 	stripV3Fields = func(value any) {
 		switch node := value.(type) {
@@ -226,6 +282,7 @@ let boxed: Box[Int] = Box[Int]{value: identity(7)}
 	if err := json.Unmarshal(data, &legacy); err != nil {
 		t.Fatal(err)
 	}
+	stripKIRV6WireFields(legacy)
 	delete(legacy, "traits")
 	delete(legacy, "trait_impls")
 	for _, rawFunction := range legacy["functions"].([]any) {
@@ -369,7 +426,7 @@ func TestKIRRequiresBuiltinIDInVersionFive(t *testing.T) {
 	}
 	document.Statements[0].Init.BuiltinID = ""
 	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "mismatched builtin id") {
-		t.Fatalf("expected KIR v5 rejection for missing builtin id, got %v", err)
+		t.Fatalf("expected KIR rejection for missing builtin id, got %v", err)
 	}
 }
 
@@ -1559,6 +1616,42 @@ func TestKIRTypeParserAcceptsSelfhostEncodings(t *testing.T) {
 		if got := TypeSpecString(parsed); got != test.want {
 			t.Errorf("parsed type %q = %q, want %q", test.encoded, got, test.want)
 		}
+	}
+}
+
+func TestKIRTypeExpressionCacheDoesNotShareMutableSpecs(t *testing.T) {
+	const encoded = "KIRTypeCacheIsolation[Inner, Outer[Int]]"
+	kirTypeSpecCache.Lock()
+	delete(kirTypeSpecCache.entries, encoded)
+	kirTypeSpecCache.Unlock()
+
+	first, ok := parseKIRTypeExpression(encoded)
+	if !ok {
+		t.Fatalf("KIR type parser rejected %q", encoded)
+	}
+	if first.Tok.Source == nil {
+		t.Fatal("parsed type has no source token context")
+	}
+	first.Name = "Mutated"
+	first.Params[0].Name = "Changed"
+	first.Tok.Source.Text = "mutated source"
+
+	second, ok := parseKIRTypeExpression(encoded)
+	if !ok {
+		t.Fatalf("KIR type parser rejected cached type %q", encoded)
+	}
+	if got := TypeSpecString(second); got != encoded {
+		t.Fatalf("cached type spec was mutated through a previous result: %q", got)
+	}
+	if second.Tok.Source == nil || second.Tok.Source.Text == "mutated source" {
+		t.Fatal("cached token source aliases a previously returned type spec")
+	}
+	if got := substituteKIRType(encoded, map[string]string{"Inner": "Wrapped[Int]"}); got != "KIRTypeCacheIsolation[Wrapped[Int], Outer[Int]]" {
+		t.Fatalf("type substitution returned %q", got)
+	}
+	third, ok := parseKIRTypeExpression(encoded)
+	if !ok || TypeSpecString(third) != encoded {
+		t.Fatalf("type substitution mutated the cached parse result: %v, %v", third, ok)
 	}
 }
 

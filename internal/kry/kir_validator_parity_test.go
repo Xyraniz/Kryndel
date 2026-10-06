@@ -377,12 +377,40 @@ fn text_length(text: String) -> Int {
 		t.Fatal(err)
 	}
 
+	var missingV6Span KIRDocument
+	if err := json.Unmarshal(valid, &missingV6Span); err != nil {
+		t.Fatalf("decode KIR v6 span fixture: %v", err)
+	}
+	findKIRFunction(&missingV6Span, "main").Span = nil
+	missingV6SpanBytes, err := json.Marshal(missingV6Span)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forgedV6BindingID KIRDocument
+	if err := json.Unmarshal(mutableSource, &forgedV6BindingID); err != nil {
+		t.Fatalf("decode KIR v6 binding fixture: %v", err)
+	}
+	findKIRFunction(&forgedV6BindingID, "main").Body[0].Binding.ID = "forged-binding-id"
+	forgedV6BindingIDBytes, err := json.Marshal(forgedV6BindingID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignV6Source := cloneKIRDocument(t, base)
+	findKIRFunction(foreignV6Source, "main").Body[0].Return.Source = "outside-source-table.kry"
+	foreignV6SourceBytes, err := json.Marshal(foreignV6Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	cases := []struct {
 		name    string
 		encoded []byte
 		accept  bool
 	}{
 		{name: "valid calls and arithmetic", encoded: valid, accept: true},
+		{name: "KIR v6 missing function span", encoded: missingV6SpanBytes},
+		{name: "KIR v6 forged binding ID", encoded: forgedV6BindingIDBytes},
+		{name: "KIR v6 source outside source table", encoded: foreignV6SourceBytes},
 		{name: "wrong operator result type", encoded: wrongResultBytes},
 		{name: "dangling call target", encoded: wrongCallTargetBytes},
 		{name: "wrong call arity", encoded: wrongCallArityBytes},
@@ -459,12 +487,10 @@ fn text_length(text: String) -> Int {
 			if diagnostic := runtime.run(); diagnostic != nil {
 				t.Fatalf("selfhost KIR validator probe failed: %s", diagnostic.Message)
 			}
-			want := "rejected\n"
-			if test.accept {
-				want = "accepted\n"
-			}
-			if got := output.String(); got != want {
-				t.Fatalf("selfhost validator output = %q, Go accepted=%t, want %q", got, goAccepted, want)
+			got := output.String()
+			selfhostAccepted := got == "accepted\n"
+			if selfhostAccepted != test.accept {
+			t.Fatalf("selfhost validator output = %q, selfhost accepted=%t, Go accepted=%t; want both validators to agree", got, selfhostAccepted, goAccepted)
 			}
 		})
 	}

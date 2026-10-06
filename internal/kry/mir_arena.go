@@ -1079,6 +1079,7 @@ func cloneKIRTraitImpls(values []*KIRTraitImpl) []*KIRTraitImpl {
 		for methodIndex, method := range value.Methods {
 			if method != nil {
 				methodCopy := *method
+				methodCopy.Span = cloneKIRSourceSpan(method.Span)
 				copy.Methods[methodIndex] = &methodCopy
 			}
 		}
