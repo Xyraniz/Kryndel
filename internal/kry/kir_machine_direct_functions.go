@@ -16,99 +16,14 @@ func kirDirectFunctionTarget(function *KIRFunction, counts map[string]int) strin
 	return function.Name
 }
 
-// directKIRLegacySubsetRejection preserves the public scalar validator's
-// established diagnostics before the expanded, private helper-function slice
-// validates its additional KIR contracts.
-func directKIRLegacySubsetRejection(document *KIRDocument) error {
-	if document == nil {
-		return nil
-	}
-	if len(document.Statements) != 0 && len(document.Functions) != 0 {
-		return fmt.Errorf("%w: direct ELF backend does not execute top-level function declarations", errKIRSubsetUnsupported)
-	}
-	for _, function := range document.Functions {
-		if function != nil && len(function.Captures) != 0 {
-			return fmt.Errorf("%w: direct ELF backend does not lower lambdas or captured bindings", errKIRSubsetUnsupported)
-		}
-	}
-	seenExpressions := map[*KIRExpr]bool{}
-	var visitExpression func(*KIRExpr) error
-	var visitBlock func([]*KIRStmt) error
-	visitExpression = func(expression *KIRExpr) error {
-		if expression == nil || seenExpressions[expression] {
-			return nil
-		}
-		seenExpressions[expression] = true
-		if expression.Kind == "lambda" || expression.Lambda != nil || strings.HasPrefix(expression.Type, "fn(") {
-			return fmt.Errorf("%w: direct ELF backend does not lower lambdas or captured bindings", errKIRSubsetUnsupported)
-		}
-		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
-			if err := visitExpression(child); err != nil {
-				return err
-			}
-		}
-		for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
-			for _, child := range list {
-				if err := visitExpression(child); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	visitBlock = func(statements []*KIRStmt) error {
-		for _, statement := range statements {
-			if statement == nil {
-				continue
-			}
-			for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
-				if err := visitExpression(expression); err != nil {
-					return err
-				}
-			}
-			for _, nested := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
-				if err := visitBlock(nested); err != nil {
-					return err
-				}
-			}
-			for _, arm := range statement.Arms {
-				if arm != nil {
-					if err := visitBlock(arm.Body); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
-	if err := visitBlock(document.Statements); err != nil {
-		return err
-	}
-	for _, function := range document.Functions {
-		if function != nil {
-			if err := visitBlock(function.Body); err != nil {
-				return err
-			}
-		}
-	}
-	functionMap := kirExecFunctions(document)
-	entryFunction, _ := kirExecEntryFunction(document, functionMap)
-	for _, function := range document.Functions {
-		if function != nil && function != entryFunction {
-			return fmt.Errorf("%w: direct ELF backend helper functions are not lowered", errKIRSubsetUnsupported)
-		}
-	}
-	return nil
-}
-
 func (builder *kirDirectBuilder) prepareFunctions() error {
-	counts := make(map[string]int, len(builder.document.Functions))
-	for _, function := range builder.document.Functions {
+	counts := make(map[string]int, len(builder.topFunctions))
+	for _, function := range builder.topFunctions {
 		if function != nil {
 			counts[function.Name]++
 		}
 	}
-	for _, function := range builder.document.Functions {
+	for _, function := range builder.topFunctions {
 		if function == nil || function == builder.entryFunction {
 			continue
 		}
@@ -118,15 +33,15 @@ func (builder *kirDirectBuilder) prepareFunctions() error {
 		}
 		builder.functionDecls[target] = function
 	}
-	rootStatements := builder.document.Statements
+	rootStatements := builder.topStatements
 	if len(rootStatements) == 0 && builder.entryFunction != nil {
-		rootStatements = builder.entryFunction.Body
+		rootStatements = builder.functionBody(builder.entryFunction)
 	}
 	instantiated := make(map[*KIRFunction]bool, len(builder.functionDecls))
 	if err := builder.expandDirectFunctionCalls(rootStatements, nil, nil, instantiated); err != nil {
 		return err
 	}
-	for _, function := range builder.document.Functions {
+	for _, function := range builder.topFunctions {
 		if function == nil || function == builder.entryFunction || instantiated[function] {
 			continue
 		}
@@ -137,7 +52,7 @@ func (builder *kirDirectBuilder) prepareFunctions() error {
 		}
 		instantiated[function] = true
 		active := map[*KIRFunction]*kirDirectFunction{function: instance}
-		if err := builder.expandDirectFunctionCalls(function.Body, instance, active, instantiated); err != nil {
+		if err := builder.expandDirectFunctionCalls(builder.functionBody(function), instance, active, instantiated); err != nil {
 			return err
 		}
 	}
@@ -175,12 +90,12 @@ func (builder *kirDirectBuilder) expandDirectFunctionCalls(statements []*KIRStmt
 			return nil
 		}
 		seen[expression] = true
-		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
+		for _, child := range []*KIRExpr{builder.exprLeft(expression), builder.exprRight(expression), builder.exprOperand(expression), builder.exprBase(expression), builder.exprReceiver(expression), builder.exprCallee(expression)} {
 			if err := visitExpression(child); err != nil {
 				return err
 			}
 		}
-		for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
+		for _, list := range [][]*KIRExpr{builder.exprArgs(expression), builder.exprItems(expression), builder.exprMapKeys(expression), builder.exprValues(expression)} {
 			for _, child := range list {
 				if err := visitExpression(child); err != nil {
 					return err
@@ -217,26 +132,26 @@ func (builder *kirDirectBuilder) expandDirectFunctionCalls(statements []*KIRStmt
 			nextActive[function] = activeInstance
 		}
 		nextActive[callee] = instance
-		return builder.expandDirectFunctionCalls(callee.Body, instance, nextActive, instantiated)
+		return builder.expandDirectFunctionCalls(builder.functionBody(callee), instance, nextActive, instantiated)
 	}
 	visitBlock = func(block []*KIRStmt) error {
 		for _, statement := range block {
 			if statement == nil {
 				continue
 			}
-			for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
+			for _, expression := range []*KIRExpr{builder.stmtInit(statement), builder.stmtExpr(statement), builder.stmtTarget(statement), builder.stmtValue(statement), builder.stmtCond(statement), builder.stmtIter(statement), builder.stmtReturn(statement), builder.stmtScrutinee(statement)} {
 				if err := visitExpression(expression); err != nil {
 					return err
 				}
 			}
-			for _, nested := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
+			for _, nested := range [][]*KIRStmt{builder.stmtThen(statement), builder.stmtElse(statement), builder.stmtBody(statement)} {
 				if err := visitBlock(nested); err != nil {
 					return err
 				}
 			}
-			for _, arm := range statement.Arms {
+			for _, arm := range builder.stmtArms(statement) {
 				if arm != nil {
-					if err := visitBlock(arm.Body); err != nil {
+					if err := visitBlock(builder.armBody(arm)); err != nil {
 						return err
 					}
 				}
@@ -267,7 +182,7 @@ func (builder *kirDirectBuilder) allocateFunctionBindings() error {
 			}
 			builder.bindingSlots[kirBindingIdentity(parameter.Binding)] = machineSlot{offset: int32(16 + (index+1)*8)}
 		}
-		if err := builder.allocateBlockBindings(function.function.Body, &nextSlot); err != nil {
+		if err := builder.allocateBlockBindings(builder.functionBody(function.function), &nextSlot); err != nil {
 			return fmt.Errorf("function %q: %w", function.function.Name, err)
 		}
 		if nextSlot > maxKIRDirectFrameBytes-96 {
@@ -307,14 +222,14 @@ func (builder *kirDirectBuilder) allocateBlockBindings(block []*KIRStmt, nextSlo
 					return err
 				}
 			case "if":
-				if err := walk(statement.Then); err != nil {
+				if err := walk(builder.stmtThen(statement)); err != nil {
 					return err
 				}
-				if err := walk(statement.Else); err != nil {
+				if err := walk(builder.stmtElse(statement)); err != nil {
 					return err
 				}
 			case "while":
-				if err := walk(statement.Body); err != nil {
+				if err := walk(builder.stmtBody(statement)); err != nil {
 					return err
 				}
 			case "for":
@@ -328,7 +243,7 @@ func (builder *kirDirectBuilder) allocateBlockBindings(block []*KIRStmt, nextSlo
 				builder.forIterSlots[statement] = machineSlot{offset: *nextSlot}
 				*nextSlot += 8
 				builder.forIndexSlots[statement] = machineSlot{offset: *nextSlot}
-				if err := walk(statement.Body); err != nil {
+				if err := walk(builder.stmtBody(statement)); err != nil {
 					return err
 				}
 			}
@@ -369,7 +284,7 @@ func (builder *kirDirectBuilder) emitDirectFunctions() error {
 		if err := machine.bind(function.bodyLabel); err != nil {
 			return err
 		}
-		if err := builder.emitBlock(function.function.Body, false); err != nil {
+		if err := builder.emitBlock(builder.functionBody(function.function), false); err != nil {
 			return fmt.Errorf("function %q: %w", function.function.Name, err)
 		}
 		machine.emitMoveImmediate(0)
@@ -382,7 +297,7 @@ func (builder *kirDirectBuilder) emitDirectFunctions() error {
 }
 
 func (builder *kirDirectBuilder) emitFunctionCall(expression *KIRExpr) error {
-	if expression == nil || expression.Receiver != nil || expression.Callee != nil {
+	if expression == nil || builder.exprReceiver(expression) != nil || builder.exprCallee(expression) != nil {
 		return fmt.Errorf("direct KIR ELF does not lower methods or indirect calls")
 	}
 	prefix, target, ok := strings.Cut(expression.CallTarget, ":")
@@ -397,20 +312,20 @@ func (builder *kirDirectBuilder) emitFunctionCall(expression *KIRExpr) error {
 	if !ok || prefix != "function" || function == nil || function.target != target || function.function.Name != expression.Name {
 		return fmt.Errorf("invalid KIR executable: direct function call target %q is not lowered", expression.CallTarget)
 	}
-	if len(expression.Args) != len(function.function.Params) {
+	if len(builder.exprArgs(expression)) != len(function.function.Params) {
 		return fmt.Errorf("direct KIR ELF function %q does not lower omitted default arguments", function.function.Name)
 	}
 	if err := builder.emitCallDepthGuard(expression); err != nil {
 		return err
 	}
-	for _, argument := range expression.Args {
+	for _, argument := range builder.exprArgs(expression) {
 		if err := builder.emitExpr(argument); err != nil {
 			return err
 		}
 		builder.machine.code = append(builder.machine.code, 0x50)
 	}
 	registerPops := [6][]byte{{0x5f}, {0x5e}, {0x5a}, {0x59}, {0x41, 0x58}, {0x41, 0x59}}
-	for index := len(expression.Args) - 1; index >= 0; index-- {
+	for index := len(builder.exprArgs(expression)) - 1; index >= 0; index-- {
 		builder.machine.code = append(builder.machine.code, registerPops[index]...)
 	}
 	if err := builder.emitCallSiteID(expression); err != nil {
@@ -420,7 +335,7 @@ func (builder *kirDirectBuilder) emitFunctionCall(expression *KIRExpr) error {
 	return builder.machine.emitLabelCall(function.label)
 }
 
-func validDirectKIRFunction(function *KIRFunction, document *KIRDocument) error {
+func validDirectKIRFunction(function *KIRFunction, document kirExecMetadataProvider) error {
 	if function == nil || function.Worker || function.Unsafe || function.Trait != "" || function.Receiver != "" || len(function.TypeParams) != 0 || len(function.Captures) != 0 {
 		return fmt.Errorf("%w: direct KIR ELF supports only non-generic, non-method functions without captures", errKIRSubsetUnsupported)
 	}

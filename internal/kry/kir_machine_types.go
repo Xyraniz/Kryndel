@@ -142,7 +142,7 @@ func splitDirectKIRType(encoded string) (name string, arguments []string, compos
 	return name, arguments, true, true
 }
 
-func directKIRTypeSupported(encoded string, document *KIRDocument) bool {
+func directKIRTypeSupported(encoded string, source kirExecMetadataProvider) bool {
 	switch encoded {
 	case "Int", "UInt8", "UInt16", "UInt32", "UInt64", "Bool", "String", "Bytes", "Json", "Nil":
 		return true
@@ -152,15 +152,15 @@ func directKIRTypeSupported(encoded string, document *KIRDocument) bool {
 		return false
 	}
 	if !composite {
-		return directKIRStruct(document, name) != nil
+		return directKIRStruct(source, name) != nil
 	}
 	switch name {
 	case "Array", "Option":
-		return len(arguments) == 1 && directKIRTypeSupported(arguments[0], document)
+		return len(arguments) == 1 && directKIRTypeSupported(arguments[0], source)
 	case "Result":
-		return len(arguments) == 2 && directKIRTypeSupported(arguments[0], document) && directKIRTypeSupported(arguments[1], document)
+		return len(arguments) == 2 && directKIRTypeSupported(arguments[0], source) && directKIRTypeSupported(arguments[1], source)
 	case "Map":
-		return len(arguments) == 2 && directKIRTypeSupported(arguments[0], document) && directKIRTypeSupported(arguments[1], document)
+		return len(arguments) == 2 && directKIRTypeSupported(arguments[0], source) && directKIRTypeSupported(arguments[1], source)
 	default:
 		return false
 	}
@@ -183,11 +183,11 @@ func directKIRMapKeyKind(encoded string) (uint64, bool) {
 	}
 }
 
-func directKIRStruct(document *KIRDocument, name string) *KIRStruct {
-	if document == nil || name == "" {
+func directKIRStruct(source kirExecMetadataProvider, name string) *KIRStruct {
+	if source == nil || name == "" {
 		return nil
 	}
-	for _, structure := range document.Structs {
+	for _, structure := range source.asKIRMetadata().Structs {
 		if structure != nil && structure.Name == name && len(structure.TypeParams) == 0 {
 			return structure
 		}
@@ -195,8 +195,8 @@ func directKIRStruct(document *KIRDocument, name string) *KIRStruct {
 	return nil
 }
 
-func directKIRStructField(document *KIRDocument, encodedType, name string) (*KIRField, int, bool) {
-	structure := directKIRStruct(document, encodedType)
+func directKIRStructField(source kirExecMetadataProvider, encodedType, name string) (*KIRField, int, bool) {
+	structure := directKIRStruct(source, encodedType)
 	if structure == nil {
 		return nil, -1, false
 	}

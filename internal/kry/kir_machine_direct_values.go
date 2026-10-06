@@ -20,11 +20,10 @@ func isDirectELFUnsupportedResultErrorPayload(err error) bool {
 	return errors.As(err, &payloadError)
 }
 
-func validateDirectKIRBuiltinCall(expression *KIRExpr, document *KIRDocument) error {
+func validateDirectKIRBuiltinCall(expression *KIRExpr, args []*KIRExpr, document kirExecMetadataProvider) error {
 	if expression == nil {
 		return fmt.Errorf("invalid KIR executable: nil direct builtin")
 	}
-	args := expression.Args
 	unsupported := func() error {
 		return fmt.Errorf("%w: direct KIR ELF does not lower builtin %q with this signature", errKIRSubsetUnsupported, expression.Name)
 	}
@@ -301,11 +300,11 @@ func validateDirectKIRBuiltinCall(expression *KIRExpr, document *KIRDocument) er
 	return nil
 }
 
-func directKIRUnarySupported(expression *KIRExpr) bool {
-	if expression == nil || expression.Operand == nil {
+func directKIRUnarySupportedWithOperand(expression *KIRExpr, operandNode *KIRExpr) bool {
+	if expression == nil || operandNode == nil {
 		return false
 	}
-	operand := expression.Operand.Type
+	operand := operandNode.Type
 	switch expression.Operator {
 	case "!":
 		return operand == "Bool" && expression.Type == "Bool"
@@ -320,11 +319,11 @@ func directKIRUnarySupported(expression *KIRExpr) bool {
 	}
 }
 
-func directKIRBinarySupported(expression *KIRExpr) bool {
-	if expression == nil || expression.Left == nil || expression.Right == nil {
+func directKIRBinarySupportedWithOperands(expression, leftNode, rightNode *KIRExpr) bool {
+	if expression == nil || leftNode == nil || rightNode == nil {
 		return false
 	}
-	left, right := expression.Left.Type, expression.Right.Type
+	left, right := leftNode.Type, rightNode.Type
 	if expression.Operator == "<<" || expression.Operator == ">>" {
 		return strings.HasPrefix(left, "UInt") && right == "Int" && expression.Type == left
 	}
@@ -368,19 +367,19 @@ func directKIRBinarySupported(expression *KIRExpr) bool {
 
 func (builder *kirDirectBuilder) emitMapLiteral(expression *KIRExpr) error {
 	mapTypes, ok := directKIRMapType(expression.Type)
-	if !ok || len(expression.MapKeys) != len(expression.Values) {
+	if !ok || len(builder.exprMapKeys(expression)) != len(builder.exprValues(expression)) {
 		return fmt.Errorf("invalid KIR executable: map literal has invalid type or entry counts")
 	}
 	machine := builder.machine
-	machine.emitMoveImmediate(uint64(len(expression.MapKeys) * 2))
+	machine.emitMoveImmediate(uint64(len(builder.exprMapKeys(expression)) * 2))
 	machine.arrayRuntimeUsed = true
 	machine.mapRuntimeUsed = true
 	if err := machine.emitArrayAllocCall(); err != nil {
 		return err
 	}
 	machine.code = append(machine.code, 0x50) // keep map pointer while evaluating entries
-	for index, key := range expression.MapKeys {
-		value := expression.Values[index]
+	for index, key := range builder.exprMapKeys(expression) {
+		value := builder.exprValues(expression)[index]
 		if key == nil || value == nil || key.Type != mapTypes[0] || value.Type != mapTypes[1] {
 			return fmt.Errorf("invalid KIR executable: map literal entry does not match %q", expression.Type)
 		}
@@ -412,10 +411,10 @@ func (builder *kirDirectBuilder) emitMapLiteral(expression *KIRExpr) error {
 }
 
 func (builder *kirDirectBuilder) emitMapBuiltin(expression *KIRExpr) error {
-	if expression == nil || len(expression.Args) < 2 || expression.Args[0] == nil {
+	if expression == nil || len(builder.exprArgs(expression)) < 2 || builder.exprArgs(expression)[0] == nil {
 		return fmt.Errorf("invalid KIR executable: direct map builtin has missing arguments")
 	}
-	mapTypes, ok := directKIRMapType(expression.Args[0].Type)
+	mapTypes, ok := directKIRMapType(builder.exprArgs(expression)[0].Type)
 	if !ok {
 		return fmt.Errorf("invalid KIR executable: direct map builtin has a non-Map argument")
 	}
@@ -427,14 +426,14 @@ func (builder *kirDirectBuilder) emitMapBuiltin(expression *KIRExpr) error {
 	machine.mapRuntimeUsed = true
 	switch expression.Name {
 	case "map_get", "map_contains_key":
-		if len(expression.Args) != 2 || expression.Args[1] == nil {
+		if len(builder.exprArgs(expression)) != 2 || builder.exprArgs(expression)[1] == nil {
 			return fmt.Errorf("direct KIR ELF %s expects a map and key", expression.Name)
 		}
-		if err := builder.emitExpr(expression.Args[0]); err != nil {
+		if err := builder.emitExpr(builder.exprArgs(expression)[0]); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x50)
-		if err := builder.emitExpr(expression.Args[1]); err != nil {
+		if err := builder.emitExpr(builder.exprArgs(expression)[1]); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x48, 0x89, 0xc6, 0x5f) // rsi=key; rdi=map
@@ -464,18 +463,18 @@ func (builder *kirDirectBuilder) emitMapBuiltin(expression *KIRExpr) error {
 		machine.emitMoveImmediate(0)
 		return machine.bind(done)
 	case "map_insert":
-		if len(expression.Args) != 3 || expression.Args[1] == nil || expression.Args[2] == nil {
+		if len(builder.exprArgs(expression)) != 3 || builder.exprArgs(expression)[1] == nil || builder.exprArgs(expression)[2] == nil {
 			return fmt.Errorf("direct KIR ELF map_insert expects a map, key, and value")
 		}
-		if err := builder.emitExpr(expression.Args[0]); err != nil {
+		if err := builder.emitExpr(builder.exprArgs(expression)[0]); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x50)
-		if err := builder.emitExpr(expression.Args[1]); err != nil {
+		if err := builder.emitExpr(builder.exprArgs(expression)[1]); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x50)
-		if err := builder.emitExpr(expression.Args[2]); err != nil {
+		if err := builder.emitExpr(builder.exprArgs(expression)[2]); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x48, 0x89, 0xc1, 0x5e, 0x5f) // rcx=value, rsi=key, rdi=map
@@ -483,14 +482,14 @@ func (builder *kirDirectBuilder) emitMapBuiltin(expression *KIRExpr) error {
 		machine.arrayRuntimeUsed = true
 		return machine.emitLabelCall(machine.mapInsertLabel)
 	case "map_remove":
-		if len(expression.Args) != 2 || expression.Args[1] == nil {
+		if len(builder.exprArgs(expression)) != 2 || builder.exprArgs(expression)[1] == nil {
 			return fmt.Errorf("direct KIR ELF map_remove expects a map and key")
 		}
-		if err := builder.emitExpr(expression.Args[0]); err != nil {
+		if err := builder.emitExpr(builder.exprArgs(expression)[0]); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x50)
-		if err := builder.emitExpr(expression.Args[1]); err != nil {
+		if err := builder.emitExpr(builder.exprArgs(expression)[1]); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x48, 0x89, 0xc6, 0x5f) // rsi=key; rdi=map
@@ -518,12 +517,12 @@ func (builder *kirDirectBuilder) emitMapKeyKind(kind uint64) {
 
 func (builder *kirDirectBuilder) emitArrayLiteral(expression *KIRExpr) error {
 	machine := builder.machine
-	machine.emitMoveImmediate(uint64(len(expression.Items)))
+	machine.emitMoveImmediate(uint64(len(builder.exprItems(expression))))
 	if err := machine.emitArrayAllocCall(); err != nil {
 		return err
 	}
 	machine.code = append(machine.code, 0x50) // retain the allocated array
-	for index, item := range expression.Items {
+	for index, item := range builder.exprItems(expression) {
 		if err := builder.emitExpr(item); err != nil {
 			return err
 		}
@@ -539,15 +538,15 @@ func (builder *kirDirectBuilder) emitArrayLiteral(expression *KIRExpr) error {
 }
 
 func (builder *kirDirectBuilder) emitArrayIndex(expression *KIRExpr) error {
-	if expression.Base == nil || expression.Left == nil {
+	if builder.exprBase(expression) == nil || builder.exprLeft(expression) == nil {
 		return fmt.Errorf("invalid KIR executable: array index is missing an operand")
 	}
-	if err := builder.emitExpr(expression.Base); err != nil {
+	if err := builder.emitExpr(builder.exprBase(expression)); err != nil {
 		return err
 	}
 	machine := builder.machine
 	machine.code = append(machine.code, 0x50)
-	if err := builder.emitExpr(expression.Left); err != nil {
+	if err := builder.emitExpr(builder.exprLeft(expression)); err != nil {
 		return err
 	}
 	machine.code = append(machine.code, 0x48, 0x89, 0xc1, 0x58) // rcx=index; rax=array
@@ -566,8 +565,8 @@ func (builder *kirDirectBuilder) emitArrayIndex(expression *KIRExpr) error {
 }
 
 func (builder *kirDirectBuilder) emitStructLiteral(expression *KIRExpr) error {
-	structure := directKIRStruct(builder.document, expression.StructName)
-	if structure == nil || len(expression.Fields) != len(expression.Values) || len(expression.Fields) != len(structure.Fields) {
+	structure := directKIRStruct(builder.metadata, expression.StructName)
+	if structure == nil || len(expression.Fields) != len(builder.exprValues(expression)) || len(expression.Fields) != len(structure.Fields) {
 		return fmt.Errorf("invalid KIR executable: struct %q literal has invalid metadata", expression.StructName)
 	}
 	if err := builder.machine.emitStructAllocCall(len(structure.Fields)); err != nil {
@@ -575,8 +574,8 @@ func (builder *kirDirectBuilder) emitStructLiteral(expression *KIRExpr) error {
 	}
 	builder.machine.code = append(builder.machine.code, 0x50) // retain object while evaluating fields
 	for valueIndex, name := range expression.Fields {
-		field, fieldIndex, ok := directKIRStructField(builder.document, expression.StructName, name)
-		value := expression.Values[valueIndex]
+		field, fieldIndex, ok := directKIRStructField(builder.metadata, expression.StructName, name)
+		value := builder.exprValues(expression)[valueIndex]
 		if !ok || value == nil || value.Type != field.Type {
 			return fmt.Errorf("invalid KIR executable: struct %q literal has invalid field %q", expression.StructName, name)
 		}
@@ -594,14 +593,14 @@ func (builder *kirDirectBuilder) emitStructLiteral(expression *KIRExpr) error {
 }
 
 func (builder *kirDirectBuilder) emitStructField(expression *KIRExpr) error {
-	if expression == nil || expression.Base == nil {
+	if expression == nil || builder.exprBase(expression) == nil {
 		return fmt.Errorf("invalid KIR executable: direct struct field access has no base")
 	}
-	field, index, ok := directKIRStructField(builder.document, expression.Base.Type, expression.Field)
+	field, index, ok := directKIRStructField(builder.metadata, builder.exprBase(expression).Type, expression.Field)
 	if !ok || field.Type != expression.Type {
-		return fmt.Errorf("invalid KIR executable: direct struct field %q is not in %q", expression.Field, expression.Base.Type)
+		return fmt.Errorf("invalid KIR executable: direct struct field %q is not in %q", expression.Field, builder.exprBase(expression).Type)
 	}
-	if err := builder.emitExpr(expression.Base); err != nil {
+	if err := builder.emitExpr(builder.exprBase(expression)); err != nil {
 		return err
 	}
 	builder.machine.code = append(builder.machine.code, 0x48, 0x8b, 0x80)
@@ -612,17 +611,17 @@ func (builder *kirDirectBuilder) emitStructField(expression *KIRExpr) error {
 }
 
 func (builder *kirDirectBuilder) emitStringPredicate(expression *KIRExpr, mode string) error {
-	if expression == nil || len(expression.Args) != 2 || expression.Args[0].Type != "String" || expression.Args[1].Type != "String" {
+	if expression == nil || len(builder.exprArgs(expression)) != 2 || builder.exprArgs(expression)[0].Type != "String" || builder.exprArgs(expression)[1].Type != "String" {
 		return fmt.Errorf("direct KIR ELF %s expects two String arguments", mode)
 	}
 	if mode != "contains" && mode != "starts_with" && mode != "ends_with" {
 		return fmt.Errorf("direct KIR ELF does not lower string predicate %q", mode)
 	}
-	if err := builder.emitExpr(expression.Args[0]); err != nil {
+	if err := builder.emitExpr(builder.exprArgs(expression)[0]); err != nil {
 		return err
 	}
 	builder.machine.code = append(builder.machine.code, 0x50)
-	if err := builder.emitExpr(expression.Args[1]); err != nil {
+	if err := builder.emitExpr(builder.exprArgs(expression)[1]); err != nil {
 		return err
 	}
 	machine := builder.machine
@@ -706,7 +705,7 @@ func (builder *kirDirectBuilder) emitBuiltin(expression *KIRExpr) error {
 		return fmt.Errorf("invalid KIR executable: direct ELF builtin has no resolved target")
 	}
 	machine := builder.machine
-	args := expression.Args
+	args := builder.exprArgs(expression)
 	switch expression.Name {
 	case "print", "println":
 		return builder.emitPrint(expression)
@@ -1186,10 +1185,10 @@ func (builder *kirDirectBuilder) emitBuiltin(expression *KIRExpr) error {
 }
 
 func (builder *kirDirectBuilder) emitStringCast(expression *KIRExpr) error {
-	if expression == nil || len(expression.Args) != 1 {
+	if expression == nil || len(builder.exprArgs(expression)) != 1 {
 		return fmt.Errorf("direct KIR ELF str expects one Display argument")
 	}
-	argument := expression.Args[0]
+	argument := builder.exprArgs(expression)[0]
 	typ, err := builder.machineType(argument.Type)
 	if err != nil {
 		return err
@@ -1225,10 +1224,10 @@ func (builder *kirDirectBuilder) emitStringCast(expression *KIRExpr) error {
 }
 
 func (builder *kirDirectBuilder) emitIntCast(expression *KIRExpr) error {
-	if expression == nil || len(expression.Args) != 1 {
+	if expression == nil || len(builder.exprArgs(expression)) != 1 {
 		return fmt.Errorf("direct KIR ELF int expects one numeric, Bool, or String argument")
 	}
-	argument := expression.Args[0]
+	argument := builder.exprArgs(expression)[0]
 	typ, err := builder.machineType(argument.Type)
 	if err != nil {
 		return err
@@ -1364,10 +1363,10 @@ func (builder *kirDirectBuilder) emitIntStringCast(expression, argument *KIRExpr
 }
 
 func (builder *kirDirectBuilder) emitUnsignedCast(expression *KIRExpr) error {
-	if expression == nil || len(expression.Args) != 1 {
+	if expression == nil || len(builder.exprArgs(expression)) != 1 {
 		return fmt.Errorf("direct KIR ELF conversion %s expects one argument", expression.Name)
 	}
-	argument := expression.Args[0]
+	argument := builder.exprArgs(expression)[0]
 	inputType, err := builder.machineType(argument.Type)
 	if err != nil {
 		return err

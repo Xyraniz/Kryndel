@@ -28,7 +28,10 @@ type kirDirectFunction struct {
 
 type kirDirectBuilder struct {
 	machine          *directMachine
-	document         *KIRDocument
+	executor         *kirExecutor
+	metadata         KIRMetadata
+	topStatements    []*KIRStmt
+	topFunctions     []*KIRFunction
 	limits           Limits
 	sources          map[string]*Source
 	bindingSlots     map[string]machineSlot
@@ -58,436 +61,29 @@ type kirDirectBuilder struct {
 	currentNsecSlot  int32
 }
 
-// validateKIRDirectELFSubset retains the scalar-only KIR preflight used by
-// compatibility checks. BuildDirectELF dispatches through the wider value
-// subset below, whose operations have executable interpreter-parity fixtures.
-// The validated value is the only accepted entry point; internal walkers
-// receive its document only after this boundary.
+// validateKIRDirectELFSubset retains the scalar-only capability check used by
+// the direct backend's compatibility tests. It validates the same typed arena
+// as the production value subset and never creates a recursive wire document.
 func validateKIRDirectELFSubset(mir *ValidatedMIR) error {
-	document, err := validatedMIRDocument(mir)
+	if mir == nil || mir.arena == nil {
+		return fmt.Errorf("direct ELF backend requires validated MIR")
+	}
+	view, err := newKIRExecArenaView(mir.arena)
 	if err != nil {
 		return err
 	}
-	if err := directKIRLegacySubsetRejection(document); err != nil {
-		return err
-	}
-	return validateKIRDirectELFSubsetMode(document, false)
+	return validateDirectKIRValueArena(view, kirMetadataFromArena(mir.arena), false)
 }
 
 func validateKIRDirectELFValueSubset(mir *ValidatedMIR) error {
-	document, err := validatedMIRDocument(mir)
+	if mir == nil || mir.arena == nil {
+		return fmt.Errorf("direct ELF backend requires validated MIR")
+	}
+	view, err := newKIRExecArenaView(mir.arena)
 	if err != nil {
 		return err
 	}
-	return validateKIRDirectELFSubsetMode(document, true)
-}
-
-func validatedMIRDocument(mir *ValidatedMIR) (*KIRDocument, error) {
-	if mir == nil || mir.arena == nil {
-		return nil, fmt.Errorf("direct ELF backend requires validated MIR")
-	}
-	return mir.documentView()
-}
-
-// validateKIRDirectELFSubsetMode proves the accepted native slice using
-// decoded KIR only. It first applies the executor's semantic checks, then
-// narrows execution to operations for which the direct machine emits code.
-func validateKIRDirectELFSubsetMode(document *KIRDocument, supportValues bool) error {
-	if err := rejectKIRDirectOmittedDefaults(document); err != nil {
-		return err
-	}
-	if err := validateKIRExecSubsetWithFunctions(document, kirExecFunctions(document), true); err != nil {
-		return err
-	}
-	functionMap := kirExecFunctions(document)
-	entryFunction, entryTarget := kirExecEntryFunction(document, functionMap)
-	if !supportValues && len(document.Functions) != 0 {
-		return fmt.Errorf("%w: direct scalar KIR ELF does not lower function declarations", errKIRSubsetUnsupported)
-	}
-	if supportValues && entryFunction != nil && len(document.Statements) != 0 {
-		return fmt.Errorf("%w: direct KIR ELF does not combine a main() entry function with top-level statements", errKIRSubsetUnsupported)
-	}
-	if supportValues {
-		for _, function := range document.Functions {
-			if err := validDirectKIRFunction(function, document); err != nil {
-				return err
-			}
-		}
-		if entryFunction != nil && (entryTarget == "" || entryFunction.Return != "Nil" || len(entryFunction.Params) != 0) {
-			return fmt.Errorf("%w: direct KIR ELF main() entry must take no arguments and return Nil", errKIRSubsetUnsupported)
-		}
-	}
-	var validateExpr func(*KIRExpr) error
-	var validateBlock func([]*KIRStmt) error
-	nodeCount := 0
-	countNode := func() error {
-		nodeCount++
-		if nodeCount > maxKIRDirectNodes {
-			return fmt.Errorf("%w: direct ELF lowering is limited to %d KIR nodes", errKIRSubsetUnsupported, maxKIRDirectNodes)
-		}
-		return nil
-	}
-	validateExpr = func(expression *KIRExpr) error {
-		if expression == nil {
-			return nil
-		}
-		if err := countNode(); err != nil {
-			return err
-		}
-		if expression.Kind == "lambda" || expression.Lambda != nil {
-			return fmt.Errorf("%w: direct KIR ELF does not lower lambdas or captured bindings", errKIRSubsetUnsupported)
-		}
-		if strings.HasPrefix(expression.Type, "fn(") {
-			return fmt.Errorf("%w: direct KIR ELF does not lower function values or closures", errKIRSubsetUnsupported)
-		}
-		if expression.Callee != nil {
-			return fmt.Errorf("%w: direct KIR ELF does not lower indirect function calls", errKIRSubsetUnsupported)
-		}
-		functionCall := strings.HasPrefix(expression.CallTarget, "function:")
-		if functionCall {
-			_, target, ok := strings.Cut(expression.CallTarget, ":")
-			function := functionMap[target]
-			if expression.Kind != "call" || !supportValues || !ok || function == nil || function.Name != expression.Name || function == entryFunction || expression.Receiver != nil || len(expression.GenericArguments) != 0 || expression.TraitName != "" {
-				return fmt.Errorf("%w: direct KIR ELF call target %q is not a supported helper function", errKIRSubsetUnsupported, expression.CallTarget)
-			}
-			if len(expression.Args) < len(function.Params) {
-				for _, parameter := range function.Params[len(expression.Args):] {
-					if parameter != nil && parameter.Default != nil {
-						return fmt.Errorf("%w: direct KIR ELF function %q does not support omitted default arguments", errKIRSubsetUnsupported, function.Name)
-					}
-				}
-			}
-			if len(expression.Args) != len(function.Params) || len(expression.Args) > 6 || expression.Type != function.Return {
-				return fmt.Errorf("invalid KIR executable: direct call to %q has an unsupported signature", expression.Name)
-			}
-			for index, argument := range expression.Args {
-				if argument == nil || argument.Type != function.Params[index].Type {
-					return fmt.Errorf("invalid KIR executable: direct call to %q has mismatched argument %d", expression.Name, index+1)
-				}
-			}
-		}
-		if !supportValues && expression.Kind == "call" {
-			return fmt.Errorf("%w: direct KIR ELF does not lower builtin or function call %q in expression position", errKIRSubsetUnsupported, expression.Name)
-		}
-		if supportValues {
-			if !directKIRTypeSupported(expression.Type, document) {
-				return fmt.Errorf("%w: direct KIR ELF does not lower values of type %q", errKIRSubsetUnsupported, expression.Type)
-			}
-		} else {
-			if expression.Type == "Float" {
-				return fmt.Errorf("%w: Float values are not yet lowered by the direct KIR ELF backend", errKIRSubsetUnsupported)
-			}
-			switch expression.Type {
-			case "Int", "Bool", "String", "Nil":
-			default:
-				return fmt.Errorf("%w: direct KIR ELF does not lower values of type %q", errKIRSubsetUnsupported, expression.Type)
-			}
-		}
-		if !supportValues {
-			switch expression.Kind {
-			case "int", "bool", "string", "nil", "var", "unary", "binary":
-			default:
-				return fmt.Errorf("%w: direct KIR ELF does not lower expression kind %q", errKIRSubsetUnsupported, expression.Kind)
-			}
-		} else {
-			switch expression.Kind {
-			case "int", "bool", "string", "nil", "var", "unary", "binary", "array", "map", "index", "field":
-				if expression.Kind == "field" {
-					if expression.Base == nil {
-						return fmt.Errorf("invalid KIR executable: direct struct field access has no base")
-					}
-					field, _, ok := directKIRStructField(document, expression.Base.Type, expression.Field)
-					if !ok || field.Type != expression.Type || !directKIRTypeSupported(field.Type, document) {
-						return fmt.Errorf("%w: direct KIR ELF does not lower field %q on type %q", errKIRSubsetUnsupported, expression.Field, expression.Base.Type)
-					}
-				}
-			case "struct":
-				structure := directKIRStruct(document, expression.StructName)
-				if structure == nil || expression.Type != expression.StructName || expression.StructType != expression.StructName || len(expression.GenericArguments) != 0 {
-					return fmt.Errorf("%w: direct KIR ELF supports only non-generic struct literals", errKIRSubsetUnsupported)
-				}
-				if len(expression.Fields) != len(expression.Values) || len(expression.Fields) != len(structure.Fields) {
-					return fmt.Errorf("invalid KIR executable: struct %q literal has mismatched fields", expression.StructName)
-				}
-				seen := make(map[string]bool, len(expression.Fields))
-				for index, name := range expression.Fields {
-					field, _, ok := directKIRStructField(document, expression.StructName, name)
-					value := expression.Values[index]
-					if !ok || value == nil || seen[name] || value.Type != field.Type {
-						return fmt.Errorf("invalid KIR executable: struct %q literal has invalid field %q", expression.StructName, name)
-					}
-					seen[name] = true
-				}
-			case "call":
-				if functionCall {
-					// The signature and target are checked above; argument expressions
-					// are recursively validated below.
-					break
-				}
-				if expression.Receiver != nil || expression.CallTarget != "builtin:"+expression.Name {
-					return fmt.Errorf("%w: direct KIR ELF only lowers builtin calls with resolved targets", errKIRSubsetUnsupported)
-				}
-				if err := validateDirectKIRBuiltinCall(expression, document); err != nil {
-					return err
-				}
-				switch expression.Name {
-				case "print", "println", "len", "array_push", "array_concat", "array_get", "array_indices", "array_set", "array_slice", "array_take", "array_drop", "array_reverse", "map_get", "map_contains_key", "map_insert", "map_remove", "process_args", "some", "none", "ok", "err", "is_some", "is_none", "is_ok", "is_err", "unwrap_or", "result_unwrap", "result_error", "assert", "assert_eq", "u8", "u16", "u32", "u64", "int", "str", "string_chars", "substring", "contains", "starts_with", "ends_with", "bytes", "bytes_from_u8", "u8_array", "string_to_bytes", "fs_read_text", "fs_write_bytes":
-				default:
-					return fmt.Errorf("%w: direct KIR ELF does not lower builtin %q", errKIRSubsetUnsupported, expression.Name)
-				}
-			default:
-				return fmt.Errorf("%w: direct KIR ELF does not lower expression kind %q", errKIRSubsetUnsupported, expression.Kind)
-			}
-			if expression.Kind == "unary" && !directKIRUnarySupported(expression) {
-				return fmt.Errorf("%w: direct KIR ELF does not lower unary operator %q for %s", errKIRSubsetUnsupported, expression.Operator, expression.Type)
-			}
-			if expression.Kind == "binary" && !directKIRBinarySupported(expression) {
-				return fmt.Errorf("%w: direct KIR ELF does not lower binary operator %q for %s", errKIRSubsetUnsupported, expression.Operator, expression.Type)
-			}
-		}
-		if supportValues && expression.Kind == "index" {
-			name, arguments, composite := parseKIRContainerType(expression.Base.Type)
-			if !composite || name != "Array" || len(arguments) != 1 || expression.Left == nil || expression.Left.Type != "Int" || arguments[0] != expression.Type {
-				return fmt.Errorf("%w: direct KIR ELF indexing supports Array[T] only", errKIRSubsetUnsupported)
-			}
-		}
-		if supportValues && expression.Kind == "array" {
-			arrayName, arrayTypes, arrayComposite := parseKIRContainerType(expression.Type)
-			if !arrayComposite || arrayName != "Array" || len(arrayTypes) != 1 {
-				return fmt.Errorf("invalid KIR executable: direct array expression has type %q", expression.Type)
-			}
-			for _, item := range expression.Items {
-				if item == nil || !directKIRTypeSupported(item.Type, document) || item.Type != arrayTypes[0] {
-					return fmt.Errorf("%w: direct KIR ELF array item has unsupported type", errKIRSubsetUnsupported)
-				}
-			}
-		}
-		if supportValues && expression.Kind == "map" {
-			mapTypes, ok := directKIRMapType(expression.Type)
-			if !ok || !directKIRTypeSupported(expression.Type, document) {
-				return fmt.Errorf("invalid KIR executable: direct map expression has type %q", expression.Type)
-			}
-			if _, ok := directKIRMapKeyKind(mapTypes[0]); !ok {
-				return fmt.Errorf("%w: direct KIR ELF map keys of type %q are unsupported", errKIRSubsetUnsupported, mapTypes[0])
-			}
-			if len(expression.MapKeys) != len(expression.Values) {
-				return fmt.Errorf("invalid KIR executable: direct map literal has mismatched key/value counts")
-			}
-			for index, key := range expression.MapKeys {
-				value := expression.Values[index]
-				if key == nil || value == nil || key.Type != mapTypes[0] || value.Type != mapTypes[1] {
-					return fmt.Errorf("invalid KIR executable: direct map literal entry does not match %q", expression.Type)
-				}
-			}
-		}
-		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
-			if err := validateExpr(child); err != nil {
-				return err
-			}
-		}
-		for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
-			for _, child := range list {
-				if err := validateExpr(child); err != nil {
-					return err
-				}
-			}
-		}
-		if supportValues && expression.Kind == "call" {
-			for _, argument := range expression.Args {
-				if argument == nil || !directKIRTypeSupported(argument.Type, document) {
-					return fmt.Errorf("%w: direct KIR ELF builtin %q has an unsupported argument type", errKIRSubsetUnsupported, expression.Name)
-				}
-			}
-		}
-		return nil
-	}
-	validateBlock = func(statements []*KIRStmt) error {
-		for _, statement := range statements {
-			if err := countNode(); err != nil {
-				return err
-			}
-			switch statement.Kind {
-			case "let", "const":
-				if err := validateExpr(statement.Init); err != nil {
-					return err
-				}
-			case "assign":
-				if statement.Target == nil || statement.Target.Kind != "var" {
-					return fmt.Errorf("%w: direct KIR ELF assignment targets must be local variables", errKIRSubsetUnsupported)
-				}
-				if err := validateExpr(statement.Target); err != nil {
-					return err
-				}
-				if err := validateExpr(statement.Value); err != nil {
-					return err
-				}
-			case "expr":
-				if supportValues {
-					if err := validateExpr(statement.Expr); err != nil {
-						return err
-					}
-					if statement.Expr.Kind != "call" {
-						return fmt.Errorf("%w: direct KIR ELF expression statement must be a supported builtin call", errKIRSubsetUnsupported)
-					}
-					if statement.Expr.Name == "print" || statement.Expr.Name == "println" {
-						if len(statement.Expr.Args) != 1 {
-							return fmt.Errorf("%w: direct KIR ELF print/println requires exactly one argument", errKIRSubsetUnsupported)
-						}
-						argument := statement.Expr.Args[0]
-						if argument.Type != "Int" && !strings.HasPrefix(argument.Type, "UInt") && argument.Type != "Bool" && argument.Type != "String" {
-							return fmt.Errorf("%w: native print does not support %s values", errKIRSubsetUnsupported, argument.Type)
-						}
-					}
-				} else {
-					if statement.Expr.Kind != "call" || (statement.Expr.Name != "print" && statement.Expr.Name != "println") {
-						return fmt.Errorf("%w: direct KIR ELF supports expression statements only for print/println", errKIRSubsetUnsupported)
-					}
-					if len(statement.Expr.Args) != 1 {
-						return fmt.Errorf("%w: direct KIR ELF print/println requires exactly one argument", errKIRSubsetUnsupported)
-					}
-					argument := statement.Expr.Args[0]
-					if argument.Type != "Int" && !strings.HasPrefix(argument.Type, "UInt") && argument.Type != "Bool" && argument.Type != "String" {
-						return fmt.Errorf("%w: native print does not support %s values", errKIRSubsetUnsupported, argument.Type)
-					}
-					if err := validateExpr(argument); err != nil {
-						return err
-					}
-				}
-			case "if":
-				if err := validateExpr(statement.Cond); err != nil {
-					return err
-				}
-				if err := validateBlock(statement.Then); err != nil {
-					return err
-				}
-				if err := validateBlock(statement.Else); err != nil {
-					return err
-				}
-			case "while":
-				if err := validateExpr(statement.Cond); err != nil {
-					return err
-				}
-				if err := validateBlock(statement.Body); err != nil {
-					return err
-				}
-			case "for":
-				if !supportValues {
-					return fmt.Errorf("%w: statement %q", errKIRSubsetUnsupported, statement.Kind)
-				}
-				if err := validateExpr(statement.Iter); err != nil {
-					return err
-				}
-				if statement.Iter == nil {
-					return fmt.Errorf("invalid KIR executable: direct for loop has no iterator")
-				}
-				name, arguments, composite := parseKIRContainerType(statement.Iter.Type)
-				if !composite || name != "Array" || len(arguments) != 1 || statement.Binding == nil || statement.Binding.Type != arguments[0] || statement.Binding.Name != statement.Name {
-					return fmt.Errorf("%w: direct KIR ELF for loops support Array[T] with a matching binding", errKIRSubsetUnsupported)
-				}
-				if err := validateBlock(statement.Body); err != nil {
-					return err
-				}
-			case "break", "continue":
-				if !supportValues {
-					return fmt.Errorf("%w: statement %q", errKIRSubsetUnsupported, statement.Kind)
-				}
-			case "return":
-				if err := validateExpr(statement.Return); err != nil {
-					return err
-				}
-			default:
-				return fmt.Errorf("%w: statement %q", errKIRSubsetUnsupported, statement.Kind)
-			}
-		}
-		return nil
-	}
-	if len(document.Statements) != 0 {
-		if err := validateBlock(document.Statements); err != nil {
-			return err
-		}
-	}
-	for _, function := range document.Functions {
-		if function == nil {
-			continue
-		}
-		if err := validateBlock(function.Body); err != nil {
-			if isDirectELFUnsupportedResultErrorPayload(err) {
-				return err
-			}
-			return fmt.Errorf("function %q: %w", function.Name, err)
-		}
-	}
-	return nil
-}
-
-func rejectKIRDirectOmittedDefaults(document *KIRDocument) error {
-	functions := kirExecFunctions(document)
-	var visitExpr func(*KIRExpr) error
-	var visitStatements func([]*KIRStmt) error
-	visitExpr = func(expression *KIRExpr) error {
-		if expression == nil {
-			return nil
-		}
-		if expression.Kind == "call" && strings.HasPrefix(expression.CallTarget, "function:") {
-			target := strings.TrimPrefix(expression.CallTarget, "function:")
-			if function := functions[target]; function != nil && len(expression.Args) < len(function.Params) {
-				for _, parameter := range function.Params[len(expression.Args):] {
-					if parameter != nil && parameter.Default != nil {
-						return fmt.Errorf("%w: direct KIR ELF function %q does not support omitted default arguments", errKIRSubsetUnsupported, function.Name)
-					}
-				}
-			}
-		}
-		for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
-			if err := visitExpr(child); err != nil {
-				return err
-			}
-		}
-		for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
-			for _, child := range list {
-				if err := visitExpr(child); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	visitStatements = func(statements []*KIRStmt) error {
-		for _, statement := range statements {
-			if statement == nil {
-				continue
-			}
-			for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
-				if err := visitExpr(expression); err != nil {
-					return err
-				}
-			}
-			for _, block := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
-				if err := visitStatements(block); err != nil {
-					return err
-				}
-			}
-			for _, arm := range statement.Arms {
-				if arm != nil {
-					if err := visitStatements(arm.Body); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
-	if err := visitStatements(document.Statements); err != nil {
-		return err
-	}
-	for _, function := range document.Functions {
-		if function != nil {
-			if err := visitStatements(function.Body); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return validateDirectKIRValueArena(view, kirMetadataFromArena(mir.arena), true)
 }
 
 func directKIRMapType(encoded string) ([]string, bool) {
@@ -499,16 +95,22 @@ func buildDirectKIRELF(mir *ValidatedMIR, limits Limits, sources map[string]*Sou
 	if mir == nil || mir.arena == nil {
 		return nil, fmt.Errorf("direct ELF backend requires validated MIR")
 	}
-	document, err := mir.documentView()
+	view, err := newKIRExecArenaView(mir.arena)
 	if err != nil {
 		return nil, err
 	}
 	if err := validateKIRDirectELFValueSubset(mir); err != nil {
 		return nil, err
 	}
+	metadata := kirMetadataFromArena(mir.arena)
+	functions := kirExecFunctionsFromArena(view)
+	executor := &kirExecutor{metadata: metadata, arenaView: view, functions: functions}
 	builder := &kirDirectBuilder{
 		machine:          newDirectMachine(),
-		document:         document,
+		executor:         executor,
+		metadata:         metadata,
+		topStatements:    view.statementList(mir.arena.TopStatements),
+		topFunctions:     view.functionList(mir.arena.TopFunctions),
 		limits:           limits,
 		sources:          sources,
 		bindingSlots:     map[string]machineSlot{},
@@ -523,17 +125,17 @@ func buildDirectKIRELF(mir *ValidatedMIR, limits Limits, sources map[string]*Sou
 		callSiteTable:    -1,
 		failureSites:     map[string]*kirDirectDiagnosticSite{},
 	}
-	for _, declaration := range document.Structs {
+	for _, declaration := range metadata.Structs {
 		if declaration != nil {
 			builder.structs[declaration.Name] = declaration
 		}
 	}
-	for _, declaration := range document.Enums {
+	for _, declaration := range metadata.Enums {
 		if declaration != nil {
 			builder.enums[declaration.Name] = declaration
 		}
 	}
-	if main, _ := kirExecEntryFunction(document, kirExecFunctions(document)); main != nil {
+	if main, _ := kirExecEntryFunctionFromArena(view, functions); main != nil {
 		builder.entryFunction = main
 		builder.entryFrame = &StackFrame{Function: main.Name, Source: main.Source, Line: main.Line, Column: main.Column}
 	}
@@ -547,9 +149,9 @@ func buildDirectKIRELF(mir *ValidatedMIR, limits Limits, sources map[string]*Sou
 }
 
 func (builder *kirDirectBuilder) allocateBindings() error {
-	statements := builder.document.Statements
+	statements := builder.topStatements
 	if len(statements) == 0 && builder.entryFunction != nil {
-		statements = builder.entryFunction.Body
+		statements = builder.functionBody(builder.entryFunction)
 	}
 	reserve := func(name string) (machineSlot, error) {
 		if builder.machine.nextSlot > maxKIRDirectFrameBytes-128-8 {
@@ -582,14 +184,14 @@ func (builder *kirDirectBuilder) allocateBindings() error {
 					return err
 				}
 			case "if":
-				if err := walk(statement.Then); err != nil {
+				if err := walk(builder.stmtThen(statement)); err != nil {
 					return err
 				}
-				if err := walk(statement.Else); err != nil {
+				if err := walk(builder.stmtElse(statement)); err != nil {
 					return err
 				}
 			case "while":
-				if err := walk(statement.Body); err != nil {
+				if err := walk(builder.stmtBody(statement)); err != nil {
 					return err
 				}
 			case "for":
@@ -606,7 +208,7 @@ func (builder *kirDirectBuilder) allocateBindings() error {
 				}
 				builder.forIterSlots[statement] = iterator
 				builder.forIndexSlots[statement] = index
-				if err := walk(statement.Body); err != nil {
+				if err := walk(builder.stmtBody(statement)); err != nil {
 					return err
 				}
 			}
@@ -669,9 +271,9 @@ func (builder *kirDirectBuilder) build() ([]byte, error) {
 		}
 	}
 
-	statements := builder.document.Statements
+	statements := builder.topStatements
 	if len(statements) == 0 && builder.entryFunction != nil {
-		statements = builder.entryFunction.Body
+		statements = builder.functionBody(builder.entryFunction)
 	}
 	if err := builder.emitBlock(statements, true); err != nil {
 		return nil, err
@@ -1080,8 +682,8 @@ func (builder *kirDirectBuilder) emitBlock(statements []*KIRStmt, topLevel bool)
 		if err := builder.emitStep(statement.Source, statement.Line, statement.Column); err != nil {
 			return err
 		}
-		if statement.Kind == "return" && statement.Return != nil && statement.Return.Kind == "call" && statement.Return.Tail && strings.HasPrefix(statement.Return.CallTarget, "function:") {
-			return builder.emitTailFunctionCall(statement.Return)
+		if statement.Kind == "return" && builder.stmtReturn(statement) != nil && builder.stmtReturn(statement).Kind == "call" && builder.stmtReturn(statement).Tail && strings.HasPrefix(builder.stmtReturn(statement).CallTarget, "function:") {
+			return builder.emitTailFunctionCall(builder.stmtReturn(statement))
 		}
 		if err := builder.emitStmt(statement); err != nil {
 			return err
@@ -1143,7 +745,7 @@ func (builder *kirDirectBuilder) emitFunctionReturnEpilog() {
 }
 
 func (builder *kirDirectBuilder) emitTailFunctionCall(expression *KIRExpr) error {
-	if expression == nil || expression.Receiver != nil || expression.Callee != nil {
+	if expression == nil || builder.exprReceiver(expression) != nil || builder.exprCallee(expression) != nil {
 		return fmt.Errorf("direct KIR ELF does not lower methods or indirect tail calls")
 	}
 	prefix, target, ok := strings.Cut(expression.CallTarget, ":")
@@ -1158,21 +760,21 @@ func (builder *kirDirectBuilder) emitTailFunctionCall(expression *KIRExpr) error
 	if !ok || prefix != "function" || function == nil || function.target != target || function.function.Name != expression.Name {
 		return fmt.Errorf("invalid KIR executable: direct function tail-call target %q is not lowered", expression.CallTarget)
 	}
-	if len(expression.Args) != len(function.function.Params) {
+	if len(builder.exprArgs(expression)) != len(function.function.Params) {
 		return fmt.Errorf("direct KIR ELF function %q does not lower omitted default arguments", function.function.Name)
 	}
 	if builder.currentFunction != nil && function == builder.currentFunction {
 		if err := builder.emitCallDepthGuard(expression); err != nil {
 			return err
 		}
-		for _, argument := range expression.Args {
+		for _, argument := range builder.exprArgs(expression) {
 			if err := builder.emitExpr(argument); err != nil {
 				return err
 			}
 			builder.machine.code = append(builder.machine.code, 0x50)
 		}
 		registerPops := [6][]byte{{0x5f}, {0x5e}, {0x5a}, {0x59}, {0x41, 0x58}, {0x41, 0x59}}
-		for index := len(expression.Args) - 1; index >= 0; index-- {
+		for index := len(builder.exprArgs(expression)) - 1; index >= 0; index-- {
 			builder.machine.code = append(builder.machine.code, registerPops[index]...)
 		}
 		if err := builder.emitCallSiteID(expression); err != nil {
@@ -1193,14 +795,14 @@ func (builder *kirDirectBuilder) emitTailFunctionCall(expression *KIRExpr) error
 	if err := builder.emitCallDepthGuard(expression); err != nil {
 		return err
 	}
-	for _, argument := range expression.Args {
+	for _, argument := range builder.exprArgs(expression) {
 		if err := builder.emitExpr(argument); err != nil {
 			return err
 		}
 		builder.machine.code = append(builder.machine.code, 0x50)
 	}
 	registerPops := [6][]byte{{0x5f}, {0x5e}, {0x5a}, {0x59}, {0x41, 0x58}, {0x41, 0x59}}
-	for index := len(expression.Args) - 1; index >= 0; index-- {
+	for index := len(builder.exprArgs(expression)) - 1; index >= 0; index-- {
 		builder.machine.code = append(builder.machine.code, registerPops[index]...)
 	}
 	if err := builder.emitCallSiteID(expression); err != nil {
@@ -1228,7 +830,7 @@ func (builder *kirDirectBuilder) emitStmt(statement *KIRStmt) error {
 	machine := builder.machine
 	switch statement.Kind {
 	case "let", "const":
-		if err := builder.emitExpr(statement.Init); err != nil {
+		if err := builder.emitExpr(builder.stmtInit(statement)); err != nil {
 			return err
 		}
 		slot, ok := builder.bindingSlots[kirBindingIdentity(statement.Binding)]
@@ -1237,23 +839,23 @@ func (builder *kirDirectBuilder) emitStmt(statement *KIRStmt) error {
 		}
 		machine.emitStoreSlot(slot)
 	case "assign":
-		if err := builder.emitExpr(statement.Value); err != nil {
+		if err := builder.emitExpr(builder.stmtValue(statement)); err != nil {
 			return err
 		}
-		slot, ok := builder.bindingSlots[kirBindingIdentity(statement.Target.Binding)]
+		slot, ok := builder.bindingSlots[kirBindingIdentity(builder.stmtTarget(statement).Binding)]
 		if !ok {
-			return fmt.Errorf("direct KIR ELF backend has no slot for binding %q", statement.Target.Name)
+			return fmt.Errorf("direct KIR ELF backend has no slot for binding %q", builder.stmtTarget(statement).Name)
 		}
 		machine.emitStoreSlot(slot)
 	case "expr":
-		if statement.Expr.Kind != "call" {
+		if builder.stmtExpr(statement).Kind != "call" {
 			return fmt.Errorf("direct KIR ELF backend encountered an unsupported expression statement")
 		}
-		if err := builder.emitExpr(statement.Expr); err != nil {
+		if err := builder.emitExpr(builder.stmtExpr(statement)); err != nil {
 			return err
 		}
 	case "if":
-		if err := builder.emitExpr(statement.Cond); err != nil {
+		if err := builder.emitExpr(builder.stmtCond(statement)); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x48, 0x85, 0xc0)
@@ -1262,17 +864,17 @@ func (builder *kirDirectBuilder) emitStmt(statement *KIRStmt) error {
 		if err := machine.emitConditionalJump(0x84, elseLabel); err != nil {
 			return err
 		}
-		if err := builder.emitBlock(statement.Then, false); err != nil {
+		if err := builder.emitBlock(builder.stmtThen(statement), false); err != nil {
 			return err
 		}
-		if len(statement.Else) > 0 {
+		if len(builder.stmtElse(statement)) > 0 {
 			if err := machine.emitJump(joinLabel); err != nil {
 				return err
 			}
 			if err := machine.bind(elseLabel); err != nil {
 				return err
 			}
-			if err := builder.emitBlock(statement.Else, false); err != nil {
+			if err := builder.emitBlock(builder.stmtElse(statement), false); err != nil {
 				return err
 			}
 			return machine.bind(joinLabel)
@@ -1288,7 +890,7 @@ func (builder *kirDirectBuilder) emitStmt(statement *KIRStmt) error {
 		if err := builder.emitStep(statement.Source, statement.Line, statement.Column); err != nil {
 			return err
 		}
-		if err := builder.emitExpr(statement.Cond); err != nil {
+		if err := builder.emitExpr(builder.stmtCond(statement)); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x48, 0x85, 0xc0)
@@ -1296,7 +898,7 @@ func (builder *kirDirectBuilder) emitStmt(statement *KIRStmt) error {
 			return err
 		}
 		builder.loops = append(builder.loops, machineLoop{breakLabel: endLabel, continueLabel: conditionLabel})
-		if err := builder.emitBlock(statement.Body, false); err != nil {
+		if err := builder.emitBlock(builder.stmtBody(statement), false); err != nil {
 			builder.loops = builder.loops[:len(builder.loops)-1]
 			return err
 		}
@@ -1312,7 +914,7 @@ func (builder *kirDirectBuilder) emitStmt(statement *KIRStmt) error {
 		if !iteratorOK || !indexOK || !bindingOK {
 			return fmt.Errorf("invalid KIR executable: direct for loop %q has no allocated slots", statement.Name)
 		}
-		if err := builder.emitExpr(statement.Iter); err != nil {
+		if err := builder.emitExpr(builder.stmtIter(statement)); err != nil {
 			return err
 		}
 		machine.emitStoreSlot(iterator)
@@ -1337,7 +939,7 @@ func (builder *kirDirectBuilder) emitStmt(statement *KIRStmt) error {
 		machine.code = append(machine.code, 0x48, 0x8b, 0x44, 0xc8, 0x08)
 		machine.emitStoreSlot(binding)
 		builder.loops = append(builder.loops, machineLoop{breakLabel: endLabel, continueLabel: incrementLabel})
-		if err := builder.emitBlock(statement.Body, false); err != nil {
+		if err := builder.emitBlock(builder.stmtBody(statement), false); err != nil {
 			builder.loops = builder.loops[:len(builder.loops)-1]
 			return err
 		}
@@ -1362,8 +964,8 @@ func (builder *kirDirectBuilder) emitStmt(statement *KIRStmt) error {
 		}
 		return machine.emitJump(loop.continueLabel)
 	case "return":
-		if statement.Return != nil {
-			if err := builder.emitExpr(statement.Return); err != nil {
+		if builder.stmtReturn(statement) != nil {
+			if err := builder.emitExpr(builder.stmtReturn(statement)); err != nil {
 				return err
 			}
 		} else {
@@ -1376,10 +978,10 @@ func (builder *kirDirectBuilder) emitStmt(statement *KIRStmt) error {
 }
 
 func (builder *kirDirectBuilder) emitPrint(expression *KIRExpr) error {
-	if len(expression.Args) != 1 {
+	if len(builder.exprArgs(expression)) != 1 {
 		return fmt.Errorf("direct KIR ELF print expects one argument")
 	}
-	if err := builder.emitExpr(expression.Args[0]); err != nil {
+	if err := builder.emitExpr(builder.exprArgs(expression)[0]); err != nil {
 		return err
 	}
 	machine := builder.machine
@@ -1389,7 +991,7 @@ func (builder *kirDirectBuilder) emitPrint(expression *KIRExpr) error {
 	oldLimit, oldTrap := machine.outputLimitLabel, machine.trapLabel
 	machine.outputLimitLabel, machine.trapLabel = limitLabel, streamLabel
 	var err error
-	switch expression.Args[0].Type {
+	switch builder.exprArgs(expression)[0].Type {
 	case "Int":
 		err = machine.emitInteger(false, lineFeed)
 	case "UInt8", "UInt16", "UInt32", "UInt64":
@@ -1399,7 +1001,7 @@ func (builder *kirDirectBuilder) emitPrint(expression *KIRExpr) error {
 	case "String":
 		err = machine.emitStringOutput(lineFeed)
 	default:
-		err = fmt.Errorf("direct KIR ELF cannot print %s", expression.Args[0].Type)
+		err = fmt.Errorf("direct KIR ELF cannot print %s", builder.exprArgs(expression)[0].Type)
 	}
 	machine.outputLimitLabel, machine.trapLabel = oldLimit, oldTrap
 	return err
@@ -1505,7 +1107,7 @@ func (builder *kirDirectBuilder) emitExpr(expression *KIRExpr) error {
 		}
 		machine.emitLoadSlot(slot)
 	case "unary":
-		if err := builder.emitExpr(expression.Operand); err != nil {
+		if err := builder.emitExpr(builder.exprOperand(expression)); err != nil {
 			return err
 		}
 		switch expression.Operator {
@@ -1515,7 +1117,7 @@ func (builder *kirDirectBuilder) emitExpr(expression *KIRExpr) error {
 		case "-":
 			failure := builder.diag(expression, CatRuntime, "negation overflow")
 			machine.code = append(machine.code, 0x48, 0xf7, 0xd8)
-			operandType, err := builder.machineType(expression.Operand.Type)
+			operandType, err := builder.machineType(builder.exprOperand(expression).Type)
 			if err != nil {
 				return err
 			}
@@ -1526,7 +1128,7 @@ func (builder *kirDirectBuilder) emitExpr(expression *KIRExpr) error {
 			}
 			machine.emitUIntMask(machineBits(operandType))
 		case "~":
-			operandType, err := builder.machineType(expression.Operand.Type)
+			operandType, err := builder.machineType(builder.exprOperand(expression).Type)
 			if err != nil {
 				return err
 			}
@@ -1552,7 +1154,7 @@ func (builder *kirDirectBuilder) emitBinary(expression *KIRExpr) error {
 	machine := builder.machine
 	operator := expression.Operator
 	if operator == "&&" || operator == "||" {
-		if err := builder.emitExpr(expression.Left); err != nil {
+		if err := builder.emitExpr(builder.exprLeft(expression)); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x48, 0x85, 0xc0)
@@ -1565,7 +1167,7 @@ func (builder *kirDirectBuilder) emitBinary(expression *KIRExpr) error {
 		if err := machine.emitConditionalJump(branch, shortCircuit); err != nil {
 			return err
 		}
-		if err := builder.emitExpr(expression.Right); err != nil {
+		if err := builder.emitExpr(builder.exprRight(expression)); err != nil {
 			return err
 		}
 		machine.code = append(machine.code, 0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x48, 0x0f, 0xb6, 0xc0)
@@ -1578,21 +1180,21 @@ func (builder *kirDirectBuilder) emitBinary(expression *KIRExpr) error {
 		machine.emitMoveImmediate(shortValue)
 		return machine.bind(done)
 	}
-	if err := builder.emitExpr(expression.Left); err != nil {
+	if err := builder.emitExpr(builder.exprLeft(expression)); err != nil {
 		return err
 	}
 	machine.code = append(machine.code, 0x50) // preserve the left operand
-	if err := builder.emitExpr(expression.Right); err != nil {
+	if err := builder.emitExpr(builder.exprRight(expression)); err != nil {
 		return err
 	}
 	machine.code = append(machine.code, 0x48, 0x89, 0xc1, 0x58) // rcx=right, rax=left
 	if operator == "+" {
-		name, arguments, composite := parseKIRContainerType(expression.Left.Type)
-		if composite && name == "Array" && len(arguments) == 1 && expression.Right.Type == expression.Left.Type && expression.Type == expression.Left.Type {
+		name, arguments, composite := parseKIRContainerType(builder.exprLeft(expression).Type)
+		if composite && name == "Array" && len(arguments) == 1 && builder.exprRight(expression).Type == builder.exprLeft(expression).Type && expression.Type == builder.exprLeft(expression).Type {
 			return machine.emitArrayConcatCall()
 		}
 	}
-	if expression.Left.Type == "String" {
+	if builder.exprLeft(expression).Type == "String" {
 		if operator == "+" {
 			return machine.emitStringConcatCall()
 		}
@@ -1609,7 +1211,7 @@ func (builder *kirDirectBuilder) emitBinary(expression *KIRExpr) error {
 		}
 		return nil
 	}
-	unsigned := strings.HasPrefix(expression.Left.Type, "UInt")
+	unsigned := strings.HasPrefix(builder.exprLeft(expression).Type, "UInt")
 	if operator == "==" || operator == "!=" || operator == "<" || operator == "<=" || operator == ">" || operator == ">=" {
 		conditions := map[string]byte{"==": 0x94, "!=": 0x95, "<": 0x9c, "<=": 0x9e, ">": 0x9f, ">=": 0x9d}
 		if unsigned {
@@ -1689,7 +1291,7 @@ func (builder *kirDirectBuilder) emitBinary(expression *KIRExpr) error {
 		}
 		return nil
 	case "<<", ">>":
-		shiftType, err := builder.machineType(expression.Left.Type)
+		shiftType, err := builder.machineType(builder.exprLeft(expression).Type)
 		if err != nil {
 			return err
 		}

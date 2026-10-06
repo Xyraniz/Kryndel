@@ -175,6 +175,44 @@ func TestInterpreterRuntimeUsesTypedArenaEdges(t *testing.T) {
 	}
 }
 
+func TestDirectELFLoweringConsumesOnlyValidatedArenaEdges(t *testing.T) {
+	for _, fileName := range []string{"kir_machine_direct.go", "kir_machine_direct_functions.go", "kir_machine_direct_values.go", "kir_machine_direct_arena.go"} {
+		file, err := parser.ParseFile(token.NewFileSet(), fileName, nil, parser.AllErrors)
+		if err != nil {
+			t.Fatalf("parse %s: %v", fileName, err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch selector.Sel.Name {
+			case "Left", "Right", "Operand", "Base", "Callee", "Args", "Items", "MapKeys", "Values", "Init", "Expr", "Value", "Cond", "Iter", "Scrutinee", "Then", "Else", "Body", "Arms":
+				t.Errorf("%s reads recursive KIR child field %s directly; use typed arena accessors", fileName, selector.Sel.Name)
+			}
+			return true
+		})
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := ""
+			switch callee := call.Fun.(type) {
+			case *ast.Ident:
+				name = callee.Name
+			case *ast.SelectorExpr:
+				name = callee.Sel.Name
+			}
+			switch name {
+			case "documentView", "toKIRDocument", "validatedMIRDocument", "DecodeKIR", "MarshalKIR":
+				t.Errorf("%s lowering calls recursive KIR or wire helper %s", fileName, name)
+			}
+			return true
+		})
+	}
+}
+
 func TestInterpreterArenaAdaptersKeepEdgesOutsideRecursiveKIRNodes(t *testing.T) {
 	program, checker := testProgram(t, "fn main() -> Nil { let value: Int = 1; println(value); return nil }\n")
 	mir, err := CompileMIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
