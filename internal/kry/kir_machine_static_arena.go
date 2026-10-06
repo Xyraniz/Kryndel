@@ -76,7 +76,7 @@ func directStaticOutputMIR(arena *KIRArena, outputLimit int64) ([][]byte, error)
 			if !statement.Init.Present {
 				return nil, errDirectPEStaticNotApplicable("direct PE backend requires an initializer for '%s'", statement.Value.Name)
 			}
-			value, ok := directPEStaticMIRValue(arena, statement.Init, environment)
+			value, ok := directStaticMIRValue(arena, statement.Init, environment)
 			if !ok {
 				return nil, errDirectPEStaticNotApplicable("direct PE backend requires a compile-time value for '%s'", statement.Value.Name)
 			}
@@ -95,7 +95,7 @@ func directStaticOutputMIR(arena *KIRArena, outputLimit int64) ([][]byte, error)
 			if err != nil || len(arguments) != 1 {
 				return nil, errDirectPEStaticNotApplicable("invalid static print argument range")
 			}
-			value, ok := directPEStaticMIRValue(arena, MIRRef{Index: arguments[0], Present: true}, environment)
+			value, ok := directStaticMIRValue(arena, MIRRef{Index: arguments[0], Present: true}, environment)
 			if !ok {
 				return nil, errDirectPEStaticNotApplicable("direct PE backend requires a compile-time print value")
 			}
@@ -116,11 +116,104 @@ func directStaticOutputMIR(arena *KIRArena, outputLimit int64) ([][]byte, error)
 	return output, nil
 }
 
+// directStaticOutputELFMIR folds the ELF backend's compile-time output subset
+// from the same validated arena while preserving the ELF entry-shape rules.
+func directStaticOutputELFMIR(arena *KIRArena, outputLimit int64) ([]byte, error) {
+	if arena == nil {
+		return nil, fmt.Errorf("missing validated MIR arena")
+	}
+	if err := arena.validateReferences(); err != nil {
+		return nil, fmt.Errorf("invalid validated MIR arena: %w", err)
+	}
+	statements, err := arena.indexList(arena.StatementRefs, arena.TopStatements)
+	if err != nil {
+		return nil, fmt.Errorf("invalid top-level statement range: %w", err)
+	}
+	functions, err := arena.indexList(arena.FunctionRefs, arena.TopFunctions)
+	if err != nil {
+		return nil, fmt.Errorf("invalid top-level function range: %w", err)
+	}
+	var main *MIRFunction
+	for _, index := range functions {
+		function := &arena.Functions[index]
+		if function.Value.Name != "main" {
+			continue
+		}
+		if main != nil {
+			return nil, fmt.Errorf("direct ELF backend has duplicate main functions")
+		}
+		main = function
+	}
+	if len(statements) > 0 && main != nil {
+		return nil, fmt.Errorf("direct ELF backend does not support both top-level statements and main")
+	}
+	if len(statements) == 0 && main != nil {
+		parameters, err := arena.indexList(arena.ParameterRefs, main.Params)
+		if err != nil {
+			return nil, fmt.Errorf("invalid main parameter range: %w", err)
+		}
+		if len(parameters) != 0 || main.Value.Return != "Nil" {
+			return nil, fmt.Errorf("direct ELF backend requires main() -> Nil")
+		}
+		statements, err = arena.indexList(arena.StatementRefs, main.Body)
+		if err != nil {
+			return nil, fmt.Errorf("invalid main body range: %w", err)
+		}
+	} else if len(statements) == 0 && len(functions) > 0 {
+		return nil, fmt.Errorf("program requires top-level statements or main() -> Nil")
+	}
+
+	environment := make(map[string]Value)
+	var output []byte
+	for _, index := range statements {
+		statement := arena.Statements[index]
+		switch statement.Value.Kind {
+		case "let", "const":
+			if !statement.Init.Present {
+				return nil, fmt.Errorf("direct ELF backend requires an initializer for '%s'", statement.Value.Name)
+			}
+			value, ok := directStaticMIRValue(arena, statement.Init, environment)
+			if !ok {
+				return nil, fmt.Errorf("direct ELF backend requires a compile-time value for '%s'", statement.Value.Name)
+			}
+			environment[statement.Value.Name] = value
+		case "expr":
+			if !statement.Expr.Present {
+				return nil, fmt.Errorf("direct ELF backend supports only print/println of static values")
+			}
+			expression := arena.Expressions[statement.Expr.Index]
+			if expression.Value.Kind != "call" || expression.Receiver.Present ||
+				(expression.Value.CallTarget != "builtin:print" && expression.Value.CallTarget != "builtin:println") || expression.Args.Count != 1 {
+				return nil, fmt.Errorf("direct ELF backend supports only print/println of static values")
+			}
+			arguments, err := arena.indexList(arena.ExpressionRefs, expression.Args)
+			if err != nil || len(arguments) != 1 {
+				return nil, fmt.Errorf("invalid static print argument range")
+			}
+			value, ok := directStaticMIRValue(arena, MIRRef{Index: arguments[0], Present: true}, environment)
+			if !ok {
+				return nil, fmt.Errorf("direct ELF backend requires a compile-time print value")
+			}
+			text := display(value)
+			if expression.Value.CallTarget == "builtin:println" {
+				text += "\n"
+			}
+			output = append(output, text...)
+		default:
+			return nil, fmt.Errorf("direct ELF backend does not support statement kind %s", statement.Value.Kind)
+		}
+		if outputLimit > 0 && int64(len(output)) > outputLimit {
+			return nil, errDirectOutputLimit
+		}
+	}
+	return output, nil
+}
+
 func errDirectPEStaticNotApplicable(format string, args ...any) error {
 	return fmt.Errorf(format, args...)
 }
 
-func directPEStaticMIRValue(arena *KIRArena, ref MIRRef, environment map[string]Value) (Value, bool) {
+func directStaticMIRValue(arena *KIRArena, ref MIRRef, environment map[string]Value) (Value, bool) {
 	if !ref.Present {
 		return nilVal(), false
 	}
@@ -150,14 +243,14 @@ func directPEStaticMIRValue(arena *KIRArena, ref MIRRef, environment map[string]
 		if err != nil || len(arguments) != 1 {
 			return nilVal(), false
 		}
-		value, ok := directPEStaticMIRValue(arena, MIRRef{Index: arguments[0], Present: true}, environment)
+		value, ok := directStaticMIRValue(arena, MIRRef{Index: arguments[0], Present: true}, environment)
 		if !ok {
 			return nilVal(), false
 		}
 		return stringVal(display(value)), true
 	case "binary":
-		left, leftOK := directPEStaticMIRValue(arena, expression.Left, environment)
-		right, rightOK := directPEStaticMIRValue(arena, expression.Right, environment)
+		left, leftOK := directStaticMIRValue(arena, expression.Left, environment)
+		right, rightOK := directStaticMIRValue(arena, expression.Right, environment)
 		if !leftOK || !rightOK {
 			return nilVal(), false
 		}

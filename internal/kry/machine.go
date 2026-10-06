@@ -33,14 +33,16 @@ func BuildDirectELF(p *Program, c *Checker, target NativeTarget) ([]byte, error)
 // buildDirectELFFromMIR is the production ELF lowering boundary. It accepts
 // source-compiled or wire-decoded ValidatedMIR and never materializes an AST.
 func buildDirectELFFromMIR(mir *ValidatedMIR) ([]byte, error) {
-	document, err := validatedMIRDocument(mir)
-	if err != nil {
-		return nil, err
+	if mir == nil || mir.arena == nil {
+		return nil, fmt.Errorf("direct ELF backend requires validated MIR")
 	}
 	if err := validateMIRFunctionValueSupport(mir, "elf-direct"); err != nil {
 		return nil, err
 	}
-	target := NativeTarget{OS: document.Target.OS, Arch: document.Target.Arch, GUI: document.Target.GUI}
+	target := NativeTarget{OS: mir.arena.Target.OS, Arch: mir.arena.Target.Arch, GUI: mir.arena.Target.GUI}
+	if err := validateNativeOutputTarget("elf-direct", target); err != nil {
+		return nil, err
+	}
 	if err := validateMIRNativeFeatureSupport(mir, "elf-direct", target); err != nil {
 		return nil, err
 	}

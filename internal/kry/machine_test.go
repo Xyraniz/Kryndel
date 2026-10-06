@@ -66,6 +66,21 @@ println(prefix + str(40 + 2))
 	}
 }
 
+func TestDirectELFStaticLoweringRequiresAnEntryPoint(t *testing.T) {
+	program, checker := testProgram(t, "fn helper() -> Int { return 42 }")
+	encoded, err := EmitKIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mir, err := DecodeMIR(encoded, checker.Env.Lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buildDirectELFFromMIR(mir); err == nil {
+		t.Fatal("direct ELF lowering accepted a program with no top-level statements or main function")
+	}
+}
+
 func TestDirectELFStaticAndDynamicLoweringUsesDecodedMIR(t *testing.T) {
 	tests := []struct {
 		name   string

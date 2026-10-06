@@ -167,13 +167,13 @@ func TestNativeCapabilityPreflightTraversesValidatedArena(t *testing.T) {
 }
 
 func TestDirectPEStaticLowererConsumesOnlyTheValidatedArena(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "kir_machine_pe_arena.go", nil, parser.AllErrors)
+	file, err := parser.ParseFile(token.NewFileSet(), "kir_machine_static_arena.go", nil, parser.AllErrors)
 	if err != nil {
 		t.Fatal(err)
 	}
 	wanted := map[string]bool{
 		"directStaticOutputMIR":        false,
-		"directPEStaticMIRValue":       false,
+		"directStaticMIRValue":         false,
 		"directStaticMIRArenaConstant": false,
 	}
 	for _, declaration := range file.Decls {
@@ -248,6 +248,79 @@ func TestDirectPEStaticLowererConsumesOnlyTheValidatedArena(t *testing.T) {
 	})
 	if staticPos == token.NoPos || recursiveViewPos == token.NoPos || staticPos >= recursiveViewPos {
 		t.Fatal("PE static output must lower from arena indexes before any dynamic compatibility view is created")
+	}
+}
+
+func TestDirectELFStaticLowererConsumesOnlyTheValidatedArena(t *testing.T) {
+	staticFile, err := parser.ParseFile(token.NewFileSet(), "machine_kir.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staticLowerer *ast.FuncDecl
+	for _, declaration := range staticFile.Decls {
+		candidate, ok := declaration.(*ast.FuncDecl)
+		if ok && candidate.Name.Name == "directStaticKIROutput" {
+			staticLowerer = candidate
+			break
+		}
+	}
+	if staticLowerer == nil {
+		t.Fatal("directStaticKIROutput is missing")
+	}
+	ast.Inspect(staticLowerer.Type, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if ok && (identifier.Name == "KIRDocument" || identifier.Name == "KIRExpr" || identifier.Name == "KIRStmt") {
+			t.Errorf("directStaticKIROutput accepts recursive wire type %s", identifier.Name)
+		}
+		return true
+	})
+	ast.Inspect(staticLowerer.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if ok && selector.Sel.Name == "documentView" {
+			t.Error("directStaticKIROutput reconstructs the recursive KIR document")
+		}
+		return true
+	})
+
+	machineFile, err := parser.ParseFile(token.NewFileSet(), "machine.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entrypoint *ast.FuncDecl
+	for _, declaration := range machineFile.Decls {
+		candidate, ok := declaration.(*ast.FuncDecl)
+		if ok && candidate.Name.Name == "buildDirectELFFromMIR" {
+			entrypoint = candidate
+			break
+		}
+	}
+	if entrypoint == nil {
+		t.Fatal("buildDirectELFFromMIR is missing")
+	}
+	var staticPos, dynamicValidationPos token.Pos
+	ast.Inspect(entrypoint.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		identifier, ok := call.Fun.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		switch identifier.Name {
+		case "directStaticKIROutput":
+			staticPos = call.Pos()
+		case "validateKIRDirectELFValueSubset":
+			dynamicValidationPos = call.Pos()
+		}
+		return true
+	})
+	if staticPos == token.NoPos || dynamicValidationPos == token.NoPos || staticPos >= dynamicValidationPos {
+		t.Fatal("ELF static output must consume the validated arena before dynamic lowering")
 	}
 }
 
