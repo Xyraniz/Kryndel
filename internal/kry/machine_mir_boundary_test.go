@@ -68,6 +68,149 @@ func TestProductionLoweringEntrypointsUseValidatedMIR(t *testing.T) {
 	checkCalls("native.go", "EmitC", "GenerateC")
 }
 
+func TestInterpreterRuntimeUsesTypedArenaEdges(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "kir_exec.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	functions := map[string]*ast.FuncDecl{}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok {
+			functions[function.Name.Name] = function
+		}
+	}
+	for functionName, forbiddenCalls := range map[string][]string{
+		"executeMIRRuntime":          {"documentView", "toKIRDocument", "executeKIRWithOptions"},
+		"executeKIRArenaWithOptions": {"documentView", "toKIRDocument", "executeKIRWithOptions", "DecodeKIR", "MarshalKIR"},
+	} {
+		function := functions[functionName]
+		if function == nil || function.Body == nil {
+			t.Fatalf("kir_exec.go does not declare %s", functionName)
+		}
+		forbidden := make(map[string]bool, len(forbiddenCalls))
+		for _, name := range forbiddenCalls {
+			forbidden[name] = true
+		}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			if functionName == "executeKIRArenaWithOptions" {
+				if literal, ok := node.(*ast.CompositeLit); ok {
+					if identifier, ok := literal.Type.(*ast.Ident); ok && identifier.Name == "KIRDocument" {
+						t.Errorf("%s constructs a recursive KIR document instead of retaining the arena", functionName)
+					}
+				}
+			}
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := ""
+			switch callee := call.Fun.(type) {
+			case *ast.Ident:
+				name = callee.Name
+			case *ast.SelectorExpr:
+				name = callee.Sel.Name
+			}
+			if forbidden[name] {
+				t.Errorf("%s calls recursive or decoder-only helper %s", functionName, name)
+			}
+			return true
+		})
+	}
+	for functionName, fields := range map[string][]string{
+		"invokeKIR":           {"Body", "Default"},
+		"evalExpr":            {"Left", "Right", "Operand", "Base", "Receiver", "Callee", "Lambda", "Args", "Items", "MapKeys", "Values"},
+		"execStmt":            {"Init", "Expr", "Target", "Value", "Cond", "Iter", "Return", "Scrutinee", "Then", "Else", "Body", "Arms"},
+		"resolveKIRCall":      {"Callee"},
+		"resolveKIRTraitCall": {"Receiver"},
+		"evalKIRCall":         {"Receiver", "Callee", "Args"},
+		"evalKIRTailCall":     {"Receiver", "Callee", "Args"},
+		"debugKIRStatement":   {"Return"},
+	} {
+		function := functions[functionName]
+		if function == nil || function.Body == nil {
+			t.Fatalf("kir_exec.go does not declare %s", functionName)
+		}
+		forbidden := make(map[string]bool, len(fields))
+		for _, name := range fields {
+			forbidden[name] = true
+		}
+		base := map[string]string{
+			"invokeKIR": "function", "evalExpr": "expression", "execStmt": "statement",
+			"resolveKIRCall": "expression", "resolveKIRTraitCall": "expression",
+			"evalKIRCall": "expression", "evalKIRTailCall": "expression", "debugKIRStatement": "statement",
+		}[functionName]
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if ok {
+				object, isIdentifier := selector.X.(*ast.Ident)
+				if isIdentifier && object.Name == base && forbidden[selector.Sel.Name] {
+					t.Errorf("%s reads recursive child field %s.%s instead of resolving its arena reference", functionName, base, selector.Sel.Name)
+				}
+			}
+			return true
+		})
+	}
+	for functionName, required := range map[string]string{
+		"executeMIRRuntime":          "executeKIRArenaWithOptions",
+		"executeKIRArenaWithOptions": "validateArenaExecSubset",
+	} {
+		found := false
+		ast.Inspect(functions[functionName].Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			switch callee := call.Fun.(type) {
+			case *ast.Ident:
+				found = found || callee.Name == required
+			case *ast.SelectorExpr:
+				found = found || callee.Sel.Name == required
+			}
+			return true
+		})
+		if !found {
+			t.Errorf("%s does not call %s", functionName, required)
+		}
+	}
+}
+
+func TestInterpreterArenaAdaptersKeepEdgesOutsideRecursiveKIRNodes(t *testing.T) {
+	program, checker := testProgram(t, "fn main() -> Nil { let value: Int = 1; println(value); return nil }\n")
+	mir, err := CompileMIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := newKIRExecArenaView(mir.arena)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, expression := range view.expressions {
+		if expression == nil {
+			t.Fatalf("arena expression adapter %d was not materialized", index)
+		}
+		if expression.Left != nil || expression.Right != nil || expression.Operand != nil || expression.Base != nil || expression.Receiver != nil || expression.Callee != nil || expression.Lambda != nil || len(expression.Args) != 0 || len(expression.Items) != 0 || len(expression.MapKeys) != 0 || len(expression.Values) != 0 {
+			t.Fatalf("arena expression adapter %d contains recursive child data", index)
+		}
+	}
+	for index, statement := range view.statements {
+		if statement == nil {
+			t.Fatalf("arena statement adapter %d was not materialized", index)
+		}
+		if statement.Init != nil || statement.Expr != nil || statement.Target != nil || statement.Value != nil || statement.Cond != nil || statement.Iter != nil || statement.Return != nil || statement.Scrutinee != nil || len(statement.Then) != 0 || len(statement.Else) != 0 || len(statement.Body) != 0 || len(statement.Arms) != 0 {
+			t.Fatalf("arena statement adapter %d contains recursive child data", index)
+		}
+	}
+	for index, function := range view.functions {
+		if function == nil {
+			t.Fatalf("arena function adapter %d was not materialized", index)
+		}
+		if len(function.Body) != 0 {
+			t.Fatalf("arena function adapter %d contains recursive body data", index)
+		}
+	}
+}
+
 func TestCompileMIRBuildsFlatArenaWithoutRecursiveKIRDocument(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "ir.go", nil, parser.AllErrors)
 	if err != nil {

@@ -1068,9 +1068,8 @@ func newRuntimeFromMIR(mir *ValidatedMIR, lim Limits, sb Sandbox, args []string)
 	if source == nil && sourceName != "" {
 		source = &Source{Name: sourceName}
 	}
-	// Keep only diagnostic metadata on the compatibility shell. Runtime
-	// execution still materializes its recursive compatibility view from MIR;
-	// that interpreter path is being migrated to indexed arena access.
+	// Keep only source metadata on the compatibility shell. Runtime execution
+	// evaluates the validated arena through indexed scalar adapters.
 	program := &Program{Source: source}
 	runtime := &Runtime{
 		Prog: program, mir: mir, Args: append([]string(nil), args...), Global: newRunScope(nil),

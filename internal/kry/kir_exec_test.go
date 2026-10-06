@@ -871,6 +871,32 @@ func TestKIRExecutorRejectsUnsupportedEffectsAndTypes(t *testing.T) {
 	}
 }
 
+func TestInterpreterArenaPreflightRejectsUnsupportedNodeBeforeOutput(t *testing.T) {
+	program, checker := testProgram(t, "println(\"before unsupported node\")\n")
+	mir, err := CompileMIR(program, checker, NativeTarget{OS: runtime.GOOS, Arch: runtime.GOARCH})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := false
+	for index := range mir.arena.Expressions {
+		if mir.arena.Expressions[index].Value.Kind == "string" {
+			mir.arena.Expressions[index].Value.Kind = "future-node"
+			mutated = true
+			break
+		}
+	}
+	if !mutated {
+		t.Fatal("test source did not produce the expected string expression")
+	}
+	var output bytes.Buffer
+	if _, err := executeKIRArenaWithOptions(mir.arena, DefaultLimits(), mir.sources, kirExecOptions{output: &output}); !errors.Is(err, errKIRSubsetUnsupported) {
+		t.Fatalf("unsupported typed node preflight error = %v, want errKIRSubsetUnsupported", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("interpreter emitted output before rejecting unsupported MIR: %q", output.String())
+	}
+}
+
 func TestKIRExecutorMatchesRuntimeForFilesystemBuiltins(t *testing.T) {
 	root := t.TempDir()
 	nested := filepath.Join(root, "nested")

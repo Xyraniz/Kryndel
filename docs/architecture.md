@@ -62,13 +62,15 @@ then stores the same arena form. `EmitKIR` serializes from that arena.
 All production run and native-build entrypoints begin from `ValidatedMIR`.
 That value no longer retains the recursive wire document: its canonical state
 is the typed arena, including explicit optional references and bounded child
-ranges. C AOT and direct PE now follow those indexes and create only scalar
-per-row views. The interpreter and dynamic ELF lowerer still request a complete
-typed compatibility view, so their recursive walkers remain to be migrated.
-This is a real intermediate step, not the final single-representation boundary. The
-interpreter keeps its runtime state in a persistent KIR executor, including
-across REPL snippets. Direct ELF and PE reject constructs outside their
-supported subsets without an AST-derived fallback.
+ranges. C AOT, the interpreter, and direct PE now follow those indexes and use
+shallow scalar row adapters with recursive edges left empty. The interpreter
+resolves expression, statement, function, parameter, and match references
+through the arena and preflights its supported subset before execution.
+Dynamic ELF still requests a recursive compatibility view, so the
+single-representation boundary is unfinished. The interpreter keeps its
+runtime state in a persistent KIR executor, including across REPL snippets.
+Direct ELF and PE reject constructs outside their supported subsets without an
+AST-derived fallback.
 
 `DecodeMIR` validates the portable KIR document without source-text and package
 visibility sidecars, then flattens it into the same arena used by
