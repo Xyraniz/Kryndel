@@ -68,6 +68,97 @@ func TestProductionLoweringEntrypointsUseValidatedMIR(t *testing.T) {
 	checkCalls("native.go", "EmitC", "GenerateC")
 }
 
+func TestCompileMIRBuildsFlatArenaWithoutRecursiveKIRDocument(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "ir.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compile *ast.FuncDecl
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok && function.Name.Name == "CompileMIR" {
+			compile = function
+			break
+		}
+	}
+	if compile == nil || compile.Body == nil {
+		t.Fatal("ir.go does not declare CompileMIR")
+	}
+	compileCalls := map[string]bool{}
+	ast.Inspect(compile.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if identifier, ok := call.Fun.(*ast.Ident); ok {
+			compileCalls[identifier.Name] = true
+		}
+		return true
+	})
+	if !compileCalls["buildKIRArenaFromCheckedSource"] {
+		t.Fatal("CompileMIR does not build the arena directly from checked source")
+	}
+	for _, forbidden := range []string{"buildKIRDocument", "validateKIRDocument", "newKIRArena", "documentView", "toKIRDocument"} {
+		if compileCalls[forbidden] {
+			t.Errorf("CompileMIR constructs or validates through recursive KIR helper %s", forbidden)
+		}
+	}
+
+	file, err = parser.ParseFile(token.NewFileSet(), "kir_arena_builder.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"buildKIRDocument", "validateKIRDocument", "newKIRArena", "documentView", "toKIRDocument", "kirExpr", "kirStmt", "kirStmts", "kirLambda"} {
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := ""
+			switch callee := call.Fun.(type) {
+			case *ast.Ident:
+				name = callee.Name
+			case *ast.SelectorExpr:
+				name = callee.Sel.Name
+			}
+			if name == forbidden {
+				t.Errorf("direct source arena builder calls recursive KIR helper %s", forbidden)
+			}
+			return true
+		})
+	}
+	ast.Inspect(file, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if ok && identifier.Name == "KIRDocument" {
+			t.Error("direct checked-source arena builder depends on the recursive wire document type")
+		}
+		return true
+	})
+
+	file, err = parser.ParseFile(token.NewFileSet(), "kir.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Name.Name != "kirExprScalars" {
+			continue
+		}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if identifier, ok := call.Fun.(*ast.Ident); ok && (identifier.Name == "kirExpr" || identifier.Name == "kirLambda" || identifier.Name == "kirValue") {
+				t.Errorf("scalar expression lowering calls recursive tree builder %s", identifier.Name)
+			}
+			return true
+		})
+		return
+	}
+	t.Fatal("kir.go does not declare kirExprScalars")
+}
+
 func TestRuntimePreparationDoesNotMaterializeRecursiveKIR(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "runtime.go", nil, parser.AllErrors)
 	if err != nil {

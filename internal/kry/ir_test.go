@@ -89,6 +89,36 @@ fn main() -> Int {
 	if err := mir.arena.validateReferences(); err != nil {
 		t.Fatalf("valid source produced invalid arena references: %v", err)
 	}
+	legacyDocument, err := buildKIRDocument(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatalf("build portable KIR reference from checked source: %v", err)
+	}
+	if err := validateKIRDocument(legacyDocument, checker.Lim); err != nil {
+		t.Fatalf("portable reference document from checked source is invalid: %v", err)
+	}
+	arenaDocument, err := mir.arena.toKIRDocument()
+	if err != nil {
+		t.Fatalf("materialize arena for source-lowering contract: %v", err)
+	}
+	if !reflect.DeepEqual(arenaDocument, legacyDocument) {
+		want, _ := json.Marshal(legacyDocument)
+		got, _ := json.Marshal(arenaDocument)
+		at := 0
+		for at < len(want) && at < len(got) && want[at] == got[at] {
+			at++
+		}
+		start, end := at-100, at+250
+		if start < 0 {
+			start = 0
+		}
+		if end > len(want) {
+			end = len(want)
+		}
+		if end > len(got) {
+			end = len(got)
+		}
+		t.Fatalf("direct source-to-arena lowering changed canonical checked KIR near byte %d; old=%s new=%s", at, want[start:end], got[start:end])
+	}
 
 	wire, err := mir.MarshalKIR()
 	if err != nil {
@@ -139,6 +169,13 @@ func TestCompileMIRRejectsCheckerThatDidNotComplete(t *testing.T) {
 	unvalidated.checked = false
 	if _, err := CompileMIR(program, &unvalidated, NativeTarget{OS: "linux", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), "checker has not completed successfully") {
 		t.Fatalf("CompileMIR accepted an unchecked Checker or returned the wrong error: %v", err)
+	}
+}
+
+func TestCompileMIRRejectsUnsupportedTargetMetadata(t *testing.T) {
+	program, checker := testProgram(t, "println(42)\n")
+	if _, err := CompileMIR(program, checker, NativeTarget{OS: "plan9", Arch: "386"}); err == nil || !strings.Contains(err.Error(), "unsupported target plan9-386") {
+		t.Fatalf("CompileMIR accepted invalid target metadata or returned the wrong error: %v", err)
 	}
 }
 

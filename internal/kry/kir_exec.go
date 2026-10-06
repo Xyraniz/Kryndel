@@ -185,20 +185,8 @@ type kirExecOptions struct {
 	runtime   *Runtime
 }
 
-// executeKIRSubset runs the bounded executable KIR slice directly. Callers
-// must pass a decoded document; this function repeats structural validation
-// because it is also the boundary used by native code generation.
-func executeValidatedMIR(mir *ValidatedMIR, limits Limits, sources map[string]*Source, sandbox ...Sandbox) (kirExecResult, error) {
-	if mir == nil || mir.arena == nil {
-		return kirExecResult{}, fmt.Errorf("invalid MIR executable: missing validated document")
-	}
-	document, err := mir.documentView()
-	if err != nil {
-		return kirExecResult{}, err
-	}
-	return executeKIRSubset(document, limits, sources, sandbox...)
-}
-
+// executeKIRSubset is a compatibility executor used by differential tests and
+// decoder-facing tools. Runtime execution enters through executeMIRRuntime.
 func executeKIRSubset(document *KIRDocument, limits Limits, sources map[string]*Source, sandbox ...Sandbox) (kirExecResult, error) {
 	if document == nil {
 		return kirExecResult{}, fmt.Errorf("invalid KIR executable: missing document")

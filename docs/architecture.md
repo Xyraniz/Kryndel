@@ -50,13 +50,14 @@ Lexical scopes are represented by parent-linked environments. A declaration is l
 
 ## Intermediate representation status
 
-`CompileMIR` converts the checker-annotated source tree into an opaque,
-validated `ValidatedMIR` backed by flat typed node tables and checked indexes.
-It checks that the supplied checker belongs to that tree, validates the KIR
-structure and resource bounds, and snapshots source text and package
-visibility as diagnostic sidecars. `DecodeMIR` parses and validates the wire
-document once, then stores the same arena form. `EmitKIR` serializes from that
-arena; source compilation does not encode and decode JSON to reach it.
+`CompileMIR` lowers the checker-annotated source tree straight into an opaque
+`ValidatedMIR` backed by flat typed node tables and checked indexes. It checks
+that the supplied checker belongs to that tree, requires successful semantic
+checking, validates source resource bounds and target metadata, validates all
+arena references, and snapshots source text and package visibility as
+diagnostic sidecars. It does not build a recursive KIR tree or encode and
+decode JSON. `DecodeMIR` parses and validates the portable wire document once,
+then stores the same arena form. `EmitKIR` serializes from that arena.
 
 All production run and native-build entrypoints begin from `ValidatedMIR`.
 That value no longer retains the recursive wire document: its canonical state

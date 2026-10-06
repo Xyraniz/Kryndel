@@ -5,8 +5,9 @@ import "fmt"
 // ValidatedMIR is the opaque in-memory lowering boundary for the interpreter
 // and native backends. Its canonical storage is a flat typed arena created
 // from checked source or validated KIR; callers cannot construct or mutate it
-// through the public Go API. Lowerer bodies still materialize a complete
-// recursive compatibility view and have not yet migrated to indexed access. The
+// through the public Go API. CompileMIR fills this arena directly from checked
+// source. Some lowerer bodies still materialize a complete recursive
+// compatibility view and have not yet migrated to indexed access. The
 // source-compiled form also carries immutable source-text and package
 // visibility sidecars. Decoded KIR retains source names and coordinates for
 // diagnostics but does not include source text or those sidecars.
@@ -39,16 +40,16 @@ func CompileMIR(program *Program, checker *Checker, target NativeTarget) (*Valid
 	if diagnostic := ValidateASTLimits(program, checker.Lim); diagnostic != nil {
 		return nil, fmt.Errorf("%s", diagnostic.Message)
 	}
-	document, err := buildKIRDocument(program, checker, target)
-	if err != nil {
-		return nil, err
+	kirTarget := KIRTarget{OS: target.OS, Arch: target.Arch, GUI: target.GUI}
+	if !validKIRTarget(kirTarget) {
+		return nil, fmt.Errorf("invalid lowered MIR: unsupported target %s-%s", kirTarget.OS, kirTarget.Arch)
 	}
-	if err := validateKIRDocument(document, checker.Lim); err != nil {
-		return nil, fmt.Errorf("invalid lowered MIR: %w", err)
-	}
-	arena, err := newKIRArena(document)
+	arena, err := buildKIRArenaFromCheckedSource(program, checker, target)
 	if err != nil {
-		return nil, fmt.Errorf("build validated MIR arena: %w", err)
+		return nil, fmt.Errorf("build validated MIR arena from checked source: %w", err)
+	}
+	if err := arena.validateReferences(); err != nil {
+		return nil, fmt.Errorf("invalid lowered MIR arena: %w", err)
 	}
 	paths := newKIRPathNames(program)
 	sources := make(map[string]*Source, len(program.Sources)+1)

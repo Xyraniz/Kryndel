@@ -248,45 +248,19 @@ func buildKIRDocument(p *Program, c *Checker, target NativeTarget) (*KIRDocument
 	if p == nil || c == nil || c.Env == nil {
 		return nil, fmt.Errorf("missing checked program")
 	}
+	metadata, err := buildKIRMetadata(p, target)
+	if err != nil {
+		return nil, err
+	}
 	paths := newKIRPathNames(p)
 	d := &KIRDocument{
-		Format: KIRFormat, Version: KIRVersion, LanguageVersion: LanguageVersion, Module: paths.name(p.Module),
-		Source: paths.source(p.Source), Target: KIRTarget{OS: target.OS, Arch: target.Arch, GUI: target.GUI},
-		Imports: make([]string, 0, len(p.Imports)), Sources: make([]string, 0, len(p.Sources)),
-		Structs: make([]*KIRStruct, 0, len(p.Structs)), Enums: make([]*KIREnum, 0, len(p.Enums)), Traits: make([]*KIRTrait, 0, len(p.Traits)), TraitImpls: make([]*KIRTraitImpl, 0, len(p.TraitImpls)),
+		Format: metadata.Format, Version: metadata.Version, LanguageVersion: metadata.LanguageVersion, Module: metadata.Module,
+		Source: metadata.Source, Target: metadata.Target,
+		Imports: cloneKIRStrings(metadata.Imports), Sources: cloneKIRStrings(metadata.Sources),
+		Structs: cloneKIRStructs(metadata.Structs), Enums: cloneKIREnums(metadata.Enums), Traits: cloneKIRTraits(metadata.Traits), TraitImpls: cloneKIRTraitImpls(metadata.TraitImpls),
 		Functions: make([]*KIRFunction, 0, len(p.Functions)), Statements: make([]*KIRStmt, 0, len(p.Statements)),
 	}
 	functionTargets := kirFunctionTargets(p, paths)
-	for _, x := range p.Imports {
-		d.Imports = append(d.Imports, x.Path)
-	}
-	for _, x := range p.Sources {
-		d.Sources = append(d.Sources, paths.source(x))
-	}
-	for _, x := range p.Structs {
-		s := &KIRStruct{Name: x.Name, Public: x.Public, Module: paths.name(x.Module), TypeParams: make([]*KIRTypeParam, 0, len(x.TypeParams)), Fields: make([]*KIRField, 0, len(x.Fields))}
-		for _, parameter := range x.TypeParams {
-			s.TypeParams = append(s.TypeParams, &KIRTypeParam{Name: parameter.Name, Constraint: parameter.Constraint})
-		}
-		for _, f := range x.Fields {
-			s.Fields = append(s.Fields, &KIRField{Name: f.Name, Public: f.Public, Type: typeString(f.Type, f.Spec)})
-		}
-		d.Structs = append(d.Structs, s)
-	}
-	for _, x := range p.Enums {
-		d.Enums = append(d.Enums, &KIREnum{Name: x.Name, Public: x.Public, Module: paths.name(x.Module), Variants: append([]string(nil), x.Variants...)})
-	}
-	for _, x := range p.Traits {
-		trait := &KIRTrait{Name: x.Name, Public: x.Public, Module: paths.name(x.Module), Methods: make([]*KIRTraitMethod, 0, len(x.Methods))}
-		for _, method := range x.Methods {
-			entry := &KIRTraitMethod{Name: method.Name, Return: typeSpecString(method.Return), Params: make([]*KIRParam, 0, len(method.Params))}
-			for _, parameter := range method.Params {
-				entry.Params = append(entry.Params, &KIRParam{Name: parameter.Name, Type: typeSpecString(parameter.Type)})
-			}
-			trait.Methods = append(trait.Methods, entry)
-		}
-		d.Traits = append(d.Traits, trait)
-	}
 	for _, x := range p.Functions {
 		f := &KIRFunction{Name: x.Name, Source: paths.tokenSource(x.Tok), Line: x.Tok.Line, Column: x.Tok.Column, Public: x.Public, Worker: x.Worker, Unsafe: x.Unsafe, Trait: x.Trait, Module: paths.name(x.Module), Receiver: typeSpecString(x.Receiver), Return: typeSpecString(x.Return), TypeParams: make([]*KIRTypeParam, 0, len(x.TypeParams)), Params: make([]*KIRParam, 0, len(x.Params)), Captures: []*KIRCapture{}, Body: kirStmts(x.Body, c, functionTargets, paths)}
 		for _, tp := range x.TypeParams {
@@ -296,13 +270,6 @@ func buildKIRDocument(p *Program, c *Checker, target NativeTarget) (*KIRDocument
 			f.Params = append(f.Params, &KIRParam{Name: param.Name, Type: typeSpecString(param.Type), Default: kirExpr(param.Default, c, functionTargets, paths), Binding: kirBinding(param.Name, typeSpecString(param.Type), false, param.Tok, paths)})
 		}
 		d.Functions = append(d.Functions, f)
-	}
-	for _, implementation := range p.TraitImpls {
-		entry := &KIRTraitImpl{Trait: implementation.Trait, For: typeSpecString(implementation.Target), Module: paths.name(implementation.Module), Methods: make([]*KIRTraitImplMethod, 0, len(implementation.Methods))}
-		for _, method := range implementation.Methods {
-			entry.Methods = append(entry.Methods, &KIRTraitImplMethod{Name: method.Name, Target: "function:" + functionTargets[method]})
-		}
-		d.TraitImpls = append(d.TraitImpls, entry)
 	}
 	for _, x := range p.Statements {
 		d.Statements = append(d.Statements, kirStmt(x, c, functionTargets, paths))
@@ -414,15 +381,16 @@ func kirExpr(e *Expr, c *Checker, functionTargets map[*Function]string, paths ki
 	if e == nil {
 		return nil
 	}
-	genericArguments := make([]string, 0, len(e.GenericArguments))
-	for _, argument := range e.GenericArguments {
-		genericArguments = append(genericArguments, argument.String())
-	}
-	structType := ""
-	if e.StructType != nil {
-		structType = TypeSpecString(e.StructType)
-	}
-	k := &KIRExpr{Kind: exprName(e.Kind), Source: paths.tokenSource(e.Tok), Line: e.Tok.Line, Column: e.Tok.Column, Type: typeString(e.Type, nil), Int: e.Int, Float: e.Float, Bool: e.Bool, String: e.Str, Name: e.Name, Operator: opText(e.Op), CallTarget: "", TraitName: e.TraitName, Left: kirExpr(e.Left, c, functionTargets, paths), Right: kirExpr(e.Right, c, functionTargets, paths), Operand: kirExpr(e.Operand, c, functionTargets, paths), Args: make([]*KIRExpr, 0, len(e.Args)), Items: make([]*KIRExpr, 0, len(e.Items)), Base: kirExpr(e.Base, c, functionTargets, paths), Field: e.Field, Receiver: kirExpr(e.Receiver, c, functionTargets, paths), MapKeys: make([]*KIRExpr, 0, len(e.MapKeys)), StructName: e.StructName, StructType: structType, GenericArguments: genericArguments, Fields: append([]string(nil), e.Fields...), Values: make([]*KIRExpr, 0, len(e.Values)), EnumType: e.EnumType, EnumVariant: e.EnumVariant, Tail: e.Tail}
+	k := kirExprScalars(e, c, functionTargets, paths)
+	k.Args = make([]*KIRExpr, 0, len(e.Args))
+	k.Items = make([]*KIRExpr, 0, len(e.Items))
+	k.MapKeys = make([]*KIRExpr, 0, len(e.MapKeys))
+	k.Values = make([]*KIRExpr, 0, len(e.Values))
+	k.Left = kirExpr(e.Left, c, functionTargets, paths)
+	k.Right = kirExpr(e.Right, c, functionTargets, paths)
+	k.Operand = kirExpr(e.Operand, c, functionTargets, paths)
+	k.Base = kirExpr(e.Base, c, functionTargets, paths)
+	k.Receiver = kirExpr(e.Receiver, c, functionTargets, paths)
 	for _, x := range e.Args {
 		k.Args = append(k.Args, kirExpr(x, c, functionTargets, paths))
 	}
@@ -443,12 +411,31 @@ func kirExpr(e *Expr, c *Checker, functionTargets map[*Function]string, paths ki
 			k.Binding = kirBinding(e.Name, typeString(binding.Type, nil), binding.Mutable, binding.Token, paths)
 		}
 	}
-	if e.Kind == ExLambda {
-		k.Lambda = kirLambda(e.Lambda, e.Captures, c, functionTargets, paths)
-	} else if e.Kind == ExCall && e.Function == nil && e.Receiver == nil {
+	if e.Kind == ExCall && e.Function == nil && e.Receiver == nil && e.Callee != nil {
+		k.Callee = kirExpr(e.Callee, c, functionTargets, paths)
+	}
+	return k
+}
+
+// kirExprScalars builds only the checked scalar payload for an expression.
+// Source compilation uses it to populate arena rows without first creating a
+// recursive KIR tree; kirExpr adds the portable tree edges for wire fixtures.
+func kirExprScalars(e *Expr, c *Checker, functionTargets map[*Function]string, paths kirPathNames) *KIRExpr {
+	if e == nil {
+		return nil
+	}
+	genericArguments := make([]string, 0, len(e.GenericArguments))
+	for _, argument := range e.GenericArguments {
+		genericArguments = append(genericArguments, argument.String())
+	}
+	structType := ""
+	if e.StructType != nil {
+		structType = TypeSpecString(e.StructType)
+	}
+	k := &KIRExpr{Kind: exprName(e.Kind), Source: paths.tokenSource(e.Tok), Line: e.Tok.Line, Column: e.Tok.Column, Type: typeString(e.Type, nil), Int: e.Int, Float: e.Float, Bool: e.Bool, String: e.Str, Name: e.Name, Operator: opText(e.Op), CallTarget: "", TraitName: e.TraitName, Field: e.Field, StructName: e.StructName, StructType: structType, GenericArguments: genericArguments, Fields: append([]string(nil), e.Fields...), EnumType: e.EnumType, EnumVariant: e.EnumVariant, Tail: e.Tail}
+	if e.Kind == ExCall && e.Function == nil && e.Receiver == nil && e.Callee != nil {
 		if _, builtin := c.Env.Builtins[e.Name]; !builtin {
 			k.Name = ""
-			k.Callee = kirExpr(e.Callee, c, functionTargets, paths)
 		}
 	}
 	if b, ok := c.Env.Builtins[e.Name]; ok && e.Kind == ExCall && e.Receiver == nil && e.Function == nil && (e.Callee == nil || e.Callee.Type == nil || e.Callee.Type.Kind != TyFunction) {
@@ -462,7 +449,7 @@ func kirExpr(e *Expr, c *Checker, functionTargets map[*Function]string, paths ki
 			target = e.Function.Name
 		}
 		k.CallTarget = "function:" + target
-	} else if e.Kind == ExCall && k.Callee == nil {
+	} else if e.Kind == ExCall && e.Callee == nil {
 		k.CallTarget = "function:" + e.Name
 	} else if e.Kind == ExVar && e.Function != nil {
 		target := functionTargets[e.Function]

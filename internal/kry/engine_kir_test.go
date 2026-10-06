@@ -94,7 +94,7 @@ func runEngineKIRDocument(t *testing.T, engine *Engine, path string) kirExecResu
 		}
 	}
 	sandbox := Sandbox{Root: engine.RestrictedRoot, Restricted: engine.RestrictedRoot != ""}
-	result, err := executeValidatedMIR(document, engine.Limits, kirSourceMap(program), sandbox)
+	result, err := executeMIRDocumentOracle(document, engine.Limits, kirSourceMap(program), sandbox)
 	if err != nil {
 		t.Fatalf("Engine KIR document did not execute directly: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestEngineRunsUnsignedAndConcatenationKIRForSourceAndKexe(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := executeValidatedMIR(document, engine.Limits, kirSourceMap(program)); err != nil {
+			if _, err := executeMIRDocumentOracle(document, engine.Limits, kirSourceMap(program)); err != nil {
 				t.Fatalf("source/artifact KIR fell outside the executable subset: %v", err)
 			}
 			wantOutput, wantDiagnostic := runASTPath(t, engine, path, nil)

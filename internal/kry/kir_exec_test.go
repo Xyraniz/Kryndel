@@ -13,6 +13,24 @@ import (
 	"testing"
 )
 
+// executeMIRDocumentOracle is a test-only differential oracle. It deliberately
+// crosses the portable wire boundary so it cannot be mistaken for the
+// production interpreter entry point.
+func executeMIRDocumentOracle(mir *ValidatedMIR, limits Limits, sources map[string]*Source, sandbox ...Sandbox) (kirExecResult, error) {
+	if mir == nil || mir.arena == nil {
+		return kirExecResult{}, fmt.Errorf("invalid MIR executable: missing validated arena")
+	}
+	encoded, err := mir.MarshalKIR()
+	if err != nil {
+		return kirExecResult{}, err
+	}
+	document, err := DecodeKIR(encoded, limits)
+	if err != nil {
+		return kirExecResult{}, err
+	}
+	return executeKIRSubset(document, limits, sources, sandbox...)
+}
+
 // kirSourceMap is retained only by differential tests that compare the KIR
 // executor with the legacy AST oracle. Production KIR execution gets source
 // metadata from ValidatedMIR.
