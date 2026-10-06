@@ -14,7 +14,8 @@ type kirPEBindingID struct {
 }
 
 type kirPEFunction struct {
-	function *KIRFunction
+	function kirPEFunctionView
+	index    MIRIndex
 	target   string
 	label    int
 	slots    map[kirPEBindingID]machineSlot
@@ -22,15 +23,43 @@ type kirPEFunction struct {
 }
 
 type kirPEValidatedProgram struct {
-	entry     []*KIRStmt
-	main      *KIRFunction
+	entry     MIRNodeRefList
+	main      MIRRef
 	functions []*kirPEFunction
 	byTarget  map[string]*kirPEFunction
 }
 
-// lowerDirectPEKIR accepts only validated MIR. Static output and capability
-// checks use the typed arena; dynamic PE traversal still uses a compatibility
-// document while that lowering path is being migrated.
+// PE lowering views copy only one validated arena row. Recursive edges stay
+// explicit MIR references and collections are consumed through arena ranges.
+type kirPEExpression struct {
+	KIRExpr
+	Left, Right, Operand, Base, Receiver, Callee MIRRef
+	Lambda, Binding, Const                       MIRRef
+	Args, Items, MapKeys, Values                 []MIRRef
+}
+
+type kirPEStatement struct {
+	KIRStmt
+	Binding, Init, Expr, Target, Value MIRRef
+	Cond, Iter, Return, Scrutinee      MIRRef
+	Then, Else, Body                   MIRNodeRefList
+	Arms                               MIRNodeRefList
+}
+
+type kirPEFunctionView struct {
+	KIRFunction
+	Body     MIRNodeRefList
+	Params   []MIRIndex
+	Captures MIRNodeRefList
+}
+
+type kirPEParameter struct {
+	KIRParam
+	Default, Binding MIRRef
+}
+
+// lowerDirectPEKIR accepts only validated MIR. Both static and dynamic PE
+// lowering read the arena's typed rows and checked references.
 func lowerDirectPEKIR(mir *ValidatedMIR, limits Limits) ([]byte, error) {
 	if mir == nil || mir.arena == nil {
 		return nil, fmt.Errorf("direct PE backend requires validated MIR")
@@ -60,11 +89,7 @@ func lowerDirectPEKIR(mir *ValidatedMIR, limits Limits) ([]byte, error) {
 		}
 		return image, nil
 	}
-	document, err := mir.documentView()
-	if err != nil {
-		return nil, err
-	}
-	validated, err := validateKIRDirectPE(document)
+	validated, err := validateKIRDirectPE(arena)
 	if err != nil {
 		return nil, fmt.Errorf("direct PE dynamic subset: %w (static output path: %v)", err, staticErr)
 	}
@@ -76,15 +101,15 @@ func lowerDirectPEKIR(mir *ValidatedMIR, limits Limits) ([]byte, error) {
 		function.label = machine.newLabel()
 		machine.functionLabels[function.target] = function.label
 	}
-	entrySlots, entryNext, err := collectKIRPEBindings(validated.entry, nil, "<entry>")
+	entrySlots, entryNext, err := collectKIRPEBindings(arena, validated.entry, nil, "<entry>")
 	if err != nil {
 		return nil, fmt.Errorf("direct PE entry setup: %w", err)
 	}
 	entry := &kirPEFunction{target: "<entry>", slots: entrySlots, nextSlot: entryNext}
-	if err := collectKIRPEFunctions(validated.functions); err != nil {
+	if err := collectKIRPEFunctions(arena, validated.functions); err != nil {
 		return nil, fmt.Errorf("direct PE function setup: %w", err)
 	}
-	lowerer := &kirPEMachine{machine: machine, program: validated, entry: entry, maxWallTimeMS: limits.MaxWallTimeMS}
+	lowerer := &kirPEMachine{machine: machine, arena: arena, program: validated, entry: entry, maxWallTimeMS: limits.MaxWallTimeMS}
 	machine.outputLimitLabel = lowerer.runtimeFailureLabel("output limit exceeded")
 	for _, function := range validated.functions {
 		if err := lowerer.collectFunctionParameters(function); err != nil {
@@ -127,7 +152,7 @@ func lowerDirectPEKIR(mir *ValidatedMIR, limits Limits) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if document.Target.GUI {
+	if arena.Target.GUI {
 		pePut16(image, peSubsystemOffset, peSubsystemGUI)
 	}
 	return image, nil
@@ -135,11 +160,11 @@ func lowerDirectPEKIR(mir *ValidatedMIR, limits Limits) ([]byte, error) {
 
 type kirPEMachine struct {
 	machine       *directMachine
+	arena         *KIRArena
 	program       *kirPEValidatedProgram
 	entry         *kirPEFunction
 	current       *kirPEFunction
 	scopes        []map[kirPEBindingID]machineSlot
-	statementSlot map[*KIRStmt]machineSlot
 	loops         []machineLoop
 	inFunction    bool
 	maxWallTimeMS int64
@@ -192,54 +217,163 @@ func (lowerer *kirPEMachine) runtimeFailureLabel(message string) int {
 	return label
 }
 
-func validateKIRDirectPE(document *KIRDocument) (*kirPEValidatedProgram, error) {
-	if document == nil {
-		return nil, fmt.Errorf("missing validated KIR document")
+func kirPERefs(arena *KIRArena, list MIRNodeRefList) ([]MIRRef, error) {
+	indexes, err := arena.indexList(arena.ExpressionRefs, list)
+	if err != nil {
+		return nil, err
 	}
-	if document.Format != KIRFormat || document.Version <= 0 || document.Version > KIRVersion {
+	refs := make([]MIRRef, len(indexes))
+	for index, node := range indexes {
+		refs[index] = MIRRef{Index: node, Present: true}
+	}
+	return refs, nil
+}
+
+func kirPEExpressionAt(arena *KIRArena, ref MIRRef) (*kirPEExpression, error) {
+	if !ref.Present {
+		return nil, nil
+	}
+	if uint64(ref.Index) >= uint64(len(arena.Expressions)) {
+		return nil, fmt.Errorf("expression reference %d is out of bounds", ref.Index)
+	}
+	row := arena.Expressions[ref.Index]
+	args, err := kirPERefs(arena, row.Args)
+	if err != nil {
+		return nil, err
+	}
+	items, err := kirPERefs(arena, row.Items)
+	if err != nil {
+		return nil, err
+	}
+	mapKeys, err := kirPERefs(arena, row.MapKeys)
+	if err != nil {
+		return nil, err
+	}
+	values, err := kirPERefs(arena, row.Values)
+	if err != nil {
+		return nil, err
+	}
+	return &kirPEExpression{
+		KIRExpr: row.Value, Left: row.Left, Right: row.Right, Operand: row.Operand,
+		Base: row.Base, Receiver: row.Receiver, Callee: row.Callee, Lambda: row.Lambda,
+		Binding: row.Binding, Const: row.Const, Args: args, Items: items, MapKeys: mapKeys, Values: values,
+	}, nil
+}
+
+func kirPEStatementAt(arena *KIRArena, index MIRIndex) (*kirPEStatement, error) {
+	if uint64(index) >= uint64(len(arena.Statements)) {
+		return nil, fmt.Errorf("statement reference %d is out of bounds", index)
+	}
+	row := arena.Statements[index]
+	return &kirPEStatement{
+		KIRStmt: row.Value, Binding: row.Binding, Init: row.Init, Expr: row.Expr,
+		Target: row.Target, Value: row.ValueExpr, Cond: row.Cond, Iter: row.Iter,
+		Return: row.Return, Scrutinee: row.Scrutinee, Then: row.Then, Else: row.Else,
+		Body: row.Body, Arms: row.Arms,
+	}, nil
+}
+
+func kirPEFunctionAt(arena *KIRArena, index MIRIndex) (*kirPEFunctionView, error) {
+	if uint64(index) >= uint64(len(arena.Functions)) {
+		return nil, fmt.Errorf("function reference %d is out of bounds", index)
+	}
+	row := arena.Functions[index]
+	parameters, err := arena.indexList(arena.ParameterRefs, row.Params)
+	if err != nil {
+		return nil, err
+	}
+	return &kirPEFunctionView{KIRFunction: row.Value, Body: row.Body, Params: parameters, Captures: row.Captures}, nil
+}
+
+func kirPEParameterAt(arena *KIRArena, index MIRIndex) (*kirPEParameter, error) {
+	if uint64(index) >= uint64(len(arena.Parameters)) {
+		return nil, fmt.Errorf("parameter reference %d is out of bounds", index)
+	}
+	row := arena.Parameters[index]
+	return &kirPEParameter{KIRParam: row.Value, Default: row.Default, Binding: row.Binding}, nil
+}
+
+func kirPEBindingAt(arena *KIRArena, ref MIRRef) (*KIRBinding, error) {
+	if !ref.Present {
+		return nil, nil
+	}
+	if uint64(ref.Index) >= uint64(len(arena.Bindings)) {
+		return nil, fmt.Errorf("binding reference %d is out of bounds", ref.Index)
+	}
+	return &arena.Bindings[ref.Index], nil
+}
+
+func validateKIRDirectPE(arena *KIRArena) (*kirPEValidatedProgram, error) {
+	if arena == nil {
+		return nil, fmt.Errorf("missing validated KIR arena")
+	}
+	if arena.Format != KIRFormat || arena.Version <= 0 || arena.Version > KIRVersion {
 		return nil, fmt.Errorf("unsupported validated KIR header")
 	}
-	if document.Target.OS != "windows" || document.Target.Arch != "amd64" {
+	if arena.Target.OS != "windows" || arena.Target.Arch != "amd64" {
 		return nil, fmt.Errorf("direct PE backend requires windows-amd64")
 	}
-	if len(document.Imports) != 0 || len(document.Structs) != 0 || len(document.Enums) != 0 {
+	if len(arena.Imports) != 0 || len(arena.Structs) != 0 || len(arena.Enums) != 0 {
 		return nil, fmt.Errorf("module imports, structs, and enums are not supported")
 	}
-	program := &kirPEValidatedProgram{entry: document.Statements, byTarget: map[string]*kirPEFunction{}}
-	if len(document.Statements) > 0 {
-		for _, function := range document.Functions {
-			if function != nil && function.Name == "main" {
+	functionIndexes, err := arena.indexList(arena.FunctionRefs, arena.TopFunctions)
+	if err != nil {
+		return nil, err
+	}
+	statementIndexes, err := arena.indexList(arena.StatementRefs, arena.TopStatements)
+	if err != nil {
+		return nil, err
+	}
+	program := &kirPEValidatedProgram{entry: arena.TopStatements, byTarget: map[string]*kirPEFunction{}}
+	if len(statementIndexes) != 0 {
+		for _, index := range functionIndexes {
+			function, err := kirPEFunctionAt(arena, index)
+			if err != nil {
+				return nil, err
+			}
+			if function.Name == "main" {
 				return nil, fmt.Errorf("direct PE backend does not support both top-level statements and main")
 			}
 		}
 	} else {
-		for _, function := range document.Functions {
-			if function == nil || function.Name != "main" {
+		for _, index := range functionIndexes {
+			function, err := kirPEFunctionAt(arena, index)
+			if err != nil {
+				return nil, err
+			}
+			if function.Name != "main" {
 				continue
 			}
-			if program.main != nil {
+			if program.main.Present {
 				return nil, fmt.Errorf("direct PE backend has duplicate main functions")
 			}
-			program.main = function
+			program.main = MIRRef{Index: index, Present: true}
 		}
-		if program.main == nil {
+		if !program.main.Present {
 			return nil, fmt.Errorf("program requires top-level statements or main() -> Nil")
 		}
-		if len(program.main.Params) != 0 || program.main.Return != "Nil" {
+		main, err := kirPEFunctionAt(arena, program.main.Index)
+		if err != nil {
+			return nil, err
+		}
+		if len(main.Params) != 0 || main.Return != "Nil" {
 			return nil, fmt.Errorf("main must have signature main() -> Nil")
 		}
-		program.entry = program.main.Body
+		program.entry = main.Body
 	}
 
 	nameCounts := map[string]int{}
-	for _, function := range document.Functions {
-		if function != nil {
-			nameCounts[function.Name]++
+	for _, index := range functionIndexes {
+		function, err := kirPEFunctionAt(arena, index)
+		if err != nil {
+			return nil, err
 		}
+		nameCounts[function.Name]++
 	}
-	for _, function := range document.Functions {
-		if function == nil {
-			return nil, fmt.Errorf("function metadata is missing")
+	for _, index := range functionIndexes {
+		function, err := kirPEFunctionAt(arena, index)
+		if err != nil {
+			return nil, err
 		}
 		if function.Receiver != "" || function.Worker || function.Unsafe || len(function.TypeParams) != 0 {
 			return nil, fmt.Errorf("function '%s' has unsupported metadata (module=%q receiver=%t worker=%t unsafe=%t type-parameters=%d)", function.Name, function.Module, function.Receiver != "", function.Worker, function.Unsafe, len(function.TypeParams))
@@ -253,93 +387,150 @@ func validateKIRDirectPE(document *KIRDocument) (*kirPEValidatedProgram, error) 
 		if !directPETypeName(function.Return, true) {
 			return nil, fmt.Errorf("function '%s' has unsupported return type %s", function.Name, function.Return)
 		}
-		for _, parameter := range function.Params {
-			if parameter == nil || parameter.Binding == nil {
+		for _, parameterIndex := range function.Params {
+			parameter, err := kirPEParameterAt(arena, parameterIndex)
+			if err != nil {
+				return nil, err
+			}
+			binding, err := kirPEBindingAt(arena, parameter.Binding)
+			if err != nil {
+				return nil, err
+			}
+			if binding == nil {
 				return nil, fmt.Errorf("function '%s' has incomplete parameter binding metadata", function.Name)
 			}
-			if !directPETypeName(parameter.Type, false) || parameter.Binding.Type != parameter.Type {
+			if !directPETypeName(parameter.Type, false) || binding.Type != parameter.Type {
 				return nil, fmt.Errorf("function '%s' parameter '%s' has unsupported type %s", function.Name, parameter.Name, parameter.Type)
 			}
 		}
 	}
-	for _, function := range document.Functions {
+	for _, index := range functionIndexes {
+		function, err := kirPEFunctionAt(arena, index)
+		if err != nil {
+			return nil, err
+		}
 		if function.Name == "main" {
 			continue
 		}
 		target := function.Name
 		if nameCounts[function.Name] > 1 {
-			target = kirFunctionTargetFromDocument(function)
+			params := make([]string, 0, len(function.Params))
+			for _, parameterIndex := range function.Params {
+				parameter, err := kirPEParameterAt(arena, parameterIndex)
+				if err != nil {
+					return nil, err
+				}
+				params = append(params, parameter.Type)
+			}
+			target = kirFunctionIdentity(function.Name, function.Module, kirFunctionReceiverIdentity(function.Trait, function.Receiver), params)
 		}
 		if _, duplicate := program.byTarget[target]; duplicate {
 			return nil, fmt.Errorf("function '%s' has duplicate KIR call target %q", function.Name, target)
 		}
-		entry := &kirPEFunction{function: function, target: target}
+		entry := &kirPEFunction{function: *function, target: target, index: index}
 		program.byTarget[target] = entry
 		program.functions = append(program.functions, entry)
 	}
-	if err := validateKIRDirectPEStatements(program.entry, false, false, program.byTarget); err != nil {
+	if err := validateKIRDirectPEStatements(arena, program.entry, false, false, program.byTarget); err != nil {
 		return nil, err
 	}
 	for _, function := range program.functions {
-		if err := validateKIRDirectPEStatements(function.function.Body, true, false, program.byTarget); err != nil {
+		if err := validateKIRDirectPEStatements(arena, function.function.Body, true, false, program.byTarget); err != nil {
 			return nil, fmt.Errorf("function '%s': %w", function.function.Name, err)
 		}
 	}
 	return program, nil
 }
 
-func validateKIRDirectPEStatements(statements []*KIRStmt, inFunction, inLoop bool, functions map[string]*kirPEFunction) error {
-	for _, statement := range statements {
-		if statement == nil {
-			return fmt.Errorf("missing statement metadata")
+func validateKIRDirectPEStatements(arena *KIRArena, statements MIRNodeRefList, inFunction, inLoop bool, functions map[string]*kirPEFunction) error {
+	indexes, err := arena.indexList(arena.StatementRefs, statements)
+	if err != nil {
+		return err
+	}
+	for _, index := range indexes {
+		statement, err := kirPEStatementAt(arena, index)
+		if err != nil {
+			return err
+		}
+		binding, err := kirPEBindingAt(arena, statement.Binding)
+		if err != nil {
+			return err
 		}
 		switch statement.Kind {
 		case "let", "const":
-			if statement.Init == nil || statement.Binding == nil || statement.Binding.Name != statement.Name || statement.Binding.Mutable != statement.Mutable || statement.Binding.Type == "" || !directPETypeName(statement.Binding.Type, false) || statement.Init.Type != statement.Binding.Type {
+			init, err := kirPEExpressionAt(arena, statement.Init)
+			if err != nil {
+				return err
+			}
+			if init == nil || binding == nil || binding.Name != statement.Name || binding.Mutable != statement.Mutable || binding.Type == "" || !directPETypeName(binding.Type, false) || init.Type != binding.Type {
 				return fmt.Errorf("binding '%s' has an unsupported or incomplete type", statement.Name)
 			}
-			if err := validateKIRDirectPEExpr(statement.Init, false, functions); err != nil {
+			if err := validateKIRDirectPEExpr(arena, statement.Init, false, functions); err != nil {
 				return err
 			}
 		case "assign":
-			if statement.Target == nil || statement.Target.Kind != "var" || statement.Target.Binding == nil || statement.Value == nil || statement.Value.Type == "" || !directPETypeName(statement.Value.Type, false) || statement.Target.Binding.Type != statement.Value.Type {
+			target, err := kirPEExpressionAt(arena, statement.Target)
+			if err != nil {
+				return err
+			}
+			value, err := kirPEExpressionAt(arena, statement.Value)
+			if err != nil {
+				return err
+			}
+			if target == nil || value == nil {
 				return fmt.Errorf("assignment requires a scalar or String binding")
 			}
-			if err := validateKIRDirectPEExpr(statement.Value, false, functions); err != nil {
+			targetBinding, err := kirPEBindingAt(arena, target.Binding)
+			if err != nil {
+				return err
+			}
+			if target.Kind != "var" || targetBinding == nil || value.Type == "" || !directPETypeName(value.Type, false) || targetBinding.Type != value.Type {
+				return fmt.Errorf("assignment requires a scalar or String binding")
+			}
+			if err := validateKIRDirectPEExpr(arena, statement.Value, false, functions); err != nil {
 				return err
 			}
 		case "expr":
-			if statement.Expr == nil || statement.Expr.Kind != "call" || statement.Expr.Receiver != nil {
+			expression, err := kirPEExpressionAt(arena, statement.Expr)
+			if err != nil {
+				return err
+			}
+			if expression == nil || expression.Kind != "call" || expression.Receiver.Present {
 				return fmt.Errorf("expression statements must be direct calls")
 			}
-			if strings.HasPrefix(statement.Expr.CallTarget, "builtin:") && (statement.Expr.CallTarget == "builtin:print" || statement.Expr.CallTarget == "builtin:println") {
-				if err := validateKIRDirectPEExpr(statement.Expr, true, functions); err != nil {
-					return err
-				}
-			} else if err := validateKIRDirectPEExpr(statement.Expr, false, functions); err != nil {
+			allowOutput := expression.CallTarget == "builtin:print" || expression.CallTarget == "builtin:println"
+			if err := validateKIRDirectPEExpr(arena, statement.Expr, allowOutput, functions); err != nil {
 				return err
 			}
 		case "if":
-			if statement.Cond == nil || statement.Cond.Type != "Bool" {
+			condition, err := kirPEExpressionAt(arena, statement.Cond)
+			if err != nil {
+				return err
+			}
+			if condition == nil || condition.Type != "Bool" {
 				return fmt.Errorf("if condition must be Bool")
 			}
-			if err := validateKIRDirectPEExpr(statement.Cond, false, functions); err != nil {
+			if err := validateKIRDirectPEExpr(arena, statement.Cond, false, functions); err != nil {
 				return err
 			}
-			if err := validateKIRDirectPEStatements(statement.Then, inFunction, inLoop, functions); err != nil {
+			if err := validateKIRDirectPEStatements(arena, statement.Then, inFunction, inLoop, functions); err != nil {
 				return err
 			}
-			if err := validateKIRDirectPEStatements(statement.Else, inFunction, inLoop, functions); err != nil {
+			if err := validateKIRDirectPEStatements(arena, statement.Else, inFunction, inLoop, functions); err != nil {
 				return err
 			}
 		case "while":
-			if statement.Cond == nil || statement.Cond.Type != "Bool" {
-				return fmt.Errorf("while condition must be Bool")
-			}
-			if err := validateKIRDirectPEExpr(statement.Cond, false, functions); err != nil {
+			condition, err := kirPEExpressionAt(arena, statement.Cond)
+			if err != nil {
 				return err
 			}
-			if err := validateKIRDirectPEStatements(statement.Body, inFunction, true, functions); err != nil {
+			if condition == nil || condition.Type != "Bool" {
+				return fmt.Errorf("while condition must be Bool")
+			}
+			if err := validateKIRDirectPEExpr(arena, statement.Cond, false, functions); err != nil {
+				return err
+			}
+			if err := validateKIRDirectPEStatements(arena, statement.Body, inFunction, true, functions); err != nil {
 				return err
 			}
 		case "break", "continue":
@@ -347,8 +538,12 @@ func validateKIRDirectPEStatements(statements []*KIRStmt, inFunction, inLoop boo
 				return fmt.Errorf("%s is outside a loop", statement.Kind)
 			}
 		case "return":
-			if statement.Return != nil && statement.Return.Kind != "nil" {
-				if err := validateKIRDirectPEExpr(statement.Return, false, functions); err != nil {
+			result, err := kirPEExpressionAt(arena, statement.Return)
+			if err != nil {
+				return err
+			}
+			if result != nil && result.Kind != "nil" {
+				if err := validateKIRDirectPEExpr(arena, statement.Return, false, functions); err != nil {
 					return err
 				}
 			}
@@ -359,7 +554,11 @@ func validateKIRDirectPEStatements(statements []*KIRStmt, inFunction, inLoop boo
 	return nil
 }
 
-func validateKIRDirectPEExpr(expression *KIRExpr, allowOutput bool, functions map[string]*kirPEFunction) error {
+func validateKIRDirectPEExpr(arena *KIRArena, ref MIRRef, allowOutput bool, functions map[string]*kirPEFunction) error {
+	expression, err := kirPEExpressionAt(arena, ref)
+	if err != nil {
+		return err
+	}
 	if expression == nil {
 		return fmt.Errorf("missing expression")
 	}
@@ -373,7 +572,11 @@ func validateKIRDirectPEExpr(expression *KIRExpr, allowOutput bool, functions ma
 	case "int", "bool", "string":
 		return nil
 	case "var":
-		if expression.Binding == nil || expression.Binding.Name != expression.Name || expression.Binding.Type != expression.Type {
+		binding, err := kirPEBindingAt(arena, expression.Binding)
+		if err != nil {
+			return err
+		}
+		if binding == nil || binding.Name != expression.Name || binding.Type != expression.Type {
 			return fmt.Errorf("variable '%s' is missing resolved binding metadata", expression.Name)
 		}
 		return nil
@@ -385,12 +588,12 @@ func validateKIRDirectPEExpr(expression *KIRExpr, allowOutput bool, functions ma
 		default:
 			return fmt.Errorf("unary operator %s is not supported", expression.Operator)
 		}
-		return validateKIRDirectPEExpr(expression.Operand, false, functions)
+		return validateKIRDirectPEExpr(arena, expression.Operand, false, functions)
 	case "binary":
 		if expression.Type == "String" || expression.Type == "Nil" {
 			return fmt.Errorf("String concatenation and non-scalar binary operations are not supported")
 		}
-		if expression.Left != nil && expression.Left.Type == "String" {
+		if expression.Left.Present && arena.Expressions[expression.Left.Index].Value.Type == "String" {
 			return fmt.Errorf("String comparison is not supported by the direct PE runtime")
 		}
 		switch expression.Operator {
@@ -398,12 +601,12 @@ func validateKIRDirectPEExpr(expression *KIRExpr, allowOutput bool, functions ma
 		default:
 			return fmt.Errorf("binary operator %s is not supported", expression.Operator)
 		}
-		if err := validateKIRDirectPEExpr(expression.Left, false, functions); err != nil {
+		if err := validateKIRDirectPEExpr(arena, expression.Left, false, functions); err != nil {
 			return err
 		}
-		return validateKIRDirectPEExpr(expression.Right, false, functions)
+		return validateKIRDirectPEExpr(arena, expression.Right, false, functions)
 	case "call":
-		if expression.Receiver != nil || expression.Callee != nil || expression.CallTarget == "" {
+		if expression.Receiver.Present || expression.Callee.Present || expression.CallTarget == "" {
 			return fmt.Errorf("receiver calls and function values are not supported")
 		}
 		if strings.HasPrefix(expression.CallTarget, "function:") {
@@ -412,15 +615,18 @@ func validateKIRDirectPEExpr(expression *KIRExpr, allowOutput bool, functions ma
 			if !ok {
 				return fmt.Errorf("function call %q has no supported KIR target", target)
 			}
-			function := entry.function
-			if len(expression.Args) != len(function.Params) || len(expression.Args) > directPEWindowsMaxArgs {
-				return fmt.Errorf("function '%s' must be called with all arguments and at most %d parameters", function.Name, directPEWindowsMaxArgs)
+			if len(expression.Args) != len(entry.function.Params) || len(expression.Args) > directPEWindowsMaxArgs {
+				return fmt.Errorf("function '%s' must be called with all arguments and at most %d parameters", entry.function.Name, directPEWindowsMaxArgs)
 			}
 			for index, argument := range expression.Args {
-				if argument == nil || argument.Type != function.Params[index].Type {
-					return fmt.Errorf("function '%s' argument %d is missing matching checked type metadata", function.Name, index+1)
+				parameter, err := kirPEParameterAt(arena, entry.function.Params[index])
+				if err != nil {
+					return err
 				}
-				if err := validateKIRDirectPEExpr(argument, false, functions); err != nil {
+				if !argument.Present || arena.Expressions[argument.Index].Value.Type != parameter.Type {
+					return fmt.Errorf("function '%s' argument %d is missing matching checked type metadata", entry.function.Name, index+1)
+				}
+				if err := validateKIRDirectPEExpr(arena, argument, false, functions); err != nil {
 					return err
 				}
 			}
@@ -443,24 +649,28 @@ func validateKIRDirectPEExpr(expression *KIRExpr, allowOutput bool, functions ma
 				return fmt.Errorf("conversion %s must have one argument and return UInt%d", expression.Name, bits)
 			}
 			argument := expression.Args[0]
-			if argument == nil || (argument.Type != "Int" && !strings.HasPrefix(argument.Type, "UInt")) {
+			if !argument.Present || (arena.Expressions[argument.Index].Value.Type != "Int" && !strings.HasPrefix(arena.Expressions[argument.Index].Value.Type, "UInt")) {
 				return fmt.Errorf("conversion %s requires an Int or UInt argument", expression.Name)
 			}
-			return validateKIRDirectPEExpr(argument, false, functions)
+			return validateKIRDirectPEExpr(arena, argument, false, functions)
 		case "builtin:str":
 			if len(expression.Args) != 1 || expression.Type != "String" {
 				return fmt.Errorf("conversion str must have one argument and return String")
 			}
 			argument := expression.Args[0]
-			if argument == nil || (argument.Type != "Int" && argument.Type != "Bool" && argument.Type != "String" && !strings.HasPrefix(argument.Type, "UInt")) {
+			if !argument.Present {
 				return fmt.Errorf("direct PE str supports Int, UInt, Bool, and String values")
 			}
-			return validateKIRDirectPEExpr(argument, false, functions)
+			argumentType := arena.Expressions[argument.Index].Value.Type
+			if argumentType != "Int" && argumentType != "Bool" && argumentType != "String" && !strings.HasPrefix(argumentType, "UInt") {
+				return fmt.Errorf("direct PE str supports Int, UInt, Bool, and String values")
+			}
+			return validateKIRDirectPEExpr(arena, argument, false, functions)
 		case "builtin:print", "builtin:println":
 			if !allowOutput || len(expression.Args) != 1 {
 				return fmt.Errorf("only statement-form print(value) and println(value) are supported")
 			}
-			return validateKIRDirectPEExpr(expression.Args[0], false, functions)
+			return validateKIRDirectPEExpr(arena, expression.Args[0], false, functions)
 		default:
 			return fmt.Errorf("builtin %q is not supported by the direct PE backend", expression.Name)
 		}
@@ -469,53 +679,67 @@ func validateKIRDirectPEExpr(expression *KIRExpr, allowOutput bool, functions ma
 	}
 }
 
-func collectKIRPEBindings(statements []*KIRStmt, params []*KIRParam, function string) (map[kirPEBindingID]machineSlot, int32, error) {
+func collectKIRPEBindings(arena *KIRArena, statements MIRNodeRefList, params []MIRIndex, function string) (map[kirPEBindingID]machineSlot, int32, error) {
 	slots := make(map[kirPEBindingID]machineSlot)
 	var next int32
-	for index, parameter := range params {
-		if parameter == nil || parameter.Binding == nil {
+	for index, parameterIndex := range params {
+		parameter, err := kirPEParameterAt(arena, parameterIndex)
+		if err != nil {
+			return nil, 0, err
+		}
+		binding, err := kirPEBindingAt(arena, parameter.Binding)
+		if err != nil {
+			return nil, 0, err
+		}
+		if binding == nil {
 			return nil, 0, fmt.Errorf("parameter binding metadata is missing")
 		}
 		next += 8
-		if _, duplicate := slots[kirPEBindingKey(parameter.Binding)]; duplicate {
+		if _, duplicate := slots[kirPEBindingKey(binding)]; duplicate {
 			return nil, 0, fmt.Errorf("function '%s' has duplicate parameter binding metadata", function)
 		}
-		slots[kirPEBindingKey(parameter.Binding)] = machineSlot{offset: int32((index + 1) * 8), typ: kirPEType(parameter.Type)}
+		slots[kirPEBindingKey(binding)] = machineSlot{offset: int32((index + 1) * 8), typ: kirPEType(parameter.Type)}
 	}
-	statementSlots := map[*KIRStmt]machineSlot{}
-	if err := collectKIRPEBlock(statements, []map[kirPEBindingID]bool{{}}, &next, statementSlots); err != nil {
+	if err := collectKIRPEBlock(arena, statements, []map[kirPEBindingID]bool{{}}, &next, slots); err != nil {
 		return nil, 0, err
-	}
-	for statement, slot := range statementSlots {
-		slots[kirPEBindingKey(statement.Binding)] = slot
 	}
 	return slots, next, nil
 }
 
-func collectKIRPEBlock(statements []*KIRStmt, scopes []map[kirPEBindingID]bool, next *int32, slots map[*KIRStmt]machineSlot) error {
-	for _, statement := range statements {
-		if statement == nil {
-			return fmt.Errorf("missing statement metadata")
+func collectKIRPEBlock(arena *KIRArena, statements MIRNodeRefList, scopes []map[kirPEBindingID]bool, next *int32, slots map[kirPEBindingID]machineSlot) error {
+	indexes, err := arena.indexList(arena.StatementRefs, statements)
+	if err != nil {
+		return err
+	}
+	for _, index := range indexes {
+		statement, err := kirPEStatementAt(arena, index)
+		if err != nil {
+			return err
+		}
+		binding, err := kirPEBindingAt(arena, statement.Binding)
+		if err != nil {
+			return err
 		}
 		switch statement.Kind {
 		case "let", "const":
-			key := kirPEBindingKey(statement.Binding)
+			key := kirPEBindingKey(binding)
 			current := scopes[len(scopes)-1]
 			if _, duplicate := current[key]; duplicate {
 				return fmt.Errorf("duplicate binding metadata for '%s'", statement.Name)
 			}
 			current[key] = true
 			*next += 8
-			slots[statement] = machineSlot{offset: *next, typ: kirPEType(statement.Binding.Type)}
+			slot := machineSlot{offset: *next, typ: kirPEType(binding.Type)}
+			slots[key] = slot
 		case "if":
-			if err := collectKIRPEBlock(statement.Then, append(scopes, map[kirPEBindingID]bool{}), next, slots); err != nil {
+			if err := collectKIRPEBlock(arena, statement.Then, append(scopes, map[kirPEBindingID]bool{}), next, slots); err != nil {
 				return err
 			}
-			if err := collectKIRPEBlock(statement.Else, append(scopes, map[kirPEBindingID]bool{}), next, slots); err != nil {
+			if err := collectKIRPEBlock(arena, statement.Else, append(scopes, map[kirPEBindingID]bool{}), next, slots); err != nil {
 				return err
 			}
 		case "while":
-			if err := collectKIRPEBlock(statement.Body, append(scopes, map[kirPEBindingID]bool{}), next, slots); err != nil {
+			if err := collectKIRPEBlock(arena, statement.Body, append(scopes, map[kirPEBindingID]bool{}), next, slots); err != nil {
 				return err
 			}
 		}
@@ -523,12 +747,12 @@ func collectKIRPEBlock(statements []*KIRStmt, scopes []map[kirPEBindingID]bool, 
 	return nil
 }
 
-func collectKIRPEFunctions(functions []*kirPEFunction) error {
+func collectKIRPEFunctions(arena *KIRArena, functions []*kirPEFunction) error {
 	for _, entry := range functions {
-		if entry == nil || entry.function == nil {
+		if entry == nil {
 			return fmt.Errorf("function metadata is missing")
 		}
-		slots, next, err := collectKIRPEBindings(entry.function.Body, entry.function.Params, entry.function.Name)
+		slots, next, err := collectKIRPEBindings(arena, entry.function.Body, entry.function.Params, entry.function.Name)
 		if err != nil {
 			return fmt.Errorf("function '%s': %w", entry.function.Name, err)
 		}
@@ -552,8 +776,16 @@ func kirPEType(name string) *Type {
 }
 
 func (lowerer *kirPEMachine) collectFunctionParameters(function *kirPEFunction) error {
-	for _, parameter := range function.function.Params {
-		if parameter == nil || parameter.Binding == nil || function.slots[kirPEBindingKey(parameter.Binding)].typ == nil {
+	for _, parameterIndex := range function.function.Params {
+		parameter, err := kirPEParameterAt(lowerer.arena, parameterIndex)
+		if err != nil {
+			return err
+		}
+		binding, err := kirPEBindingAt(lowerer.arena, parameter.Binding)
+		if err != nil {
+			return err
+		}
+		if binding == nil || function.slots[kirPEBindingKey(binding)].typ == nil {
 			return fmt.Errorf("function '%s' has unsupported parameter binding metadata", function.function.Name)
 		}
 	}
@@ -574,16 +806,15 @@ func (lowerer *kirPEMachine) emitEntry() error {
 	machine.emitOutputCounterInit(lowerer.entry.nextSlot + 32)
 	lowerer.current = lowerer.entry
 	lowerer.scopes = []map[kirPEBindingID]machineSlot{{}}
-	lowerer.statementSlot = map[*KIRStmt]machineSlot{}
 	lowerer.loops = nil
 	emitPEWallClockStart(machine, lowerer.maxWallTimeMS)
 	if err := lowerer.emitWallClockCheck(); err != nil {
 		return err
 	}
-	if err := lowerer.emitStatements(lowerer.program.entry, lowerer.program.main == nil); err != nil {
+	if err := lowerer.emitStatements(lowerer.program.entry, !lowerer.program.main.Present); err != nil {
 		return err
 	}
-	if lowerer.program.main != nil {
+	if lowerer.program.main.Present {
 		if err := lowerer.emitWallClockCheck(); err != nil {
 			return err
 		}
@@ -611,10 +842,17 @@ func (lowerer *kirPEMachine) emitFunctions() error {
 		lowerer.inFunction = true
 		lowerer.loops = nil
 		lowerer.scopes = []map[kirPEBindingID]machineSlot{{}}
-		lowerer.statementSlot = map[*KIRStmt]machineSlot{}
 		machine.bufferOffset = function.nextSlot + 1
-		for index, parameter := range function.function.Params {
-			key := kirPEBindingKey(parameter.Binding)
+		for index, parameterIndex := range function.function.Params {
+			parameter, err := kirPEParameterAt(lowerer.arena, parameterIndex)
+			if err != nil {
+				return err
+			}
+			binding, err := kirPEBindingAt(lowerer.arena, parameter.Binding)
+			if err != nil {
+				return err
+			}
+			key := kirPEBindingKey(binding)
 			slot, ok := function.slots[key]
 			if !ok {
 				return fmt.Errorf("function '%s' has no slot for parameter '%s'", function.function.Name, parameter.Name)
@@ -641,8 +879,12 @@ func (lowerer *kirPEMachine) bindSlot(key kirPEBindingID, slot machineSlot) {
 	lowerer.scopes[len(lowerer.scopes)-1][key] = slot
 }
 
-func (lowerer *kirPEMachine) lookupSlot(binding *KIRBinding) (machineSlot, bool) {
-	key := kirPEBindingKey(binding)
+func (lowerer *kirPEMachine) lookupSlot(binding MIRRef) (machineSlot, bool) {
+	metadata, err := kirPEBindingAt(lowerer.arena, binding)
+	if err != nil || metadata == nil {
+		return machineSlot{}, false
+	}
+	key := kirPEBindingKey(metadata)
 	for scope := len(lowerer.scopes) - 1; scope >= 0; scope-- {
 		if slot, ok := lowerer.scopes[scope][key]; ok {
 			return slot, true
@@ -651,17 +893,22 @@ func (lowerer *kirPEMachine) lookupSlot(binding *KIRBinding) (machineSlot, bool)
 	return machineSlot{}, false
 }
 
-func (lowerer *kirPEMachine) emitScopedStatements(statements []*KIRStmt) error {
+func (lowerer *kirPEMachine) emitScopedStatements(statements MIRNodeRefList) error {
 	lowerer.scopes = append(lowerer.scopes, map[kirPEBindingID]machineSlot{})
 	err := lowerer.emitStatements(statements, false)
 	lowerer.scopes = lowerer.scopes[:len(lowerer.scopes)-1]
 	return err
 }
 
-func (lowerer *kirPEMachine) emitStatements(statements []*KIRStmt, topLevel bool) error {
-	for _, statement := range statements {
-		if statement == nil {
-			return fmt.Errorf("direct PE lowering encountered missing statement metadata")
+func (lowerer *kirPEMachine) emitStatements(statements MIRNodeRefList, topLevel bool) error {
+	indexes, err := lowerer.arena.indexList(lowerer.arena.StatementRefs, statements)
+	if err != nil {
+		return err
+	}
+	for _, index := range indexes {
+		statement, err := kirPEStatementAt(lowerer.arena, index)
+		if err != nil {
+			return err
 		}
 		if err := lowerer.emitWallClockCheck(); err != nil {
 			return err
@@ -671,23 +918,35 @@ func (lowerer *kirPEMachine) emitStatements(statements []*KIRStmt, topLevel bool
 			if err := lowerer.emitExpr(statement.Init); err != nil {
 				return err
 			}
-			slot, ok := lowerer.current.slots[kirPEBindingKey(statement.Binding)]
+			binding, err := kirPEBindingAt(lowerer.arena, statement.Binding)
+			if err != nil {
+				return err
+			}
+			slot, ok := lowerer.current.slots[kirPEBindingKey(binding)]
 			if !ok {
 				return fmt.Errorf("direct PE has no slot for binding '%s'", statement.Name)
 			}
 			lowerer.machine.emitStoreSlot(slot)
-			lowerer.bindSlot(kirPEBindingKey(statement.Binding), slot)
+			lowerer.bindSlot(kirPEBindingKey(binding), slot)
 		case "assign":
 			if err := lowerer.emitExpr(statement.Value); err != nil {
 				return err
 			}
-			slot, ok := lowerer.lookupSlot(statement.Target.Binding)
+			target, err := kirPEExpressionAt(lowerer.arena, statement.Target)
+			if err != nil {
+				return err
+			}
+			slot, ok := lowerer.lookupSlot(target.Binding)
 			if !ok {
-				return fmt.Errorf("direct PE has no storage for binding '%s'", statement.Target.Name)
+				return fmt.Errorf("direct PE has no storage for binding '%s'", target.Name)
 			}
 			lowerer.machine.emitStoreSlot(slot)
 		case "expr":
-			if statement.Expr.CallTarget == "builtin:print" || statement.Expr.CallTarget == "builtin:println" {
+			expression, err := kirPEExpressionAt(lowerer.arena, statement.Expr)
+			if err != nil {
+				return err
+			}
+			if expression.CallTarget == "builtin:print" || expression.CallTarget == "builtin:println" {
 				if err := lowerer.emitOutput(statement.Expr); err != nil {
 					return err
 				}
@@ -706,7 +965,7 @@ func (lowerer *kirPEMachine) emitStatements(statements []*KIRStmt, topLevel bool
 			if err := lowerer.emitScopedStatements(statement.Then); err != nil {
 				return err
 			}
-			if len(statement.Else) != 0 {
+			if statement.Else.Count != 0 {
 				if err := lowerer.machine.emitJump(joinLabel); err != nil {
 					return err
 				}
@@ -760,7 +1019,11 @@ func (lowerer *kirPEMachine) emitStatements(statements []*KIRStmt, topLevel bool
 				return err
 			}
 		case "return":
-			if statement.Return != nil && statement.Return.Kind != "nil" {
+			result, err := kirPEExpressionAt(lowerer.arena, statement.Return)
+			if err != nil {
+				return err
+			}
+			if result != nil && result.Kind != "nil" {
 				if err := lowerer.emitExpr(statement.Return); err != nil {
 					return err
 				}
@@ -782,7 +1045,14 @@ func (lowerer *kirPEMachine) emitStatements(statements []*KIRStmt, topLevel bool
 	return nil
 }
 
-func (lowerer *kirPEMachine) emitOutput(expression *KIRExpr) error {
+func (lowerer *kirPEMachine) emitOutput(ref MIRRef) error {
+	expression, err := kirPEExpressionAt(lowerer.arena, ref)
+	if err != nil {
+		return err
+	}
+	if expression == nil {
+		return fmt.Errorf("direct PE output is missing its call expression")
+	}
 	if len(expression.Args) != 1 {
 		return fmt.Errorf("direct PE %s expects one argument", expression.Name)
 	}
@@ -791,13 +1061,17 @@ func (lowerer *kirPEMachine) emitOutput(expression *KIRExpr) error {
 		return err
 	}
 	newline := expression.CallTarget == "builtin:println"
-	switch argument.Type {
+	argumentView, err := kirPEExpressionAt(lowerer.arena, argument)
+	if err != nil {
+		return err
+	}
+	switch argumentView.Type {
 	case "String":
 		return lowerer.machine.emitStringOutput(newline)
 	case "Bool":
 		return lowerer.emitBooleanOutput(newline)
 	default:
-		return lowerer.machine.emitInteger(strings.HasPrefix(argument.Type, "UInt"), newline)
+		return lowerer.machine.emitInteger(strings.HasPrefix(argumentView.Type, "UInt"), newline)
 	}
 }
 
@@ -824,11 +1098,15 @@ func (lowerer *kirPEMachine) emitBooleanOutput(newline bool) error {
 	return lowerer.machine.bind(doneLabel)
 }
 
-func (lowerer *kirPEMachine) emitStringConversion(argument *KIRExpr) error {
+func (lowerer *kirPEMachine) emitStringConversion(ref MIRRef) error {
+	argument, err := kirPEExpressionAt(lowerer.arena, ref)
+	if err != nil {
+		return err
+	}
 	if argument == nil {
 		return fmt.Errorf("direct PE str is missing its value")
 	}
-	if err := lowerer.emitExpr(argument); err != nil {
+	if err := lowerer.emitExpr(ref); err != nil {
 		return err
 	}
 	switch argument.Type {
@@ -859,28 +1137,36 @@ func (lowerer *kirPEMachine) emitStringConversion(argument *KIRExpr) error {
 	}
 }
 
-func (lowerer *kirPEMachine) emitExpr(expression *KIRExpr) error {
+func (lowerer *kirPEMachine) emitExpr(ref MIRRef) error {
+	expression, err := kirPEExpressionAt(lowerer.arena, ref)
+	if err != nil {
+		return err
+	}
 	if expression == nil {
 		return fmt.Errorf("direct PE cannot lower a missing KIR expression")
 	}
-	if expression.Const != nil {
-		switch expression.Const.Kind {
+	if expression.Const.Present {
+		if uint64(expression.Const.Index) >= uint64(len(lowerer.arena.Values)) {
+			return fmt.Errorf("direct PE constant reference %d is out of bounds", expression.Const.Index)
+		}
+		constant := lowerer.arena.Values[expression.Const.Index].Value
+		switch constant.Kind {
 		case "int":
-			lowerer.machine.emitMoveImmediate(uint64(expression.Const.Int))
+			lowerer.machine.emitMoveImmediate(uint64(constant.Int))
 			return nil
 		case "uint":
-			lowerer.machine.emitMoveImmediate(expression.Const.UInt)
-			lowerer.machine.emitUIntMask(expression.Const.UIntBits)
+			lowerer.machine.emitMoveImmediate(constant.UInt)
+			lowerer.machine.emitUIntMask(constant.UIntBits)
 			return nil
 		case "bool":
-			if expression.Const.Bool {
+			if constant.Bool {
 				lowerer.machine.emitMoveImmediate(1)
 			} else {
 				lowerer.machine.emitMoveImmediate(0)
 			}
 			return nil
 		case "string":
-			lowerer.machine.emitStringAddress(expression.Const.String)
+			lowerer.machine.emitStringAddress(constant.String)
 			return nil
 		}
 	}
@@ -964,7 +1250,14 @@ func (lowerer *kirPEMachine) emitExpr(expression *KIRExpr) error {
 	}
 }
 
-func (lowerer *kirPEMachine) emitUnsignedConversionCheck(value *KIRExpr, bits uint8) error {
+func (lowerer *kirPEMachine) emitUnsignedConversionCheck(ref MIRRef, bits uint8) error {
+	value, err := kirPEExpressionAt(lowerer.arena, ref)
+	if err != nil {
+		return err
+	}
+	if value == nil {
+		return fmt.Errorf("direct PE backend cannot validate an incomplete unsigned conversion")
+	}
 	inputBits := kirPEBits(value.Type)
 	if (value.Type != "Int" && inputBits == 0) || bits == 0 {
 		return fmt.Errorf("direct PE backend cannot validate an incomplete unsigned conversion")
@@ -988,7 +1281,7 @@ func (lowerer *kirPEMachine) emitUnsignedConversionCheck(value *KIRExpr, bits ui
 	return lowerer.machine.emitConditionalJump(0x85, lowerer.runtimeFailureLabel("value is outside unsigned range"))
 }
 
-func (lowerer *kirPEMachine) emitBinary(expression *KIRExpr) error {
+func (lowerer *kirPEMachine) emitBinary(expression *kirPEExpression) error {
 	if expression.Operator == "&&" || expression.Operator == "||" {
 		if err := lowerer.emitExpr(expression.Left); err != nil {
 			return err
@@ -1030,8 +1323,12 @@ func (lowerer *kirPEMachine) emitBinary(expression *KIRExpr) error {
 	}
 	lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x89, 0xc1, 0x58)
 	lowerer.machine.windowsStackDepth -= 8
-	leftType := kirPEType(expression.Left.Type)
-	unsigned := strings.HasPrefix(expression.Left.Type, "UInt")
+	leftExpression, err := kirPEExpressionAt(lowerer.arena, expression.Left)
+	if err != nil {
+		return err
+	}
+	leftType := kirPEType(leftExpression.Type)
+	unsigned := strings.HasPrefix(leftExpression.Type, "UInt")
 	switch expression.Operator {
 	case "+":
 		lowerer.machine.code = append(lowerer.machine.code, 0x48, 0x01, 0xc8)
@@ -1154,7 +1451,7 @@ func kirPEBits(name string) uint8 {
 	}
 }
 
-func (lowerer *kirPEMachine) emitFunctionCall(expression *KIRExpr) error {
+func (lowerer *kirPEMachine) emitFunctionCall(expression *kirPEExpression) error {
 	target := strings.TrimPrefix(expression.CallTarget, "function:")
 	function, ok := lowerer.program.byTarget[target]
 	if !ok {

@@ -315,8 +315,8 @@ func TestDirectPECapabilitiesAreCheckedBeforeAnyEmissionPath(t *testing.T) {
 	if preflight == token.NoPos || staticLowering == token.NoPos || preflight >= staticLowering {
 		t.Fatal("PE must validate supported language features from typed MIR before attempting output generation")
 	}
-	if recursiveView != token.NoPos && preflight >= recursiveView {
-		t.Fatal("PE capability preflight must happen before dynamic lowering materializes a recursive KIR view")
+	if recursiveView != token.NoPos {
+		t.Fatal("PE lowering must not materialize a recursive KIR view")
 	}
 }
 
@@ -400,9 +400,83 @@ func TestDirectPEStaticLowererConsumesOnlyTheValidatedArena(t *testing.T) {
 		}
 		return true
 	})
-	if staticPos == token.NoPos || recursiveViewPos == token.NoPos || staticPos >= recursiveViewPos {
-		t.Fatal("PE static output must lower from arena indexes before any dynamic compatibility view is created")
+	if staticPos == token.NoPos || recursiveViewPos != token.NoPos {
+		t.Fatal("PE static and dynamic output paths must lower without a recursive compatibility view")
 	}
+}
+
+func TestDirectPEDynamicLoweringFollowsValidatedArenaReferences(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "kir_machine_pe.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted := map[string]bool{
+		"validateKIRDirectPE":           false,
+		"validateKIRDirectPEExpr":       false,
+		"validateKIRDirectPEStatements": false,
+		"collectKIRPEBindings":          false,
+		"emitStatements":                false,
+		"emitExpr":                      false,
+	}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		if _, needed := wanted[function.Name.Name]; needed {
+			wanted[function.Name.Name] = true
+			ast.Inspect(function.Type, func(node ast.Node) bool {
+				identifier, ok := node.(*ast.Ident)
+				if ok && identifier.Name == "KIRDocument" {
+					t.Errorf("%s accepts recursive KIRDocument", function.Name.Name)
+				}
+				return true
+			})
+		}
+		if function.Body != nil {
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name := ""
+				switch callee := call.Fun.(type) {
+				case *ast.Ident:
+					name = callee.Name
+				case *ast.SelectorExpr:
+					name = callee.Sel.Name
+				}
+				if name == "documentView" || name == "toKIRDocument" || name == "validateKIRDocument" {
+					t.Errorf("PE dynamic lowerer %s reconstructs or revalidates recursive KIR via %s", function.Name.Name, name)
+				}
+				return true
+			})
+		}
+	}
+	for name, found := range wanted {
+		if !found {
+			t.Errorf("PE dynamic lowerer is missing arena consumer %s", name)
+		}
+	}
+	for _, function := range file.Decls {
+		declaration, ok := function.(*ast.FuncDecl)
+		if !ok || declaration.Name.Name != "validateKIRDirectPE" {
+			continue
+		}
+		acceptsArena := false
+		ast.Inspect(declaration.Type.Params, func(node ast.Node) bool {
+			identifier, ok := node.(*ast.Ident)
+			if ok && identifier.Name == "KIRArena" {
+				acceptsArena = true
+			}
+			return true
+		})
+		if !acceptsArena {
+			t.Fatal("validateKIRDirectPE must accept the validated arena")
+		}
+		return
+	}
+	t.Fatal("validateKIRDirectPE is missing")
 }
 
 func TestDirectELFStaticLowererConsumesOnlyTheValidatedArena(t *testing.T) {

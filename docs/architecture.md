@@ -61,10 +61,10 @@ arena; source compilation does not encode and decode JSON to reach it.
 All production run and native-build entrypoints begin from `ValidatedMIR`.
 That value no longer retains the recursive wire document: its canonical state
 is the typed arena, including explicit optional references and bounded child
-ranges. C AOT now follows those indexes and creates only scalar per-row views.
-The interpreter and the dynamic ELF/PE lowerers still request a complete typed
-compatibility view, so their recursive walkers remain to be migrated. This is
-a real intermediate step, not the final single-representation boundary. The
+ranges. C AOT and direct PE now follow those indexes and create only scalar
+per-row views. The interpreter and dynamic ELF lowerer still request a complete
+typed compatibility view, so their recursive walkers remain to be migrated.
+This is a real intermediate step, not the final single-representation boundary. The
 interpreter keeps its runtime state in a persistent KIR executor, including
 across REPL snippets. Direct ELF and PE reject constructs outside their
 supported subsets without an AST-derived fallback.

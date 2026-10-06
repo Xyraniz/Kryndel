@@ -12,6 +12,86 @@ import (
 	"testing"
 )
 
+func TestDirectPEArenaViewsPreserveEdgesWithoutRecursiveChildren(t *testing.T) {
+	program, checker := testProgram(t, `
+fn add(value: Int) -> Int { return value + 1 }
+fn main() -> Nil {
+    let result: Int = add(41)
+    println(result)
+    return nil
+}
+`)
+	mir, err := CompileMIR(program, checker, NativeTarget{OS: "windows", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arena := mir.arena
+	if err := arena.validateReferences(); err != nil {
+		t.Fatal(err)
+	}
+	var sawBinary, sawCall, sawStatement, sawFunction bool
+	for index, row := range arena.Expressions {
+		ref := MIRRef{Index: MIRIndex(index), Present: true}
+		view, err := kirPEExpressionAt(arena, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if view.KIRExpr.Left != nil || view.KIRExpr.Right != nil || view.KIRExpr.Operand != nil || view.KIRExpr.Callee != nil || len(view.KIRExpr.Args) != 0 {
+			t.Fatalf("PE expression row %d contains recursive child fields", index)
+		}
+		if row.Value.Kind == "binary" {
+			sawBinary = true
+			if !view.Left.Present || !view.Right.Present || view.Left.Index != row.Left.Index || view.Right.Index != row.Right.Index {
+				t.Fatalf("PE binary view lost arena child references: %#v", row)
+			}
+		}
+		if row.Value.Kind == "call" && row.Args.Count != 0 {
+			sawCall = true
+			if uint32(len(view.Args)) != row.Args.Count {
+				t.Fatalf("PE call view lost arguments: got %d, want %d", len(view.Args), row.Args.Count)
+			}
+			for _, argument := range view.Args {
+				if !argument.Present || uint64(argument.Index) >= uint64(len(arena.Expressions)) {
+					t.Fatalf("PE call view contains an invalid argument reference: %#v", argument)
+				}
+			}
+		}
+	}
+	for index, row := range arena.Statements {
+		view, err := kirPEStatementAt(arena, MIRIndex(index))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if view.KIRStmt.Init != nil || view.KIRStmt.Expr != nil || view.KIRStmt.Target != nil || len(view.KIRStmt.Then) != 0 || len(view.KIRStmt.Body) != 0 {
+			t.Fatalf("PE statement row %d contains recursive child fields", index)
+		}
+		if row.Init.Present {
+			sawStatement = true
+			if !view.Init.Present || view.Init.Index != row.Init.Index {
+				t.Fatalf("PE statement view lost initializer reference: %#v", row)
+			}
+		}
+	}
+	for index, row := range arena.Functions {
+		view, err := kirPEFunctionAt(arena, MIRIndex(index))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(view.KIRFunction.Body) != 0 || len(view.KIRFunction.Params) != 0 || len(view.KIRFunction.Captures) != 0 {
+			t.Fatalf("PE function row %d contains recursive child fields", index)
+		}
+		if row.Params.Count != 0 {
+			sawFunction = true
+			if uint32(len(view.Params)) != row.Params.Count {
+				t.Fatalf("PE function view lost parameters: got %d, want %d", len(view.Params), row.Params.Count)
+			}
+		}
+	}
+	if !sawBinary || !sawCall || !sawStatement || !sawFunction {
+		t.Fatalf("PE arena edge fixture incomplete: binary=%t call=%t statement=%t function=%t", sawBinary, sawCall, sawStatement, sawFunction)
+	}
+}
+
 func TestDirectPELowersValidatedKIRWithoutAST(t *testing.T) {
 	cases := []struct {
 		name           string

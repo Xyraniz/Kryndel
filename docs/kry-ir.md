@@ -5,17 +5,17 @@ KIR (`kry-ir`) is the stable interchange format between the checked Kryndel fron
 KIR v5 is the canonical interchange tree. Go `ValidatedMIR` stores a flat,
 typed arena built from the checked frontend or from one validated decode of
 this wire format, with immutable source-text and visibility sidecars for
-diagnostics. `EmitKIR` serializes from the arena. Current Go lowerer bodies
-for the interpreter and dynamic ELF/PE paths still obtain a complete typed
-compatibility view from it. C AOT and the static ELF/PE output paths traverse
-arena indexes directly. Dynamic indexed lowering and the interpreter migration
-remain unfinished; the compatibility view is not JSON-decoded.
+diagnostics. `EmitKIR` serializes from the arena. The interpreter and dynamic
+ELF path still obtain a complete typed compatibility view from it. C AOT, all
+PE paths, and static ELF output traverse arena indexes directly. Dynamic ELF
+and interpreter migration remain unfinished; the compatibility view is not
+JSON-decoded.
 
 The original checked source AST is no longer a production lowering input. The
 Engine interpreter keeps globals, closures, and runtime lifecycle state in a
 persistent KIR executor. Its current recursive walker consumes a typed view
-materialized from the validated arena. C AOT follows arena indexes directly
-and materializes only scalar node rows while emitting code.
+materialized from the validated arena. C AOT and direct PE follow arena indexes
+directly and materialize only scalar node rows while emitting code.
 Direct ELF lowers its bounded native subset from KIR and rejects unsupported
 forms without falling back to an AST-derived model. `DecodeMIR` can be executed
 by the interpreter or consumed by native lowerers without source or visibility
