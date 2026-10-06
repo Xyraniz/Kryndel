@@ -80,7 +80,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	directPEStaticExprKinds, err := kirLanguageKinds("kir_machine_pe.go", "directPEStaticKIRValue", "Kind", map[string]string{
+	directPEStaticExprKinds, err := kirLanguageKinds("kir_machine_pe_arena.go", "directPEStaticMIRValue", "Kind", map[string]string{
 		"int": "ExInt", "float": "ExFloat", "bool": "ExBool", "string": "ExString", "var": "ExVar", "nil": "ExNil", "binary": "ExBinary", "call": "ExCall",
 	})
 	if err != nil {

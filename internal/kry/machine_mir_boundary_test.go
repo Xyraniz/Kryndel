@@ -166,6 +166,96 @@ func TestNativeCapabilityPreflightTraversesValidatedArena(t *testing.T) {
 	}
 }
 
+func TestDirectPEStaticLowererConsumesOnlyTheValidatedArena(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "kir_machine_pe_arena.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted := map[string]bool{
+		"directStaticOutputMIR":        false,
+		"directPEStaticMIRValue":       false,
+		"directStaticMIRArenaConstant": false,
+	}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || !wantedHas(wanted, function.Name.Name) {
+			continue
+		}
+		wanted[function.Name.Name] = true
+		ast.Inspect(function.Type, func(node ast.Node) bool {
+			identifier, ok := node.(*ast.Ident)
+			if ok && (identifier.Name == "KIRDocument" || identifier.Name == "KIRExpr" || identifier.Name == "KIRStmt") {
+				t.Errorf("%s accepts recursive wire type %s", function.Name.Name, identifier.Name)
+			}
+			return true
+		})
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := ""
+			switch callee := call.Fun.(type) {
+			case *ast.Ident:
+				name = callee.Name
+			case *ast.SelectorExpr:
+				name = callee.Sel.Name
+			}
+			switch name {
+			case "documentView", "toKIRDocument", "DecodeKIR":
+				t.Errorf("%s reconstructs a recursive KIR document through %s", function.Name.Name, name)
+			}
+			return true
+		})
+	}
+	for name, found := range wanted {
+		if !found {
+			t.Errorf("arena static lowerer does not declare %s", name)
+		}
+	}
+
+	peFile, err := parser.ParseFile(token.NewFileSet(), "kir_machine_pe.go", nil, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lowerer *ast.FuncDecl
+	for _, declaration := range peFile.Decls {
+		candidate, ok := declaration.(*ast.FuncDecl)
+		if ok && candidate.Name.Name == "lowerDirectPEKIR" {
+			lowerer = candidate
+			break
+		}
+	}
+	if lowerer == nil {
+		t.Fatal("lowerDirectPEKIR is missing")
+	}
+	var staticPos, recursiveViewPos token.Pos
+	ast.Inspect(lowerer.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if ok && selector.Sel.Name == "documentView" {
+			recursiveViewPos = call.Pos()
+			return true
+		}
+		identifier, ok := call.Fun.(*ast.Ident)
+		if ok && identifier.Name == "directStaticOutputMIR" {
+			staticPos = call.Pos()
+		}
+		return true
+	})
+	if staticPos == token.NoPos || recursiveViewPos == token.NoPos || staticPos >= recursiveViewPos {
+		t.Fatal("PE static output must lower from arena indexes before any dynamic compatibility view is created")
+	}
+}
+
+func wantedHas(wanted map[string]bool, name string) bool {
+	_, exists := wanted[name]
+	return exists
+}
+
 func TestRunForREPLRequiresValidatedMIR(t *testing.T) {
 	program, checker := testProgram(t, "let visible = 42")
 	runtime, diagnostic := newASTOracleRuntime(program, checker, DefaultLimits(), Sandbox{}, nil)

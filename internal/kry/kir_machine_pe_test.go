@@ -181,3 +181,46 @@ func TestDirectPEKIRUnsupportedDiagnosticsDoNotNeedAST(t *testing.T) {
 		t.Fatalf("KIR unsupported diagnostic = %v", err)
 	}
 }
+
+func TestDirectPEStaticOutputLoweringUsesValidatedArena(t *testing.T) {
+	program, checker := testProgram(t, "fn main() -> Nil { println(\"Kryndel \" + str(40 + 2)); return nil }")
+	encoded, err := EmitKIR(program, checker, NativeTarget{OS: "windows", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mir, err := DecodeMIR(encoded, checker.Env.Lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, checker = nil, nil
+	chunks, err := directStaticOutputMIR(mir.arena, mir.limits.MaxOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(bytes.Join(chunks, nil)); got != "Kryndel 42\n" {
+		t.Fatalf("arena static output = %q, want %q", got, "Kryndel 42\n")
+	}
+	image, err := lowerDirectPEKIR(mir, mir.limits)
+	if err != nil {
+		t.Fatalf("lower validated arena to PE: %v", err)
+	}
+	if _, err := pe.NewFile(bytes.NewReader(image)); err != nil {
+		t.Fatalf("Go PE parser rejected arena-lowered image: %v", err)
+	}
+}
+
+func TestDirectPEStaticLoweringRequiresAnEntryPoint(t *testing.T) {
+	program, checker := testProgram(t, "fn helper() -> Int { return 42 }")
+	encoded, err := EmitKIR(program, checker, NativeTarget{OS: "windows", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mir, err := DecodeMIR(encoded, checker.Env.Lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = lowerDirectPEKIR(mir, mir.limits)
+	if err == nil || !strings.Contains(err.Error(), "program requires top-level statements or main() -> Nil") {
+		t.Fatalf("PE lowering without an entry point returned %v", err)
+	}
+}

@@ -28,23 +28,38 @@ type kirPEValidatedProgram struct {
 	byTarget  map[string]*kirPEFunction
 }
 
-// lowerDirectPEKIR accepts only a decoded, validated KIR document. The PE
-// traversal and storage model are KIR-native; directMachine is used only as a
-// Win64 instruction/label/data writer.
+// lowerDirectPEKIR accepts only validated MIR. Static output and capability
+// checks use the typed arena; dynamic PE traversal still uses a compatibility
+// document while that lowering path is being migrated.
 func lowerDirectPEKIR(mir *ValidatedMIR, limits Limits) ([]byte, error) {
 	if mir == nil || mir.arena == nil {
 		return nil, fmt.Errorf("direct PE backend requires validated MIR")
 	}
+	arena := mir.arena
+	if err := arena.validateReferences(); err != nil {
+		return nil, fmt.Errorf("invalid validated MIR arena: %w", err)
+	}
+	target := NativeTarget{OS: arena.Target.OS, Arch: arena.Target.Arch, GUI: arena.Target.GUI}
+	if err := validateNativeOutputTarget("pe-direct", target); err != nil {
+		return nil, err
+	}
+	if err := validateMIRFunctionValueSupport(mir, "pe-direct"); err != nil {
+		return nil, err
+	}
+	output, staticErr := directStaticOutputMIR(arena, limits.MaxOutputBytes)
+	if staticErr == nil {
+		image, err := buildDirectStaticPE(output, arena.Target.GUI, limits)
+		if err != nil {
+			return nil, err
+		}
+		if limit := limits.MaxArtifactBytes; limit > 0 && len(image) > limit {
+			return nil, fmt.Errorf("direct PE exceeds configured artifact limit")
+		}
+		return image, nil
+	}
 	document, err := mir.documentView()
 	if err != nil {
 		return nil, err
-	}
-	if err := validateKIRDirectPEFunctionValues(document); err != nil {
-		return nil, err
-	}
-	output, staticErr := directStaticOutputKIR(document, limits.MaxOutputBytes)
-	if staticErr == nil {
-		return buildDirectStaticPE(output, document.Target.GUI, limits)
 	}
 	validated, err := validateKIRDirectPE(document)
 	if err != nil {
@@ -113,255 +128,6 @@ func lowerDirectPEKIR(mir *ValidatedMIR, limits Limits) ([]byte, error) {
 		pePut16(image, peSubsystemOffset, peSubsystemGUI)
 	}
 	return image, nil
-}
-
-func validateKIRDirectPEFunctionValues(document *KIRDocument) error {
-	if document == nil {
-		return fmt.Errorf("missing validated KIR document")
-	}
-	unsupported := func() error {
-		return fmt.Errorf("pe-direct backend does not support function values or closures; use the interpreter")
-	}
-	for _, structure := range document.Structs {
-		if structure == nil {
-			continue
-		}
-		for _, field := range structure.Fields {
-			if field != nil && kirPETypeContainsFunction(field.Type) {
-				return unsupported()
-			}
-		}
-	}
-	for _, function := range document.Functions {
-		if function == nil {
-			continue
-		}
-		if kirPETypeContainsFunction(function.Return) || kirPETypeContainsFunction(function.Receiver) {
-			return unsupported()
-		}
-		for _, parameter := range function.Params {
-			if parameter != nil && (kirPETypeContainsFunction(parameter.Type) || (parameter.Default != nil && kirPEExprUsesFunctionValue(parameter.Default))) {
-				return unsupported()
-			}
-		}
-		if kirPEStmtsUseFunctionValue(function.Body) {
-			return unsupported()
-		}
-	}
-	if kirPEStmtsUseFunctionValue(document.Statements) {
-		return unsupported()
-	}
-	return nil
-}
-
-func kirPETypeContainsFunction(name string) bool {
-	return strings.Contains(name, "fn(")
-}
-
-func kirPEStmtsUseFunctionValue(statements []*KIRStmt) bool {
-	for _, statement := range statements {
-		if statement == nil {
-			continue
-		}
-		for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
-			if kirPEExprUsesFunctionValue(expression) {
-				return true
-			}
-		}
-		for _, block := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
-			if kirPEStmtsUseFunctionValue(block) {
-				return true
-			}
-		}
-		for _, arm := range statement.Arms {
-			if arm != nil && kirPEStmtsUseFunctionValue(arm.Body) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func kirPEExprUsesFunctionValue(expression *KIRExpr) bool {
-	if expression == nil {
-		return false
-	}
-	if expression.Kind == "lambda" || kirPETypeContainsFunction(expression.Type) {
-		return true
-	}
-	for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Base, expression.Receiver, expression.Callee} {
-		if kirPEExprUsesFunctionValue(child) {
-			return true
-		}
-	}
-	for _, list := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
-		for _, child := range list {
-			if kirPEExprUsesFunctionValue(child) {
-				return true
-			}
-		}
-	}
-	return expression.Lambda != nil && kirPEStmtsUseFunctionValue(expression.Lambda.Body)
-}
-
-func directStaticOutputKIR(document *KIRDocument, outputLimit int64) ([][]byte, error) {
-	if document == nil {
-		return nil, fmt.Errorf("missing validated KIR document")
-	}
-	statements := document.Statements
-	if len(statements) == 0 {
-		for _, function := range document.Functions {
-			if function == nil || function.Name != "main" {
-				continue
-			}
-			if len(function.Params) != 0 || function.Return != "Nil" {
-				return nil, fmt.Errorf("direct PE backend requires main() -> Nil")
-			}
-			statements = function.Body
-			if len(statements) > 0 {
-				last := statements[len(statements)-1]
-				if last != nil && last.Kind == "return" {
-					if last.Return == nil || last.Return.Kind != "nil" {
-						return nil, fmt.Errorf("direct PE backend supports only return nil in main")
-					}
-					statements = statements[:len(statements)-1]
-				}
-			}
-			break
-		}
-	}
-	if len(document.Statements) > 0 {
-		for _, function := range document.Functions {
-			if function != nil && function.Name == "main" {
-				return nil, fmt.Errorf("direct PE backend does not support both top-level statements and main")
-			}
-		}
-	}
-	environment := map[string]Value{}
-	var output [][]byte
-	var outputBytes int64
-	for _, statement := range statements {
-		if statement == nil {
-			continue
-		}
-		switch statement.Kind {
-		case "let", "const":
-			if statement.Init == nil {
-				return nil, fmt.Errorf("direct PE backend requires an initializer for '%s'", statement.Name)
-			}
-			value, ok := directPEStaticKIRValue(statement.Init, environment)
-			if !ok {
-				return nil, fmt.Errorf("direct PE backend requires a compile-time value for '%s'", statement.Name)
-			}
-			environment[statement.Name] = value
-			output = append(output, nil)
-		case "expr":
-			if statement.Expr == nil || statement.Expr.Kind != "call" || statement.Expr.Receiver != nil || (statement.Expr.CallTarget != "builtin:print" && statement.Expr.CallTarget != "builtin:println") || len(statement.Expr.Args) != 1 {
-				return nil, fmt.Errorf("direct PE backend supports only print/println of static values")
-			}
-			value, ok := directPEStaticKIRValue(statement.Expr.Args[0], environment)
-			if !ok {
-				return nil, fmt.Errorf("direct PE backend requires a compile-time print value")
-			}
-			text := display(value)
-			if statement.Expr.CallTarget == "builtin:println" {
-				text += "\n"
-			}
-			chunk := []byte(text)
-			output = append(output, chunk)
-			outputBytes += int64(len(chunk))
-		default:
-			return nil, fmt.Errorf("direct PE backend does not support statement kind %s", statement.Kind)
-		}
-		if outputBytes > outputLimit {
-			return nil, errDirectOutputLimit
-		}
-	}
-	return output, nil
-}
-
-func directPEStaticKIRValue(expression *KIRExpr, environment map[string]Value) (Value, bool) {
-	if expression == nil {
-		return nilVal(), false
-	}
-	if expression.Const != nil {
-		return directStaticKIRConstant(expression.Const)
-	}
-	switch expression.Kind {
-	case "int":
-		return intVal(expression.Int), true
-	case "bool":
-		return boolVal(expression.Bool), true
-	case "string":
-		return stringVal(expression.String), true
-	case "float":
-		return floatVal(expression.Float), true
-	case "nil":
-		return nilVal(), true
-	case "var":
-		value, ok := environment[expression.Name]
-		return value, ok
-	case "call":
-		if expression.Receiver != nil || expression.CallTarget != "builtin:str" || len(expression.Args) != 1 {
-			return nilVal(), false
-		}
-		value, ok := directPEStaticKIRValue(expression.Args[0], environment)
-		if !ok {
-			return nilVal(), false
-		}
-		return stringVal(display(value)), true
-	case "binary":
-		left, leftOK := directPEStaticKIRValue(expression.Left, environment)
-		right, rightOK := directPEStaticKIRValue(expression.Right, environment)
-		if !leftOK || !rightOK {
-			return nilVal(), false
-		}
-		if expression.Operator == "+" && left.Kind == VString && right.Kind == VString {
-			return stringVal(left.S + right.S), true
-		}
-		if left.Kind == VInt && right.Kind == VInt {
-			var value int64
-			var ok bool
-			switch expression.Operator {
-			case "+":
-				value, ok = addI(left.I, right.I)
-			case "-":
-				value, ok = subI(left.I, right.I)
-			case "*":
-				value, ok = mulI(left.I, right.I)
-			case "/":
-				value, ok = divI(left.I, right.I)
-			case "%":
-				value, ok = remI(left.I, right.I)
-			default:
-				return nilVal(), false
-			}
-			if ok {
-				return intVal(value), true
-			}
-		}
-		if left.Kind == VUInt && right.Kind == VUInt && left.UBits == right.UBits {
-			var value uint64
-			switch expression.Operator {
-			case "+":
-				value = left.U + right.U
-			case "-":
-				value = left.U - right.U
-			case "*":
-				value = left.U * right.U
-			case "&":
-				value = left.U & right.U
-			case "^":
-				value = left.U ^ right.U
-			case "|":
-				value = left.U | right.U
-			default:
-				return nilVal(), false
-			}
-			return uintVal(left.UBits, value), true
-		}
-	}
-	return nilVal(), false
 }
 
 type kirPEMachine struct {
