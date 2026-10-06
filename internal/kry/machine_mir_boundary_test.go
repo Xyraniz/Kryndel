@@ -66,6 +66,78 @@ func TestProductionLoweringEntrypointsUseValidatedMIR(t *testing.T) {
 	checkCalls("native.go", "EmitC", "GenerateC")
 }
 
+func TestCAOTLoweringUsesFlatValidatedMIRRows(t *testing.T) {
+	for _, fileName := range []string{"codegen.go", "codegen_arena.go"} {
+		file, err := parser.ParseFile(token.NewFileSet(), fileName, nil, parser.AllErrors)
+		if err != nil {
+			t.Fatalf("parse %s: %v", fileName, err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			identifier, ok := call.Fun.(*ast.Ident)
+			if ok && (identifier.Name == "documentView" || identifier.Name == "toKIRDocument") {
+				t.Errorf("C AOT lowering in %s reconstructs a recursive KIR document", fileName)
+			}
+			return true
+		})
+		if fileName != "codegen.go" {
+			continue
+		}
+		for _, declaration := range file.Decls {
+			typeDeclaration, ok := declaration.(*ast.GenDecl)
+			if !ok || typeDeclaration.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range typeDeclaration.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok || typeSpec.Name.Name != "cgen" {
+					continue
+				}
+				structure, ok := typeSpec.Type.(*ast.StructType)
+				if !ok {
+					t.Fatal("cgen is not a struct")
+				}
+				ast.Inspect(structure.Fields, func(node ast.Node) bool {
+					identifier, ok := node.(*ast.Ident)
+					if ok && identifier.Name == "KIRDocument" {
+						t.Error("cgen retains a recursive KIR document instead of the validated arena")
+					}
+					return true
+				})
+			}
+		}
+	}
+
+	program, checker := testProgram(t, "fn main() -> Nil { println(1 + 2); return nil }\n")
+	mir, err := CompileMIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arena := mir.arena
+	generator := &cgen{
+		arena:           arena,
+		expressionNodes: make([]*KIRExpr, len(arena.Expressions)),
+		expressionIndex: make(map[*KIRExpr]MIRIndex, len(arena.Expressions)),
+	}
+	for index, row := range arena.Expressions {
+		if row.Value.Kind != "binary" {
+			continue
+		}
+		expression := generator.expression(MIRRef{Index: MIRIndex(index), Present: true})
+		if expression.Left != nil || expression.Right != nil || len(expression.Args) != 0 {
+			t.Fatal("C AOT expression view contains recursive child nodes")
+		}
+		if !row.Left.Present || !row.Right.Present || generator.expression(row.Left) == nil || generator.expression(row.Right) == nil {
+			t.Fatal("C AOT cannot follow checked expression references through the validated arena")
+		}
+		return
+	}
+	t.Fatal("test KIR has no binary expression row")
+}
+
 func TestNativeMachineLowerersDoNotAcceptSourceAST(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {

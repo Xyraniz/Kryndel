@@ -18,11 +18,13 @@ import (
 // deterministic, and unsupported constructs are rejected with a clear
 // diagnostic instead of silently degrading.
 type cgen struct {
-	doc     *KIRDocument
-	limits  Limits
-	buf     strings.Builder
-	tmp     int
-	structs []*KIRStruct
+	arena         *KIRArena
+	limits        Limits
+	buf           strings.Builder
+	tmp           int
+	functions     []*KIRFunction
+	topStatements []*KIRStmt
+	structs       []*KIRStruct
 	// structInstances are the concrete runtime types represented by the
 	// generated KValue structs. Generic declarations contribute one entry per
 	// closed type used by a reachable function specialization.
@@ -37,6 +39,13 @@ type cgen struct {
 	functionIndex         map[*KIRFunction]int
 	functionByTarget      map[string]*KIRFunction
 	functionsByName       map[string][]*KIRFunction
+	expressionNodes       []*KIRExpr
+	statementNodes        []*KIRStmt
+	functionNodes         []*KIRFunction
+	armNodes              []*KIRArm
+	expressionIndex       map[*KIRExpr]MIRIndex
+	statementIndex        map[*KIRStmt]MIRIndex
+	armIndex              map[*KIRArm]MIRIndex
 	builtins              map[string]Builtin
 	functionInstances     []*cFunctionInstance
 	functionInstanceByKey map[string]*cFunctionInstance
@@ -108,16 +117,22 @@ func generateCFromValidatedKIR(mir *ValidatedMIR, limits Limits, obfuscate bool)
 	if mir == nil || mir.arena == nil {
 		return "", fmt.Errorf("missing validated MIR")
 	}
-	document, err := mir.documentView()
-	if err != nil {
-		return "", err
+	if err := mir.arena.validateReferences(); err != nil {
+		return "", fmt.Errorf("invalid validated MIR arena: %w", err)
 	}
-	if kirDocumentUsesFunctionValues(document) {
+	if kirArenaUsesFunctionValue(mir.arena) {
 		return "", fmt.Errorf("C backend does not support function values or closures; use the interpreter")
 	}
 	g := &cgen{
-		doc:                   document,
+		arena:                 mir.arena,
 		limits:                limits,
+		expressionNodes:       make([]*KIRExpr, len(mir.arena.Expressions)),
+		statementNodes:        make([]*KIRStmt, len(mir.arena.Statements)),
+		functionNodes:         make([]*KIRFunction, len(mir.arena.Functions)),
+		armNodes:              make([]*KIRArm, len(mir.arena.Arms)),
+		expressionIndex:       make(map[*KIRExpr]MIRIndex, len(mir.arena.Expressions)),
+		statementIndex:        make(map[*KIRStmt]MIRIndex, len(mir.arena.Statements)),
+		armIndex:              make(map[*KIRArm]MIRIndex, len(mir.arena.Arms)),
 		structID:              map[string]int{},
 		enumID:                map[string]int{},
 		fnName:                map[*KIRFunction]string{},
@@ -128,19 +143,20 @@ func generateCFromValidatedKIR(mir *ValidatedMIR, limits Limits, obfuscate bool)
 		builtins:              Builtins(),
 		functionInstanceByKey: map[string]*cFunctionInstance{},
 		globals:               map[string]bool{},
-		traitImpls:            document.TraitImpls,
+		traitImpls:            mir.arena.TraitImpls,
 		obfuscate:             obfuscate,
 	}
-	g.structs = append(g.structs, document.Structs...)
-	g.enums = append(g.enums, document.Enums...)
+	g.structs = append(g.structs, mir.arena.Structs...)
+	g.enums = append(g.enums, mir.arena.Enums...)
+	g.functions = g.functionList(mir.arena.TopFunctions)
+	g.topStatements = g.statementList(mir.arena.TopStatements)
 	for i, e := range g.enums {
 		g.enumID[e.Name] = i
 	}
-	for i, f := range document.Functions {
-		g.functionIndex[f] = i
+	for _, f := range g.functions {
 		g.functionsByName[f.Name] = append(g.functionsByName[f.Name], f)
 	}
-	for _, f := range document.Functions {
+	for _, f := range g.functions {
 		target := f.Name
 		if len(g.functionsByName[f.Name]) > 1 {
 			target = kirFunctionTargetFromDocument(f)
@@ -221,7 +237,7 @@ func (g *cgen) planInstances() error {
 			}
 		}
 	}
-	for _, function := range g.doc.Functions {
+	for _, function := range g.functions {
 		if g.functionNeedsSpecialization(function) {
 			continue
 		}
@@ -230,7 +246,7 @@ func (g *cgen) planInstances() error {
 			return err
 		}
 	}
-	if err := g.walkStatementsForInstances(g.doc.Statements, nil); err != nil {
+	if err := g.walkStatementsForInstances(g.topStatements, nil); err != nil {
 		return err
 	}
 	for next := 0; next < len(g.functionInstances); next++ {
@@ -254,7 +270,7 @@ func (g *cgen) walkFunctionForInstances(function *KIRFunction, substitutions map
 			return err
 		}
 	}
-	return g.walkStatementsForInstances(function.Body, substitutions)
+	return g.walkStatementsForInstances(g.functionBody(function), substitutions)
 }
 
 func (g *cgen) walkStatementsForInstances(statements []*KIRStmt, substitutions map[string]string) error {
@@ -262,18 +278,27 @@ func (g *cgen) walkStatementsForInstances(statements []*KIRStmt, substitutions m
 		if statement == nil {
 			continue
 		}
-		for _, expression := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
+		row := g.statementRow(statement)
+		if row == nil {
+			return fmt.Errorf("C AOT cannot read an invalid statement from validated MIR")
+		}
+		for _, expression := range []*KIRExpr{
+			g.expression(row.Init), g.expression(row.Expr), g.expression(row.Target), g.expression(row.ValueExpr),
+			g.expression(row.Cond), g.expression(row.Iter), g.expression(row.Return), g.expression(row.Scrutinee),
+		} {
 			if err := g.walkExprForInstances(expression, substitutions); err != nil {
 				return err
 			}
 		}
-		for _, branch := range [][]*KIRStmt{statement.Then, statement.Else, statement.Body} {
+		for _, branch := range [][]*KIRStmt{
+			g.statementList(row.Then), g.statementList(row.Else), g.statementList(row.Body),
+		} {
 			if err := g.walkStatementsForInstances(branch, substitutions); err != nil {
 				return err
 			}
 		}
-		for _, arm := range statement.Arms {
-			if err := g.walkStatementsForInstances(arm.Body, substitutions); err != nil {
+		for _, arm := range g.armList(row.Arms) {
+			if err := g.walkStatementsForInstances(g.armBody(arm), substitutions); err != nil {
 				return err
 			}
 		}
@@ -292,29 +317,48 @@ func (g *cgen) walkExprForInstances(expression *KIRExpr, substitutions map[strin
 		}
 	}
 	if expression.Kind == "call" && expression.TraitName != "" {
+		row := g.expressionRow(expression)
+		if row == nil {
+			return fmt.Errorf("C AOT cannot read an invalid expression from validated MIR")
+		}
+		receiver := g.expression(row.Receiver)
 		function, err := g.traitImplementationMethod(expression, substitutions)
 		if err != nil {
 			return err
 		}
 		if g.functionNeedsSpecialization(function) {
-			if _, err := g.functionInstanceForCall(function, expression.Receiver, expression.GenericArguments, substitutions, true); err != nil {
+			if _, err := g.functionInstanceForCall(function, receiver, expression.GenericArguments, substitutions, true); err != nil {
 				return err
 			}
 		}
 	} else if expression.Kind == "call" && strings.HasPrefix(expression.CallTarget, "function:") {
+		row := g.expressionRow(expression)
+		if row == nil {
+			return fmt.Errorf("C AOT cannot read an invalid expression from validated MIR")
+		}
+		receiver := g.expression(row.Receiver)
 		function := g.functionByTarget[strings.TrimPrefix(expression.CallTarget, "function:")]
 		if function != nil && g.functionNeedsSpecialization(function) {
-			if _, err := g.functionInstanceForCall(function, expression.Receiver, expression.GenericArguments, substitutions, true); err != nil {
+			if _, err := g.functionInstanceForCall(function, receiver, expression.GenericArguments, substitutions, true); err != nil {
 				return err
 			}
 		}
 	}
-	for _, child := range []*KIRExpr{expression.Left, expression.Right, expression.Operand, expression.Callee, expression.Base, expression.Receiver} {
+	row := g.expressionRow(expression)
+	if row == nil {
+		return fmt.Errorf("C AOT cannot read an invalid expression from validated MIR")
+	}
+	for _, child := range []*KIRExpr{
+		g.expression(row.Left), g.expression(row.Right), g.expression(row.Operand),
+		g.expression(row.Callee), g.expression(row.Base), g.expression(row.Receiver),
+	} {
 		if err := g.walkExprForInstances(child, substitutions); err != nil {
 			return err
 		}
 	}
-	for _, children := range [][]*KIRExpr{expression.Args, expression.Items, expression.MapKeys, expression.Values} {
+	for _, children := range [][]*KIRExpr{
+		g.expressionList(row.Args), g.expressionList(row.Items), g.expressionList(row.MapKeys), g.expressionList(row.Values),
+	} {
 		for _, child := range children {
 			if err := g.walkExprForInstances(child, substitutions); err != nil {
 				return err
@@ -325,10 +369,14 @@ func (g *cgen) walkExprForInstances(expression *KIRExpr, substitutions map[strin
 }
 
 func (g *cgen) traitImplementationMethod(expression *KIRExpr, substitutions map[string]string) (*KIRFunction, error) {
-	if expression == nil || expression.Receiver == nil || expression.Receiver.Type == "" || expression.TraitName == "" {
+	if expression == nil || expression.TraitName == "" {
 		return nil, fmt.Errorf("C AOT cannot resolve an incomplete trait method call")
 	}
-	receiverType := substituteKIRType(expression.Receiver.Type, substitutions)
+	receiver := g.expressionEdge(expression, func(row MIRExpression) MIRRef { return row.Receiver })
+	if receiver == nil || receiver.Type == "" {
+		return nil, fmt.Errorf("C AOT cannot resolve an incomplete trait method receiver")
+	}
+	receiverType := substituteKIRType(receiver.Type, substitutions)
 	parsedReceiver, ok := parseKIRTypeExpression(receiverType)
 	if !ok || g.structDecl(parsedReceiver.Name) == nil || typeContainsKIRVariable(receiverType, kirOpenTypeParameters(substitutions)) {
 		return nil, fmt.Errorf("C AOT trait dispatch for %s.%s requires a concrete struct receiver after specialization", expression.TraitName, expression.Name)
@@ -491,7 +539,7 @@ func (g *cgen) fail(format string, args ...any) {
 // runtime dispatch table can resolve handler names dynamically (the name may
 // be passed through a wrapper function rather than written as a literal).
 func (g *cgen) collectPolyHandlers() {
-	for _, f := range g.doc.Functions {
+	for _, f := range g.functions {
 		if g.functionNeedsSpecialization(f) {
 			continue
 		}
@@ -507,7 +555,7 @@ func (g *cgen) collectPolyHandlers() {
 // collectGlobals records top-level let/const bindings so they can be emitted
 // as file-scope cells and referenced from functions.
 func (g *cgen) collectGlobals() {
-	for _, st := range g.doc.Statements {
+	for _, st := range g.topStatements {
 		if st.Kind == "let" || st.Kind == "const" {
 			g.globals[st.Name] = true
 		}
@@ -530,7 +578,7 @@ func (g *cgen) isGlobal(name string) bool {
 
 // emitGlobals declares file-scope cells for every top-level binding.
 func (g *cgen) emitGlobals() {
-	for _, st := range g.doc.Statements {
+	for _, st := range g.topStatements {
 		if st.Kind == "let" || st.Kind == "const" {
 			fmt.Fprintf(&g.buf, "static KValue %s;\n", cBindingName(st.Name))
 		}
@@ -686,7 +734,7 @@ func (g *cgen) emitFunction(f *KIRFunction, name, bodyName string, substitutions
 		}
 		g.locals[len(g.locals)-1][p.Name] = true
 	}
-	g.block(f.Body, "  ")
+	g.block(g.functionBody(f), "  ")
 	g.locals = g.locals[:len(g.locals)-1]
 	g.functionSubstitution = previousSubstitution
 	fmt.Fprintf(&g.buf, "  return kv_nil();\n}\n")
@@ -719,9 +767,9 @@ func (g *cgen) emitMain() {
 	g.deferBases = nil
 	g.loopBases = nil
 	g.topLevel = true
-	g.block(g.doc.Statements, "  ")
+	g.block(g.topStatements, "  ")
 	g.topLevel = false
-	if len(g.doc.Statements) == 0 {
+	if len(g.topStatements) == 0 {
 		if functions := g.functionsByName["main"]; len(functions) == 1 {
 			f := functions[0]
 			fmt.Fprintf(&g.buf, "  { k_argc = 0; k_args[0] = kv_nil(); KValue _r = %s(); (void)_r; k_check_wall_time(); }\n", g.fnName[f])
@@ -763,33 +811,40 @@ func (g *cgen) stmt(s *KIRStmt, indent string) {
 	if s == nil {
 		return
 	}
+	row := g.statementRow(s)
+	if row == nil {
+		return
+	}
 	fmt.Fprintf(&g.buf, "%sk_step();\n", indent)
 	switch kirStmtKind(s.Kind) {
 	case StLet, StConst:
 		if g.topLevel {
-			fmt.Fprintf(&g.buf, "%s%s = %s;\n", indent, cBindingName(s.Name), g.expr(s.Init))
+			fmt.Fprintf(&g.buf, "%s%s = %s;\n", indent, cBindingName(s.Name), g.expr(g.expression(row.Init)))
 		} else {
-			fmt.Fprintf(&g.buf, "%sKValue %s = %s;\n", indent, cBindingName(s.Name), g.expr(s.Init))
+			fmt.Fprintf(&g.buf, "%sKValue %s = %s;\n", indent, cBindingName(s.Name), g.expr(g.expression(row.Init)))
 			if len(g.locals) > 0 {
 				g.locals[len(g.locals)-1][s.Name] = true
 			}
 		}
 	case StAssign:
-		if s.Target == nil || s.Target.Kind != "var" {
+		target := g.expression(row.Target)
+		if target == nil || target.Kind != "var" {
 			g.fail("assignment target must be a binding")
 			return
 		}
-		fmt.Fprintf(&g.buf, "%s%s = %s;\n", indent, cBindingName(s.Target.Name), g.expr(s.Value))
+		fmt.Fprintf(&g.buf, "%s%s = %s;\n", indent, cBindingName(target.Name), g.expr(g.expression(row.ValueExpr)))
 	case StExpr:
-		fmt.Fprintf(&g.buf, "%s{ KValue _e = %s; (void)_e; }\n", indent, g.expr(s.Expr))
+		fmt.Fprintf(&g.buf, "%s{ KValue _e = %s; (void)_e; }\n", indent, g.expr(g.expression(row.Expr)))
 	case StIf:
 		cond := g.next()
-		fmt.Fprintf(&g.buf, "%s{ KValue %s = %s; if (%s.tag != K_BOOL) kfail(\"condition must be Bool\");\n", indent, cond, g.expr(s.Cond), cond)
+		fmt.Fprintf(&g.buf, "%s{ KValue %s = %s; if (%s.tag != K_BOOL) kfail(\"condition must be Bool\");\n", indent, cond, g.expr(g.expression(row.Cond)), cond)
 		fmt.Fprintf(&g.buf, "%s  if (%s.u.b) {\n", indent, cond)
-		g.nestedBlock(s.Then, indent+"    ")
-		if len(s.Else) > 0 {
+		thenBody := g.statementList(row.Then)
+		elseBody := g.statementList(row.Else)
+		g.nestedBlock(thenBody, indent+"    ")
+		if len(elseBody) > 0 {
 			fmt.Fprintf(&g.buf, "%s  } else {\n", indent)
-			g.nestedBlock(s.Else, indent+"    ")
+			g.nestedBlock(elseBody, indent+"    ")
 		}
 		fmt.Fprintf(&g.buf, "%s  }\n%s}\n", indent, indent)
 	case StWhile:
@@ -798,8 +853,8 @@ func (g *cgen) stmt(s *KIRStmt, indent string) {
 		g.loopBases = append(g.loopBases, lb)
 		fmt.Fprintf(&g.buf, "%s  while (1) {\n", indent)
 		cond := g.next()
-		fmt.Fprintf(&g.buf, "%s    KValue %s = %s; if (%s.tag != K_BOOL) kfail(\"condition must be Bool\"); if (!%s.u.b) break;\n", indent, cond, g.expr(s.Cond), cond, cond)
-		g.nestedBlock(s.Body, indent+"    ")
+		fmt.Fprintf(&g.buf, "%s    KValue %s = %s; if (%s.tag != K_BOOL) kfail(\"condition must be Bool\"); if (!%s.u.b) break;\n", indent, cond, g.expr(g.expression(row.Cond)), cond, cond)
+		g.nestedBlock(g.statementList(row.Body), indent+"    ")
 		fmt.Fprintf(&g.buf, "%s  }\n", indent)
 		g.loopBases = g.loopBases[:len(g.loopBases)-1]
 		fmt.Fprintf(&g.buf, "%s}\n", indent)
@@ -809,10 +864,10 @@ func (g *cgen) stmt(s *KIRStmt, indent string) {
 		idx := g.next()
 		fmt.Fprintf(&g.buf, "%s{ int %s = k_ndefers;\n", indent, lb)
 		g.loopBases = append(g.loopBases, lb)
-		fmt.Fprintf(&g.buf, "%s  KValue %s = k_iter_items(%s);\n", indent, it, g.expr(s.Iter))
+		fmt.Fprintf(&g.buf, "%s  KValue %s = k_iter_items(%s);\n", indent, it, g.expr(g.expression(row.Iter)))
 		fmt.Fprintf(&g.buf, "%s  for (size_t %s = 0; %s < %s.u.a.len; %s++) {\n", indent, idx, idx, it, idx)
 		fmt.Fprintf(&g.buf, "%s    KValue %s = %s.u.a.items[%s];\n", indent, cBindingName(s.Name), it, idx)
-		g.nestedBlock(s.Body, indent+"    ")
+		g.nestedBlock(g.statementList(row.Body), indent+"    ")
 		fmt.Fprintf(&g.buf, "%s  }\n", indent)
 		g.loopBases = g.loopBases[:len(g.loopBases)-1]
 		fmt.Fprintf(&g.buf, "%s}\n", indent)
@@ -829,7 +884,7 @@ func (g *cgen) stmt(s *KIRStmt, indent string) {
 	case StDefer:
 		g.emitDefer(s, indent)
 	case StUnsafe:
-		g.nestedBlock(s.Body, indent)
+		g.nestedBlock(g.statementList(row.Body), indent)
 	default:
 		g.fail("unsupported statement kind %q", s.Kind)
 	}
@@ -848,29 +903,41 @@ func (g *cgen) emitUnwind(indent string) {
 }
 
 func (g *cgen) emitReturn(s *KIRStmt, indent string) {
+	row := g.statementRow(s)
+	if row == nil {
+		return
+	}
+	value := g.expression(row.Return)
 	fmt.Fprintf(&g.buf, "%swhile (k_ndefers > %s) k_defers[--k_ndefers]();\n", indent, g.fnBase)
-	if s.Return == nil {
+	if value == nil {
 		fmt.Fprintf(&g.buf, "%sreturn kv_nil();\n", indent)
 		return
 	}
-	if g.emitTailCallReturn(s.Return, indent) {
+	if g.emitTailCallReturn(value, indent) {
 		return
 	}
 	// `return expr?` where the function returns Option/Result yields the
 	// operand itself: some(x) wrapped is identical to the original Option.
-	if s.Return.Kind == "propagate" {
-		fmt.Fprintf(&g.buf, "%sreturn %s;\n", indent, g.expr(s.Return.Operand))
+	if value.Kind == "propagate" {
+		operand := g.expressionEdge(value, func(row MIRExpression) MIRRef { return row.Operand })
+		fmt.Fprintf(&g.buf, "%sreturn %s;\n", indent, g.expr(operand))
 		return
 	}
-	fmt.Fprintf(&g.buf, "%sreturn %s;\n", indent, g.expr(s.Return))
+	fmt.Fprintf(&g.buf, "%sreturn %s;\n", indent, g.expr(value))
 }
 
 func (g *cgen) emitTailCallReturn(expression *KIRExpr, indent string) bool {
 	if expression == nil || expression.Kind != "call" || !expression.Tail {
 		return false
 	}
+	row := g.expressionRow(expression)
+	if row == nil {
+		return false
+	}
+	receiver := g.expression(row.Receiver)
+	args := g.expressionList(row.Args)
 	var function *KIRFunction
-	if expression.Receiver != nil {
+	if receiver != nil {
 		if expression.TraitName != "" {
 			var err error
 			function, err = g.traitImplementationMethod(expression, g.functionSubstitution)
@@ -887,7 +954,7 @@ func (g *cgen) emitTailCallReturn(expression *KIRExpr, indent string) bool {
 	if function == nil {
 		return false
 	}
-	name, err := g.functionSymbolForCall(function, expression.Receiver, expression.GenericArguments)
+	name, err := g.functionSymbolForCall(function, receiver, expression.GenericArguments)
 	if err != nil {
 		g.fail("%s", err)
 		return false
@@ -900,14 +967,14 @@ func (g *cgen) emitTailCallReturn(expression *KIRExpr, indent string) bool {
 	frame := g.next()
 	fmt.Fprintf(&g.buf, "%s{ KValue %s[K_MAX_ARGS];\n", indent, frame)
 	argumentOffset := 0
-	if expression.Receiver != nil {
-		fmt.Fprintf(&g.buf, "%s  %s[0] = %s;\n", indent, frame, g.expr(expression.Receiver))
+	if receiver != nil {
+		fmt.Fprintf(&g.buf, "%s  %s[0] = %s;\n", indent, frame, g.expr(receiver))
 		argumentOffset = 1
 	}
-	for index, argument := range expression.Args {
+	for index, argument := range args {
 		fmt.Fprintf(&g.buf, "%s  %s[%d] = %s;\n", indent, frame, index+argumentOffset, g.expr(argument))
 	}
-	argumentCount := argumentOffset + len(expression.Args)
+	argumentCount := argumentOffset + len(args)
 	fmt.Fprintf(&g.buf, "%s  k_argc = %d; memcpy(k_args, %s, sizeof(KValue)*%d); k_tail_target = %s; k_tail_pending = 1; return kv_nil();\n", indent, argumentCount, frame, argumentCount, bodyName)
 	fmt.Fprintf(&g.buf, "%s}\n", indent)
 	return true
@@ -916,15 +983,16 @@ func (g *cgen) emitTailCallReturn(expression *KIRExpr, indent string) bool {
 func (g *cgen) emitDefer(s *KIRStmt, indent string) {
 	name := "k_defer_" + g.next()
 	fmt.Fprintf(&g.buf, "%svoid %s(void) {\n", indent, name)
-	g.block(s.Body, indent+"  ")
+	g.block(g.statementEdges(s, func(row MIRStatement) MIRNodeRefList { return row.Body }), indent+"  ")
 	fmt.Fprintf(&g.buf, "%s}\n", indent)
 	fmt.Fprintf(&g.buf, "%sk_defers[k_ndefers++] = %s;\n", indent, name)
 }
 
 func (g *cgen) emitMatch(s *KIRStmt, indent string) {
 	scrut := g.next()
-	fmt.Fprintf(&g.buf, "%s{ KValue %s = %s;\n", indent, scrut, g.expr(s.Scrutinee))
-	for i, arm := range s.Arms {
+	scrutinee := g.statementEdge(s, func(row MIRStatement) MIRRef { return row.Scrutinee })
+	fmt.Fprintf(&g.buf, "%s{ KValue %s = %s;\n", indent, scrut, g.expr(scrutinee))
+	for i, arm := range g.statementArms(s) {
 		cond := g.patternCond(arm.Pattern, scrut)
 		if i == 0 {
 			fmt.Fprintf(&g.buf, "%s  if (%s) {\n", indent, cond)
@@ -938,7 +1006,7 @@ func (g *cgen) emitMatch(s *KIRStmt, indent string) {
 			}
 			fmt.Fprintf(&g.buf, "%s    KValue %s = "+inner+";\n", indent, cBindingName(arm.Pattern.Binding), scrut)
 		}
-		g.block(arm.Body, indent+"    ")
+		g.block(g.armBody(arm), indent+"    ")
 		fmt.Fprintf(&g.buf, "%s  }\n", indent)
 	}
 	fmt.Fprintf(&g.buf, "%s  else { kfail(\"no match arm matched\"); }\n", indent)
@@ -1047,9 +1115,9 @@ func (g *cgen) expr(e *KIRExpr) string {
 		}
 		return fmt.Sprintf("kv_enum(%d, %d)", id, g.variantIndex(e.EnumType, e.EnumVariant))
 	case ExArray:
-		return g.arrayLiteral(e.Items)
+		return g.arrayLiteral(g.expressionEdges(e, func(row MIRExpression) MIRNodeRefList { return row.Items }))
 	case ExSet:
-		return g.setLiteral(e.Items)
+		return g.setLiteral(g.expressionEdges(e, func(row MIRExpression) MIRNodeRefList { return row.Items }))
 	case ExMap:
 		return g.mapLiteral(e)
 	case ExStruct:
@@ -1059,7 +1127,9 @@ func (g *cgen) expr(e *KIRExpr) string {
 	case ExBinary:
 		return g.binary(e)
 	case ExIndex:
-		return fmt.Sprintf("k_index(%s, %s)", g.expr(e.Base), g.expr(e.Left))
+		base := g.expressionEdge(e, func(row MIRExpression) MIRRef { return row.Base })
+		index := g.expressionEdge(e, func(row MIRExpression) MIRRef { return row.Left })
+		return fmt.Sprintf("k_index(%s, %s)", g.expr(base), g.expr(index))
 	case ExField:
 		return g.field(e)
 	case ExPropagate:
@@ -1102,15 +1172,21 @@ func (g *cgen) setLiteral(items []*KIRExpr) string {
 }
 
 func (g *cgen) mapLiteral(e *KIRExpr) string {
-	if len(e.MapKeys) == 0 {
+	row := g.expressionRow(e)
+	if row == nil {
+		return "kv_nil()"
+	}
+	keys := g.expressionList(row.MapKeys)
+	values := g.expressionList(row.Values)
+	if len(keys) == 0 {
 		return "kv_map((KValue*)kalloc(1), (KValue*)kalloc(1), 0)"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "({ KValue *_k = (KValue*)kalloc(sizeof(KValue)*%d); KValue *_v = (KValue*)kalloc(sizeof(KValue)*%d); size_t _n = 0;", len(e.MapKeys), len(e.MapKeys))
-	for i := range e.MapKeys {
+	fmt.Fprintf(&b, "({ KValue *_k = (KValue*)kalloc(sizeof(KValue)*%d); KValue *_v = (KValue*)kalloc(sizeof(KValue)*%d); size_t _n = 0;", len(keys), len(keys))
+	for i := range keys {
 		kv := g.next()
 		vv := g.next()
-		fmt.Fprintf(&b, " KValue %s = %s; KValue %s = %s;", kv, g.expr(e.MapKeys[i]), vv, g.expr(e.Values[i]))
+		fmt.Fprintf(&b, " KValue %s = %s; KValue %s = %s;", kv, g.expr(keys[i]), vv, g.expr(values[i]))
 		fmt.Fprintf(&b, " for (size_t _i=0;_i<_n;_i++) if (k_equal(_k[_i],%s)) kfail(\"duplicate map key\");", kv)
 		fmt.Fprintf(&b, " _k[_n] = %s; _v[_n] = %s; _n++;", kv, vv)
 	}
@@ -1137,6 +1213,7 @@ func (g *cgen) structLiteral(e *KIRExpr) string {
 		return "kv_nil()"
 	}
 	var b strings.Builder
+	values := g.expressionEdges(e, func(row MIRExpression) MIRNodeRefList { return row.Values })
 	fmt.Fprintf(&b, "({ KValue *_f = (KValue*)kalloc(sizeof(KValue)*%d);", len(decl.Fields))
 	for i := range decl.Fields {
 		fmt.Fprintf(&b, " _f[%d] = kv_nil();", i)
@@ -1152,7 +1229,7 @@ func (g *cgen) structLiteral(e *KIRExpr) string {
 			g.fail("unknown field '%s'", name)
 			continue
 		}
-		fmt.Fprintf(&b, " _f[%d] = %s;", idx, g.expr(e.Values[i]))
+		fmt.Fprintf(&b, " _f[%d] = %s;", idx, g.expr(values[i]))
 	}
 	fmt.Fprintf(&b, " kv_struct(%d, _f); })", id)
 	return b.String()
@@ -1168,7 +1245,8 @@ func (g *cgen) structDecl(name string) *KIRStruct {
 }
 
 func (g *cgen) unary(e *KIRExpr) string {
-	op := g.expr(e.Operand)
+	operand := g.expressionEdge(e, func(row MIRExpression) MIRRef { return row.Operand })
+	op := g.expr(operand)
 	switch e.Operator {
 	case "!":
 		return fmt.Sprintf("k_not(%s)", op)
@@ -1182,9 +1260,11 @@ func (g *cgen) unary(e *KIRExpr) string {
 }
 
 func (g *cgen) binary(e *KIRExpr) string {
-	l := g.expr(e.Left)
-	r := g.expr(e.Right)
-	intOperands := e.Left != nil && e.Right != nil && e.Left.Type == "Int" && e.Right.Type == "Int"
+	left := g.expressionEdge(e, func(row MIRExpression) MIRRef { return row.Left })
+	right := g.expressionEdge(e, func(row MIRExpression) MIRRef { return row.Right })
+	l := g.expr(left)
+	r := g.expr(right)
+	intOperands := left != nil && right != nil && left.Type == "Int" && right.Type == "Int"
 	switch e.Operator {
 	case "&&":
 		return fmt.Sprintf("k_and(%s, %s)", l, r)
@@ -1251,11 +1331,12 @@ func (g *cgen) binary(e *KIRExpr) string {
 }
 
 func (g *cgen) field(e *KIRExpr) string {
-	base := g.expr(e.Base)
+	baseExpression := g.expressionEdge(e, func(row MIRExpression) MIRRef { return row.Base })
+	base := g.expr(baseExpression)
 	// Resolve the field index from the base expression's static type.
 	var decl *KIRStruct
-	if e.Base != nil && e.Base.Type != "" {
-		if baseType, ok := parseKIRTypeExpression(e.Base.Type); ok {
+	if baseExpression != nil && baseExpression.Type != "" {
+		if baseType, ok := parseKIRTypeExpression(baseExpression.Type); ok {
 			decl = g.structDecl(baseType.Name)
 		}
 	}
@@ -1277,12 +1358,18 @@ func (g *cgen) field(e *KIRExpr) string {
 }
 
 func (g *cgen) propagate(e *KIRExpr) string {
-	operand := g.expr(e.Operand)
+	operand := g.expr(g.expressionEdge(e, func(row MIRExpression) MIRRef { return row.Operand }))
 	return fmt.Sprintf("({ KValue _p = %s; if (_p.tag == K_OPTION) { if (!_p.u.opt.present) return _p; _p = *_p.u.opt.inner; } else if (_p.tag == K_RESULT) { if (!_p.u.res.ok) return _p; _p = *_p.u.res.inner; } else kfail(\"'?' requires an Option or Result\"); _p; })", operand)
 }
 
 func (g *cgen) call(e *KIRExpr) string {
-	if e.Receiver != nil {
+	row := g.expressionRow(e)
+	if row == nil {
+		return "kv_nil()"
+	}
+	receiver := g.expression(row.Receiver)
+	args := g.expressionList(row.Args)
+	if receiver != nil {
 		return g.methodCall(e)
 	}
 	if strings.HasPrefix(e.CallTarget, "builtin:") {
@@ -1304,10 +1391,12 @@ func (g *cgen) call(e *KIRExpr) string {
 		g.fail("unknown function target '%s'", target)
 		return "kv_nil()"
 	}
-	return g.functionCall(f, nil, e.Args, e.GenericArguments)
+	return g.functionCall(f, nil, args, e.GenericArguments)
 }
 
 func (g *cgen) methodCall(e *KIRExpr) string {
+	receiver := g.expressionEdge(e, func(row MIRExpression) MIRRef { return row.Receiver })
+	args := g.expressionEdges(e, func(row MIRExpression) MIRNodeRefList { return row.Args })
 	var f *KIRFunction
 	if e.TraitName != "" {
 		var err error
@@ -1323,7 +1412,7 @@ func (g *cgen) methodCall(e *KIRExpr) string {
 		g.fail("unknown method '%s'", e.Name)
 		return "kv_nil()"
 	}
-	return g.functionCall(f, e.Receiver, e.Args, e.GenericArguments)
+	return g.functionCall(f, receiver, args, e.GenericArguments)
 }
 
 func (g *cgen) functionCall(f *KIRFunction, receiver *KIRExpr, args []*KIRExpr, genericArguments []string) string {
@@ -1350,7 +1439,14 @@ func (g *cgen) functionCall(f *KIRFunction, receiver *KIRExpr, args []*KIRExpr, 
 // builtinCall lowers a builtin invocation. Unsupported builtins are rejected
 // with a clear diagnostic so the native backend never silently misbehaves.
 func (g *cgen) builtinCall(e *KIRExpr, b Builtin) string {
-	arg := func(i int) string { return g.expr(e.Args[i]) }
+	args := g.expressionEdges(e, func(row MIRExpression) MIRNodeRefList { return row.Args })
+	arg := func(i int) string {
+		if i < 0 || i >= len(args) {
+			g.fail("KIR builtin %q has an invalid argument index", b.Name)
+			return "kv_nil()"
+		}
+		return g.expr(args[i])
+	}
 	switch b.Name {
 	case "print":
 		return fmt.Sprintf("({ k_print(%s, 0); kv_nil(); })", arg(0))
@@ -1719,13 +1815,14 @@ func (g *cgen) builtinCall(e *KIRExpr, b Builtin) string {
 // threadSpawn lowers thread_spawn("worker") to a thread handle wrapping the
 // worker function pointer.
 func (g *cgen) threadSpawn(e *KIRExpr) string {
-	if len(e.Args) != 1 || e.Args[0].Kind != "string" {
+	args := g.expressionEdges(e, func(row MIRExpression) MIRNodeRefList { return row.Args })
+	if len(args) != 1 || args[0].Kind != "string" {
 		g.fail("thread_spawn requires a literal worker function name")
 		return "kv_nil()"
 	}
-	f := g.uniqueFunction(e.Args[0].String)
+	f := g.uniqueFunction(args[0].String)
 	if f == nil {
-		g.fail("thread_spawn references unknown or overloaded worker '%s'", e.Args[0].String)
+		g.fail("thread_spawn references unknown or overloaded worker '%s'", args[0].String)
 		return "kv_nil()"
 	}
 	if g.functionNeedsSpecialization(f) {
@@ -1737,31 +1834,34 @@ func (g *cgen) threadSpawn(e *KIRExpr) string {
 
 // taskSpawn lowers task_spawn(group, "worker") to a task-group-owned thread.
 func (g *cgen) taskSpawn(e *KIRExpr) string {
-	if len(e.Args) != 2 || e.Args[1].Kind != "string" {
+	args := g.expressionEdges(e, func(row MIRExpression) MIRNodeRefList { return row.Args })
+	if len(args) != 2 || args[1].Kind != "string" {
 		g.fail("task_spawn requires a literal worker function name")
 		return "kv_nil()"
 	}
-	f := g.uniqueFunction(e.Args[1].String)
+	f := g.uniqueFunction(args[1].String)
 	if f == nil {
-		g.fail("task_spawn references unknown or overloaded worker '%s'", e.Args[1].String)
+		g.fail("task_spawn references unknown or overloaded worker '%s'", args[1].String)
 		return "kv_nil()"
 	}
 	if g.functionNeedsSpecialization(f) {
 		g.fail("C AOT does not support generic worker function values without explicit type arguments")
 		return "kv_nil()"
 	}
-	return fmt.Sprintf("k_task_spawn(%s, %s, 0, 0)", g.expr(e.Args[0]), g.fnName[f])
+	return fmt.Sprintf("k_task_spawn(%s, %s, 0, 0)", g.expr(args[0]), g.fnName[f])
 }
 
 // polyRegister lowers poly_register(slot, handler, priority). The checker has
 // already constrained handler to an unambiguous literal function name.
 func (g *cgen) polyRegister(e *KIRExpr) string {
-	return fmt.Sprintf("k_poly_register(%s, %s, %s)", g.expr(e.Args[0]), g.expr(e.Args[1]), g.expr(e.Args[2]))
+	args := g.expressionEdges(e, func(row MIRExpression) MIRNodeRefList { return row.Args })
+	return fmt.Sprintf("k_poly_register(%s, %s, %s)", g.expr(args[0]), g.expr(args[1]), g.expr(args[2]))
 }
 
 // polyReorder lowers poly_reorder(slot, handler, before).
 func (g *cgen) polyReorder(e *KIRExpr) string {
-	return fmt.Sprintf("k_poly_reorder(%s, %s, %s)", g.expr(e.Args[0]), g.expr(e.Args[1]), g.expr(e.Args[2]))
+	args := g.expressionEdges(e, func(row MIRExpression) MIRNodeRefList { return row.Args })
+	return fmt.Sprintf("k_poly_reorder(%s, %s, %s)", g.expr(args[0]), g.expr(args[1]), g.expr(args[2]))
 }
 
 // cString renders a Go string as a C string literal.
