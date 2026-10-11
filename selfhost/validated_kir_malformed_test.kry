@@ -51,6 +51,15 @@ fn generated_document(target_os: String, structs: String, enums: String, stateme
     return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"bad.kry\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":" + structs + ",\"enums\":" + enums + ",\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":" + statements + "}"
 }
 
+fn generated_document_with_parameter(target_os: String, structs: String, enums: String, statements: String, parameter_name: String, parameter_type: String, source: String) -> String {
+    let mut os_json: String = "\"linux\""
+    if target_os == "windows" { os_json = "\"windows\"" }
+    let binding: String = "{\"name\":\"" + parameter_name + "\",\"type\":\"" + parameter_type + "\",\"mutable\":false,\"source\":\"" + source + "\",\"line\":1,\"column\":1}"
+    let parameter: String = "{\"name\":\"" + parameter_name + "\",\"type\":\"" + parameter_type + "\",\"default\":null,\"binding\":" + binding + "}"
+    let function: String = "{\"name\":\"generated\",\"source\":\"" + source + "\",\"line\":1,\"column\":1,\"public\":false,\"worker\":false,\"unsafe\":false,\"trait\":\"\",\"module\":\"\",\"receiver\":null,\"return\":\"Nil\",\"type_params\":[],\"params\":[" + parameter + "],\"captures\":[],\"body\":" + statements + "}"
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"" + source + "\",\"target\":{\"os\":" + os_json + ",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[],\"structs\":" + structs + ",\"enums\":" + enums + ",\"traits\":[],\"trait_impls\":[],\"functions\":[" + function + "],\"statements\":[]}"
+}
+
 fn generated_expression_statement(expression: String) -> String {
     return "[{\"kind\":\"expr\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"expr\":" + expression + "}]"
 }
@@ -118,7 +127,7 @@ fn valid_generic_struct_document() -> String {
     let declaration: String = "[{\"name\":\"Envelope\",\"public\":false,\"module\":\"\",\"type_params\":[{\"name\":\"T\",\"constraint\":\"\"}],\"fields\":[{\"name\":\"payload\",\"public\":false,\"type\":\"Option[Array[T]]\"}]}]"
     let value: String = "{\"kind\":\"var\",\"source\":\"valid.kry\",\"line\":1,\"column\":1,\"type\":\"Option[Array[Int]]\",\"name\":\"payload\",\"binding\":{\"name\":\"payload\",\"type\":\"Option[Array[Int]]\",\"mutable\":false,\"source\":\"valid.kry\",\"line\":1,\"column\":1}}"
     let expression: String = "{\"kind\":\"struct\",\"source\":\"valid.kry\",\"line\":1,\"column\":1,\"type\":\"Envelope[Int]\",\"const\":null,\"struct_name\":\"Envelope\",\"struct_type\":\"Envelope[Int]\",\"fields\":[\"payload\"],\"values\":[" + value + "]}"
-    return generated_document("linux", declaration, "[]", generated_expression_statement(expression))
+    return generated_document_with_parameter("linux", declaration, "[]", generated_expression_statement(expression), "payload", "Option[Array[Int]]", "valid.kry")
 }
 
 fn valid_unicode_type_identifier_document(target_os: String) -> String {
@@ -136,6 +145,12 @@ fn constrained_generic_struct_document(target_os: String, constraint: String, in
     let declaration: String = "[{\"name\":\"Number\",\"public\":false,\"module\":\"\",\"type_params\":[{\"name\":\"T\",\"constraint\":\"" + constraint + "\"}],\"fields\":[{\"name\":\"value\",\"public\":false,\"type\":\"T\"}]}]"
     let expression: String = "{\"kind\":\"struct\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + instance_type + "\",\"const\":null,\"struct_name\":\"Number\",\"struct_type\":\"" + instance_type + "\",\"fields\":[\"value\"],\"values\":[" + value + "]}"
     return generated_document(target_os, declaration, "[]", generated_expression_statement(expression))
+}
+
+fn constrained_generic_struct_document_with_value_parameter(target_os: String, constraint: String, instance_type: String, value: String, value_type: String) -> String {
+    let declaration: String = "[{\"name\":\"Number\",\"public\":false,\"module\":\"\",\"type_params\":[{\"name\":\"T\",\"constraint\":\"" + constraint + "\"}],\"fields\":[{\"name\":\"value\",\"public\":false,\"type\":\"T\"}]}]"
+    let expression: String = "{\"kind\":\"struct\",\"source\":\"bad.kry\",\"line\":1,\"column\":1,\"type\":\"" + instance_type + "\",\"const\":null,\"struct_name\":\"Number\",\"struct_type\":\"" + instance_type + "\",\"fields\":[\"value\"],\"values\":[" + value + "]}"
+    return generated_document_with_parameter(target_os, declaration, "[]", generated_expression_statement(expression), "value", value_type, "bad.kry")
 }
 
 fn nested_generic_constraint_document(target_os: String, outer_constraint: String) -> String {
@@ -264,13 +279,13 @@ fn main() -> Nil {
     assert_eq(accepted_by_generated_path(valid_struct_document()), true)
     assert_eq(valid_generated_kir(valid_generic_struct_document()), true)
     assert_eq(valid_generated_kir(constrained_generic_struct_document("linux", "Numeric", "Number[Int]", generated_int_expression(1))), true)
-    assert_eq(valid_generated_kir(constrained_generic_struct_document("linux", "Any", "Number[FFIBuffer]", generated_variable_expression("FFIBuffer"))), true)
-    assert_eq(valid_generated_kir(constrained_generic_struct_document("linux", "Any", "Number[Array[FFIBuffer]]", generated_variable_expression("Array[FFIBuffer]"))), true)
+    assert_eq(valid_generated_kir(constrained_generic_struct_document_with_value_parameter("linux", "Any", "Number[FFIBuffer]", generated_variable_expression("FFIBuffer"), "FFIBuffer")), true)
+    assert_eq(valid_generated_kir(constrained_generic_struct_document_with_value_parameter("linux", "Any", "Number[Array[FFIBuffer]]", generated_variable_expression("Array[FFIBuffer]"), "Array[FFIBuffer]")), true)
     assert_eq(rejected_before_lowering(constrained_generic_struct_document("linux", "Any", "Number[MadeUp]", generated_variable_expression("MadeUp"))), true)
     assert_eq(rejected_before_lowering(constrained_generic_struct_document("linux", "Numeric", "Number[String]", generated_string_expression())), true)
     assert_eq(rejected_by_generated_path(constrained_generic_struct_document("windows", "Numeric", "Number[String]", generated_string_expression())), true)
-    assert_eq(valid_generated_kir(constrained_generic_struct_document("linux", "Copy", "Number[Array[Int]]", generated_variable_expression("Array[Int]"))), true)
-    assert_eq(valid_generated_kir(constrained_generic_struct_document("linux", "Copy", "Number[Map[String,Int]]", generated_variable_expression("Map[String,Int]"))), true)
+    assert_eq(valid_generated_kir(constrained_generic_struct_document_with_value_parameter("linux", "Copy", "Number[Array[Int]]", generated_variable_expression("Array[Int]"), "Array[Int]")), true)
+    assert_eq(valid_generated_kir(constrained_generic_struct_document_with_value_parameter("linux", "Copy", "Number[Map[String,Int]]", generated_variable_expression("Map[String,Int]"), "Map[String,Int]")), true)
     assert_eq(rejected_before_lowering(constrained_generic_struct_document("linux", "Copy", "Number[FFIBuffer]", generated_variable_expression("FFIBuffer"))), true)
     assert_eq(valid_generated_kir(nested_generic_constraint_document("linux", "Numeric")), true)
     assert_eq(rejected_before_lowering(nested_generic_constraint_document("linux", "Copy")), true)
@@ -305,7 +320,7 @@ fn main() -> Nil {
     assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("%", "Int", generated_int_expression(5), generated_int_expression(2))))), true)
     assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("&", "UInt8", generated_uint_expression(1), generated_uint_expression(2))))), true)
     assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("<<", "UInt8", generated_uint_expression(1), generated_int_expression(2))))), true)
-    assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("+", "Array[Int]", generated_variable_expression("Array[Int]"), generated_variable_expression("Array[Int]"))))), true)
+    assert_eq(valid_generated_kir(generated_document_with_parameter("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("+", "Array[Int]", generated_variable_expression("Array[Int]"), generated_variable_expression("Array[Int]"))), "value", "Array[Int]", "bad.kry")), true)
     assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_binary_expression("+", "String", generated_int_expression(1), generated_int_expression(2))))), false)
     assert_eq(rejected_by_generated_path(generated_document("windows", "[]", "[]", generated_expression_statement(generated_binary_expression("+", "String", generated_int_expression(1), generated_int_expression(2))))), true)
     assert_eq(valid_generated_kir(generated_document("linux", "[]", "[]", generated_expression_statement(generated_unary_expression("!", "Bool", generated_int_expression(1))))), false)

@@ -11,7 +11,9 @@ import (
 )
 
 func TestSelfhostPEBackendSupportsWin64StackArguments(t *testing.T) {
-	image, d := runSelfhostPEBackend(t, `
+	// Portable decoding and typed semantic validation precede native lowering.
+	// This fixture used 5,296,928 instructions; allow less than 10% headroom.
+	image, d := runSelfhostPEBackendWithBudget(t, `
 fn five(a: Int, b: Int, c: Int, d: Int, e: Int) -> Int {
     return a + b * 10 + c * 100 + d * 1000 + e * 10000
 }
@@ -31,7 +33,7 @@ fn main() -> Nil {
     println(seven(1, five(1, 2, 3, 4, 5), 3, 4, 5, 6, 7))
     println(eight(1, 2, 3, 4, 5, 6, 7, 8))
 }
-`)
+`, 5_750_000)
 	if d != nil {
 		t.Fatalf("selfhost PE backend rejected Win64 stack arguments: %v", d)
 	}

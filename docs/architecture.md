@@ -102,19 +102,45 @@ Backend support limits and KIR version history are tracked in the
 [KIR reference](kry-ir.md).
 
 The Go interpreter and native lowerers consume the indexed arena described
-above. Selfhost validates decoded portable JSON, converts it to schema-shaped
-typed tables for declarations, functions, bindings, expressions, statements,
-patterns, values, spans, and child references, and retains only those tables in
-`ValidatedKIR`; the ELF and dynamic ELF/PE lowerers consume typed arena views,
-not the recursive `Json` document or a lossy ELF projection. Go and Kry use
-separately implemented row types; the shared schema and corpus guard the wire
-contract and representative validator parity, but do not prove identical
-in-memory layouts. Selfhost source compilation still serializes generated KIR
-to JSON text and parses it before validation. The single validated-IR boundary
-is therefore still incomplete across toolchains.
+above. The selfhost source parser accumulates schema-shaped typed rows and
+references directly in `KIRTypedArena`, including declarations, functions,
+bindings, expressions, statements, patterns, values, spans, imports, and child
+ranges. `build_source_arena` combines imported modules into the same arena;
+`compile_path` passes it through `validate_kir_typed_arena` before calling
+`compile_validated_kir`. It does not serialize or parse KIR JSON. The optional
+`--emit-kir` path serializes the validated arena at the output boundary.
+
+Portable JSON enters selfhost through a separate decoder boundary. Its wire
+shape is checked, it is converted to the typed arena, and the same arena
+validator checks references, node shapes, checked types, lexical bindings,
+mutability, call targets, and v6 metadata before returning `ValidatedKIR`.
+That value retains the typed arena only. The ELF and dynamic ELF/PE lowerers
+consume indexed `KIRTypedNodeView` values, whose child access follows table
+references; they do not retain a recursive JSON document. Go and Kry use
+separately implemented row types. The shared schema and corpus guard the wire
+contract and representative validator parity, rather than identical in-memory
+layouts or complete language support in the selfhost frontend.
+
+The production boundaries are:
+
+| Path | Arena construction or validation | Consumer |
+| --- | --- | --- |
+| Go checked source | `ir.go`: `CompileMIR`; `kir_arena_builder.go` | Opaque `ValidatedMIR` |
+| Go portable KIR | `kir.go`: `DecodeMIR` | The same `ValidatedMIR` arena |
+| Go interpreter | `engine.go`, `kir_exec.go`, `kir_exec_arena.go` | Indexed expression, statement, function, and binding rows |
+| C AOT | `codegen.go`: `generateCFromValidatedKIR`; `codegen_arena.go` | Typed rows and child ranges |
+| Direct ELF | `machine.go`: `buildDirectELFFromMIR`; `kir_machine_static_arena.go`, `kir_machine_direct_arena.go` | The validated arena for static and dynamic subsets |
+| Direct PE | `machine_pe.go`, `kir_machine_pe.go`: `lowerDirectPEKIR` | The validated arena for static and dynamic subsets |
+| Selfhost checked source | `source_kir_compiler.kry`: `build_source_arena`; `validated_kir.kry`: `validate_kir_typed_arena` | `ValidatedKIR` |
+| Legacy selfhost source CLI | `source_compiler.kry`: delegates to `source_kir_compiler.kry`'s `compile_path` | The same validated source arena and backend |
+| Selfhost portable KIR | `kir_backend.kry`; `validated_kir.kry`: `validate_kir_document` | The same `ValidatedKIR` arena |
+| Selfhost ELF and dynamic ELF/PE | `elf_backend.kry`: `compile_kir`; `dynamic_backend.kry`: `compile_validated_kir` | Indexed typed views and explicit capability rejection |
 
 The self-hosted dynamic backend has an explicit `LoweredNativeImage` contract
 between lowering and serialization. It carries code, data, target, imports,
 and typed relocation/function-range rows; `native_image.kry` selects the ELF
 or PE writer without inspecting KIR. Lowering no longer traverses recursive
-JSON. The source frontend's JSON text round trip remains migration work.
+JSON. `pe_backend.kry` serializes the already lowered native image. The
+standalone `kir_arena.kry` generic JSON utility is not a production lowering
+input. Structural regressions enforce these boundaries; bootstrap provenance
+and target runtime parity must also be rerun for changed compiler sources.

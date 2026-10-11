@@ -24,13 +24,27 @@ fn json_field(value: KIRTypedNodeView, key: String) -> KIRTypedNodeView {
 
 fn json_text(value: KIRTypedNodeView) -> String { return result_unwrap(kir_typed_string(value)) }
 
+// Binding identity is shared by declarations, reads and writes. Older portable
+// KIR without IDs retains its name lookup; v6 resolves lexical shadowing by ID.
+pub fn kir_binding_key(node: KIRTypedNodeView) -> String {
+    let binding: Result[KIRTypedNodeView, String] = kir_typed_object_get(node, "binding")
+    if is_ok(binding) && kir_typed_kind(result_unwrap(binding)) == "object" {
+        let identity: Result[KIRTypedNodeView, String] = kir_typed_object_get(result_unwrap(binding), "id")
+        if is_ok(identity) {
+            let id: Result[String, String] = kir_typed_string(result_unwrap(identity))
+            if is_ok(id) && result_unwrap(id) != "" { return result_unwrap(id) }
+        }
+    }
+    return json_text(json_field(node, "name"))
+}
+
 pub fn eval_int(expression: KIRTypedNodeView, bindings: Map[String, String]) -> Result[Int, String] {
     let kind: String = json_text(json_field(expression, "kind"))
     let checked_type: String = json_text(json_field(expression, "type"))
     if checked_type != "Int" { return err("stage1 ELF backend expects a checked Int expression") }
     if kind == "int" { return kir_typed_int(json_field(expression, "int")) }
     if kind == "var" {
-        let name: String = json_text(json_field(expression, "name"))
+        let name: String = kir_binding_key(expression)
         if is_none(map_get(bindings, name)) { return err("unknown static binding: " + name) }
         return ok(int(unwrap_or(map_get(bindings, name), "")))
     }
@@ -76,7 +90,7 @@ pub fn eval_display(expression: KIRTypedNodeView, bindings: Map[String, String])
         return ok("false")
     }
     if kind == "var" {
-        let name: String = json_text(json_field(expression, "name"))
+        let name: String = kir_binding_key(expression)
         if is_none(map_get(bindings, name)) { return err("unknown static binding: " + name) }
         return ok(unwrap_or(map_get(bindings, name), ""))
     }
@@ -162,7 +176,7 @@ pub fn compile_kir(kir: ValidatedKIR) -> Result[Bytes, String] {
         let kind: String = json_text(json_field(statement, "kind"))
         if kind == "let" || kind == "const" {
             if result_unwrap(kir_typed_bool(json_field(statement, "mutable"))) { return err("stage1 ELF backend does not support mutable bindings") }
-            let name: String = json_text(json_field(statement, "name"))
+            let name: String = kir_binding_key(statement)
             let evaluated: Result[String, String] = eval_display(json_field(statement, "init"), bindings)
             if is_err(evaluated) { return err(unwrap_or(result_error(evaluated), "cannot evaluate static binding")) }
             bindings = map_insert(bindings, name, result_unwrap(evaluated))

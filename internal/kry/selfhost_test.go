@@ -39,6 +39,33 @@ func assertLinuxAMD64ELF(t *testing.T, data []byte, label string) {
 	}
 }
 
+func assertHistoricalSourceCompilerOutput(t *testing.T, program *Program, checker *Checker, imagePath string) {
+	t.Helper()
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Log("native historical source compiler output requires Linux amd64; generated ELF structure was validated")
+		return
+	}
+	r, diagnostic := NewRuntimeWithArgs(program, checker, DefaultLimits(), Sandbox{}, nil)
+	if diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	var expected bytes.Buffer
+	r.output = &expected
+	if diagnostic := r.run(); diagnostic != nil {
+		t.Fatal(diagnostic.Message)
+	}
+	if err := os.Chmod(imagePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := exec.Command(imagePath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run historical source compiler ELF: %v; output=%q", err, actual)
+	}
+	if !bytes.Equal(actual, expected.Bytes()) {
+		t.Fatalf("historical source compiler output %q differs from typed Go interpreter output %q", actual, expected.Bytes())
+	}
+}
+
 func runStage37ModuleTypeFixture(t *testing.T, compiler, label string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -484,6 +511,7 @@ func TestStage1SourceCompilerMatchesDirectELFOracle(t *testing.T) {
 	}
 	assertNativeArtifact(t, stage1, "source stage1 self-hosted output")
 	assertNativeArtifact(t, oracle, "source stage1 direct ELF oracle")
+	assertHistoricalSourceCompilerOutput(t, fixtureProgram, fixtureChecker, outputPath)
 }
 
 func TestStage2SourceCompilerParsesExpressionsAndEscapes(t *testing.T) {
@@ -528,6 +556,7 @@ func TestStage2SourceCompilerParsesExpressionsAndEscapes(t *testing.T) {
 	}
 	assertNativeArtifact(t, stage2, "source stage2 self-hosted output")
 	assertNativeArtifact(t, oracle, "source stage2 direct ELF oracle")
+	assertHistoricalSourceCompilerOutput(t, fixtureProgram, fixtureChecker, outputPath)
 }
 
 func TestStage2SourceCompilerRejectsUnsupportedSyntax(t *testing.T) {
@@ -556,7 +585,7 @@ func TestStage2SourceCompilerRejectsUnsupportedSyntax(t *testing.T) {
 	}
 	if d = r.run(); d == nil {
 		t.Fatal("unsupported source syntax was accepted")
-	} else if !strings.Contains(d.Message, "unsupported statement") {
+	} else if !strings.Contains(d.Message, "expected '{'") {
 		t.Fatalf("unexpected unsupported-syntax diagnostic: %s", d.Message)
 	}
 }
@@ -1015,6 +1044,9 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("Stage 3 bootstrap hashes are target-specific; run the locked bootstrap on linux-amd64")
 	}
+	if os.Getenv("KRY_SKIP_STAGE36_BOOTSTRAP") == "1" && os.Getenv("KRY_REQUIRE_LOCKED_BOOTSTRAP") != "1" {
+		t.Skip("locked Stage 0-to-Stage 3 bootstrap runs in the dedicated bootstrap job")
+	}
 	if available, ok := linuxAvailableMemoryAndSwapBytes(); ok && available < 14<<30 {
 		message := fmt.Sprintf("Stage 3 source graph bootstrap needs at least 14 GiB of available memory and swap; host reports %d MiB", available>>20)
 		if os.Getenv("KRY_REQUIRE_LOCKED_BOOTSTRAP") == "1" {
@@ -1100,23 +1132,20 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	debug.FreeOSMemory()
 
 	generatedCompiler := filepath.Join(dir, "source-kir-compiler")
-	// KIR v6 validates source metadata for every node after its semantic pass.
-	// Keep the measured limits in the lock so ordinary and race runs exercise
-	// the same bounded Stage 0 provenance command.
 	maxWallMS := fmt.Sprint(lock.BootstrapWallMS)
 	maxInstructions := fmt.Sprint(lock.BootstrapInstructionLimit)
 	bootstrapKIRLimit := fmt.Sprint(lock.SourceCompilerKIRMaxBytes)
 	bootstrapArrayLimit := fmt.Sprint(lock.SourceCompilerKIRMaxArrayElements)
-	runBackend := exec.Command(stage0Path, "--max-memory", bootstrapMemoryLimit, "--max-artifact", bootstrapKIRLimit, "--max-json", bootstrapKIRLimit, "--max-array-elements", bootstrapArrayLimit, "--max-instructions", maxInstructions, "--max-wall-ms", maxWallMS, "run", backendPath, kirFile, generatedCompiler)
-	if output, err := runBackend.CombinedOutput(); err != nil {
-		t.Fatalf("Stage 0 failed to run kir_backend.kry on source compiler KIR: %v; output: %s", err, output)
+	runSourceCompiler := exec.Command(stage0Path, "--max-memory", bootstrapMemoryLimit, "--max-artifact", bootstrapKIRLimit, "--max-array-elements", bootstrapArrayLimit, "--max-instructions", maxInstructions, "--max-wall-ms", maxWallMS, "run", compilerPath, compilerPath, generatedCompiler, "linux-amd64")
+	if output, err := runSourceCompiler.CombinedOutput(); err != nil {
+		t.Fatalf("Stage 0 failed to compile the source compiler through its typed source path: %v; output: %s", err, output)
 	}
 	if err := os.Remove(kirFile); err != nil {
-		t.Fatalf("release the consumed source compiler KIR payload: %v", err)
+		t.Fatalf("release the separately emitted source compiler KIR payload: %v", err)
 	}
 	runtime.GC()
 	debug.FreeOSMemory()
-	t.Logf("stage35 generated compiler ELF from %d-byte KIR", kirSize)
+	t.Logf("Stage 0 rebuilt Stage 1 through the typed source path after separately emitting %d-byte portable KIR", kirSize)
 	compilerELF, err := os.ReadFile(generatedCompiler)
 	if err != nil {
 		t.Fatalf("stage35 dynamic backend did not write compiler ELF: %v", err)
@@ -1185,8 +1214,14 @@ func TestStage36KryndelSecondCompilerBootstrap(t *testing.T) {
 	}
 	kirArenaText := strings.ReplaceAll(string(kirArenaSource), "\r\n", "\n")
 	verifyBootstrapHash(t, lock, verifiedHashes, "kir_arena.kry", []byte(kirArenaText))
-	if !strings.Contains(validatorText, "import \"kir_arena\"") {
-		t.Fatal("validated KIR no longer imports its locked arena module")
+	typedArenaSource, err := os.ReadFile(filepath.Join(selfhost, "kir_typed_arena.kry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	typedArenaText := strings.ReplaceAll(string(typedArenaSource), "\r\n", "\n")
+	verifyBootstrapHash(t, lock, verifiedHashes, "kir_typed_arena.kry", []byte(typedArenaText))
+	if !strings.Contains(validatorText, "import \"kir_typed_arena\"") {
+		t.Fatal("validated KIR no longer imports its locked typed arena module")
 	}
 	const backendImports = "import \"elf_backend\"\nimport \"native_image\"\nimport \"validated_kir\"\n"
 	if !strings.HasPrefix(backendText, backendImports) {
@@ -1729,7 +1764,7 @@ func TestSelfhostValidatorRejectsMalformedKIRFromGeneratedAPI(t *testing.T) {
 		t.Fatalf("create malformed KIR validator runtime: %s", diagnostic.Message)
 	}
 	if diagnostic := runtime.run(); diagnostic != nil {
-		t.Fatalf("malformed KIR validator fixture failed: %s", diagnostic.Message)
+		t.Fatalf("malformed KIR validator fixture failed at %s:%d:%d: %s", diagnostic.Source, diagnostic.Line, diagnostic.Column, diagnostic.Message)
 	}
 }
 

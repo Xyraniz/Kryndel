@@ -147,18 +147,19 @@ func TestSelfhostDecoderBuildsArenaOnlyAfterValidation(t *testing.T) {
 	}
 	validated := string(validatedSource)
 	for _, required := range []string{
-		"fn validate_kir_document_mode(document: Json, strict_fields: Bool)",
-		"let typed_arena: Result[KIRTypedArena, String] = kir_typed_arena_from_validated_json(document)",
-		"return ok(ValidatedKIR{ typed_arena: result_unwrap(typed_arena) })",
+		"fn validate_portable_kir(document: Json, strict_fields: Bool)",
+		"pub fn validate_kir_typed_arena(arena: KIRTypedArena)",
+		"return validate_kir_typed_arena(result_unwrap(decoded))",
+		"return ok(ValidatedKIR{ typed_arena: arena })",
 	} {
 		if !strings.Contains(validated, required) {
 			t.Errorf("selfhost validator is missing arena-validation boundary %q", required)
 		}
 	}
-	if strings.Count(validated, "document: Json") != 4 {
+	if strings.Count(validated, "document: Json") != 3 {
 		t.Fatalf("recursive Json appears outside decoder/metadata validation helpers; got %d document parameters", strings.Count(validated, "document: Json"))
 	}
-	start := strings.Index(validated, "fn validate_kir_document_mode(")
+	start := strings.Index(validated, "fn validate_portable_kir(")
 	if start < 0 {
 		t.Fatal("cannot locate selfhost portable KIR decode boundary")
 	}
@@ -167,9 +168,31 @@ func TestSelfhostDecoderBuildsArenaOnlyAfterValidation(t *testing.T) {
 		t.Fatal("cannot locate selfhost portable KIR validation entrypoint")
 	}
 	decodeAndValidate := validated[start : start+end]
-	validateAt := strings.Index(decodeAndValidate, "validate_statement_array(result_unwrap(statements)")
+	validateAt := strings.Index(decodeAndValidate, "wire_kir_shape(document,")
 	typedAt := strings.Index(decodeAndValidate, "kir_typed_arena_from_validated_json(document)")
 	if typedAt < 0 || validateAt < 0 || typedAt < validateAt {
-		t.Fatal("the typed KIR arena must be constructed only after portable KIR validation succeeds")
+		t.Fatal("the typed KIR arena must be constructed only after portable KIR shape validation succeeds")
+	}
+	program := parseSelfhostBoundaryModule(t, "validated_kir.kry")
+	constructors := 0
+	for _, function := range program.Functions {
+		walkSelfhostBoundaryStatements(function.Body, func(expression *Expr) {
+			if expression.Kind == ExStruct && expression.StructName == "ValidatedKIR" {
+				constructors++
+				if function.Name != "validate_kir_typed_arena" {
+					t.Errorf("%s mints ValidatedKIR outside the shared typed validator", function.Name)
+				}
+			}
+		})
+	}
+	if constructors != 1 {
+		t.Fatalf("ValidatedKIR has %d construction sites, want the single typed validator", constructors)
+	}
+	typedValidator := selfhostFunctionSection(validated, "validate_kir_typed_arena")
+	for _, required := range []string{"kir_typed_arena_structure_valid(arena)", "validate_functions(", "validate_statement_array(", "validate_v6_metadata(document)"} {
+		checkedAt := strings.Index(typedValidator, required)
+		if checkedAt < 0 || checkedAt > strings.Index(typedValidator, "ValidatedKIR{ typed_arena: arena }") {
+			t.Errorf("typed KIR constructor does not perform %s before minting ValidatedKIR", required)
+		}
 	}
 }

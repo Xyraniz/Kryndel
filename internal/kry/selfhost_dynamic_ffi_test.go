@@ -75,7 +75,9 @@ fn main() -> Nil {
     ffi_thread_unpin()
 }
 `
-	image, err := runSelfhostPEBackend(t, source)
+	// Portable decoding and typed semantic validation precede native lowering.
+	// This FFI fixture used 8,706,412 instructions; allow less than 10% headroom.
+	image, err := runSelfhostPEBackendWithBudget(t, source, 9_500_000)
 	if err != nil {
 		t.Fatalf("selfhost PE backend rejected the FFI fixture: %v", err)
 	}

@@ -1,9 +1,20 @@
 package kry
 
 func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*Type, *Diagnostic) {
-	arg := func(i int, want *Type) (*Type, *Diagnostic) { return c.checkExpr(sc, e.Args[i], want) }
 	bad := func(msg string) (*Type, *Diagnostic) {
 		return TError, Diag(CatType, e.Tok.Source, e.Tok.Line, e.Tok.Column, "%s", msg)
+	}
+	arg := func(i int, want *Type) (*Type, *Diagnostic) {
+		value := e.Args[i]
+		got, diagnostic := c.checkExpr(sc, value, want)
+		if diagnostic != nil {
+			return TError, diagnostic
+		}
+		if want != nil && !compatible(want, got) {
+			return TError, Diag(CatType, value.Tok.Source, value.Tok.Line, value.Tok.Column,
+				"builtin '%s' argument %d expected %s, found %s", b.Name, i+1, want, got)
+		}
+		return got, nil
 	}
 	switch b.Name {
 	case "print", "println":
@@ -73,7 +84,11 @@ func (c *Checker) checkBuiltin(sc *Scope, e *Expr, b Builtin, expected *Type) (*
 		if t.Kind != TyArray {
 			return bad("array_push expects Array[T] as its first argument")
 		}
-		v, d := arg(1, t.A)
+		want := t.A
+		if want.Kind == TyUnknown {
+			want = nil
+		}
+		v, d := arg(1, want)
 		if d != nil {
 			return TError, d
 		}

@@ -1,0 +1,299 @@
+import "kir_typed_arena"
+import "validated_kir"
+
+struct BuiltinContractCase {
+    name: String,
+    arguments: Array[String],
+    bad_arguments: Array[String],
+    result: String,
+}
+
+fn builtin_contract_cases() -> Array[BuiltinContractCase] {
+    return [
+        BuiltinContractCase{ name: "print", arguments: ["String"], bad_arguments: [], result: "Nil" },
+        BuiltinContractCase{ name: "println", arguments: ["String"], bad_arguments: [], result: "Nil" },
+        BuiltinContractCase{ name: "len", arguments: ["Array[Int]"], bad_arguments: ["Bool"], result: "Int" },
+        BuiltinContractCase{ name: "bytes", arguments: ["Array[Int]"], bad_arguments: ["Bool"], result: "Bytes" },
+        BuiltinContractCase{ name: "string_to_bytes", arguments: ["String"], bad_arguments: ["Bool"], result: "Bytes" },
+        BuiltinContractCase{ name: "array_push", arguments: ["Array[Int]", "Int"], bad_arguments: ["Bool", "Bool"], result: "Array[Int]" },
+        BuiltinContractCase{ name: "int", arguments: ["String"], bad_arguments: ["Json"], result: "Int" },
+        BuiltinContractCase{ name: "str", arguments: ["Int"], bad_arguments: [], result: "String" },
+        BuiltinContractCase{ name: "assert", arguments: ["Bool"], bad_arguments: ["String"], result: "Nil" },
+        BuiltinContractCase{ name: "assert_eq", arguments: ["Int", "Int"], bad_arguments: ["Bool", "Bool"], result: "Nil" },
+        BuiltinContractCase{ name: "contains", arguments: ["String", "String"], bad_arguments: ["Bool", "Bool"], result: "Bool" },
+        BuiltinContractCase{ name: "starts_with", arguments: ["String", "String"], bad_arguments: ["Bool", "Bool"], result: "Bool" },
+        BuiltinContractCase{ name: "ends_with", arguments: ["String", "String"], bad_arguments: ["Bool", "Bool"], result: "Bool" },
+        BuiltinContractCase{ name: "string_chars", arguments: ["String"], bad_arguments: ["Bool"], result: "Array[String]" },
+        BuiltinContractCase{ name: "codepoints", arguments: ["String"], bad_arguments: ["Bool"], result: "Array[Int]" },
+        BuiltinContractCase{ name: "substring", arguments: ["String", "Int", "Int"], bad_arguments: ["Bool", "Bool", "Bool"], result: "Result[String,String]" },
+        BuiltinContractCase{ name: "some", arguments: ["Int"], bad_arguments: ["Bool"], result: "Option[Int]" },
+        BuiltinContractCase{ name: "none", arguments: [], bad_arguments: [], result: "Option[Int]" },
+        BuiltinContractCase{ name: "ok", arguments: ["Int"], bad_arguments: ["Bool"], result: "Result[Int,String]" },
+        BuiltinContractCase{ name: "err", arguments: ["String"], bad_arguments: ["Bool"], result: "Result[Int,String]" },
+        BuiltinContractCase{ name: "is_some", arguments: ["Option[Int]"], bad_arguments: ["Bool"], result: "Bool" },
+        BuiltinContractCase{ name: "is_none", arguments: ["Option[Int]"], bad_arguments: ["Bool"], result: "Bool" },
+        BuiltinContractCase{ name: "is_ok", arguments: ["Result[Int,String]"], bad_arguments: ["Bool"], result: "Bool" },
+        BuiltinContractCase{ name: "is_err", arguments: ["Result[Int,String]"], bad_arguments: ["Bool"], result: "Bool" },
+        BuiltinContractCase{ name: "unwrap_or", arguments: ["Option[Int]", "Int"], bad_arguments: ["Bool", "Bool"], result: "Int" },
+        BuiltinContractCase{ name: "result_unwrap", arguments: ["Result[Int,String]"], bad_arguments: ["Bool"], result: "Int" },
+        BuiltinContractCase{ name: "result_error", arguments: ["Result[Int,String]"], bad_arguments: ["Bool"], result: "Option[String]" },
+        BuiltinContractCase{ name: "array_get", arguments: ["Array[Int]", "Int"], bad_arguments: ["Bool", "Bool"], result: "Option[Int]" },
+        BuiltinContractCase{ name: "array_concat", arguments: ["Array[Int]", "Array[Int]"], bad_arguments: ["Bool", "Bool"], result: "Array[Int]" },
+        BuiltinContractCase{ name: "array_indices", arguments: ["Array[Int]"], bad_arguments: ["Bool"], result: "Array[Int]" },
+        BuiltinContractCase{ name: "array_set", arguments: ["Array[Int]", "Int", "Int"], bad_arguments: ["Bool", "Bool", "Bool"], result: "Result[Array[Int],String]" },
+        BuiltinContractCase{ name: "array_slice", arguments: ["Array[Int]", "Int", "Int"], bad_arguments: ["Bool", "Bool", "Bool"], result: "Array[Int]" },
+        BuiltinContractCase{ name: "bytes_from_u8", arguments: ["Array[UInt8]"], bad_arguments: ["Bool"], result: "Bytes" },
+        BuiltinContractCase{ name: "u8_array", arguments: ["Bytes"], bad_arguments: ["Bool"], result: "Array[UInt8]" },
+        BuiltinContractCase{ name: "process_args", arguments: [], bad_arguments: [], result: "Array[String]" },
+        BuiltinContractCase{ name: "fs_read_text", arguments: ["String"], bad_arguments: ["Bool"], result: "Result[String,String]" },
+        BuiltinContractCase{ name: "fs_write_bytes", arguments: ["String", "Bytes"], bad_arguments: ["Bool", "Bool"], result: "Result[Nil,String]" },
+        BuiltinContractCase{ name: "json_parse", arguments: ["String"], bad_arguments: ["Bool"], result: "Result[Json,String]" },
+        BuiltinContractCase{ name: "json_stringify", arguments: ["Json"], bad_arguments: ["Bool"], result: "String" },
+        BuiltinContractCase{ name: "json_kind", arguments: ["Json"], bad_arguments: ["Bool"], result: "String" },
+        BuiltinContractCase{ name: "json_array_len", arguments: ["Json"], bad_arguments: ["Bool"], result: "Result[Int,String]" },
+        BuiltinContractCase{ name: "json_object_get", arguments: ["Json", "String"], bad_arguments: ["Bool", "Bool"], result: "Result[Json,String]" },
+        BuiltinContractCase{ name: "json_object_keys", arguments: ["Json"], bad_arguments: ["Bool"], result: "Result[Array[String],String]" },
+        BuiltinContractCase{ name: "json_object_keys_allowed", arguments: ["Json", "String"], bad_arguments: ["Bool", "Bool"], result: "Bool" },
+        BuiltinContractCase{ name: "json_object_fields_empty_except", arguments: ["Json", "String", "String", "String"], bad_arguments: ["Bool", "Bool", "Bool", "Bool"], result: "Bool" },
+        BuiltinContractCase{ name: "json_array_get", arguments: ["Json", "Int"], bad_arguments: ["Bool", "Bool"], result: "Result[Json,String]" },
+        BuiltinContractCase{ name: "json_string", arguments: ["Json"], bad_arguments: ["Bool"], result: "Result[String,String]" },
+        BuiltinContractCase{ name: "json_bool", arguments: ["Json"], bad_arguments: ["Bool"], result: "Result[Bool,String]" },
+        BuiltinContractCase{ name: "json_int", arguments: ["Json"], bad_arguments: ["Bool"], result: "Result[Int,String]" },
+        BuiltinContractCase{ name: "json_uint", arguments: ["Json"], bad_arguments: ["Bool"], result: "Result[UInt64,String]" },
+        BuiltinContractCase{ name: "map_get", arguments: ["Map[String,Int]", "String"], bad_arguments: ["Bool", "Bool"], result: "Option[Int]" },
+        BuiltinContractCase{ name: "map_insert", arguments: ["Map[String,Int]", "String", "Int"], bad_arguments: ["Bool", "Bool", "Bool"], result: "Map[String,Int]" },
+        BuiltinContractCase{ name: "map_contains_key", arguments: ["Map[String,Int]", "String"], bad_arguments: ["Bool", "Bool"], result: "Bool" },
+        BuiltinContractCase{ name: "map_remove", arguments: ["Map[String,Int]", "String"], bad_arguments: ["Bool", "Bool"], result: "Map[String,Int]" },
+        BuiltinContractCase{ name: "ffi_library_open", arguments: ["String"], bad_arguments: ["Bool"], result: "Result[FFILibrary,String]" },
+        BuiltinContractCase{ name: "ffi_library_close", arguments: ["FFILibrary"], bad_arguments: ["Bool"], result: "Nil" },
+        BuiltinContractCase{ name: "ffi_symbol", arguments: ["FFILibrary", "String"], bad_arguments: ["Bool", "Bool"], result: "Result[FFISymbol,String]" },
+        BuiltinContractCase{ name: "ffi_call", arguments: ["FFISymbol", "String", "Array[Int]"], bad_arguments: ["Bool", "Bool", "Bool"], result: "Result[Int,String]" },
+        BuiltinContractCase{ name: "ffi_buffer_new", arguments: ["Bytes"], bad_arguments: ["Bool"], result: "FFIBuffer" },
+        BuiltinContractCase{ name: "ffi_buffer_new_sized", arguments: ["Int"], bad_arguments: ["Bool"], result: "Result[FFIBuffer,String]" },
+        BuiltinContractCase{ name: "ffi_buffer_address", arguments: ["FFIBuffer"], bad_arguments: ["Bool"], result: "Result[Int,String]" },
+        BuiltinContractCase{ name: "ffi_buffer_read", arguments: ["FFIBuffer"], bad_arguments: ["Bool"], result: "Result[Bytes,String]" },
+        BuiltinContractCase{ name: "ffi_buffer_close", arguments: ["FFIBuffer"], bad_arguments: ["Bool"], result: "Nil" },
+        BuiltinContractCase{ name: "ffi_thread_pin", arguments: [], bad_arguments: [], result: "Nil" },
+        BuiltinContractCase{ name: "ffi_thread_unpin", arguments: [], bad_arguments: [], result: "Nil" },
+        BuiltinContractCase{ name: "u8", arguments: ["Int"], bad_arguments: ["Bool"], result: "UInt8" },
+        BuiltinContractCase{ name: "u16", arguments: ["Int"], bad_arguments: ["Bool"], result: "UInt16" },
+        BuiltinContractCase{ name: "u32", arguments: ["Int"], bad_arguments: ["Bool"], result: "UInt32" },
+        BuiltinContractCase{ name: "u64", arguments: ["Int"], bad_arguments: ["Bool"], result: "UInt64" }
+    ]
+}
+
+fn builtin_contract_document(name: String, argument_types: Array[String], result_type: String) -> String {
+    let mut parameters: String = "["
+    let mut arguments: String = "["
+    let mut index: Int = 0
+    while index < len(argument_types) {
+        if index > 0 { parameters = parameters + ","; arguments = arguments + "," }
+        let argument_name: String = "arg" + str(index)
+        let argument_type: String = unwrap_or(array_get(argument_types, index), "")
+        let source_line: String = str(index + 1)
+        let binding: String = "{\"name\":\"" + argument_name + "\",\"type\":\"" + argument_type + "\",\"mutable\":false,\"source\":\"builtin-contract.kry\",\"line\":" + source_line + ",\"column\":1}"
+        parameters = parameters + "{\"name\":\"" + argument_name + "\",\"type\":\"" + argument_type + "\",\"source\":\"builtin-contract.kry\",\"line\":" + source_line + ",\"column\":1,\"default\":null,\"binding\":" + binding + "}"
+        arguments = arguments + "{\"kind\":\"var\",\"source\":\"builtin-contract.kry\",\"line\":" + source_line + ",\"column\":1,\"type\":\"" + argument_type + "\",\"name\":\"" + argument_name + "\",\"binding\":" + binding + "}"
+        index = index + 1
+    }
+    parameters = parameters + "]"
+    arguments = arguments + "]"
+    let call: String = "{\"kind\":\"call\",\"source\":\"builtin-contract.kry\",\"line\":100,\"column\":1,\"type\":\"" + result_type + "\",\"name\":\"" + name + "\",\"call_target\":\"builtin:" + name + "\",\"builtin_id\":\"" + name + "\",\"args\":" + arguments + "}"
+    let expression_statement: String = "{\"kind\":\"expr\",\"source\":\"builtin-contract.kry\",\"line\":100,\"column\":1,\"expr\":" + call + "}"
+    return "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":\"builtin-contract.kry\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[\"builtin-contract.kry\"],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[{\"name\":\"main\",\"source\":\"builtin-contract.kry\",\"line\":1,\"column\":1,\"public\":false,\"worker\":false,\"unsafe\":false,\"trait\":\"\",\"module\":\"\",\"receiver\":\"\",\"return\":\"Nil\",\"type_params\":[],\"params\":" + parameters + ",\"captures\":[],\"body\":[" + expression_statement + "]}],\"statements\":[]}"
+}
+
+fn builtin_contract_accepts(name: String, argument_types: Array[String], result_type: String) -> Bool {
+    let document: Result[Json, String] = json_parse(builtin_contract_document(name, argument_types, result_type))
+    if is_err(document) { return false }
+    return is_ok(validate_kir_document(result_unwrap(document)))
+}
+
+fn builtin_contract_replace_argument(test_case: BuiltinContractCase, argument_index: Int) -> Array[String] {
+    let mut forged_arguments: Array[String] = []
+    let mut index: Int = 0
+    while index < len(test_case.arguments) {
+        if index == argument_index { forged_arguments = array_push(forged_arguments, unwrap_or(array_get(test_case.bad_arguments, index), "")) }
+        else { forged_arguments = array_push(forged_arguments, unwrap_or(array_get(test_case.arguments, index), "")) }
+        index = index + 1
+    }
+    return forged_arguments
+}
+
+fn builtin_contract_wrong_result(result_type: String) -> String {
+    if result_type == "Bool" { return "String" }
+    return "Bool"
+}
+
+fn test_builtin_contracts_exhaustively() -> Nil {
+    let cases: Array[BuiltinContractCase] = builtin_contract_cases()
+    let names: Array[String] = selfhost_supported_builtin_names()
+    assert(len(cases) == len(names))
+    for name in names {
+        let mut found: Int = 0
+        for test_case in cases { if test_case.name == name { found = found + 1 } }
+        assert(found == 1)
+    }
+    for test_case in cases {
+        let mut recognized: Int = 0
+        for name in names { if test_case.name == name { recognized = recognized + 1 } }
+        assert(recognized == 1)
+        assert(kir_core_builtin_types_valid(test_case.name, test_case.arguments, test_case.result))
+        assert(!kir_core_builtin_types_valid(test_case.name, test_case.arguments, builtin_contract_wrong_result(test_case.result)))
+        if len(test_case.arguments) == 0 { assert(!kir_core_builtin_types_valid(test_case.name, ["String"], test_case.result)) }
+        else { assert(!kir_core_builtin_types_valid(test_case.name, [], test_case.result)) }
+        if len(test_case.bad_arguments) != 0 {
+            assert(len(test_case.bad_arguments) == len(test_case.arguments))
+            let mut argument_index: Int = 0
+            while argument_index < len(test_case.bad_arguments) {
+                let forged_arguments: Array[String] = builtin_contract_replace_argument(test_case, argument_index)
+                assert(!kir_core_builtin_types_valid(test_case.name, forged_arguments, test_case.result))
+                argument_index = argument_index + 1
+            }
+        }
+    }
+    // Exercise complete portable-document validation at the host-effect and
+    // serialization boundary, while the exhaustive matrix above isolates the
+    // signature rules for every recognized builtin.
+    for test_case in cases {
+        if test_case.name == "process_args" || test_case.name == "fs_read_text" || test_case.name == "fs_write_bytes" || test_case.name == "json_parse" || test_case.name == "ffi_call" {
+            assert(builtin_contract_accepts(test_case.name, test_case.arguments, test_case.result))
+            assert(!builtin_contract_accepts(test_case.name, test_case.arguments, builtin_contract_wrong_result(test_case.result)))
+            if test_case.name == "process_args" {
+                assert(!builtin_contract_accepts(test_case.name, ["String"], test_case.result))
+            } else {
+                let mut argument_index: Int = 0
+                while argument_index < len(test_case.bad_arguments) {
+                    assert(!builtin_contract_accepts(test_case.name, builtin_contract_replace_argument(test_case, argument_index), test_case.result))
+                    argument_index = argument_index + 1
+                }
+            }
+        }
+    }
+    return nil
+}
+
+fn validation_expression(kind: String, type_name: String, span: KIRIndexRef, operands: Array[KIRIndexRef], binding: KIRIndexRef, target: String) -> KIRTypedExpression {
+    let absent: KIRIndexRef = kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions)
+    let mut name: String = ""
+    let mut operator: String = ""
+    let mut int_value: Int = 0
+    if kind == "var" { name = "value" }
+    if kind == "call" { name = "ghost" }
+    if kind == "binary" { operator = "+" }
+    if kind == "int" { int_value = 1 }
+    return KIRTypedExpression{
+        kind: kind, source: "arena.kry", line: 1, column: 1, span: span, type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: int_value, uint_value: u64(0), uint_bits: u8(0), float_text: "", bool_value: false,
+        string_value: "", name: name, operator: operator, call_target: target,
+        trait_name: "", builtin_id: "", left: unwrap_or(array_get(operands, 0), absent),
+        right: unwrap_or(array_get(operands, 1), absent), operand: absent, args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(), base: absent, field: "", receiver: absent,
+        map_keys: kir_typed_empty_edges(), struct_name: "", struct_type: "", generic_arguments: [],
+        fields: [], values: kir_typed_empty_edges(), enum_type: "", enum_variant: "", tail: false,
+        callee: absent, lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions), binding: binding,
+    }
+}
+
+fn validation_statement(kind: String, span: KIRIndexRef, expression: KIRIndexRef, binding: KIRIndexRef) -> KIRTypedStatement {
+    let absent: KIRIndexRef = kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions)
+    let mut initializer: KIRIndexRef = absent
+    let mut value: KIRIndexRef = absent
+    let mut returned: KIRIndexRef = absent
+    let mut name: String = ""
+    if kind == "expr" { value = expression }
+    if kind == "return" { returned = expression }
+    if kind == "let" { initializer = expression; name = "value" }
+    return KIRTypedStatement{
+        kind: kind, source: "arena.kry", line: 1, column: 1, span: span,
+        name: name, binding: binding,
+        mutable: false, is_const: false, annotation: "", init: initializer, expr: value,
+        target: absent, value: absent, cond: absent, then_body: kir_typed_empty_edges(),
+        else_body: kir_typed_empty_edges(), body: kir_typed_empty_edges(), iter: absent,
+        return_value: returned, scrutinee: absent, arms: kir_typed_empty_edges(),
+    }
+}
+
+fn validation_case(mode: String) -> KIRTypedArena {
+    let sources: KIRTypedAppendRef = kir_typed_append_source(kir_typed_empty_arena(), "arena.kry")
+    let mut end: Int = 2
+    if mode == "span" { end = -1 }
+    let span: KIRTypedAppendRef = kir_typed_append_span(sources.arena, KIRTypedSourceSpan{ start: 0, end: end })
+    let absent_binding: KIRIndexRef = kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    let mut type_name: String = "Int"
+    if mode == "type" { type_name = "Bool" }
+    let literal: KIRTypedAppendRef = kir_typed_append_expression(span.arena, validation_expression("int", type_name, span.reference, [], absent_binding, ""))
+    let mut arena: KIRTypedArena = literal.arena
+    let mut expression: KIRIndexRef = literal.reference
+    let mut function_refs: Array[KIRIndexRef] = []
+    let mut statement_refs: Array[KIRIndexRef] = []
+    if mode == "call_valid" {
+        let returned: KIRTypedAppendRef = kir_typed_append_statement(arena, validation_statement("return", span.reference, literal.reference, absent_binding))
+        let body: KIRTypedAppendRange = kir_typed_append_edges(returned.arena, [returned.reference])
+        let function: KIRTypedAppendRef = kir_typed_append_function(body.arena, KIRTypedFunction{ name: "ghost", source: "arena.kry", line: 1, column: 1, span: span.reference, public: false, worker: false, is_unsafe: false, trait_name: "", module: "", receiver: "", return_type: "Int", type_params: kir_typed_empty_edges(), params: kir_typed_empty_edges(), captures: kir_typed_empty_edges(), body: body.range })
+        arena = function.arena
+        function_refs = [function.reference]
+    }
+    if mode == "call" {
+        let literal_statement: KIRTypedAppendRef = kir_typed_append_statement(arena, validation_statement("expr", span.reference, literal.reference, absent_binding))
+        arena = literal_statement.arena
+        statement_refs = [literal_statement.reference]
+    }
+    if mode == "call" || mode == "call_valid" {
+        let call: KIRTypedAppendRef = kir_typed_append_expression(arena, validation_expression("call", "Int", span.reference, [], absent_binding, "function:ghost"))
+        arena = call.arena
+        expression = call.reference
+    }
+    if mode == "binding" || mode == "binding_valid" || mode == "binding_span_absent" {
+        let binding_span: KIRTypedAppendRef = kir_typed_append_span(arena, KIRTypedSourceSpan{ start: 0, end: 5 })
+        let mut id: String = "kry-binding-v1/0/1/1/9:arena.kry/5:value"
+        if mode == "binding" { id = "forged" }
+        let mut binding_span_ref: KIRIndexRef = binding_span.reference
+        if mode == "binding_span_absent" { binding_span_ref = kir_typed_absent_ref(KIRTypedTable::KIRTableSpans) }
+        let binding: KIRTypedAppendRef = kir_typed_append_binding(binding_span.arena, KIRTypedBinding{ id: id, name: "value", type_name: "Int", mutable: false, source: "arena.kry", line: 1, column: 1, span: binding_span_ref })
+        let declaration: KIRTypedAppendRef = kir_typed_append_statement(binding.arena, validation_statement("let", span.reference, literal.reference, binding.reference))
+        statement_refs = [declaration.reference]
+        let variable: KIRTypedAppendRef = kir_typed_append_expression(declaration.arena, validation_expression("var", "Int", span.reference, [], binding.reference, ""))
+        arena = variable.arena
+        expression = variable.reference
+    }
+    if mode == "reference" || mode == "table" || mode == "cycle" || mode == "operator" || mode == "binary_valid" {
+        let mut left: KIRIndexRef = literal.reference
+        let mut binary_type: String = "Int"
+        if mode == "reference" { left = kir_typed_ref(KIRTypedTable::KIRTableExpressions, 5) }
+        if mode == "table" { left = kir_typed_ref(KIRTypedTable::KIRTableStatements, 0) }
+        if mode == "cycle" { left = kir_typed_ref(KIRTypedTable::KIRTableExpressions, 1) }
+        if mode == "operator" { binary_type = "Bool" }
+        let binary: KIRTypedAppendRef = kir_typed_append_expression(arena, validation_expression("binary", binary_type, span.reference, [left, literal.reference], absent_binding, ""))
+        arena = binary.arena
+        expression = binary.reference
+    }
+    let statement: KIRTypedAppendRef = kir_typed_append_statement(arena, validation_statement("expr", span.reference, expression, absent_binding))
+    let statements: KIRTypedAppendRange = kir_typed_append_edges(statement.arena, array_push(statement_refs, statement.reference))
+    let functions: KIRTypedAppendRange = kir_typed_append_edges(statements.arena, function_refs)
+    return kir_typed_append_document_ranges(functions.arena, KIRTypedDocumentHeader{
+        format: "kry-ir", version: 6, language_version: "1.0.0", module: "", source: "arena.kry",
+        target: KIRTypedTarget{ os: "linux", arch: "amd64", gui: false },
+        top_functions: functions.range, top_statements: statements.range,
+    })
+}
+
+fn main() -> Nil {
+    test_builtin_contracts_exhaustively()
+    for mode in ["valid", "binding_valid", "call_valid", "binary_valid"] {
+        let accepted: Result[ValidatedKIR, String] = validate_kir_typed_arena(validation_case(mode))
+        if is_err(accepted) { println(mode + ": " + unwrap_or(result_error(accepted), "missing error")) }
+        assert(is_ok(accepted))
+    }
+    let errors: Map[String, String] = {"span": "span", "type": "non-Int", "call": "unknown function target", "binding": "non-canonical binding ID", "reference": "invalid table references", "table": "invalid table references", "cycle": "reference cycle", "operator": "matching operand and result types", "binding_span_absent": "source span"}
+    for mode in ["span", "type", "call", "binding", "reference", "table", "cycle", "operator", "binding_span_absent"] {
+        let rejected: Result[ValidatedKIR, String] = validate_kir_typed_arena(validation_case(mode))
+        assert(is_err(rejected))
+        let actual: String = unwrap_or(result_error(rejected), "missing error")
+        let expected: String = unwrap_or(map_get(errors, mode), "missing expectation")
+        if !contains(actual, expected) { println(mode + ": " + actual + "; expected " + expected) }
+        assert(contains(actual, expected))
+    }
+    return nil
+}

@@ -157,8 +157,13 @@ func TestKIRV6RejectsMissingSpansAndNonCanonicalBindingIDs(t *testing.T) {
 		{name: "reversed statement span", mutate: func(document *KIRDocument) {
 			document.Functions[0].Body[0].Span.End = document.Functions[0].Body[0].Span.Start
 		}, want: "missing or invalid source span"},
-		{name: "forged binding id", mutate: func(document *KIRDocument) { document.Functions[0].Body[0].Binding.ID += "x" }, want: "non-canonical binding ID"},
-		{name: "binding reference id mismatch", mutate: func(document *KIRDocument) { document.Functions[0].Body[1].Return.Binding.ID += "x" }, want: "non-canonical binding ID"},
+		{name: "forged binding id", mutate: func(document *KIRDocument) { document.Functions[0].Body[0].Binding.ID += "x" }, want: "does not match the active declaration"},
+		{name: "binding reference id mismatch", mutate: func(document *KIRDocument) { document.Functions[0].Body[1].Return.Binding.ID += "x" }, want: "does not match the active declaration"},
+		{name: "matching forged binding ids", mutate: func(document *KIRDocument) {
+			id := document.Functions[0].Body[0].Binding.ID + "x"
+			document.Functions[0].Body[0].Binding.ID = id
+			document.Functions[0].Body[1].Return.Binding.ID = id
+		}, want: "non-canonical binding ID"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -443,6 +448,7 @@ func TestKIRRejectsFunctionDefaultTypeMismatch(t *testing.T) {
 	document.Functions[0].Params[0].Default.Kind = "bool"
 	document.Functions[0].Params[0].Default.Type = "Bool"
 	document.Functions[0].Params[0].Default.Bool = true
+	document.Functions[0].Params[0].Default.Const = &KIRValue{Kind: "bool", Bool: true}
 	if err := validateKIRDocument(&document, DefaultLimits()); err == nil || !strings.Contains(err.Error(), "default type does not match") {
 		t.Fatalf("expected KIR rejection for mismatched parameter default, got %v", err)
 	}

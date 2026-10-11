@@ -1,0 +1,133 @@
+import "kir_typed_arena"
+
+fn typed_source_builder_expression(index: Int, span: KIRIndexRef) -> KIRTypedExpression {
+    return KIRTypedExpression{ kind: "int", source: "builder.kry", line: 1, column: index + 1, span: span, type_name: "Int", constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues), int_value: index, uint_value: u64(0), uint_bits: u8(0), float_text: "", bool_value: false, string_value: "", name: "expression-" + str(index), operator: "", call_target: "", trait_name: "", builtin_id: "", left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), args: kir_typed_empty_edges(), items: kir_typed_empty_edges(), base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), field: "", receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), map_keys: kir_typed_empty_edges(), struct_name: "", struct_type: "", generic_arguments: [], fields: [], values: kir_typed_empty_edges(), enum_type: "", enum_variant: "", tail: false, callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions), binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings) }
+}
+
+fn typed_source_builder_statement(index: Int, span: KIRIndexRef, binding: KIRIndexRef, expression: KIRIndexRef) -> KIRTypedStatement {
+    return KIRTypedStatement{ kind: "let", source: "builder.kry", line: 1, column: index + 1, span: span, name: "statement-" + str(index), binding: binding, mutable: index % 2 == 0, is_const: false, annotation: "Int", init: expression, expr: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), target: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), cond: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: kir_typed_empty_edges(), iter: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), return_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), scrutinee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), arms: kir_typed_empty_edges() }
+}
+
+fn typed_source_builder_string_is(arena: KIRTypedArena, table: KIRTypedTable, index: Int, key: String, expected: String) -> Bool {
+    let rows: Result[KIRTypedNodeView, String] = kir_typed_table_view(arena, table)
+    if is_err(rows) { return false }
+    let row: Result[KIRTypedNodeView, String] = kir_typed_array_get(result_unwrap(rows), index)
+    if is_err(row) { return false }
+    let field: Result[KIRTypedNodeView, String] = kir_typed_object_get(result_unwrap(row), key)
+    if is_err(field) { return false }
+    let text: Result[String, String] = kir_typed_string(result_unwrap(field))
+    return !is_err(text) && result_unwrap(text) == expected
+}
+
+fn typed_source_builder_int_is(arena: KIRTypedArena, table: KIRTypedTable, index: Int, key: String, expected: Int) -> Bool {
+    let rows: Result[KIRTypedNodeView, String] = kir_typed_table_view(arena, table)
+    if is_err(rows) { return false }
+    let row: Result[KIRTypedNodeView, String] = kir_typed_array_get(result_unwrap(rows), index)
+    if is_err(row) { return false }
+    let field: Result[KIRTypedNodeView, String] = kir_typed_object_get(result_unwrap(row), key)
+    if is_err(field) { return false }
+    let number: Result[Int, String] = kir_typed_int(result_unwrap(field))
+    return !is_err(number) && result_unwrap(number) == expected
+}
+
+fn typed_source_builder_bool_is(arena: KIRTypedArena, table: KIRTypedTable, index: Int, key: String, expected: Bool) -> Bool {
+    let rows: Result[KIRTypedNodeView, String] = kir_typed_table_view(arena, table)
+    if is_err(rows) { return false }
+    let row: Result[KIRTypedNodeView, String] = kir_typed_array_get(result_unwrap(rows), index)
+    if is_err(row) { return false }
+    let field: Result[KIRTypedNodeView, String] = kir_typed_object_get(result_unwrap(row), key)
+    if is_err(field) { return false }
+    let value: Result[Bool, String] = kir_typed_bool(result_unwrap(field))
+    return !is_err(value) && result_unwrap(value) == expected
+}
+
+// Structural state crosses both 32-slot leaves and 1024-slot pages. The rows
+// deliberately contain only graph data; semantic admission is tested elsewhere.
+fn typed_paged_color_probe() -> Nil {
+    let mut arena: KIRTypedArena = kir_typed_empty_arena()
+    let mut roots: Array[KIRIndexRef] = []
+    let mut index: Int = 0
+    while index < 1057 {
+        let appended: KIRTypedAppendRef = kir_typed_append_statement(arena, kir_typed_empty_statement())
+        arena = appended.arena
+        roots = array_push(roots, appended.reference)
+        index = index + 1
+    }
+    let statements: KIRTypedAppendRange = kir_typed_append_edges(arena, roots)
+    let header: KIRTypedDocumentHeader = KIRTypedDocumentHeader{ format: "kry-ir", version: 5, language_version: "1.0.0", module: "", source: "pages.kry", target: KIRTypedTarget{ os: "linux", arch: "amd64", gui: false }, top_functions: kir_typed_empty_edges(), top_statements: statements.range }
+    let complete: KIRTypedArena = kir_typed_append_document_ranges(statements.arena, header)
+    assert(is_ok(kir_typed_arena_structure_valid(complete)))
+    let orphan: KIRTypedAppendRef = kir_typed_append_statement(complete, kir_typed_empty_statement())
+    assert(is_err(kir_typed_arena_structure_valid(orphan.arena)))
+    return nil
+}
+
+fn typed_source_chunked_builder_probe() -> Nil {
+    let mut arena: KIRTypedArena = kir_typed_empty_source_arena()
+    let mut span_refs: Array[KIRIndexRef] = []
+    let mut index: Int = 0
+    while index < 1100 {
+        let span: KIRTypedAppendRef = kir_typed_append_span(arena, KIRTypedSourceSpan{ start: index * 2, end: index * 2 + 3 })
+        assert(span.reference.index == index)
+        arena = span.arena
+        span_refs = array_push(span_refs, span.reference)
+        index = index + 1
+    }
+    let edges: KIRTypedAppendRange = kir_typed_append_edges(arena, span_refs)
+    assert(edges.range.start == 0 && edges.range.count == 1100)
+    arena = edges.arena
+    index = 0
+    while index < 1100 {
+        let span_ref: KIRIndexRef = unwrap_or(array_get(span_refs, index), kir_typed_absent_ref(KIRTypedTable::KIRTableSpans))
+        let binding: KIRTypedAppendRef = kir_typed_append_binding(arena, KIRTypedBinding{ id: "binding-" + str(index), name: "binding-" + str(index), type_name: "Int", mutable: index % 2 == 0, source: "builder.kry", line: 1, column: index + 1, span: span_ref })
+        assert(binding.reference.index == index)
+        arena = binding.arena
+        let value: KIRTypedAppendRef = kir_typed_append_value(arena, KIRTypedValue{ kind: "int", int_value: index, uint_value: u64(0), uint_bits: u8(0), float_text: "", bool_value: false, string_value: "value-" + str(index), bytes: [], array: kir_typed_empty_edges(), inner: kir_typed_absent_ref(KIRTypedTable::KIRTableValues), present: false, ok: false })
+        assert(value.reference.index == index)
+        arena = value.arena
+        let expression: KIRTypedAppendRef = kir_typed_append_expression(arena, typed_source_builder_expression(index, span_ref))
+        assert(expression.reference.index == index)
+        arena = expression.arena
+        if index == 512 { arena = result_unwrap(kir_typed_replace_expression(arena, index, typed_source_builder_expression(9000, span_ref))) }
+        let statement: KIRTypedAppendRef = kir_typed_append_statement(arena, typed_source_builder_statement(index, span_ref, binding.reference, expression.reference))
+        assert(statement.reference.index == index)
+        arena = statement.arena
+        index = index + 1
+    }
+    let complete: KIRTypedArena = kir_typed_finish_source_build(arena)
+    let counts: Array[Int] = kir_typed_arena_table_counts(complete)
+    assert(unwrap_or(array_get(counts, 14), -1) == 1100)
+    assert(unwrap_or(array_get(counts, 15), -1) == 1100)
+    assert(unwrap_or(array_get(counts, 16), -1) == 1100)
+    assert(unwrap_or(array_get(counts, 19), -1) == 1100)
+    assert(unwrap_or(array_get(counts, 20), -1) == 1100)
+    assert(unwrap_or(array_get(counts, 21), -1) == 1100)
+    let mut boundary: Int = 0
+    while boundary < 7 {
+        let index: Int = unwrap_or(array_get([31, 32, 511, 512, 1023, 1024, 1099], boundary), -1)
+        let mut expected_expression: String = "expression-" + str(index)
+        let mut expected_column: Int = index + 1
+        if index == 512 { expected_expression = "expression-9000" }
+        if index == 512 { expected_column = 9001 }
+        let binding: KIRTypedBinding = result_unwrap(kir_typed_binding_at(complete, index))
+        let span: KIRTypedSourceSpan = result_unwrap(kir_typed_span_row_at(complete, index))
+        assert(binding.id == "binding-" + str(index) && binding.name == "binding-" + str(index))
+        assert(binding.mutable == (index % 2 == 0) && binding.span.index == index)
+        assert(span.start == index * 2 && span.end == index * 2 + 3)
+        assert(typed_source_builder_int_is(complete, KIRTypedTable::KIRTableValues, index, "int", index))
+        assert(typed_source_builder_string_is(complete, KIRTypedTable::KIRTableValues, index, "string", "value-" + str(index)))
+        assert(typed_source_builder_string_is(complete, KIRTypedTable::KIRTableExpressions, index, "name", expected_expression))
+        assert(typed_source_builder_int_is(complete, KIRTypedTable::KIRTableExpressions, index, "column", expected_column))
+        assert(typed_source_builder_string_is(complete, KIRTypedTable::KIRTableStatements, index, "name", "statement-" + str(index)))
+        assert(typed_source_builder_bool_is(complete, KIRTypedTable::KIRTableStatements, index, "mutable", index % 2 == 0))
+        boundary = boundary + 1
+    }
+    assert(kir_typed_arena_references_valid(complete))
+    return nil
+}
+
+fn main() -> Nil {
+    typed_source_chunked_builder_probe()
+    typed_paged_color_probe()
+    return nil
+}

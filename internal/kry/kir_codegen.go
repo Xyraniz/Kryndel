@@ -30,8 +30,11 @@ func kirPatternKind(kind string) PatternKind {
 }
 
 func substituteKIRType(encoded string, substitutions map[string]string) string {
+	if len(substitutions) == 0 {
+		return encoded
+	}
 	spec, ok := parseKIRTypeExpression(encoded)
-	if !ok || len(substitutions) == 0 {
+	if !ok {
 		return encoded
 	}
 	// Parsed type specs may be shared from the bounded cache. Substitution
@@ -221,20 +224,13 @@ func kirTypeContainsFunction(encoded string) bool {
 	if !ok {
 		return false
 	}
-	var visit func(*TypeSpec, int) bool
-	visit = func(current *TypeSpec, depth int) bool {
-		if current == nil || depth > 128 {
-			return false
-		}
-		if current.Function {
-			return true
-		}
-		for _, child := range current.Params {
-			if visit(child, depth+1) {
-				return true
-			}
-		}
-		return visit(current.Return, depth+1)
+	return kirTypeSpecContainsFunction(spec, nil, make(map[string]bool), 0)
+}
+
+func kirTypeContainsFunctionInStructs(encoded string, structs map[string]*KIRStruct) bool {
+	spec, ok := parseKIRTypeExpression(encoded)
+	if !ok {
+		return true
 	}
-	return visit(spec, 0)
+	return kirTypeSpecContainsFunction(spec, structs, make(map[string]bool), 0)
 }

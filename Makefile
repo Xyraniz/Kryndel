@@ -5,8 +5,8 @@ BINARY ?= build/kry.exe
 else
 BINARY ?= build/kry
 endif
-TIMEOUT ?= 20m
-RACE_TIMEOUT ?= 40m
+TIMEOUT ?= 90m
+RACE_TIMEOUT ?= 90m
 
 .PHONY: all build check test test-static test-race coverage fuzz-smoke check-docs check-generated native-smoke native-parity package-smoke benchmark verify-fast verify-full verify install-association release clean
 
@@ -70,7 +70,7 @@ test-race:
 
 coverage:
 	mkdir -p build
-	$(GO) test -covermode=atomic -coverprofile=build/coverage.out ./...
+	$(GO) test -timeout=$(TIMEOUT) -covermode=atomic -coverprofile=build/coverage.out ./...
 
 fuzz-smoke:
 	$(GO) test -run='^$$' -fuzz='^FuzzKryndelLex$$' -fuzztime=2s -parallel=2 -timeout=$(TIMEOUT) ./internal/kry

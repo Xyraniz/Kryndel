@@ -1,10 +1,11 @@
 import "dynamic_backend"
+import "validated_kir"
+import "kir_typed_arena"
 
 struct SourceToken {
     kind: String,
     text: String,
     source: String,
-    source_json: String,
     line: Int,
     column: Int,
     byte_start: Int,
@@ -17,6 +18,7 @@ struct SourceLocation {
 }
 
 struct SourceBinding {
+    reference: KIRIndexRef,
     type_name: String,
     mutable: Bool,
     known: Bool,
@@ -28,101 +30,34 @@ struct SourceBinding {
 }
 
 struct SourceExpr {
-    json: String,
+    row: KIRTypedExpression,
+    reference: KIRIndexRef,
     type_name: String,
     known: Bool,
     display: String,
-    location: String,
+    location: SourceToken,
     empty_kind: String,
 }
 
-fn node_prefix(token: SourceToken) -> String {
-    return node_prefix_range(token, token.byte_end)
+fn node_prefix(token: SourceToken) -> SourceToken { return token }
+
+fn node_prefix_range(token: SourceToken, byte_end: Int) -> SourceToken {
+    return SourceToken{ kind: token.kind, text: token.text, source: token.source, line: token.line, column: token.column, byte_start: token.byte_start, byte_end: byte_end }
 }
 
-fn node_prefix_range(token: SourceToken, byte_end: Int) -> String {
-    return "{\"source\":" + token.source_json + ",\"line\":" + str(token.line) + ",\"column\":" + str(token.column) + ",\"span\":{\"start\":" + str(token.byte_start) + ",\"end\":" + str(byte_end) + "},"
+fn prefix_with_span_end(prefix: SourceToken, byte_end: Int) -> SourceToken {
+    return node_prefix_range(prefix, byte_end)
 }
 
-fn prefix_with_span_end(prefix: String, byte_end: Int) -> String {
-    let chars: Array[String] = string_chars(prefix)
-    let key: Array[String] = string_chars("\"end\":")
-    let mut key_index: Int = -1
-    let mut index: Int = 0
-    while index + len(key) <= len(chars) {
-        let mut matches: Bool = true
-        let mut key_part: Int = 0
-        while key_part < len(key) {
-            if char_at(chars, index + key_part) != char_at(key, key_part) { matches = false }
-            key_part = key_part + 1
-        }
-        if matches { key_index = index + len(key); break }
-        index = index + 1
-    }
-    if key_index < 0 { return prefix }
-    let mut number_end: Int = key_index
-    while number_end < len(chars) && is_digit(char_at(chars, number_end)) { number_end = number_end + 1 }
-    let before: String = result_unwrap(substring(prefix, 0, key_index))
-    let after: String = result_unwrap(substring(prefix, number_end, len(chars) - number_end))
-    return before + str(byte_end) + after
+fn prefix_span_end(prefix: SourceToken) -> Int { return prefix.byte_end }
+
+fn prefix_with_diagnostic(prefix: SourceToken, token: SourceToken) -> SourceToken {
+    return SourceToken{ kind: prefix.kind, text: prefix.text, source: token.source, line: token.line, column: token.column, byte_start: prefix.byte_start, byte_end: prefix.byte_end }
 }
 
-fn prefix_span_end(prefix: String) -> Int {
-    let chars: Array[String] = string_chars(prefix)
-    let key: Array[String] = string_chars("\"end\":")
-    let mut index: Int = 0
-    while index + len(key) <= len(chars) {
-        let mut matches: Bool = true
-        let mut key_part: Int = 0
-        while key_part < len(key) {
-            if char_at(chars, index + key_part) != char_at(key, key_part) { matches = false }
-            key_part = key_part + 1
-        }
-        if matches {
-            let mut number_start: Int = index + len(key)
-            let mut number: String = ""
-            while number_start < len(chars) && is_digit(char_at(chars, number_start)) {
-                number = number + char_at(chars, number_start)
-                number_start = number_start + 1
-            }
-            if number == "" { return -1 }
-            return int(number)
-        }
-        index = index + 1
-    }
-    return -1
-}
 
-// Keep the full expression byte range while matching the frontend token that
-// runtime diagnostics historically report for the node (operator, delimiter,
-// or field token). The source prefix is the wire metadata before the node body.
-fn prefix_with_diagnostic(prefix: String, token: SourceToken) -> String {
-    let chars: Array[String] = string_chars(prefix)
-    let key: Array[String] = string_chars("\"span\":")
-    let mut marker: Int = -1
-    let mut index: Int = 0
-    while index + len(key) <= len(chars) {
-        let mut matches: Bool = true
-        let mut key_part: Int = 0
-        while key_part < len(key) {
-            if char_at(chars, index + key_part) != char_at(key, key_part) { matches = false }
-            key_part = key_part + 1
-        }
-        if matches { marker = index; break }
-        index = index + 1
-    }
-    if marker < 0 { return prefix }
-    let span_and_end: String = result_unwrap(substring(prefix, marker, len(chars) - marker))
-    return "{\"source\":" + token.source_json + ",\"line\":" + str(token.line) + ",\"column\":" + str(token.column) + "," + span_and_end
-}
 
-fn node_metadata_fields(token: SourceToken, byte_end: Int) -> String {
-    return node_metadata_values(token, byte_end) + ","
-}
 
-fn node_metadata_values(token: SourceToken, byte_end: Int) -> String {
-    return "\"source\":" + token.source_json + ",\"line\":" + str(token.line) + ",\"column\":" + str(token.column) + ",\"span\":{\"start\":" + str(token.byte_start) + ",\"end\":" + str(byte_end) + "}"
-}
 
 fn previous_token(parser: SourceParser) -> SourceToken {
     if parser.position <= 0 { return current_token(parser) }
@@ -155,6 +90,7 @@ struct SourceStruct {
 }
 
 struct SourceParser {
+    arena: KIRTypedArena,
     tokens: Array[SourceToken],
     position: Int,
     module_id: String,
@@ -176,20 +112,18 @@ struct ParsedType {
 
 struct ParsedStatements {
     parser: SourceParser,
-    json: String,
+    references: Array[KIRIndexRef],
 }
 
 struct ParsedProgram {
     parser: SourceParser,
-    statements: String,
-    functions: String,
-    structs: String,
-    enums: String,
+    statements: Array[KIRIndexRef],
+    functions: Array[KIRIndexRef],
 }
 
 struct ParsedFunction {
     parser: SourceParser,
-    json: String,
+    reference: KIRIndexRef,
 }
 
 struct ParsedFunctionHeader {
@@ -200,19 +134,24 @@ struct ParsedFunctionHeader {
 
 struct ParsedStruct {
     parser: SourceParser,
-    json: String,
+    reference: KIRIndexRef,
 }
 
 struct ParsedEnum {
     parser: SourceParser,
-    json: String,
+    reference: KIRIndexRef,
+}
+
+struct SourceImport {
+    path: String,
+    token: SourceToken,
 }
 
 struct SourceModule {
     path: String,
     tokens: Array[SourceToken],
     imports: Array[String],
-    import_records: Array[String],
+    import_records: Array[SourceImport],
 }
 
 struct SourceModuleContext {
@@ -229,6 +168,777 @@ struct SourceModules {
     visiting: Map[String, Bool],
     loaded: Map[String, Bool],
 }
+
+fn source_row_int(type_name: String, int_value: Int) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "int",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: int_value,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_bool(type_name: String, bool_value: Bool) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "bool",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: bool_value,
+        string_value: "",
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_string(type_name: String, string_value: String) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "string",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: string_value,
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_nil(type_name: String) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "nil",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_var(type_name: String, name: String, binding: KIRIndexRef) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "var",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: name,
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: binding
+    }
+}
+
+fn source_row_binary(type_name: String, operator: String, left: KIRIndexRef, right: KIRIndexRef) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "binary",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: operator,
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: left,
+        right: right,
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_unary(type_name: String, operator: String, operand: KIRIndexRef) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "unary",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: operator,
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: operand,
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_call(type_name: String, name: String, call_target: String, builtin_id: String, args: KIRIndexRange) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "call",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: name,
+        operator: "",
+        call_target: call_target,
+        trait_name: "",
+        builtin_id: builtin_id,
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: args,
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_array(type_name: String, items: KIRIndexRange) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "array",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: items,
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_map(type_name: String, map_keys: KIRIndexRange, values: KIRIndexRange) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "map",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: map_keys,
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: values,
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_struct(type_name: String, struct_name: String, struct_type: String, fields: Array[String], values: KIRIndexRange) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "struct",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: struct_name,
+        struct_type: struct_type,
+        generic_arguments: [],
+        fields: fields,
+        values: values,
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_enum(type_name: String, enum_type: String, enum_variant: String) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "enum",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: enum_type,
+        enum_variant: enum_variant,
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_field(type_name: String, base: KIRIndexRef, field: String) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "field",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: base,
+        field: field,
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_propagate(type_name: String, operand: KIRIndexRef) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "propagate",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: operand,
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_row_index(type_name: String, left: KIRIndexRef, base: KIRIndexRef) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: "index",
+        source: "",
+        line: 0,
+        column: 0,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: kir_typed_absent_ref(KIRTypedTable::KIRTableValues),
+        int_value: 0,
+        uint_value: u64(0),
+        uint_bits: u8(0),
+        float_text: "",
+        bool_value: false,
+        string_value: "",
+        name: "",
+        operator: "",
+        call_target: "",
+        trait_name: "",
+        builtin_id: "",
+        left: left,
+        right: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        operand: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        args: kir_typed_empty_edges(),
+        items: kir_typed_empty_edges(),
+        base: base,
+        field: "",
+        receiver: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        map_keys: kir_typed_empty_edges(),
+        struct_name: "",
+        struct_type: "",
+        generic_arguments: [],
+        fields: [],
+        values: kir_typed_empty_edges(),
+        enum_type: "",
+        enum_variant: "",
+        tail: false,
+        callee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
+        lambda: kir_typed_absent_ref(KIRTypedTable::KIRTableFunctions),
+        binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings)
+    }
+}
+
+fn source_retype_row(row: KIRTypedExpression, type_name: String) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: row.kind,
+        source: row.source,
+        line: row.line,
+        column: row.column,
+        span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans),
+        type_name: type_name,
+        constant: row.constant,
+        int_value: row.int_value,
+        uint_value: row.uint_value,
+        uint_bits: row.uint_bits,
+        float_text: row.float_text,
+        bool_value: row.bool_value,
+        string_value: row.string_value,
+        name: row.name,
+        operator: row.operator,
+        call_target: row.call_target,
+        trait_name: row.trait_name,
+        builtin_id: row.builtin_id,
+        left: row.left,
+        right: row.right,
+        operand: row.operand,
+        args: row.args,
+        items: row.items,
+        base: row.base,
+        field: row.field,
+        receiver: row.receiver,
+        map_keys: row.map_keys,
+        struct_name: row.struct_name,
+        struct_type: row.struct_type,
+        generic_arguments: row.generic_arguments,
+        fields: row.fields,
+        values: row.values,
+        enum_type: row.enum_type,
+        enum_variant: row.enum_variant,
+        tail: row.tail,
+        callee: row.callee,
+        lambda: row.lambda,
+        binding: row.binding
+    }
+}
+
+fn source_located_row(row: KIRTypedExpression, token: SourceToken, span: KIRIndexRef, constant: KIRIndexRef) -> KIRTypedExpression {
+    return KIRTypedExpression{
+        kind: row.kind,
+        source: token.source,
+        line: token.line,
+        column: token.column,
+        span: span,
+        type_name: row.type_name,
+        constant: constant,
+        int_value: row.int_value,
+        uint_value: row.uint_value,
+        uint_bits: row.uint_bits,
+        float_text: row.float_text,
+        bool_value: row.bool_value,
+        string_value: row.string_value,
+        name: row.name,
+        operator: row.operator,
+        call_target: row.call_target,
+        trait_name: row.trait_name,
+        builtin_id: row.builtin_id,
+        left: row.left,
+        right: row.right,
+        operand: row.operand,
+        args: row.args,
+        items: row.items,
+        base: row.base,
+        field: row.field,
+        receiver: row.receiver,
+        map_keys: row.map_keys,
+        struct_name: row.struct_name,
+        struct_type: row.struct_type,
+        generic_arguments: row.generic_arguments,
+        fields: row.fields,
+        values: row.values,
+        enum_type: row.enum_type,
+        enum_variant: row.enum_variant,
+        tail: row.tail,
+        callee: row.callee,
+        lambda: row.lambda,
+        binding: row.binding
+    }
+}
+
+fn source_with_arena(parser: SourceParser, arena: KIRTypedArena) -> SourceParser {
+    return SourceParser{ arena: arena, tokens: parser.tokens, position: parser.position, module_id: parser.module_id, bindings: parser.bindings, functions: parser.functions, structs: parser.structs, return_type: parser.return_type }
+}
+
+fn source_value(kind: String, display: String) -> KIRTypedValue {
+    let mut number: Int = 0
+    if kind == "int" { number = int(display) }
+    let mut text: String = ""
+    if kind == "string" { text = display }
+    return KIRTypedValue{ kind: kind, int_value: number, uint_value: u64(0), uint_bits: u8(0), float_text: "", bool_value: kind == "bool" && display == "true", string_value: text, bytes: [], array: kir_typed_empty_edges(), inner: kir_typed_absent_ref(KIRTypedTable::KIRTableValues), present: false, ok: false }
+}
+
+fn store_source_expression(parser: SourceParser, expression: SourceExpr) -> ParsedExpr {
+    if expression.row.span.present { return ParsedExpr{ parser: parser, expression: expression } }
+    let appended_span: KIRTypedAppendRef = kir_typed_append_span(parser.arena, KIRTypedSourceSpan{ start: expression.location.byte_start, end: expression.location.byte_end })
+    let mut arena: KIRTypedArena = appended_span.arena
+    let mut constant: KIRIndexRef = kir_typed_absent_ref(KIRTypedTable::KIRTableValues)
+    if expression.known && (expression.type_name == "Int" || expression.type_name == "Bool" || expression.type_name == "String") {
+        let mut kind: String = "int"
+        if expression.type_name == "Bool" { kind = "bool" }
+        if expression.type_name == "String" { kind = "string" }
+        let appended_constant: KIRTypedAppendRef = kir_typed_append_value(arena, source_value(kind, expression.display))
+        arena = appended_constant.arena
+        constant = appended_constant.reference
+    }
+    let row: KIRTypedExpression = source_located_row(expression.row, expression.location, appended_span.reference, constant)
+    let mut reference: KIRIndexRef = expression.reference
+    if reference.present {
+        arena = result_unwrap(kir_typed_replace_expression(arena, reference.index, row))
+    } else {
+        let appended: KIRTypedAppendRef = kir_typed_append_expression(arena, row)
+        arena = appended.arena
+        reference = appended.reference
+    }
+    return ParsedExpr{ parser: source_with_arena(parser, arena), expression: SourceExpr{ row: row, reference: reference, type_name: expression.type_name, known: expression.known, display: expression.display, location: expression.location, empty_kind: expression.empty_kind } }
+}
+
+fn store_parsed_expression(parsed: ParsedExpr) -> ParsedExpr { return store_source_expression(parsed.parser, parsed.expression) }
+
 
 fn char_at(chars: Array[String], index: Int) -> String {
     return unwrap_or(array_get(chars, index), "")
@@ -340,7 +1050,6 @@ fn join_token_chunks(chunks: Array[Array[SourceToken]], start: Int, end: Int) ->
 
 fn lex(source: String, source_name: String) -> Result[Array[SourceToken], String] {
     let chars: Array[String] = string_chars(source)
-    let source_json: String = json_quote(source_name)
     let mut index: Int = 0
     let count: Int = len(chars)
     let mut line: Int = 1
@@ -360,7 +1069,7 @@ fn lex(source: String, source_name: String) -> Result[Array[SourceToken], String
         }
         if current == "\n" {
             if paren_depth == 0 && bracket_depth == 0 && !newline_continues_expression(chars, index) {
-                tokens = push_token(tokens, SourceToken{ kind: "separator", text: ";", source: source_name, source_json: source_json, line: line, column: column, byte_start: byte_offset, byte_end: byte_offset + 1 })
+                tokens = push_token(tokens, SourceToken{ kind: "separator", text: ";", source: source_name, line: line, column: column, byte_start: byte_offset, byte_end: byte_offset + 1 })
                 if len(tokens) >= 128 {
                     token_chunks = array_push(token_chunks, tokens)
                     tokens = []
@@ -393,7 +1102,7 @@ fn lex(source: String, source_name: String) -> Result[Array[SourceToken], String
                 column = column + 1
             }
             let text: String = join_text_range(chars, start, index)
-            tokens = push_token(tokens, SourceToken{ kind: "identifier", text: text, source: source_name, source_json: source_json, line: location.line, column: location.column, byte_start: start_byte, byte_end: byte_offset })
+            tokens = push_token(tokens, SourceToken{ kind: "identifier", text: text, source: source_name, line: location.line, column: location.column, byte_start: start_byte, byte_end: byte_offset })
             if len(tokens) >= 128 {
                 token_chunks = array_push(token_chunks, tokens)
                 tokens = []
@@ -410,7 +1119,7 @@ fn lex(source: String, source_name: String) -> Result[Array[SourceToken], String
                 column = column + 1
             }
             let text: String = join_text_range(chars, start, index)
-            tokens = push_token(tokens, SourceToken{ kind: "integer", text: text, source: source_name, source_json: source_json, line: location.line, column: location.column, byte_start: start_byte, byte_end: byte_offset })
+            tokens = push_token(tokens, SourceToken{ kind: "integer", text: text, source: source_name, line: location.line, column: location.column, byte_start: start_byte, byte_end: byte_offset })
             if len(tokens) >= 128 {
                 token_chunks = array_push(token_chunks, tokens)
                 tokens = []
@@ -471,7 +1180,7 @@ fn lex(source: String, source_name: String) -> Result[Array[SourceToken], String
             if !closed {
                 return err("lexer: unterminated string literal")
             }
-            tokens = push_token(tokens, SourceToken{ kind: "string", text: join_text_range(text_parts, 0, len(text_parts)), source: source_name, source_json: source_json, line: location.line, column: location.column, byte_start: start_byte, byte_end: byte_offset })
+            tokens = push_token(tokens, SourceToken{ kind: "string", text: join_text_range(text_parts, 0, len(text_parts)), source: source_name, line: location.line, column: location.column, byte_start: start_byte, byte_end: byte_offset })
             if len(tokens) >= 128 {
                 token_chunks = array_push(token_chunks, tokens)
                 tokens = []
@@ -480,7 +1189,7 @@ fn lex(source: String, source_name: String) -> Result[Array[SourceToken], String
         }
         let next: String = char_at(chars, index + 1)
         if (current == "=" && next == "=") || (current == "=" && next == ">") || (current == "!" && next == "=") || (current == "<" && next == "=") || (current == ">" && next == "=") || (current == "&" && next == "&") || (current == "|" && next == "|") || (current == "<" && next == "<") || (current == ">" && next == ">") || (current == "-" && next == ">") || (current == ":" && next == ":") {
-            tokens = push_token(tokens, SourceToken{ kind: "symbol", text: current + next, source: source_name, source_json: source_json, line: line, column: column, byte_start: byte_offset, byte_end: byte_offset + 2 })
+            tokens = push_token(tokens, SourceToken{ kind: "symbol", text: current + next, source: source_name, line: line, column: column, byte_start: byte_offset, byte_end: byte_offset + 2 })
             if len(tokens) >= 128 {
                 token_chunks = array_push(token_chunks, tokens)
                 tokens = []
@@ -491,7 +1200,7 @@ fn lex(source: String, source_name: String) -> Result[Array[SourceToken], String
             continue
         }
         if current == "(" || current == ")" || current == "{" || current == "}" || current == "[" || current == "]" || current == ":" || current == "=" || current == "+" || current == "-" || current == "*" || current == "/" || current == "%" || current == "<" || current == ">" || current == "!" || current == "&" || current == "|" || current == "^" || current == "," || current == ";" || current == "." || current == "?" {
-            tokens = push_token(tokens, SourceToken{ kind: "symbol", text: current, source: source_name, source_json: source_json, line: line, column: column, byte_start: byte_offset, byte_end: byte_offset + len(string_to_bytes(current)) })
+            tokens = push_token(tokens, SourceToken{ kind: "symbol", text: current, source: source_name, line: line, column: column, byte_start: byte_offset, byte_end: byte_offset + len(string_to_bytes(current)) })
             if len(tokens) >= 128 {
                 token_chunks = array_push(token_chunks, tokens)
                 tokens = []
@@ -507,29 +1216,28 @@ fn lex(source: String, source_name: String) -> Result[Array[SourceToken], String
         }
         return err("lexer: unsupported character '" + current + "'")
     }
-    tokens = push_token(tokens, SourceToken{ kind: "eof", text: "", source: source_name, source_json: source_json, line: line, column: column, byte_start: byte_offset, byte_end: byte_offset })
+    tokens = push_token(tokens, SourceToken{ kind: "eof", text: "", source: source_name, line: line, column: column, byte_start: byte_offset, byte_end: byte_offset })
     token_chunks = array_push(token_chunks, tokens)
     return ok(join_token_chunks(token_chunks, 0, len(token_chunks)))
 }
 
 fn module_without_imports(path: String, tokens: Array[SourceToken]) -> Result[SourceModule, String] {
-    let path_json: String = json_quote(path)
     let mut output: Array[SourceToken] = []
     let mut output_chunks: Array[Array[SourceToken]] = []
     let mut imports: Array[String] = []
-    let mut import_records: Array[String] = []
+    let mut import_records: Array[SourceImport] = []
     let mut index: Int = 0
     let mut braces: Int = 0
     while index < len(tokens) {
-        let token: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "", source: path, source_json: path_json, line: 1, column: 1, byte_start: 0, byte_end: 0 })
+        let token: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "", source: path, line: 1, column: 1, byte_start: 0, byte_end: 0 })
         if braces == 0 && token.kind == "identifier" && token.text == "import" {
-            let name: SourceToken = unwrap_or(array_get(tokens, index + 1), SourceToken{ kind: "eof", text: "", source: path, source_json: path_json, line: 1, column: 1, byte_start: 0, byte_end: 0 })
+            let name: SourceToken = unwrap_or(array_get(tokens, index + 1), SourceToken{ kind: "eof", text: "", source: path, line: 1, column: 1, byte_start: 0, byte_end: 0 })
             if name.kind != "string" { return err("module: import expects a quoted module name in '" + path + "'") }
             if !safe_module_path(name.text) { return err("module: unsafe module path '" + name.text + "' in '" + path + "'") }
             imports = array_push(imports, name.text)
-            import_records = array_push(import_records, "{\"path\":" + json_quote(name.text) + "," + node_metadata_values(token, token.byte_end) + "}")
+            import_records = array_push(import_records, SourceImport{ path: name.text, token: name })
             index = index + 2
-            let separator: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "", source: path, source_json: path_json, line: 1, column: 1, byte_start: 0, byte_end: 0 })
+            let separator: SourceToken = unwrap_or(array_get(tokens, index), SourceToken{ kind: "eof", text: "", source: path, line: 1, column: 1, byte_start: 0, byte_end: 0 })
             if separator.text == ";" { index = index + 1 }
             else if separator.kind != "eof" { return err("module: expected separator after import in '" + path + "'") }
             continue
@@ -570,11 +1278,11 @@ fn load_source_modules(path: String, state: SourceModules, root_directory: Strin
 }
 
 fn current_token(parser: SourceParser) -> SourceToken {
-    return unwrap_or(array_get(parser.tokens, parser.position), SourceToken{ kind: "eof", text: "", source: "", source_json: "\"\"", line: 1, column: 1, byte_start: 0, byte_end: 0 })
+    return unwrap_or(array_get(parser.tokens, parser.position), SourceToken{ kind: "eof", text: "", source: "", line: 1, column: 1, byte_start: 0, byte_end: 0 })
 }
 
 fn advance(parser: SourceParser) -> SourceParser {
-    return SourceParser{ tokens: parser.tokens, position: parser.position + 1, module_id: parser.module_id, bindings: parser.bindings, functions: parser.functions, structs: parser.structs, return_type: parser.return_type }
+    return SourceParser{ arena: parser.arena, tokens: parser.tokens, position: parser.position + 1, module_id: parser.module_id, bindings: parser.bindings, functions: parser.functions, structs: parser.structs, return_type: parser.return_type }
 }
 
 fn parser_error(value: Result[SourceParser, String]) -> String {
@@ -604,6 +1312,36 @@ fn expect(parser: SourceParser, expected: String) -> Result[SourceParser, String
 fn parse_type(parser: SourceParser) -> Result[ParsedType, String] {
     let token: SourceToken = current_token(parser)
     if token.kind != "identifier" { return err("parser: expected a type name") }
+    if token.text == "fn" {
+        let opened: Result[SourceParser, String] = expect(advance(parser), "(")
+        if is_err(opened) { return err(parser_error(opened)) }
+        let mut current: SourceParser = result_unwrap(opened)
+        let mut parameters: String = ""
+        let mut first: Bool = true
+        while current_token(current).text != ")" {
+            let parsed_parameter: Result[ParsedType, String] = parse_type(current)
+            if is_err(parsed_parameter) { return err(unwrap_or(result_error(parsed_parameter), "parser: expected a function type parameter")) }
+            let parameter: ParsedType = result_unwrap(parsed_parameter)
+            if parameter.name == "Nil" { return err("parser: unsupported function type parameter 'Nil'") }
+            if !first { parameters = parameters + "," }
+            parameters = parameters + parameter.name
+            first = false
+            current = parameter.parser
+            if current_token(current).text == "," {
+                current = advance(current)
+            } else if current_token(current).text != ")" {
+                return err("parser: expected ',' or ')' in function type")
+            }
+        }
+        let closed: Result[SourceParser, String] = expect(current, ")")
+        if is_err(closed) { return err(parser_error(closed)) }
+        let arrow: Result[SourceParser, String] = expect(result_unwrap(closed), "->")
+        if is_err(arrow) { return err(parser_error(arrow)) }
+        let parsed_return: Result[ParsedType, String] = parse_type(result_unwrap(arrow))
+        if is_err(parsed_return) { return err(unwrap_or(result_error(parsed_return), "parser: expected a function type return")) }
+        let returned: ParsedType = result_unwrap(parsed_return)
+        return ok(ParsedType{ parser: returned.parser, name: "fn(" + parameters + ")->" + returned.name })
+    }
     let mut current: SourceParser = advance(parser)
     let mut name: String = token.text
     let declared: Option[SourceStruct] = map_get(parser.structs, token.text)
@@ -701,8 +1439,7 @@ fn parse_struct(parser: SourceParser, public: Bool) -> Result[ParsedStruct, Stri
     let mut fields: Map[String, String] = {}
     let mut public_fields: Map[String, Bool] = {}
     let mut names: Array[String] = []
-    let mut fields_json: String = "["
-    let mut first: Bool = true
+    let mut field_refs: Array[KIRIndexRef] = []
     while current_token(current).text != "}" {
         let mut field_public: Bool = true
         if current_token(current).text == "private" {
@@ -721,10 +1458,10 @@ fn parse_struct(parser: SourceParser, public: Bool) -> Result[ParsedStruct, Stri
         fields = map_insert(fields, field_name.text, field_type)
         public_fields = map_insert(public_fields, field_name.text, field_public)
         names = array_push(names, field_name.text)
-        if !first { fields_json = fields_json + "," }
-        fields_json = fields_json + "{\"name\":" + json_quote(field_name.text) + "," + node_metadata_fields(field_name, field_name.byte_end) + "\"public\":" + bool_text(field_public) + ",\"type\":" + json_quote(field_type) + "}"
-        first = false
-        current = skip_separators(result_unwrap(parsed_type).parser)
+        let span: KIRTypedAppendRef = kir_typed_append_span(result_unwrap(parsed_type).parser.arena, KIRTypedSourceSpan{ start: field_name.byte_start, end: field_name.byte_end })
+        let field: KIRTypedAppendRef = kir_typed_append_field(span.arena, KIRTypedField{ name: field_name.text, source: field_name.source, line: field_name.line, column: field_name.column, span: span.reference, public: field_public, type_name: field_type })
+        field_refs = array_push(field_refs, field.reference)
+        current = skip_separators(source_with_arena(result_unwrap(parsed_type).parser, field.arena))
         if current_token(current).text == "," {
             current = skip_separators(advance(current))
         } else if current_token(current).text != "}" {
@@ -745,10 +1482,12 @@ fn parse_struct(parser: SourceParser, public: Bool) -> Result[ParsedStruct, Stri
     let definition: SourceStruct = SourceStruct{ symbol: declared_shape.symbol, module_id: declared_shape.module_id, public: declared_shape.public, fields: fields, names: names, public_fields: public_fields }
     let after: SourceParser = result_unwrap(closed)
     let updated_structs: Map[String, SourceStruct] = map_insert(map_insert(after.structs, name.text, definition), definition.symbol, definition)
-    let updated: SourceParser = SourceParser{ tokens: after.tokens, position: after.position, module_id: after.module_id, bindings: after.bindings, functions: after.functions, structs: updated_structs, return_type: after.return_type }
+    let updated: SourceParser = SourceParser{ arena: after.arena, tokens: after.tokens, position: after.position, module_id: after.module_id, bindings: after.bindings, functions: after.functions, structs: updated_structs, return_type: after.return_type }
     let declaration_end: Int = previous_token(result_unwrap(closed)).byte_end
-    let json: String = "{\"name\":" + json_quote(definition.symbol) + "," + node_metadata_fields(declaration_token, declaration_end) + "\"public\":" + bool_text(public) + ",\"module\":\"\",\"type_params\":[],\"fields\":" + fields_json + "]}"
-    return ok(ParsedStruct{ parser: updated, json: json })
+    let span: KIRTypedAppendRef = kir_typed_append_span(updated.arena, KIRTypedSourceSpan{ start: declaration_token.byte_start, end: declaration_end })
+    let fields_range: KIRTypedAppendRange = kir_typed_append_edges(span.arena, field_refs)
+    let row: KIRTypedAppendRef = kir_typed_append_struct(fields_range.arena, KIRTypedStruct{ name: definition.symbol, source: declaration_token.source, line: declaration_token.line, column: declaration_token.column, span: span.reference, public: public, module: "", type_params: kir_typed_empty_edges(), fields: fields_range.range })
+    return ok(ParsedStruct{ parser: source_with_arena(updated, row.arena), reference: row.reference })
 }
 
 fn parse_enum(parser: SourceParser, public: Bool, module_name: String) -> Result[ParsedEnum, String] {
@@ -766,22 +1505,15 @@ fn parse_enum(parser: SourceParser, public: Bool, module_name: String) -> Result
     if is_err(brace) { return err(parser_error(brace)) }
     let mut current: SourceParser = skip_separators(result_unwrap(brace))
     let mut variants: Array[String] = []
-    let mut variants_json: String = "["
-    let mut variant_spans: Array[String] = []
-    let mut variant_spans_json: String = "["
-    let mut first: Bool = true
+    let mut variant_spans: Array[KIRIndexRef] = []
     while current_token(current).text != "}" {
         let variant: SourceToken = current_token(current)
         if variant.kind != "identifier" { return err("parser: expected an enum variant name") }
         if source_string_array_contains(variants, variant.text) { return err("parser: duplicate enum variant '" + variant.text + "'") }
         variants = array_push(variants, variant.text)
-        variant_spans = array_push(variant_spans, "{\"start\":" + str(variant.byte_start) + ",\"end\":" + str(variant.byte_end) + "}")
-        if !first { variants_json = variants_json + "," }
-        if !first { variant_spans_json = variant_spans_json + "," }
-        variants_json = variants_json + json_quote(variant.text)
-        variant_spans_json = variant_spans_json + unwrap_or(array_get(variant_spans, len(variant_spans) - 1), "")
-        first = false
-        current = advance(current)
+        let span: KIRTypedAppendRef = kir_typed_append_span(current.arena, KIRTypedSourceSpan{ start: variant.byte_start, end: variant.byte_end })
+        variant_spans = array_push(variant_spans, span.reference)
+        current = advance(source_with_arena(current, span.arena))
         if current_token(current).text == "," {
             current = skip_separators(advance(current))
         } else if current_token(current).text == ";" {
@@ -796,37 +1528,12 @@ fn parse_enum(parser: SourceParser, public: Bool, module_name: String) -> Result
     let definition: SourceStruct = SourceStruct{ symbol: declared_shape.symbol, module_id: declared_shape.module_id, public: declared_shape.public, fields: {}, names: variants, public_fields: {} }
     let after: SourceParser = result_unwrap(closed)
     let updated_enums: Map[String, SourceStruct] = map_insert(map_insert(after.structs, name.text, definition), definition.symbol, definition)
-    let updated: SourceParser = SourceParser{ tokens: after.tokens, position: after.position, module_id: after.module_id, bindings: after.bindings, functions: after.functions, structs: updated_enums, return_type: after.return_type }
+    let updated: SourceParser = SourceParser{ arena: after.arena, tokens: after.tokens, position: after.position, module_id: after.module_id, bindings: after.bindings, functions: after.functions, structs: updated_enums, return_type: after.return_type }
     let declaration_end: Int = previous_token(result_unwrap(closed)).byte_end
-    let json: String = "{\"name\":" + json_quote(definition.symbol) + "," + node_metadata_fields(declaration_token, declaration_end) + "\"public\":" + bool_text(public) + ",\"module\":" + json_quote(module_name) + ",\"variants\":" + variants_json + "],\"variant_spans\":" + variant_spans_json + "]}"
-    return ok(ParsedEnum{ parser: updated, json: json })
-}
-
-fn json_quote(value: String) -> String {
-    if !contains(value, "\"") && !contains(value, "\\") && !contains(value, "\n") && !contains(value, "\r") && !contains(value, "\t") {
-        return "\"" + value + "\""
-    }
-    let chars: Array[String] = string_chars(value)
-    let mut result: String = "\""
-    let mut index: Int = 0
-    while index < len(chars) {
-        let character: String = char_at(chars, index)
-        if character == "\"" {
-            result = result + "\\\""
-        } else if character == "\\" {
-            result = result + "\\\\"
-        } else if character == "\n" {
-            result = result + "\\n"
-        } else if character == "\r" {
-            result = result + "\\r"
-        } else if character == "\t" {
-            result = result + "\\t"
-        } else {
-            result = result + character
-        }
-        index = index + 1
-    }
-    return result + "\""
+    let span: KIRTypedAppendRef = kir_typed_append_span(updated.arena, KIRTypedSourceSpan{ start: declaration_token.byte_start, end: declaration_end })
+    let variants_range: KIRTypedAppendRange = kir_typed_append_edges(span.arena, variant_spans)
+    let row: KIRTypedAppendRef = kir_typed_append_enum(variants_range.arena, KIRTypedEnum{ name: definition.symbol, source: declaration_token.source, line: declaration_token.line, column: declaration_token.column, span: span.reference, public: public, module: module_name, variants: variants, variant_spans: variants_range.range })
+    return ok(ParsedEnum{ parser: source_with_arena(updated, row.arena), reference: row.reference })
 }
 
 fn bool_text(value: Bool) -> String {
@@ -837,11 +1544,11 @@ fn bool_text(value: Bool) -> String {
 }
 
 fn source_is_scalar_type(type_name: String) -> Bool {
-    return type_name == "Int" || type_name == "Bool" || type_name == "String" || type_name == "Json" || type_name == "Bytes" || type_name == "FFILibrary" || type_name == "FFISymbol" || type_name == "FFIBuffer" || starts_with(type_name, "UInt") || starts_with(type_name, "Array[") || starts_with(type_name, "Option[") || starts_with(type_name, "Result[") || starts_with(type_name, "Map[")
+    return type_name == "Int" || type_name == "Float" || type_name == "Bool" || type_name == "String" || type_name == "Json" || type_name == "Bytes" || type_name == "FFILibrary" || type_name == "FFISymbol" || type_name == "FFIBuffer" || starts_with(type_name, "UInt") || starts_with(type_name, "Array[") || starts_with(type_name, "Option[") || starts_with(type_name, "Result[") || starts_with(type_name, "Map[") || starts_with(type_name, "Set[")
 }
 
 fn source_type_supported(parser: SourceParser, type_name: String) -> Bool {
-    return source_is_scalar_type(type_name) || map_contains_key(parser.structs, type_name)
+    return source_is_scalar_type(type_name) || starts_with(type_name, "fn(") || map_contains_key(parser.structs, type_name)
 }
 
 fn source_struct_field_type(parser: SourceParser, type_name: String, field_name: String) -> String {
@@ -969,8 +1676,34 @@ fn array_inner(type_name: String) -> String {
     return generic_inner(type_name, "Array[")
 }
 
+fn source_type_contains_function(parser: SourceParser, type_name: String, visiting: Map[String, Bool]) -> Bool {
+    if contains(type_name, "fn(") { return true }
+    if is_array_type(type_name) { return source_type_contains_function(parser, array_inner(type_name), visiting) }
+    if starts_with(type_name, "Option[") { return source_type_contains_function(parser, generic_inner(type_name, "Option["), visiting) }
+    if starts_with(type_name, "Result[") {
+        return source_type_contains_function(parser, generic_inner(type_name, "Result["), visiting) || source_type_contains_function(parser, generic_error(type_name), visiting)
+    }
+    if starts_with(type_name, "Map[") {
+        return source_type_contains_function(parser, generic_inner(type_name, "Map["), visiting) || source_type_contains_function(parser, generic_value(type_name, "Map["), visiting)
+    }
+    if starts_with(type_name, "Set[") { return source_type_contains_function(parser, generic_inner(type_name, "Set["), visiting) }
+    if map_contains_key(visiting, type_name) { return false }
+    let definition: Option[SourceStruct] = map_get(parser.structs, type_name)
+    if is_none(definition) { return false }
+    let shape: SourceStruct = unwrap_or(definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} })
+    let next_visiting: Map[String, Bool] = map_insert(visiting, type_name, true)
+    let mut index: Int = 0
+    while index < len(shape.names) {
+        let field_name: String = unwrap_or(array_get(shape.names, index), "")
+        let field_type: String = unwrap_or(map_get(shape.fields, field_name), "")
+        if source_type_contains_function(parser, field_type, next_visiting) { return true }
+        index = index + 1
+    }
+    return false
+}
+
 fn is_generic_builtin(name: String) -> Bool {
-    return name == "assert" || name == "assert_eq" || name == "contains" || name == "starts_with" || name == "ends_with" || name == "string_chars" || name == "substring" || name == "str" || name == "int" || name == "some" || name == "none" || name == "ok" || name == "err" || name == "is_some" || name == "is_none" || name == "is_ok" || name == "is_err" || name == "unwrap_or" || name == "result_unwrap" || name == "result_error" || name == "len" || name == "array_push" || name == "array_get" || name == "array_concat" || name == "array_indices" || name == "array_set" || name == "array_slice" || name == "bytes" || name == "bytes_from_u8" || name == "u8_array" || name == "string_to_bytes" || name == "process_args" || name == "fs_read_text" || name == "fs_write_bytes" || name == "json_parse" || name == "json_stringify" || name == "json_kind" || name == "json_array_len" || name == "json_object_get" || name == "json_object_keys" || name == "json_object_keys_allowed" || name == "json_object_fields_empty_except" || name == "json_array_get" || name == "json_string" || name == "json_bool" || name == "json_int" || name == "json_uint" || name == "map_get" || name == "map_insert" || name == "map_contains_key" || name == "map_remove" || name == "print" || name == "println" || name == "ffi_library_open" || name == "ffi_library_close" || name == "ffi_symbol" || name == "ffi_call" || name == "ffi_buffer_new" || name == "ffi_buffer_new_sized" || name == "ffi_buffer_address" || name == "ffi_buffer_read" || name == "ffi_buffer_close" || name == "ffi_thread_pin" || name == "ffi_thread_unpin"
+    return name == "assert" || name == "assert_eq" || name == "contains" || name == "starts_with" || name == "ends_with" || name == "string_chars" || name == "codepoints" || name == "substring" || name == "str" || name == "int" || name == "some" || name == "none" || name == "ok" || name == "err" || name == "is_some" || name == "is_none" || name == "is_ok" || name == "is_err" || name == "unwrap_or" || name == "result_unwrap" || name == "result_error" || name == "len" || name == "array_push" || name == "array_get" || name == "array_concat" || name == "array_indices" || name == "array_set" || name == "array_slice" || name == "bytes" || name == "bytes_from_u8" || name == "u8_array" || name == "string_to_bytes" || name == "process_args" || name == "fs_read_text" || name == "fs_write_bytes" || name == "json_parse" || name == "json_stringify" || name == "json_kind" || name == "json_array_len" || name == "json_object_get" || name == "json_object_keys" || name == "json_object_keys_allowed" || name == "json_object_fields_empty_except" || name == "json_array_get" || name == "json_string" || name == "json_bool" || name == "json_int" || name == "json_uint" || name == "map_get" || name == "map_insert" || name == "map_contains_key" || name == "map_remove" || name == "print" || name == "println" || name == "ffi_library_open" || name == "ffi_library_close" || name == "ffi_symbol" || name == "ffi_call" || name == "ffi_buffer_new" || name == "ffi_buffer_new_sized" || name == "ffi_buffer_address" || name == "ffi_buffer_read" || name == "ffi_buffer_close" || name == "ffi_thread_pin" || name == "ffi_thread_unpin"
 }
 
 fn source_ffi_argument_type(argument_types: Array[String], index: Int) -> String {
@@ -1021,33 +1754,19 @@ fn source_ffi_return_type(name: String, argument_types: Array[String], argument_
     return err("parser: unknown FFI builtin '" + name + "'")
 }
 
-fn const_json(type_name: String, display: String) -> String {
-    if type_name == "Int" {
-        return "{\"kind\":\"int\",\"int\":" + display + "}"
-    }
-    if type_name == "Bool" {
-        return "{\"kind\":\"bool\",\"bool\":" + display + "}"
-    }
-    if type_name == "String" {
-        return "{\"kind\":\"string\",\"string\":" + json_quote(display) + "}"
-    }
-    return "null"
-}
+
 
 fn binding_id(name: String, source: String, byte_start: Int, line: Int, column: Int) -> String {
     return "kry-binding-v1/" + str(byte_start) + "/" + str(line) + "/" + str(column) + "/" + str(len(string_to_bytes(source))) + ":" + source + "/" + str(len(string_to_bytes(name))) + ":" + name
 }
 
-fn resolved_binding_json(name: String, binding: SourceBinding) -> String {
-    let byte_end: Int = binding.byte_start + len(string_to_bytes(name))
-    return "{\"id\":" + json_quote(binding_id(name, binding.source, binding.byte_start, binding.line, binding.column)) + ",\"name\":" + json_quote(name) + ",\"type\":" + json_quote(binding.type_name) + ",\"mutable\":" + bool_text(binding.mutable) + ",\"source\":" + json_quote(binding.source) + ",\"line\":" + str(binding.line) + ",\"column\":" + str(binding.column) + ",\"span\":{\"start\":" + str(binding.byte_start) + ",\"end\":" + str(byte_end) + "}}"
-}
+
 
 fn literal_int(value: Int, token: SourceToken) -> SourceExpr {
     let display: String = str(value)
-    let prefix: String = node_prefix(token)
+    let prefix: SourceToken = node_prefix(token)
     return SourceExpr{
-        json: prefix + "\"kind\":\"int\",\"type\":\"Int\",\"const\":" + const_json("Int", display) + ",\"int\":" + display + "}",
+        row: source_row_int("Int", value), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
         type_name: "Int",
         known: true,
         display: display,
@@ -1058,9 +1777,9 @@ fn literal_int(value: Int, token: SourceToken) -> SourceExpr {
 
 fn literal_bool(value: Bool, token: SourceToken) -> SourceExpr {
     let display: String = bool_text(value)
-    let prefix: String = node_prefix(token)
+    let prefix: SourceToken = node_prefix(token)
     return SourceExpr{
-        json: prefix + "\"kind\":\"bool\",\"type\":\"Bool\",\"const\":" + const_json("Bool", display) + ",\"bool\":" + display + "}",
+        row: source_row_bool("Bool", value), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
         type_name: "Bool",
         known: true,
         display: display,
@@ -1070,9 +1789,9 @@ fn literal_bool(value: Bool, token: SourceToken) -> SourceExpr {
 }
 
 fn literal_string(value: String, token: SourceToken) -> SourceExpr {
-    let prefix: String = node_prefix(token)
+    let prefix: SourceToken = node_prefix(token)
     return SourceExpr{
-        json: prefix + "\"kind\":\"string\",\"type\":\"String\",\"const\":" + const_json("String", value) + ",\"string\":" + json_quote(value) + "}",
+        row: source_row_string("String", value), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
         type_name: "String",
         known: true,
         display: value,
@@ -1082,35 +1801,22 @@ fn literal_string(value: String, token: SourceToken) -> SourceExpr {
 }
 
 fn apply_empty_type(expression: SourceExpr, expected: String) -> SourceExpr {
-    if is_option_type(expected) && is_option_type(expression.type_name) && expression.display == "[]" {
-        let updated_json: String = expression.location + "\"kind\":\"call\",\"type\":" + json_quote(expected) + ",\"const\":null,\"name\":\"none\",\"call_target\":\"builtin:none\",\"builtin_id\":\"none\",\"args\":[]}"
-        return SourceExpr{ json: updated_json, type_name: expected, known: expression.known, display: expression.display, location: expression.location, empty_kind: "" }
-    }
-    if is_array_type(expected) && expression.empty_kind == "array" {
-        return SourceExpr{ json: expression.location + "\"kind\":\"array\",\"type\":" + json_quote(expected) + ",\"const\":null,\"items\":[]}", type_name: expected, known: expression.known, display: expression.display, location: expression.location, empty_kind: "array" }
-    }
-    if starts_with(expected, "Map[") && expression.empty_kind == "map" {
-        return SourceExpr{ json: expression.location + "\"kind\":\"map\",\"type\":" + json_quote(expected) + ",\"const\":null,\"map_keys\":[],\"values\":[]}", type_name: expected, known: expression.known, display: expression.display, location: expression.location, empty_kind: "map" }
-    }
-    if is_result_type(expected) && is_result_type(expression.type_name) && generic_inner(expected, "Result[") == generic_inner(expression.type_name, "Result[") && expression.display != "" && starts_with(expression.json, expression.location + "\"kind\":\"call\",\"type\":") && contains(expression.json, "\"name\":\"ok\"") {
-        let updated_json: String = expression.location + "\"kind\":\"call\",\"type\":" + json_quote(expected) + ",\"const\":null,\"name\":\"ok\",\"call_target\":\"builtin:ok\",\"builtin_id\":\"ok\",\"args\":" + expression.display + "}"
-        return SourceExpr{ json: updated_json, type_name: expected, known: expression.known, display: expression.display, location: expression.location, empty_kind: "" }
-    }
-    if is_result_type(expected) && is_result_type(expression.type_name) && generic_error(expected) == generic_error(expression.type_name) && expression.display != "" {
-        let updated_json: String = expression.location + "\"kind\":\"call\",\"type\":" + json_quote(expected) + ",\"const\":null,\"name\":\"err\",\"call_target\":\"builtin:err\",\"builtin_id\":\"err\",\"args\":" + expression.display + "}"
-        return SourceExpr{ json: updated_json, type_name: expected, known: expression.known, display: "", location: expression.location, empty_kind: "" }
+    let row: KIRTypedExpression = expression.row
+    let option_empty: Bool = is_option_type(expected) && is_option_type(expression.type_name) && row.kind == "call" && row.name == "none"
+    let array_empty: Bool = is_array_type(expected) && expression.empty_kind == "array"
+    let map_empty: Bool = starts_with(expected, "Map[") && expression.empty_kind == "map"
+    let result_ok: Bool = is_result_type(expected) && is_result_type(expression.type_name) && generic_inner(expected, "Result[") == generic_inner(expression.type_name, "Result[") && row.kind == "call" && row.name == "ok"
+    let result_err: Bool = is_result_type(expected) && is_result_type(expression.type_name) && generic_error(expected) == generic_error(expression.type_name) && row.kind == "call" && row.name == "err"
+    if option_empty || array_empty || map_empty || result_ok || result_err {
+        return SourceExpr{ row: source_retype_row(row, expected), reference: expression.reference, type_name: expected, known: expression.known, display: expression.display, location: expression.location, empty_kind: expression.empty_kind }
     }
     return expression
 }
 
 fn variable_expr(name: String, binding: SourceBinding, token: SourceToken) -> SourceExpr {
-    let mut constant: String = "null"
-    let prefix: String = node_prefix(token)
-    if binding.known {
-        constant = const_json(binding.type_name, binding.display)
-    }
+    let prefix: SourceToken = node_prefix(token)
     return SourceExpr{
-        json: prefix + "\"kind\":\"var\",\"type\":" + json_quote(binding.type_name) + ",\"const\":" + constant + ",\"name\":" + json_quote(name) + ",\"binding\":" + resolved_binding_json(name, binding) + "}",
+        row: source_row_var(binding.type_name, name, binding.reference), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
         type_name: binding.type_name,
         known: binding.known,
         display: binding.display,
@@ -1120,17 +1826,15 @@ fn variable_expr(name: String, binding: SourceBinding, token: SourceToken) -> So
 }
 
 fn combine_values(left: SourceExpr, operator: String, right: SourceExpr, token: SourceToken) -> Result[SourceExpr, String] {
-    let prefix: String = prefix_with_diagnostic(prefix_with_span_end(left.location, prefix_span_end(right.location)), token)
+    let prefix: SourceToken = prefix_with_diagnostic(prefix_with_span_end(left.location, prefix_span_end(right.location)), token)
     if operator == "+" && left.type_name == "String" && right.type_name == "String" {
         let known: Bool = left.known && right.known
         let mut display: String = ""
-        let mut constant: String = "null"
         if known {
             display = left.display + right.display
-            constant = const_json("String", display)
         }
         return ok(SourceExpr{
-            json: prefix + "\"kind\":\"binary\",\"type\":\"String\",\"const\":" + constant + ",\"operator\":\"+\",\"left\":" + left.json + ",\"right\":" + right.json + "}",
+            row: source_row_binary("String", "+", left.reference, right.reference), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
             type_name: "String",
             known: known,
             display: display,
@@ -1143,7 +1847,7 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr, token: 
             return err("parser: shifts require a UInt value and an Int count")
         }
         return ok(SourceExpr{
-            json: prefix + "\"kind\":\"binary\",\"type\":" + json_quote(left.type_name) + ",\"const\":null,\"operator\":" + json_quote(operator) + ",\"left\":" + left.json + ",\"right\":" + right.json + "}",
+            row: source_row_binary(left.type_name, operator, left.reference, right.reference), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
             type_name: left.type_name,
             known: false,
             display: "",
@@ -1157,7 +1861,7 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr, token: 
     if starts_with(left.type_name, "@kry_enum_module_") {
         if operator != "==" && operator != "!=" { return err("parser: enum values support only equality") }
         return ok(SourceExpr{
-            json: prefix + "\"kind\":\"binary\",\"type\":\"Bool\",\"const\":null,\"operator\":" + json_quote(operator) + ",\"left\":" + left.json + ",\"right\":" + right.json + "}",
+            row: source_row_binary("Bool", operator, left.reference, right.reference), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
             type_name: "Bool",
             known: false,
             display: "",
@@ -1167,7 +1871,7 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr, token: 
     }
     if operator == "+" && is_array_type(left.type_name) {
         return ok(SourceExpr{
-            json: prefix + "\"kind\":\"binary\",\"type\":" + json_quote(left.type_name) + ",\"const\":null,\"operator\":\"+\",\"left\":" + left.json + ",\"right\":" + right.json + "}",
+            row: source_row_binary(left.type_name, "+", left.reference, right.reference), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
             type_name: left.type_name,
             known: false,
             display: "",
@@ -1178,13 +1882,11 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr, token: 
     if left.type_name == "String" && (operator == "==" || operator == "!=") {
         let known: Bool = left.known && right.known
         let mut equal: Bool = left.display == right.display
-        let mut constant: String = "null"
         if known {
             if operator == "!=" { equal = !equal }
-            constant = const_json("Bool", bool_text(equal))
         }
         return ok(SourceExpr{
-            json: prefix + "\"kind\":\"binary\",\"type\":\"Bool\",\"const\":" + constant + ",\"operator\":" + json_quote(operator) + ",\"left\":" + left.json + ",\"right\":" + right.json + "}",
+            row: source_row_binary("Bool", operator, left.reference, right.reference), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
             type_name: "Bool",
             known: known,
             display: bool_text(equal),
@@ -1241,12 +1943,8 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr, token: 
             else { known = false }
         }
     }
-    let mut constant: String = "null"
-    if known {
-        constant = const_json(result_type, display)
-    }
     return ok(SourceExpr{
-        json: prefix + "\"kind\":\"binary\",\"type\":" + json_quote(result_type) + ",\"const\":" + constant + ",\"operator\":" + json_quote(operator) + ",\"left\":" + left.json + ",\"right\":" + right.json + "}",
+        row: source_row_binary(result_type, operator, left.reference, right.reference), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions),
         type_name: result_type,
         known: known,
         display: display,
@@ -1256,15 +1954,15 @@ fn combine_values(left: SourceExpr, operator: String, right: SourceExpr, token: 
 }
 
 fn parse_struct_literal(parser: SourceParser, type_name: String, token: SourceToken) -> Result[ParsedExpr, String] {
-    let prefix: String = node_prefix(token)
+    let prefix: SourceToken = node_prefix(token)
     let definition: Option[SourceStruct] = map_get(parser.structs, type_name)
     if is_none(definition) { return err("parser: unknown struct '" + type_name + "'") }
     let shape: SourceStruct = unwrap_or(definition, SourceStruct{ symbol: "", module_id: "", public: false, fields: {}, names: [], public_fields: {} })
     let opened: Result[SourceParser, String] = expect(parser, "{")
     if is_err(opened) { return err(parser_error(opened)) }
     let mut current: SourceParser = skip_separators(result_unwrap(opened))
-    let mut names: String = "["
-    let mut values: String = "["
+    let mut names: Array[String] = []
+    let mut values: Array[KIRIndexRef] = []
     let mut seen: Map[String, Bool] = {}
     let mut first: Bool = true
     let mut count: Int = 0
@@ -1282,16 +1980,13 @@ fn parse_struct_literal(parser: SourceParser, type_name: String, token: SourceTo
         let expected: String = unwrap_or(map_get(shape.fields, field_name.text), "")
         let field_value: SourceExpr = apply_empty_type(value.expression, expected)
         if field_value.type_name != expected { return err("parser: struct field '" + field_name.text + "' expects " + expected) }
-        if !first {
-            names = names + ","
-            values = values + ","
-        }
-        names = names + json_quote(field_name.text)
-        values = values + field_value.json
+        names = array_push(names, field_name.text)
+        let stored_field: ParsedExpr = store_source_expression(value.parser, field_value)
+        values = array_push(values, stored_field.expression.reference)
         first = false
         count = count + 1
         seen = map_insert(seen, field_name.text, true)
-        current = skip_separators(value.parser)
+        current = skip_separators(stored_field.parser)
         if current_token(current).text == "," {
             current = skip_separators(advance(current))
         } else if current_token(current).text != "}" {
@@ -1307,13 +2002,14 @@ fn parse_struct_literal(parser: SourceParser, type_name: String, token: SourceTo
     }
     let closed: Result[SourceParser, String] = expect(current, "}")
     if is_err(closed) { return err(parser_error(closed)) }
-    let extended_prefix: String = node_prefix_range(token, previous_token(result_unwrap(closed)).byte_end)
-    let json: String = extended_prefix + "\"kind\":\"struct\",\"type\":" + json_quote(shape.symbol) + ",\"const\":null,\"struct_name\":" + json_quote(shape.symbol) + ",\"struct_type\":" + json_quote(shape.symbol) + ",\"fields\":" + names + "],\"values\":" + values + "]}"
-    return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: shape.symbol, known: false, display: "", location: extended_prefix, empty_kind: "" } })
+    let extended_prefix: SourceToken = node_prefix_range(token, previous_token(result_unwrap(closed)).byte_end)
+    let value_edges: KIRTypedAppendRange = kir_typed_append_edges(result_unwrap(closed).arena, values)
+    let row: KIRTypedExpression = source_row_struct(shape.symbol, shape.symbol, shape.symbol, names, value_edges.range)
+    return ok(store_parsed_expression(ParsedExpr{ parser: source_with_arena(result_unwrap(closed), value_edges.arena), expression: SourceExpr{ row: row, reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: shape.symbol, known: false, display: "", location: extended_prefix, empty_kind: "" } }))
 }
 
 fn parse_enum_variant(parser: SourceParser, enum_name: String, token: SourceToken) -> Result[ParsedExpr, String] {
-    let prefix: String = node_prefix(token)
+    let prefix: SourceToken = node_prefix(token)
     let declaration: Option[SourceStruct] = map_get(parser.structs, enum_name)
     if is_none(declaration) {
         if map_contains_key(parser.structs, "private:" + enum_name) { return err("parser: imported enum '" + enum_name + "' is private") }
@@ -1327,25 +2023,25 @@ fn parse_enum_variant(parser: SourceParser, enum_name: String, token: SourceToke
     if variant.kind != "identifier" { return err("parser: expected an enum variant after '::'") }
     if !source_string_array_contains(shape.names, variant.text) { return err("parser: unknown enum variant '" + enum_name + "::" + variant.text + "'") }
     let next: SourceParser = advance(result_unwrap(separator))
-    let extended_prefix: String = node_prefix_range(token, variant.byte_end)
-    let json: String = extended_prefix + "\"kind\":\"enum\",\"type\":" + json_quote(shape.symbol) + ",\"const\":null,\"enum_type\":" + json_quote(shape.symbol) + ",\"enum_variant\":" + json_quote(variant.text) + "}"
-    return ok(ParsedExpr{ parser: next, expression: SourceExpr{ json: json, type_name: shape.symbol, known: false, display: "", location: extended_prefix, empty_kind: "" } })
+    let extended_prefix: SourceToken = node_prefix_range(token, variant.byte_end)
+    let row: KIRTypedExpression = source_row_enum(shape.symbol, shape.symbol, variant.text)
+    return ok(store_parsed_expression(ParsedExpr{ parser: next, expression: SourceExpr{ row: row, reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: shape.symbol, known: false, display: "", location: extended_prefix, empty_kind: "" } }))
 }
 
 fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
     let token: SourceToken = current_token(parser)
-    let prefix: String = node_prefix(token)
+    let prefix: SourceToken = node_prefix(token)
     if token.kind == "string" {
-        return ok(ParsedExpr{ parser: advance(parser), expression: literal_string(token.text, token) })
+        return ok(store_parsed_expression(ParsedExpr{ parser: advance(parser), expression: literal_string(token.text, token) }))
     }
     if token.kind == "integer" {
-        return ok(ParsedExpr{ parser: advance(parser), expression: literal_int(int(token.text), token) })
+        return ok(store_parsed_expression(ParsedExpr{ parser: advance(parser), expression: literal_int(int(token.text), token) }))
     }
     if token.text == "true" || token.text == "false" {
-        return ok(ParsedExpr{ parser: advance(parser), expression: literal_bool(token.text == "true", token) })
+        return ok(store_parsed_expression(ParsedExpr{ parser: advance(parser), expression: literal_bool(token.text == "true", token) }))
     }
     if token.text == "nil" {
-        return ok(ParsedExpr{ parser: advance(parser), expression: SourceExpr{ json: prefix + "\"kind\":\"nil\",\"type\":\"Nil\",\"const\":null}", type_name: "Nil", known: true, display: "", location: prefix, empty_kind: "" } })
+        return ok(store_parsed_expression(ParsedExpr{ parser: advance(parser), expression: SourceExpr{ row: source_row_nil("Nil"), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: "Nil", known: true, display: "", location: prefix, empty_kind: "" } }))
     }
     if token.text == "(" {
         let nested: Result[ParsedExpr, String] = parse_expression(advance(parser))
@@ -1353,7 +2049,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
         let parsed: ParsedExpr = result_unwrap(nested)
         let closed: Result[SourceParser, String] = expect(parsed.parser, ")")
         if is_err(closed) { return err(parser_error(closed)) }
-        return ok(ParsedExpr{ parser: result_unwrap(closed), expression: parsed.expression })
+        return ok(store_parsed_expression(ParsedExpr{ parser: result_unwrap(closed), expression: parsed.expression }))
     }
     if token.kind == "identifier" {
         let after_name: SourceParser = advance(parser)
@@ -1386,7 +2082,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                 call_name = found.symbol
             }
             let mut current: SourceParser = advance(after_name)
-            let mut args: String = "["
+            let mut args: Array[KIRIndexRef] = []
             let mut argument_types: Array[String] = []
             let mut first: Bool = true
             let mut argument_index: Int = 0
@@ -1409,12 +2105,12 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                         return err("parser: function '" + token.text + "' argument " + str(argument_index) + " expects '" + expected_argument_type + "', got '" + argument_expression.type_name + "'")
                     }
                 }
-                if !first { args = args + "," }
-                args = args + argument_expression.json
+                let stored_argument: ParsedExpr = store_source_expression(parsed_argument.parser, argument_expression)
+                args = array_push(args, stored_argument.expression.reference)
                 argument_types = array_push(argument_types, argument_expression.type_name)
                 first = false
                 argument_index = argument_index + 1
-                current = parsed_argument.parser
+                current = stored_argument.parser
                 if current_token(current).text == "," {
                     current = advance(current)
                 } else if current_token(current).text != ")" {
@@ -1438,7 +2134,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                 } else if token.text == "assert_eq" {
                     if argument_index != 2 || unwrap_or(array_get(argument_types, 0), "") != unwrap_or(array_get(argument_types, 1), "") { return err("parser: assert_eq expects matching values") }
                     let asserted_type: String = unwrap_or(array_get(argument_types, 0), "")
-                    if asserted_type != "Int" && asserted_type != "Bool" && !starts_with(asserted_type, "UInt") { return err("parser: assert_eq supports Int, UInt, and Bool") }
+                    if source_type_contains_function(parser, asserted_type, {}) { return err("parser: assert_eq does not support values containing functions") }
                     return_type = "Nil"
                 } else if token.text == "contains" || token.text == "starts_with" || token.text == "ends_with" {
                     if argument_index != 2 || unwrap_or(array_get(argument_types, 0), "") != "String" || unwrap_or(array_get(argument_types, 1), "") != "String" { return err("parser: string predicate expects two String arguments") }
@@ -1446,6 +2142,9 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                 } else if token.text == "string_chars" {
                     if argument_index != 1 || unwrap_or(array_get(argument_types, 0), "") != "String" { return err("parser: string_chars expects one String") }
                     return_type = "Array[String]"
+                } else if token.text == "codepoints" {
+                    if argument_index != 1 || unwrap_or(array_get(argument_types, 0), "") != "String" { return err("parser: codepoints expects one String") }
+                    return_type = "Array[Int]"
                 } else if token.text == "substring" {
                     if argument_index != 3 || unwrap_or(array_get(argument_types, 0), "") != "String" || unwrap_or(array_get(argument_types, 1), "") != "Int" || unwrap_or(array_get(argument_types, 2), "") != "Int" { return err("parser: substring expects String, Int, Int") }
                     return_type = "Result[String,String]"
@@ -1454,7 +2153,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                     return_type = "String"
                 } else if token.text == "int" {
                     let int_argument_type: String = unwrap_or(array_get(argument_types, 0), "")
-                    if argument_index != 1 || (int_argument_type != "String" && int_argument_type != "Int" && int_argument_type != "Bool" && !starts_with(int_argument_type, "UInt")) { return err("parser: int expects String, Int, UInt, or Bool") }
+                    if argument_index != 1 || (int_argument_type != "String" && int_argument_type != "Int" && int_argument_type != "Float" && int_argument_type != "Bool" && !starts_with(int_argument_type, "UInt")) { return err("parser: int expects String, Int, UInt, Float, or Bool") }
                     return_type = "Int"
                 } else if token.text == "none" {
                     if argument_index != 0 { return err("parser: none expects no arguments") }
@@ -1490,7 +2189,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
                     return_type = "Option[" + generic_error(unwrap_or(array_get(argument_types, 0), "")) + "]"
                 } else if token.text == "len" {
                     let len_argument_type: String = unwrap_or(array_get(argument_types, 0), "")
-                    if argument_index != 1 || (!is_array_type(len_argument_type) && len_argument_type != "String" && len_argument_type != "Bytes") { return err("parser: len expects one String, Bytes, or Array") }
+                    if argument_index != 1 || (!is_array_type(len_argument_type) && len_argument_type != "String" && len_argument_type != "Bytes" && !starts_with(len_argument_type, "Map[") && !starts_with(len_argument_type, "Set[")) { return err("parser: len expects one String, Bytes, Array, Map, or Set") }
                     return_type = "Int"
                 } else if token.text == "array_push" {
                     if argument_index != 2 || !is_array_type(unwrap_or(array_get(argument_types, 0), "")) { return err("parser: array_push expects an Array and a value") }
@@ -1598,23 +2297,23 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             let closed: Result[SourceParser, String] = expect(current, ")")
             if is_err(closed) { return err(parser_error(closed)) }
             let mut builtin_identity: String = ""
-            if starts_with(call_target, "builtin:") { builtin_identity = ",\"builtin_id\":" + json_quote(result_unwrap(substring(call_target, 8, len(string_chars(call_target)) - 8))) }
-            let call_prefix: String = prefix_with_diagnostic(node_prefix_range(token, call_end), opening_token)
-            let json: String = call_prefix + "\"kind\":\"call\",\"type\":" + json_quote(return_type) + ",\"const\":null,\"name\":" + json_quote(call_name) + ",\"call_target\":" + json_quote(call_target) + builtin_identity + ",\"args\":" + args + "]}"
+            if starts_with(call_target, "builtin:") { builtin_identity = result_unwrap(substring(call_target, 8, len(string_chars(call_target)) - 8)) }
+            let call_prefix: SourceToken = prefix_with_diagnostic(node_prefix_range(token, call_end), opening_token)
+            let argument_edges: KIRTypedAppendRange = kir_typed_append_edges(result_unwrap(closed).arena, args)
+            let row: KIRTypedExpression = source_row_call(return_type, call_name, call_target, builtin_identity, argument_edges.range)
             let mut display: String = ""
-            if token.text == "none" || token.text == "ok" || token.text == "err" { display = args + "]" }
-            return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: return_type, known: false, display: display, location: call_prefix, empty_kind: "" } })
+            return ok(store_parsed_expression(ParsedExpr{ parser: source_with_arena(result_unwrap(closed), argument_edges.arena), expression: SourceExpr{ row: row, reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: return_type, known: false, display: display, location: call_prefix, empty_kind: "" } }))
         }
         if current_token(after_name).text == "{" && map_contains_key(parser.structs, token.text) {
             return parse_struct_literal(after_name, token.text, token)
         }
         let binding: Option[SourceBinding] = map_get(parser.bindings, token.text)
         if is_none(binding) { return err("parser: unknown identifier '" + token.text + "'") }
-        return ok(ParsedExpr{ parser: after_name, expression: variable_expr(token.text, unwrap_or(binding, SourceBinding{ type_name: "", mutable: false, known: false, display: "", source: token.source, line: token.line, column: token.column, byte_start: token.byte_start }), token) })
+        return ok(store_parsed_expression(ParsedExpr{ parser: after_name, expression: variable_expr(token.text, unwrap_or(binding, SourceBinding{ reference: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings), type_name: "", mutable: false, known: false, display: "", source: token.source, line: token.line, column: token.column, byte_start: token.byte_start }), token) }))
     }
     if token.text == "[" {
         let mut current: SourceParser = skip_separators(advance(parser))
-        let mut items: String = "["
+        let mut items: Array[KIRIndexRef] = []
         let mut first: Bool = true
         let mut element_type: String = ""
         while current_token(current).kind != "symbol" || current_token(current).text != "]" {
@@ -1626,8 +2325,7 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             } else if element_type != parsed_item.expression.type_name {
                 return err("parser: array literal elements must have the same type")
             }
-            if !first { items = items + "," }
-            items = items + parsed_item.expression.json
+            items = array_push(items, parsed_item.expression.reference)
             first = false
             current = skip_separators(parsed_item.parser)
             if current_token(current).text == "," {
@@ -1643,14 +2341,15 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
         let type_name: String = "Array[" + element_type + "]"
         let mut empty_kind: String = ""
         if first { empty_kind = "array" }
-        let collection_prefix: String = node_prefix_range(token, previous_token(result_unwrap(closed)).byte_end)
-        let json: String = collection_prefix + "\"kind\":\"array\",\"type\":" + json_quote(type_name) + ",\"const\":null,\"items\":" + items + "]}"
-        return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: type_name, known: false, display: "", location: collection_prefix, empty_kind: empty_kind } })
+        let collection_prefix: SourceToken = node_prefix_range(token, previous_token(result_unwrap(closed)).byte_end)
+        let item_edges: KIRTypedAppendRange = kir_typed_append_edges(result_unwrap(closed).arena, items)
+        let row: KIRTypedExpression = source_row_array(type_name, item_edges.range)
+        return ok(store_parsed_expression(ParsedExpr{ parser: source_with_arena(result_unwrap(closed), item_edges.arena), expression: SourceExpr{ row: row, reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: type_name, known: false, display: "", location: collection_prefix, empty_kind: empty_kind } }))
     }
     if token.text == "{" {
         let mut current: SourceParser = skip_separators(advance(parser))
-        let mut keys: String = "["
-        let mut values: String = "["
+        let mut keys: Array[KIRIndexRef] = []
+        let mut values: Array[KIRIndexRef] = []
         let mut first: Bool = true
         let mut key_type: String = ""
         let mut value_type: String = ""
@@ -1676,12 +2375,8 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
             } else if value_type != parsed_value.expression.type_name {
                 return err("parser: map values must have one homogeneous type")
             }
-            if !first {
-                keys = keys + ","
-                values = values + ","
-            }
-            keys = keys + parsed_key.expression.json
-            values = values + parsed_value.expression.json
+            keys = array_push(keys, parsed_key.expression.reference)
+            values = array_push(values, parsed_value.expression.reference)
             first = false
             current = skip_separators(parsed_value.parser)
             if current_token(current).text == "," {
@@ -1699,9 +2394,11 @@ fn parse_primary(parser: SourceParser) -> Result[ParsedExpr, String] {
         let type_name: String = "Map[" + key_type + "," + value_type + "]"
         let mut empty_kind: String = ""
         if first { empty_kind = "map" }
-        let collection_prefix: String = node_prefix_range(token, previous_token(result_unwrap(closed)).byte_end)
-        let json: String = collection_prefix + "\"kind\":\"map\",\"type\":" + json_quote(type_name) + ",\"const\":null,\"map_keys\":" + keys + "],\"values\":" + values + "]}"
-        return ok(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: type_name, known: false, display: "", location: collection_prefix, empty_kind: empty_kind } })
+        let collection_prefix: SourceToken = node_prefix_range(token, previous_token(result_unwrap(closed)).byte_end)
+        let key_edges: KIRTypedAppendRange = kir_typed_append_edges(result_unwrap(closed).arena, keys)
+        let value_edges: KIRTypedAppendRange = kir_typed_append_edges(key_edges.arena, values)
+        let row: KIRTypedExpression = source_row_map(type_name, key_edges.range, value_edges.range)
+        return ok(store_parsed_expression(ParsedExpr{ parser: source_with_arena(result_unwrap(closed), value_edges.arena), expression: SourceExpr{ row: row, reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: type_name, known: false, display: "", location: collection_prefix, empty_kind: empty_kind } }))
     }
     return err("parser: expected a literal, identifier, or parenthesized expression; found " + token.kind + " '" + token.text + "'")
 }
@@ -1712,7 +2409,7 @@ fn parse_postfix(parser: SourceParser) -> Result[ParsedExpr, String] {
     let mut parsed: ParsedExpr = result_unwrap(first)
     while current_token(parsed.parser).text == "[" || current_token(parsed.parser).text == "." || current_token(parsed.parser).text == "?" {
         let postfix_token: SourceToken = current_token(parsed.parser)
-        let mut prefix: String = node_prefix(postfix_token)
+        let mut prefix: SourceToken = node_prefix(postfix_token)
         if current_token(parsed.parser).text == "." {
             let field_token: SourceToken = current_token(advance(parsed.parser))
             if field_token.kind != "identifier" { return err("parser: expected a struct field name after '.'") }
@@ -1723,8 +2420,8 @@ fn parse_postfix(parser: SourceParser) -> Result[ParsedExpr, String] {
                 return err("parser: field '" + field_token.text + "' is private in struct '" + parsed.expression.type_name + "'")
             }
             prefix = prefix_with_diagnostic(prefix_with_span_end(parsed.expression.location, field_token.byte_end), field_token)
-            let json: String = prefix + "\"kind\":\"field\",\"type\":" + json_quote(field_type) + ",\"const\":null,\"base\":" + parsed.expression.json + ",\"field\":" + json_quote(field_token.text) + "}"
-            parsed = ParsedExpr{ parser: advance(advance(parsed.parser)), expression: SourceExpr{ json: json, type_name: field_type, known: false, display: "", location: prefix, empty_kind: "" } }
+            let row: KIRTypedExpression = source_row_field(field_type, parsed.expression.reference, field_token.text)
+            parsed = store_parsed_expression(ParsedExpr{ parser: advance(advance(parsed.parser)), expression: SourceExpr{ row: row, reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: field_type, known: false, display: "", location: prefix, empty_kind: "" } })
             continue
         }
         if current_token(parsed.parser).text == "?" {
@@ -1744,8 +2441,8 @@ fn parse_postfix(parser: SourceParser) -> Result[ParsedExpr, String] {
                 return err("parser: '?' requires an Option or Result matching the enclosing function return type")
             }
             prefix = prefix_with_diagnostic(prefix_with_span_end(parsed.expression.location, postfix_token.byte_end), postfix_token)
-            let json: String = prefix + "\"kind\":\"propagate\",\"type\":" + json_quote(type_name) + ",\"const\":null,\"operand\":" + parsed.expression.json + "}"
-            parsed = ParsedExpr{ parser: advance(parsed.parser), expression: SourceExpr{ json: json, type_name: type_name, known: false, display: "", location: prefix, empty_kind: "" } }
+            let row: KIRTypedExpression = source_row_propagate(type_name, parsed.expression.reference)
+            parsed = store_parsed_expression(ParsedExpr{ parser: advance(parsed.parser), expression: SourceExpr{ row: row, reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: type_name, known: false, display: "", location: prefix, empty_kind: "" } })
             continue
         }
         let index: Result[ParsedExpr, String] = parse_expression(advance(parsed.parser))
@@ -1757,15 +2454,15 @@ fn parse_postfix(parser: SourceParser) -> Result[ParsedExpr, String] {
         if !is_array_type(parsed.expression.type_name) { return err("parser: indexing requires Array[T]") }
         let type_name: String = array_inner(parsed.expression.type_name)
         prefix = prefix_with_diagnostic(prefix_with_span_end(parsed.expression.location, previous_token(result_unwrap(closed)).byte_end), postfix_token)
-        let json: String = prefix + "\"kind\":\"index\",\"type\":" + json_quote(type_name) + ",\"const\":null,\"left\":" + parsed_index.expression.json + ",\"base\":" + parsed.expression.json + "}"
-        parsed = ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ json: json, type_name: type_name, known: false, display: "", location: prefix, empty_kind: "" } }
+        let row: KIRTypedExpression = source_row_index(type_name, parsed_index.expression.reference, parsed.expression.reference)
+        parsed = store_parsed_expression(ParsedExpr{ parser: result_unwrap(closed), expression: SourceExpr{ row: row, reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: type_name, known: false, display: "", location: prefix, empty_kind: "" } })
     }
     return ok(parsed)
 }
 
 fn parse_unary(parser: SourceParser) -> Result[ParsedExpr, String] {
     let token: SourceToken = current_token(parser)
-    let prefix: String = node_prefix(token)
+    let prefix: SourceToken = node_prefix(token)
     if token.kind != "symbol" || (token.text != "-" && token.text != "!") {
         return parse_postfix(parser)
     }
@@ -1785,11 +2482,9 @@ fn parse_unary(parser: SourceParser) -> Result[ParsedExpr, String] {
         else { display = bool_text(parsed.expression.display != "true") }
     }
     let type_name: String = parsed.expression.type_name
-    let mut constant: String = "null"
-    if known { constant = const_json(type_name, display) }
-    let unary_prefix: String = prefix_with_span_end(prefix, prefix_span_end(parsed.expression.location))
-    let json: String = unary_prefix + "\"kind\":\"unary\",\"type\":" + json_quote(type_name) + ",\"const\":" + constant + ",\"operator\":" + json_quote(token.text) + ",\"operand\":" + parsed.expression.json + "}"
-    return ok(ParsedExpr{ parser: parsed.parser, expression: SourceExpr{ json: json, type_name: type_name, known: known, display: display, location: unary_prefix, empty_kind: "" } })
+    let unary_prefix: SourceToken = prefix_with_span_end(prefix, prefix_span_end(parsed.expression.location))
+    let row: KIRTypedExpression = source_row_unary(type_name, token.text, parsed.expression.reference)
+    return ok(store_parsed_expression(ParsedExpr{ parser: parsed.parser, expression: SourceExpr{ row: row, reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: type_name, known: known, display: display, location: unary_prefix, empty_kind: "" } }))
 }
 
 fn parse_multiplication(parser: SourceParser) -> Result[ParsedExpr, String] {
@@ -1804,7 +2499,7 @@ fn parse_multiplication(parser: SourceParser) -> Result[ParsedExpr, String] {
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, operator, right.expression, operator_token)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: binary expression failed")) }
-        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+        parsed = store_parsed_expression(ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) })
     }
     return ok(parsed)
 }
@@ -1821,7 +2516,7 @@ fn parse_addition(parser: SourceParser) -> Result[ParsedExpr, String] {
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, operator, right.expression, operator_token)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: binary expression failed")) }
-        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+        parsed = store_parsed_expression(ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) })
     }
     return ok(parsed)
 }
@@ -1838,7 +2533,7 @@ fn parse_shift(parser: SourceParser) -> Result[ParsedExpr, String] {
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, operator, right.expression, operator_token)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: comparison failed")) }
-        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+        parsed = store_parsed_expression(ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) })
     }
     return ok(parsed)
 }
@@ -1854,7 +2549,7 @@ fn parse_bitand(parser: SourceParser) -> Result[ParsedExpr, String] {
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "&", right.expression, operator_token)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: bitwise expression failed")) }
-        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+        parsed = store_parsed_expression(ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) })
     }
     return ok(parsed)
 }
@@ -1870,7 +2565,7 @@ fn parse_bitxor(parser: SourceParser) -> Result[ParsedExpr, String] {
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "^", right.expression, operator_token)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: bitwise expression failed")) }
-        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+        parsed = store_parsed_expression(ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) })
     }
     return ok(parsed)
 }
@@ -1886,7 +2581,7 @@ fn parse_bitor(parser: SourceParser) -> Result[ParsedExpr, String] {
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "|", right.expression, operator_token)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: bitwise expression failed")) }
-        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+        parsed = store_parsed_expression(ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) })
     }
     return ok(parsed)
 }
@@ -1903,7 +2598,7 @@ fn parse_comparison(parser: SourceParser) -> Result[ParsedExpr, String] {
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, operator, right.expression, operator_token)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: comparison failed")) }
-        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+        parsed = store_parsed_expression(ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) })
     }
     return ok(parsed)
 }
@@ -1919,7 +2614,7 @@ fn parse_logical_and(parser: SourceParser) -> Result[ParsedExpr, String] {
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "&&", right.expression, operator_token)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: logical expression failed")) }
-        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+        parsed = store_parsed_expression(ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) })
     }
     return ok(parsed)
 }
@@ -1935,7 +2630,7 @@ fn parse_expression(parser: SourceParser) -> Result[ParsedExpr, String] {
         let right: ParsedExpr = result_unwrap(right_result)
         let combined: Result[SourceExpr, String] = combine_values(parsed.expression, "||", right.expression, operator_token)
         if is_err(combined) { return err(unwrap_or(result_error(combined), "parser: logical expression failed")) }
-        parsed = ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) }
+        parsed = store_parsed_expression(ParsedExpr{ parser: right.parser, expression: result_unwrap(combined) })
     }
     return ok(parsed)
 }
@@ -1959,27 +2654,39 @@ fn finish_statement(parser: SourceParser) -> Result[SourceParser, String] {
     return err("parser: expected a statement separator after '" + current.text + "'")
 }
 
-fn statement_json(kind: String, body: String, token: SourceToken, byte_end: Int) -> String {
-    return "{\"kind\":" + json_quote(kind) + "," + node_metadata_fields(token, byte_end) + body + "}"
+fn source_restore_bindings(parser: SourceParser, bindings: Map[String, SourceBinding]) -> SourceParser {
+    return SourceParser{ tokens: parser.tokens, position: parser.position, module_id: parser.module_id, bindings: bindings, functions: parser.functions, structs: parser.structs, return_type: parser.return_type, arena: parser.arena }
+}
+
+fn source_append_binding(arena: KIRTypedArena, name: String, type_name: String, mutable: Bool, token: SourceToken) -> KIRTypedAppendRef {
+    let span: KIRTypedAppendRef = kir_typed_append_span(arena, KIRTypedSourceSpan{ start: token.byte_start, end: token.byte_start + len(string_to_bytes(name)) })
+    return kir_typed_append_binding(span.arena, KIRTypedBinding{ id: binding_id(name, token.source, token.byte_start, token.line, token.column), name: name, type_name: type_name, mutable: mutable, source: token.source, line: token.line, column: token.column, span: span.reference })
+}
+
+fn store_source_statement(parser: SourceParser, row: KIRTypedStatement, token: SourceToken, end: Int) -> ParsedStatements {
+    let span: KIRTypedAppendRef = kir_typed_append_span(parser.arena, KIRTypedSourceSpan{ start: token.byte_start, end: end })
+    let statement: KIRTypedAppendRef = kir_typed_append_statement(span.arena, KIRTypedStatement{ kind: row.kind, source: token.source, line: token.line, column: token.column, span: span.reference, name: row.name, binding: row.binding, mutable: row.mutable, is_const: row.is_const, annotation: row.annotation, init: row.init, expr: row.expr, target: row.target, value: row.value, cond: row.cond, then_body: row.then_body, else_body: row.else_body, body: row.body, iter: row.iter, return_value: row.return_value, scrutinee: row.scrutinee, arms: row.arms })
+    return ParsedStatements{ parser: source_with_arena(parser, statement.arena), references: [statement.reference] }
 }
 
 fn parse_output(parser: SourceParser) -> Result[ParsedStatements, String] {
     let token: SourceToken = current_token(parser)
-    let name: String = token.text
     let opening_token: SourceToken = current_token(advance(parser))
     let opened: Result[SourceParser, String] = expect(advance(parser), "(")
     if is_err(opened) { return err(parser_error(opened)) }
     let value: Result[ParsedExpr, String] = parse_expression(result_unwrap(opened))
-        if is_err(value) { return err(source_expression_error(value)) }
+    if is_err(value) { return err(source_expression_error(value)) }
     let parsed: ParsedExpr = result_unwrap(value)
     let call_end: Int = current_token(parsed.parser).byte_end
     let closed: Result[SourceParser, String] = expect(parsed.parser, ")")
     if is_err(closed) { return err(parser_error(closed)) }
     let separated: Result[SourceParser, String] = finish_statement(result_unwrap(closed))
     if is_err(separated) { return err(parser_error(separated)) }
-    let call_prefix: String = prefix_with_diagnostic(node_prefix_range(token, call_end), opening_token)
-    let expression: String = call_prefix + "\"kind\":\"call\",\"type\":\"Nil\",\"const\":null,\"name\":" + json_quote(name) + ",\"call_target\":\"builtin:" + name + "\",\"builtin_id\":" + json_quote(name) + ",\"args\":[" + parsed.expression.json + "]}"
-    return ok(ParsedStatements{ parser: result_unwrap(separated), json: statement_json("expr", "\"expr\":" + expression, token, previous_token(result_unwrap(closed)).byte_end) })
+    let arguments: KIRTypedAppendRange = kir_typed_append_edges(result_unwrap(separated).arena, [parsed.expression.reference])
+    let call_location: SourceToken = prefix_with_diagnostic(node_prefix_range(token, call_end), opening_token)
+    let call: SourceExpr = SourceExpr{ row: source_row_call("Nil", token.text, "builtin:" + token.text, token.text, arguments.range), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: "Nil", known: false, display: "", location: call_location, empty_kind: "" }
+    let stored: ParsedExpr = store_source_expression(source_with_arena(result_unwrap(separated), arguments.arena), call)
+    return ok(store_source_statement(stored.parser, KIRTypedStatement{ kind: "expr", source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans), name: "", binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings), mutable: false, is_const: false, annotation: "", init: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), expr: stored.expression.reference, target: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), cond: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: kir_typed_empty_edges(), iter: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), return_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), scrutinee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), arms: kir_typed_empty_edges() }, token, previous_token(result_unwrap(closed)).byte_end))
 }
 
 fn parse_binding(parser: SourceParser) -> Result[ParsedStatements, String] {
@@ -2013,21 +2720,20 @@ fn parse_binding(parser: SourceParser) -> Result[ParsedStatements, String] {
     if keyword == "const" && !initializer.known {
         return err("parser: const initializer must be compile-time known")
     }
-    let separated: Result[SourceParser, String] = finish_statement(parsed.parser)
+    let stored: ParsedExpr = store_source_expression(parsed.parser, initializer)
+    let separated: Result[SourceParser, String] = finish_statement(stored.parser)
     if is_err(separated) { return err(parser_error(separated)) }
-    let binding: SourceBinding = SourceBinding{ type_name: initializer.type_name, mutable: mutable, known: !mutable && initializer.known, display: initializer.display, source: name.source, line: name.line, column: name.column, byte_start: name.byte_start }
-    let mut updated_parser: SourceParser = result_unwrap(separated)
-    updated_parser = SourceParser{ tokens: updated_parser.tokens, position: updated_parser.position, module_id: updated_parser.module_id, bindings: map_insert(updated_parser.bindings, name.text, binding), functions: updated_parser.functions, structs: updated_parser.structs, return_type: updated_parser.return_type }
-    let binding_info: SourceBinding = SourceBinding{ type_name: initializer.type_name, mutable: mutable, known: false, display: "", source: name.source, line: name.line, column: name.column, byte_start: name.byte_start }
-    let body: String = "\"name\":" + json_quote(name.text) + ",\"mutable\":" + bool_text(mutable) + ",\"const\":" + bool_text(keyword == "const") + ",\"annotation\":" + json_quote(annotation) + ",\"binding\":" + resolved_binding_json(name.text, binding_info) + ",\"init\":" + initializer.json
-    return ok(ParsedStatements{ parser: updated_parser, json: statement_json(keyword, body, keyword_token, previous_token(parsed.parser).byte_end) })
+    let appended: KIRTypedAppendRef = source_append_binding(result_unwrap(separated).arena, name.text, initializer.type_name, mutable, name)
+    let binding: SourceBinding = SourceBinding{ type_name: initializer.type_name, mutable: mutable, known: !mutable && initializer.known, display: initializer.display, source: name.source, line: name.line, column: name.column, byte_start: name.byte_start, reference: appended.reference }
+    let updated: SourceParser = source_restore_bindings(source_with_arena(result_unwrap(separated), appended.arena), map_insert(result_unwrap(separated).bindings, name.text, binding))
+    return ok(store_source_statement(updated, KIRTypedStatement{ kind: keyword, source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans), name: name.text, binding: appended.reference, mutable: mutable, is_const: keyword == "const", annotation: annotation, init: stored.expression.reference, expr: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), target: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), cond: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: kir_typed_empty_edges(), iter: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), return_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), scrutinee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), arms: kir_typed_empty_edges() }, keyword_token, previous_token(parsed.parser).byte_end))
 }
 
 fn parse_assignment(parser: SourceParser) -> Result[ParsedStatements, String] {
     let target: SourceToken = current_token(parser)
     let binding: Option[SourceBinding] = map_get(parser.bindings, target.text)
     if is_none(binding) { return err("parser: unknown assignment target '" + target.text + "'") }
-    let info: SourceBinding = unwrap_or(binding, SourceBinding{ type_name: "", mutable: false, known: false, display: "", source: target.source, line: target.line, column: target.column, byte_start: target.byte_start })
+    let info: SourceBinding = unwrap_or(binding, SourceBinding{ reference: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings), type_name: "", mutable: false, known: false, display: "", source: target.source, line: target.line, column: target.column, byte_start: target.byte_start })
     if !info.mutable { return err("parser: assignment target '" + target.text + "' is not mutable") }
     let equals: Result[SourceParser, String] = expect(advance(parser), "=")
     if is_err(equals) { return err(parser_error(equals)) }
@@ -2036,13 +2742,14 @@ fn parse_assignment(parser: SourceParser) -> Result[ParsedStatements, String] {
     let parsed: ParsedExpr = result_unwrap(value)
     let updated_expression: SourceExpr = apply_empty_type(parsed.expression, info.type_name)
     if updated_expression.type_name != info.type_name { return err("parser: assignment to '" + target.text + "' expects '" + info.type_name + "', got '" + updated_expression.type_name + "'") }
-    let separated: Result[SourceParser, String] = finish_statement(parsed.parser)
+    let stored_value: ParsedExpr = store_source_expression(parsed.parser, updated_expression)
+    let separated: Result[SourceParser, String] = finish_statement(stored_value.parser)
     if is_err(separated) { return err(parser_error(separated)) }
     let updated: SourceParser = result_unwrap(separated)
-    let replacement: SourceBinding = SourceBinding{ type_name: info.type_name, mutable: true, known: false, display: "", source: info.source, line: info.line, column: info.column, byte_start: info.byte_start }
-    let next: SourceParser = SourceParser{ tokens: updated.tokens, position: updated.position, module_id: updated.module_id, bindings: map_insert(updated.bindings, target.text, replacement), functions: updated.functions, structs: updated.structs, return_type: updated.return_type }
-    let target_json: String = node_prefix(target) + "\"kind\":\"var\",\"type\":" + json_quote(info.type_name) + ",\"const\":null,\"name\":" + json_quote(target.text) + ",\"binding\":" + resolved_binding_json(target.text, info) + "}"
-    return ok(ParsedStatements{ parser: next, json: statement_json("assign", "\"target\":" + target_json + ",\"value\":" + updated_expression.json, target, previous_token(parsed.parser).byte_end) })
+    let replacement: SourceBinding = SourceBinding{ type_name: info.type_name, mutable: true, known: false, display: "", source: info.source, line: info.line, column: info.column, byte_start: info.byte_start, reference: info.reference }
+    let next: SourceParser = source_restore_bindings(updated, map_insert(updated.bindings, target.text, replacement))
+    let target_expression: ParsedExpr = store_source_expression(next, variable_expr(target.text, replacement, target))
+    return ok(store_source_statement(target_expression.parser, KIRTypedStatement{ kind: "assign", source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans), name: "", binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings), mutable: false, is_const: false, annotation: "", init: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), expr: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), target: target_expression.expression.reference, value: stored_value.expression.reference, cond: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: kir_typed_empty_edges(), iter: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), return_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), scrutinee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), arms: kir_typed_empty_edges() }, target, previous_token(parsed.parser).byte_end))
 }
 
 fn parse_call_statement(parser: SourceParser) -> Result[ParsedStatements, String] {
@@ -2053,14 +2760,13 @@ fn parse_call_statement(parser: SourceParser) -> Result[ParsedStatements, String
     if parsed.expression.type_name != "Nil" { return err("parser: scalar call result must be used in an expression") }
     let separated: Result[SourceParser, String] = finish_statement(parsed.parser)
     if is_err(separated) { return err(parser_error(separated)) }
-    return ok(ParsedStatements{ parser: result_unwrap(separated), json: statement_json("expr", "\"expr\":" + parsed.expression.json, token, previous_token(parsed.parser).byte_end) })
+    return ok(store_source_statement(result_unwrap(separated), KIRTypedStatement{ kind: "expr", source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans), name: "", binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings), mutable: false, is_const: false, annotation: "", init: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), expr: parsed.expression.reference, target: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), cond: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: kir_typed_empty_edges(), iter: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), return_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), scrutinee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), arms: kir_typed_empty_edges() }, token, previous_token(parsed.parser).byte_end))
 }
 
 fn parse_return(parser: SourceParser) -> Result[ParsedStatements, String] {
     let token: SourceToken = current_token(parser)
-    let prefix: String = node_prefix(token)
     let mut current: SourceParser = advance(parser)
-    let mut value: SourceExpr = SourceExpr{ json: prefix + "\"kind\":\"nil\",\"type\":\"Nil\",\"const\":null}", type_name: "Nil", known: true, display: "", location: prefix, empty_kind: "" }
+    let mut value: SourceExpr = SourceExpr{ row: source_row_nil("Nil"), reference: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), type_name: "Nil", known: true, display: "", location: token, empty_kind: "" }
     if current_token(current).text != ";" && current_token(current).text != "}" && current_token(current).kind != "eof" {
         let parsed: Result[ParsedExpr, String] = parse_expression(current)
         if is_err(parsed) { return err(source_expression_error(parsed)) }
@@ -2068,39 +2774,28 @@ fn parse_return(parser: SourceParser) -> Result[ParsedStatements, String] {
         value = apply_empty_type(result.expression, parser.return_type)
         current = result.parser
     }
-    let separated: Result[SourceParser, String] = finish_statement(current)
+    let stored: ParsedExpr = store_source_expression(current, value)
+    let separated: Result[SourceParser, String] = finish_statement(stored.parser)
     if is_err(separated) { return err(parser_error(separated)) }
-    return ok(ParsedStatements{ parser: result_unwrap(separated), json: statement_json("return", "\"return\":" + value.json, token, previous_token(current).byte_end) })
-}
-
-fn join_json_items(items: Array[String], start: Int, end: Int) -> String {
-    if end <= start { return "" }
-    if end - start == 1 { return unwrap_or(array_get(items, start), "") }
-    let middle: Int = start + (end - start) / 2
-    let left: String = join_json_items(items, start, middle)
-    let right: String = join_json_items(items, middle, end)
-    if left == "" { return right }
-    if right == "" { return left }
-    return left + "," + right
+    return ok(store_source_statement(result_unwrap(separated), KIRTypedStatement{ kind: "return", source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans), name: "", binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings), mutable: false, is_const: false, annotation: "", init: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), expr: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), target: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), cond: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: kir_typed_empty_edges(), iter: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), return_value: stored.expression.reference, scrutinee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), arms: kir_typed_empty_edges() }, token, previous_token(current).byte_end))
 }
 
 fn parse_block(parser: SourceParser) -> Result[ParsedStatements, String] {
     let opened: Result[SourceParser, String] = expect(parser, "{")
     if is_err(opened) { return err(parser_error(opened)) }
     let mut current: SourceParser = skip_separators(result_unwrap(opened))
-    let mut body_items: Array[String] = []
+    let mut body_items: KIRTypedIndexRefRows = kir_typed_reference_rows_empty()
     while current_token(current).kind != "symbol" || current_token(current).text != "}" {
         if current_token(current).kind == "eof" { return err("parser: unterminated block") }
         let statement: Result[ParsedStatements, String] = parse_statement(current)
         if is_err(statement) { return err("at block token '" + current_token(current).text + "' (position " + str(current.position) + "): " + statements_error(statement)) }
         let parsed: ParsedStatements = result_unwrap(statement)
-        body_items = array_push(body_items, parsed.json)
+        body_items = kir_typed_reference_rows_append_all(body_items, parsed.references)
         current = skip_separators(parsed.parser)
     }
     let closed: Result[SourceParser, String] = expect(current, "}")
     if is_err(closed) { return err(parser_error(closed)) }
-    let body_json: String = "[" + join_json_items(body_items, 0, len(body_items)) + "]"
-    return ok(ParsedStatements{ parser: result_unwrap(closed), json: body_json })
+    return ok(ParsedStatements{ parser: source_restore_bindings(result_unwrap(closed), parser.bindings), references: kir_typed_reference_rows_finish(body_items) })
 }
 
 fn parse_function_header(parser: SourceParser) -> Result[ParsedFunctionHeader, String] {
@@ -2145,7 +2840,7 @@ fn parse_function_header(parser: SourceParser) -> Result[ParsedFunctionHeader, S
 fn collect_module_type_headers(module: SourceModule, module_index: Int, is_root: Bool) -> Result[SourceModuleContext, String] {
     let mut module_id: String = str(module_index)
     if is_root { module_id = "root" }
-    let mut parser: SourceParser = SourceParser{ tokens: module.tokens, position: 0, module_id: module_id, bindings: {}, functions: {}, structs: {}, return_type: "" }
+    let mut parser: SourceParser = SourceParser{ arena: kir_typed_empty_arena(), tokens: module.tokens, position: 0, module_id: module_id, bindings: {}, functions: {}, structs: {}, return_type: "" }
     let mut structs: Map[String, SourceStruct] = {}
     let mut struct_names: Array[String] = []
     let mut public_struct_names: Array[String] = []
@@ -2180,7 +2875,7 @@ fn collect_module_type_headers(module: SourceModule, module_index: Int, is_root:
             continue
         }
         if current_token(declaration).text == "fn" {
-            let header: Result[ParsedFunctionHeader, String] = parse_function_header(SourceParser{ tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: {}, structs: structs, return_type: "" })
+            let header: Result[ParsedFunctionHeader, String] = parse_function_header(SourceParser{ arena: parser.arena, tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: {}, structs: structs, return_type: "" })
             if is_err(header) { return err(unwrap_or(result_error(header), "invalid function header")) }
             let parsed_header: ParsedFunctionHeader = result_unwrap(header)
             if current_token(parsed_header.parser).text != "{" { return err("module: expected a body for '" + parsed_header.name + "'") }
@@ -2194,7 +2889,63 @@ fn collect_module_type_headers(module: SourceModule, module_index: Int, is_root:
     return ok(SourceModuleContext{ module_id: module_id, functions: {}, public_names: [], structs: structs, struct_names: struct_names, public_struct_names: public_struct_names })
 }
 
+fn source_function_parameters_expose_private(structs: Map[String, SourceStruct], parameters: String) -> Bool {
+    let chars: Array[String] = string_chars(parameters)
+    let mut start: Int = 0
+    let mut index: Int = 0
+    let mut bracket_depth: Int = 0
+    let mut parenthesis_depth: Int = 0
+    while index <= len(chars) {
+        let mut current: String = ""
+        if index < len(chars) { current = unwrap_or(array_get(chars, index), "") }
+        if index == len(chars) || (current == "," && bracket_depth == 0 && parenthesis_depth == 0) {
+            if index > start {
+                let parameter: Result[String, String] = substring(parameters, start, index - start)
+                if is_err(parameter) { return true }
+                if source_type_exposes_private(structs, result_unwrap(parameter)) { return true }
+            }
+            start = index + 1
+        } else if current == "[" {
+            bracket_depth = bracket_depth + 1
+        } else if current == "]" {
+            bracket_depth = bracket_depth - 1
+        } else if current == "(" {
+            parenthesis_depth = parenthesis_depth + 1
+        } else if current == ")" {
+            parenthesis_depth = parenthesis_depth - 1
+        }
+        index = index + 1
+    }
+    return false
+}
+
+fn source_function_type_exposes_private(structs: Map[String, SourceStruct], type_name: String) -> Bool {
+    if !starts_with(type_name, "fn(") { return true }
+    let chars: Array[String] = string_chars(type_name)
+    let mut index: Int = 2
+    let mut depth: Int = 0
+    let mut closing: Int = -1
+    while index < len(chars) {
+        let current: String = unwrap_or(array_get(chars, index), "")
+        if current == "(" {
+            depth = depth + 1
+        } else if current == ")" {
+            depth = depth - 1
+            if depth == 0 { closing = index; break }
+        }
+        index = index + 1
+    }
+    if closing < 0 || closing + 3 >= len(chars) { return true }
+    let parameters: Result[String, String] = substring(type_name, 3, closing - 3)
+    if is_err(parameters) { return true }
+    if source_function_parameters_expose_private(structs, result_unwrap(parameters)) { return true }
+    let returned: Result[String, String] = substring(type_name, closing + 3, len(chars) - closing - 3)
+    if is_err(returned) { return true }
+    return source_type_exposes_private(structs, result_unwrap(returned))
+}
+
 fn source_type_exposes_private(structs: Map[String, SourceStruct], type_name: String) -> Bool {
+    if starts_with(type_name, "fn(") { return source_function_type_exposes_private(structs, type_name) }
     if is_array_type(type_name) { return source_type_exposes_private(structs, array_inner(type_name)) }
     if starts_with(type_name, "Option[") { return source_type_exposes_private(structs, generic_inner(type_name, "Option[")) }
     if starts_with(type_name, "Result[") {
@@ -2203,6 +2954,7 @@ fn source_type_exposes_private(structs: Map[String, SourceStruct], type_name: St
     if starts_with(type_name, "Map[") {
         return source_type_exposes_private(structs, generic_inner(type_name, "Map[")) || source_type_exposes_private(structs, generic_value(type_name, "Map["))
     }
+    if starts_with(type_name, "Set[") { return source_type_exposes_private(structs, generic_inner(type_name, "Set[")) }
     if source_is_scalar_type(type_name) { return false }
     let definition: Option[SourceStruct] = map_get(structs, type_name)
     if is_none(definition) { return false }
@@ -2270,7 +3022,7 @@ fn source_module_type_scope(modules: Array[SourceModule], contexts: Array[Source
 
 fn collect_module_context(module: SourceModule, headers: SourceModuleContext, type_scope: Map[String, SourceStruct]) -> Result[SourceModuleContext, String] {
     let module_id: String = headers.module_id
-    let mut parser: SourceParser = SourceParser{ tokens: module.tokens, position: 0, module_id: module_id, bindings: {}, functions: {}, structs: type_scope, return_type: "" }
+    let mut parser: SourceParser = SourceParser{ arena: kir_typed_empty_arena(), tokens: module.tokens, position: 0, module_id: module_id, bindings: {}, functions: {}, structs: type_scope, return_type: "" }
     let mut functions: Map[String, SourceFunction] = {}
     let mut public_names: Array[String] = []
     while current_token(parser).kind != "eof" {
@@ -2282,7 +3034,7 @@ fn collect_module_context(module: SourceModule, headers: SourceModuleContext, ty
             declaration = advance(declaration)
         }
         if current_token(declaration).text == "fn" {
-            let parsed: Result[ParsedFunctionHeader, String] = parse_function_header(SourceParser{ tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: {}, structs: parser.structs, return_type: "" })
+            let parsed: Result[ParsedFunctionHeader, String] = parse_function_header(SourceParser{ arena: parser.arena, tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: {}, structs: parser.structs, return_type: "" })
             if is_err(parsed) { return err(unwrap_or(result_error(parsed), "invalid function header")) }
             let header: ParsedFunctionHeader = result_unwrap(parsed)
             if map_contains_key(functions, header.name) { return err("module: duplicate function '" + header.name + "' in '" + module.path + "'") }
@@ -2302,14 +3054,14 @@ fn collect_module_context(module: SourceModule, headers: SourceModuleContext, ty
             continue
         }
         if current_token(declaration).text == "struct" {
-            let parsed_struct: Result[ParsedStruct, String] = parse_struct(SourceParser{ tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: functions, structs: parser.structs, return_type: "" }, public)
+            let parsed_struct: Result[ParsedStruct, String] = parse_struct(SourceParser{ arena: parser.arena, tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: functions, structs: parser.structs, return_type: "" }, public)
             if is_err(parsed_struct) { return err("module '" + module.path + "': " + unwrap_or(result_error(parsed_struct), "invalid struct declaration")) }
             let completed: ParsedStruct = result_unwrap(parsed_struct)
             parser = completed.parser
             continue
         }
         if current_token(declaration).text == "enum" {
-            let parsed_enum: Result[ParsedEnum, String] = parse_enum(SourceParser{ tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: functions, structs: parser.structs, return_type: "" }, public, source_module_name(module.path, source_directory(module.path)))
+            let parsed_enum: Result[ParsedEnum, String] = parse_enum(SourceParser{ arena: parser.arena, tokens: parser.tokens, position: declaration.position, module_id: module_id, bindings: {}, functions: functions, structs: parser.structs, return_type: "" }, public, source_module_name(module.path, source_directory(module.path)))
             if is_err(parsed_enum) { return err("module '" + module.path + "': " + unwrap_or(result_error(parsed_enum), "invalid enum declaration")) }
             let completed_enum: ParsedEnum = result_unwrap(parsed_enum)
             parser = completed_enum.parser
@@ -2412,7 +3164,7 @@ fn predeclare_functions(parser: SourceParser) -> Result[SourceParser, String] {
         }
         current = advance(current)
     }
-    return ok(SourceParser{ tokens: parser.tokens, position: parser.position, module_id: parser.module_id, bindings: parser.bindings, functions: functions, structs: parser.structs, return_type: parser.return_type })
+    return ok(SourceParser{ arena: parser.arena, tokens: parser.tokens, position: parser.position, module_id: parser.module_id, bindings: parser.bindings, functions: functions, structs: parser.structs, return_type: parser.return_type })
 }
 
 fn parse_function(parser: SourceParser, public: Bool) -> Result[ParsedFunction, String] {
@@ -2424,10 +3176,9 @@ fn parse_function(parser: SourceParser, public: Bool) -> Result[ParsedFunction, 
     let parameters_open: Result[SourceParser, String] = expect(advance(named), "(")
     if is_err(parameters_open) { return err(parser_error(parameters_open)) }
     let mut current: SourceParser = result_unwrap(parameters_open)
-    let mut parameters_json: String = "["
+    let mut parameter_refs: Array[KIRIndexRef] = []
     let mut parameter_types: Array[String] = []
     let mut local_bindings: Map[String, SourceBinding] = {}
-    let mut first: Bool = true
     while current_token(current).text != ")" {
         let parameter_name: SourceToken = current_token(current)
         if parameter_name.kind != "identifier" { return err("parser: expected a parameter name") }
@@ -2437,18 +3188,20 @@ fn parse_function(parser: SourceParser, public: Bool) -> Result[ParsedFunction, 
         if is_err(parsed_type) { return err(unwrap_or(result_error(parsed_type), "parser: expected a parameter type")) }
         let parameter_type: String = result_unwrap(parsed_type).name
         if !source_type_supported(parser, parameter_type) { return err("parser: unsupported function parameter type '" + parameter_type + "'") }
-        if !first { parameters_json = parameters_json + "," }
-        let parameter_binding: SourceBinding = SourceBinding{ type_name: parameter_type, mutable: false, known: false, display: "", source: parameter_name.source, line: parameter_name.line, column: parameter_name.column, byte_start: parameter_name.byte_start }
-        parameters_json = parameters_json + "{\"name\":" + json_quote(parameter_name.text) + ",\"type\":" + json_quote(parameter_type) + ",\"source\":" + parameter_name.source_json + ",\"line\":" + str(parameter_name.line) + ",\"column\":" + str(parameter_name.column) + ",\"span\":{\"start\":" + str(parameter_name.byte_start) + ",\"end\":" + str(previous_token(result_unwrap(parsed_type).parser).byte_end) + "},\"default\":null,\"binding\":" + resolved_binding_json(parameter_name.text, parameter_binding) + "}"
+        let after_type: SourceParser = result_unwrap(parsed_type).parser
+        let binding: KIRTypedAppendRef = source_append_binding(after_type.arena, parameter_name.text, parameter_type, false, parameter_name)
+        let span: KIRTypedAppendRef = kir_typed_append_span(binding.arena, KIRTypedSourceSpan{ start: parameter_name.byte_start, end: previous_token(after_type).byte_end })
+        let parameter: KIRTypedAppendRef = kir_typed_append_parameter(span.arena, KIRTypedParameter{ name: parameter_name.text, type_name: parameter_type, source: parameter_name.source, line: parameter_name.line, column: parameter_name.column, span: span.reference, default_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), binding: binding.reference })
+        let parameter_binding: SourceBinding = SourceBinding{ type_name: parameter_type, mutable: false, known: false, display: "", source: parameter_name.source, line: parameter_name.line, column: parameter_name.column, byte_start: parameter_name.byte_start, reference: binding.reference }
+        parameter_refs = array_push(parameter_refs, parameter.reference)
         parameter_types = array_push(parameter_types, parameter_type)
         local_bindings = map_insert(local_bindings, parameter_name.text, parameter_binding)
-        current = result_unwrap(parsed_type).parser
+        current = source_with_arena(after_type, parameter.arena)
         if current_token(current).text == "," {
             current = advance(current)
         } else if current_token(current).text != ")" {
             return err("parser: expected ',' or ')' after parameter")
         }
-        first = false
     }
     let closed_parameters: Result[SourceParser, String] = expect(current, ")")
     if is_err(closed_parameters) { return err(parser_error(closed_parameters)) }
@@ -2459,15 +3212,19 @@ fn parse_function(parser: SourceParser, public: Bool) -> Result[ParsedFunction, 
     let return_type: String = result_unwrap(parsed_return).name
     if return_type != "Nil" && !source_type_supported(parser, return_type) { return err("parser: unsupported function return type '" + return_type + "'") }
     let signature: SourceFunction = SourceFunction{ return_type: return_type, parameters: parameter_types, symbol: source_function_symbol(parser.module_id, name.text) }
-    let local_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: result_unwrap(parsed_return).parser.position, module_id: parser.module_id, bindings: local_bindings, functions: map_insert(parser.functions, name.text, signature), structs: parser.structs, return_type: return_type }
+    let after_return: SourceParser = result_unwrap(parsed_return).parser
+    let local_parser: SourceParser = SourceParser{ tokens: after_return.tokens, position: after_return.position, module_id: parser.module_id, bindings: local_bindings, functions: map_insert(parser.functions, name.text, signature), structs: parser.structs, return_type: return_type, arena: after_return.arena }
     let body: Result[ParsedStatements, String] = parse_block(local_parser)
     if is_err(body) { return err(statements_error(body)) }
     let parsed_body: ParsedStatements = result_unwrap(body)
-    let outer_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: parsed_body.parser.position, module_id: parser.module_id, bindings: parser.bindings, functions: map_insert(parser.functions, name.text, signature), structs: parser.structs, return_type: parser.return_type }
+    let outer_parser: SourceParser = SourceParser{ tokens: parser.tokens, position: parsed_body.parser.position, module_id: parser.module_id, bindings: parser.bindings, functions: map_insert(parser.functions, name.text, signature), structs: parser.structs, return_type: parser.return_type, arena: parsed_body.parser.arena }
     let function_token: SourceToken = current_token(parser)
     let function_end: Int = previous_non_separator(parsed_body.parser).byte_end
-    let function_json: String = "{\"name\":" + json_quote(signature.symbol) + "," + node_metadata_fields(function_token, function_end) + "\"public\":" + bool_text(public) + ",\"worker\":false,\"unsafe\":false,\"trait\":\"\",\"module\":\"\",\"receiver\":\"\",\"type_params\":[],\"params\":" + parameters_json + "],\"captures\":[],\"return\":" + json_quote(return_type) + ",\"body\":" + parsed_body.json + "}"
-    return ok(ParsedFunction{ parser: outer_parser, json: function_json })
+    let span: KIRTypedAppendRef = kir_typed_append_span(outer_parser.arena, KIRTypedSourceSpan{ start: function_token.byte_start, end: function_end })
+    let parameters: KIRTypedAppendRange = kir_typed_append_edges(span.arena, parameter_refs)
+    let statements: KIRTypedAppendRange = kir_typed_append_edges(parameters.arena, parsed_body.references)
+    let function: KIRTypedAppendRef = kir_typed_append_function(statements.arena, KIRTypedFunction{ name: signature.symbol, source: function_token.source, line: function_token.line, column: function_token.column, span: span.reference, public: public, worker: false, is_unsafe: false, trait_name: "", module: "", receiver: "", return_type: return_type, type_params: kir_typed_empty_edges(), params: parameters.range, captures: kir_typed_empty_edges(), body: statements.range })
+    return ok(ParsedFunction{ parser: source_with_arena(outer_parser, function.arena), reference: function.reference })
 }
 
 fn parse_if(parser: SourceParser) -> Result[ParsedStatements, String] {
@@ -2480,25 +3237,26 @@ fn parse_if(parser: SourceParser) -> Result[ParsedStatements, String] {
     if is_err(then_block) { return err(statements_error(then_block)) }
     let parsed_then: ParsedStatements = result_unwrap(then_block)
     let mut after_then: SourceParser = skip_separators(parsed_then.parser)
-    let mut else_json: String = "[]"
+    let mut else_refs: Array[KIRIndexRef] = []
     if current_token(after_then).text == "else" {
         let else_start: SourceParser = advance(after_then)
         if current_token(else_start).text == "if" {
             let else_if: Result[ParsedStatements, String] = parse_if(else_start)
             if is_err(else_if) { return err(statements_error(else_if)) }
             let parsed_else_if: ParsedStatements = result_unwrap(else_if)
-            else_json = "[" + parsed_else_if.json + "]"
+            else_refs = parsed_else_if.references
             after_then = parsed_else_if.parser
         } else {
             let else_block: Result[ParsedStatements, String] = parse_block(else_start)
             if is_err(else_block) { return err(statements_error(else_block)) }
             let parsed_else: ParsedStatements = result_unwrap(else_block)
-            else_json = parsed_else.json
+            else_refs = parsed_else.references
             after_then = parsed_else.parser
         }
     }
-    let body: String = "\"cond\":" + parsed_condition.expression.json + ",\"then\":" + parsed_then.json + ",\"else\":" + else_json
-    return ok(ParsedStatements{ parser: after_then, json: statement_json("if", body, token, previous_non_separator(after_then).byte_end) })
+    let then_edges: KIRTypedAppendRange = kir_typed_append_edges(after_then.arena, parsed_then.references)
+    let else_edges: KIRTypedAppendRange = kir_typed_append_edges(then_edges.arena, else_refs)
+    return ok(store_source_statement(source_with_arena(after_then, else_edges.arena), KIRTypedStatement{ kind: "if", source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans), name: "", binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings), mutable: false, is_const: false, annotation: "", init: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), expr: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), target: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), cond: parsed_condition.expression.reference, then_body: then_edges.range, else_body: else_edges.range, body: kir_typed_empty_edges(), iter: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), return_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), scrutinee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), arms: kir_typed_empty_edges() }, token, previous_non_separator(after_then).byte_end))
 }
 
 fn parse_match(parser: SourceParser) -> Result[ParsedStatements, String] {
@@ -2513,17 +3271,19 @@ fn parse_match(parser: SourceParser) -> Result[ParsedStatements, String] {
     let opened: Result[SourceParser, String] = expect(scrutinee.parser, "{")
     if is_err(opened) { return err(parser_error(opened)) }
     let mut current: SourceParser = skip_separators(result_unwrap(opened))
-    let mut arm_items: Array[String] = []
+    let mut arm_items: Array[KIRIndexRef] = []
     let mut seen_variants: Array[String] = []
     let mut wildcard_seen: Bool = false
     while current_token(current).text != "}" {
         if current_token(current).kind == "eof" { return err("parser: unterminated match arms") }
         if wildcard_seen { return err("parser: wildcard pattern must be the final match arm") }
         let pattern_token: SourceToken = current_token(current)
-        let mut pattern_json: String = ""
+        let mut pattern_kind: String = "wildcard"
+        let mut pattern_type_name: String = ""
+        let mut pattern_variant: String = ""
+        let mut pattern_end: Int = pattern_token.byte_end
         if pattern_token.kind != "identifier" { return err("parser: expected an enum variant or '_' match pattern") }
         if pattern_token.text == "_" {
-            pattern_json = node_prefix(pattern_token) + "\"kind\":\"wildcard\",\"type\":\"\",\"variant\":\"\",\"binding\":\"\"}"
             wildcard_seen = true
             current = advance(current)
         } else {
@@ -2543,17 +3303,26 @@ fn parse_match(parser: SourceParser) -> Result[ParsedStatements, String] {
             if !source_string_array_contains(pattern_shape.names, variant.text) { return err("parser: unknown enum variant '" + pattern_type + "::" + variant.text + "' in match pattern") }
             if source_string_array_contains(seen_variants, variant.text) { return err("parser: duplicate enum match pattern '" + pattern_type + "::" + variant.text + "'") }
             seen_variants = array_push(seen_variants, variant.text)
-            pattern_json = node_prefix_range(pattern_token, variant.byte_end) + "\"kind\":\"enum\",\"type\":" + json_quote(pattern_shape.symbol) + ",\"variant\":" + json_quote(variant.text) + ",\"binding\":\"\"}"
+            pattern_kind = "enum"
+            pattern_type_name = pattern_shape.symbol
+            pattern_variant = variant.text
+            pattern_end = variant.byte_end
             current = advance(result_unwrap(separator))
         }
+        let pattern_span: KIRTypedAppendRef = kir_typed_append_span(current.arena, KIRTypedSourceSpan{ start: pattern_token.byte_start, end: pattern_end })
+        let pattern: KIRTypedAppendRef = kir_typed_append_pattern(pattern_span.arena, KIRTypedPattern{ kind: pattern_kind, source: pattern_token.source, line: pattern_token.line, column: pattern_token.column, span: pattern_span.reference, bool_value: false, int_value: 0, string_value: "", type_name: pattern_type_name, variant: pattern_variant, binding_name: "", present: false, ok: false, resolved_binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings) })
+        current = source_with_arena(current, pattern.arena)
         let arrow: Result[SourceParser, String] = expect(current, "=>")
         if is_err(arrow) { return err(parser_error(arrow)) }
         let body: Result[ParsedStatements, String] = parse_block(result_unwrap(arrow))
         if is_err(body) { return err(statements_error(body)) }
         let parsed_body: ParsedStatements = result_unwrap(body)
         let arm_end: Int = previous_non_separator(parsed_body.parser).byte_end
-        arm_items = array_push(arm_items, "{" + node_metadata_fields(pattern_token, arm_end) + "\"pattern\":" + pattern_json + ",\"body\":" + parsed_body.json + "}")
-        current = SourceParser{ tokens: parsed_body.parser.tokens, position: parsed_body.parser.position, module_id: parsed_body.parser.module_id, bindings: scrutinee.parser.bindings, functions: parsed_body.parser.functions, structs: parsed_body.parser.structs, return_type: parsed_body.parser.return_type }
+        let arm_span: KIRTypedAppendRef = kir_typed_append_span(parsed_body.parser.arena, KIRTypedSourceSpan{ start: pattern_token.byte_start, end: arm_end })
+        let body_edges: KIRTypedAppendRange = kir_typed_append_edges(arm_span.arena, parsed_body.references)
+        let arm: KIRTypedAppendRef = kir_typed_append_arm(body_edges.arena, KIRTypedArm{ source: pattern_token.source, line: pattern_token.line, column: pattern_token.column, span: arm_span.reference, pattern: pattern.reference, body: body_edges.range })
+        arm_items = array_push(arm_items, arm.reference)
+        current = source_restore_bindings(source_with_arena(parsed_body.parser, arm.arena), scrutinee.parser.bindings)
         current = skip_separators(current)
     }
     if !wildcard_seen {
@@ -2566,8 +3335,8 @@ fn parse_match(parser: SourceParser) -> Result[ParsedStatements, String] {
     }
     let closed: Result[SourceParser, String] = expect(current, "}")
     if is_err(closed) { return err(parser_error(closed)) }
-    let arms_json: String = "[" + join_json_items(arm_items, 0, len(arm_items)) + "]"
-    return ok(ParsedStatements{ parser: result_unwrap(closed), json: statement_json("match", "\"scrutinee\":" + scrutinee.expression.json + ",\"arms\":" + arms_json, token, previous_token(result_unwrap(closed)).byte_end) })
+    let arms: KIRTypedAppendRange = kir_typed_append_edges(result_unwrap(closed).arena, arm_items)
+    return ok(store_source_statement(source_with_arena(result_unwrap(closed), arms.arena), KIRTypedStatement{ kind: "match", source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans), name: "", binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings), mutable: false, is_const: false, annotation: "", init: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), expr: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), target: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), cond: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: kir_typed_empty_edges(), iter: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), return_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), scrutinee: scrutinee.expression.reference, arms: arms.range }, token, previous_token(result_unwrap(closed)).byte_end))
 }
 
 fn parse_while(parser: SourceParser) -> Result[ParsedStatements, String] {
@@ -2579,7 +3348,8 @@ fn parse_while(parser: SourceParser) -> Result[ParsedStatements, String] {
     let body: Result[ParsedStatements, String] = parse_block(parsed_condition.parser)
     if is_err(body) { return err(statements_error(body)) }
     let parsed_body: ParsedStatements = result_unwrap(body)
-    return ok(ParsedStatements{ parser: parsed_body.parser, json: statement_json("while", "\"cond\":" + parsed_condition.expression.json + ",\"body\":" + parsed_body.json, token, previous_non_separator(parsed_body.parser).byte_end) })
+    let body_edges: KIRTypedAppendRange = kir_typed_append_edges(parsed_body.parser.arena, parsed_body.references)
+    return ok(store_source_statement(source_with_arena(parsed_body.parser, body_edges.arena), KIRTypedStatement{ kind: "while", source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans), name: "", binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings), mutable: false, is_const: false, annotation: "", init: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), expr: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), target: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), cond: parsed_condition.expression.reference, then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: body_edges.range, iter: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), return_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), scrutinee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), arms: kir_typed_empty_edges() }, token, previous_non_separator(parsed_body.parser).byte_end))
 }
 
 fn parse_for(parser: SourceParser) -> Result[ParsedStatements, String] {
@@ -2593,14 +3363,15 @@ fn parse_for(parser: SourceParser) -> Result[ParsedStatements, String] {
     let parsed_iterator: ParsedExpr = result_unwrap(iterator)
     if !is_array_type(parsed_iterator.expression.type_name) { return err("parser: for iterator must be Array[T]") }
     let item_type: String = array_inner(parsed_iterator.expression.type_name)
-    let loop_binding: SourceBinding = SourceBinding{ type_name: item_type, mutable: false, known: false, display: "", source: binding_token.source, line: binding_token.line, column: binding_token.column, byte_start: binding_token.byte_start }
-    let loop_parser: SourceParser = SourceParser{ tokens: parsed_iterator.parser.tokens, position: parsed_iterator.parser.position, module_id: parsed_iterator.parser.module_id, bindings: map_insert(parsed_iterator.parser.bindings, binding_token.text, loop_binding), functions: parsed_iterator.parser.functions, structs: parsed_iterator.parser.structs, return_type: parsed_iterator.parser.return_type }
+    let binding: KIRTypedAppendRef = source_append_binding(parsed_iterator.parser.arena, binding_token.text, item_type, false, binding_token)
+    let loop_binding: SourceBinding = SourceBinding{ type_name: item_type, mutable: false, known: false, display: "", source: binding_token.source, line: binding_token.line, column: binding_token.column, byte_start: binding_token.byte_start, reference: binding.reference }
+    let loop_parser: SourceParser = source_restore_bindings(source_with_arena(parsed_iterator.parser, binding.arena), map_insert(parsed_iterator.parser.bindings, binding_token.text, loop_binding))
     let body: Result[ParsedStatements, String] = parse_block(loop_parser)
     if is_err(body) { return err(statements_error(body)) }
     let parsed_body: ParsedStatements = result_unwrap(body)
-    let outer: SourceParser = SourceParser{ tokens: parsed_body.parser.tokens, position: parsed_body.parser.position, module_id: parser.module_id, bindings: parser.bindings, functions: parsed_body.parser.functions, structs: parsed_body.parser.structs, return_type: parser.return_type }
-    let json: String = statement_json("for", "\"name\":" + json_quote(binding_token.text) + ",\"binding\":" + resolved_binding_json(binding_token.text, loop_binding) + ",\"iter\":" + parsed_iterator.expression.json + ",\"body\":" + parsed_body.json, token, previous_non_separator(parsed_body.parser).byte_end)
-    return ok(ParsedStatements{ parser: outer, json: json })
+    let outer: SourceParser = source_restore_bindings(parsed_body.parser, parser.bindings)
+    let body_edges: KIRTypedAppendRange = kir_typed_append_edges(outer.arena, parsed_body.references)
+    return ok(store_source_statement(source_with_arena(outer, body_edges.arena), KIRTypedStatement{ kind: "for", source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans), name: binding_token.text, binding: binding.reference, mutable: false, is_const: false, annotation: "", init: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), expr: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), target: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), cond: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: body_edges.range, iter: parsed_iterator.expression.reference, return_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), scrutinee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), arms: kir_typed_empty_edges() }, token, previous_non_separator(parsed_body.parser).byte_end))
 }
 
 fn parse_statement(parser: SourceParser) -> Result[ParsedStatements, String] {
@@ -2618,7 +3389,7 @@ fn parse_statement(parser: SourceParser) -> Result[ParsedStatements, String] {
     if token.text == "break" || token.text == "continue" {
         let separated: Result[SourceParser, String] = finish_statement(advance(current))
         if is_err(separated) { return err(parser_error(separated)) }
-        return ok(ParsedStatements{ parser: result_unwrap(separated), json: statement_json(token.text, "\"expr\":null", token, token.byte_end) })
+        return ok(store_source_statement(result_unwrap(separated), KIRTypedStatement{ kind: token.text, source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans), name: "", binding: kir_typed_absent_ref(KIRTypedTable::KIRTableBindings), mutable: false, is_const: false, annotation: "", init: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), expr: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), target: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), cond: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: kir_typed_empty_edges(), iter: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), return_value: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), scrutinee: kir_typed_absent_ref(KIRTypedTable::KIRTableExpressions), arms: kir_typed_empty_edges() }, token, token.byte_end))
     }
     if token.text == "return" { return parse_return(current) }
     if token.kind == "identifier" && current_token(advance(current)).text == "=" { return parse_assignment(current) }
@@ -2630,10 +3401,8 @@ fn parse_program(parser: SourceParser, module_path: String) -> Result[ParsedProg
     let declarations: Result[SourceParser, String] = predeclare_functions(parser)
     if is_err(declarations) { return err(unwrap_or(result_error(declarations), "parser: failed to collect function declarations")) }
     let mut current: SourceParser = skip_separators(result_unwrap(declarations))
-    let mut statement_items: Array[String] = []
-    let mut function_items: Array[String] = []
-    let mut struct_items: Array[String] = []
-    let mut enum_items: Array[String] = []
+    let mut statement_items: KIRTypedIndexRefRows = kir_typed_reference_rows_empty()
+    let mut function_items: Array[KIRIndexRef] = []
     while current_token(current).kind != "eof" {
         let mut function_parser: SourceParser = current
         let mut public: Bool = false
@@ -2645,7 +3414,6 @@ fn parse_program(parser: SourceParser, module_path: String) -> Result[ParsedProg
             let definition: Result[ParsedStruct, String] = parse_struct(function_parser, public)
             if is_err(definition) { return err(unwrap_or(result_error(definition), "struct parser error")) }
             let parsed_struct: ParsedStruct = result_unwrap(definition)
-            struct_items = array_push(struct_items, parsed_struct.json)
             current = skip_separators(parsed_struct.parser)
             continue
         }
@@ -2653,7 +3421,6 @@ fn parse_program(parser: SourceParser, module_path: String) -> Result[ParsedProg
             let definition: Result[ParsedEnum, String] = parse_enum(function_parser, public, module_path)
             if is_err(definition) { return err(unwrap_or(result_error(definition), "enum parser error")) }
             let parsed_enum: ParsedEnum = result_unwrap(definition)
-            enum_items = array_push(enum_items, parsed_enum.json)
             current = skip_separators(parsed_enum.parser)
             continue
         }
@@ -2661,32 +3428,21 @@ fn parse_program(parser: SourceParser, module_path: String) -> Result[ParsedProg
             let function: Result[ParsedFunction, String] = parse_function(function_parser, public)
             if is_err(function) { return err(unwrap_or(result_error(function), "function parser error")) }
             let parsed_function: ParsedFunction = result_unwrap(function)
-            function_items = array_push(function_items, parsed_function.json)
+            function_items = array_push(function_items, parsed_function.reference)
             current = skip_separators(parsed_function.parser)
             continue
         }
         let statement: Result[ParsedStatements, String] = parse_statement(current)
         if is_err(statement) { return err("at source token '" + current_token(current).text + "' (position " + str(current.position) + "): " + statements_error(statement)) }
         let parsed: ParsedStatements = result_unwrap(statement)
-        statement_items = array_push(statement_items, parsed.json)
+        statement_items = kir_typed_reference_rows_append_all(statement_items, parsed.references)
         if parsed.parser.position == current.position { return err("parser: made no progress") }
         current = skip_separators(parsed.parser)
     }
-    let statements: String = "[" + join_json_items(statement_items, 0, len(statement_items)) + "]"
-    let functions: String = "[" + join_json_items(function_items, 0, len(function_items)) + "]"
-    let structs: String = "[" + join_json_items(struct_items, 0, len(struct_items)) + "]"
-    let enums: String = "[" + join_json_items(enum_items, 0, len(enum_items)) + "]"
-    return ok(ParsedProgram{ parser: current, statements: statements, functions: functions, structs: structs, enums: enums })
+    return ok(ParsedProgram{ parser: current, statements: kir_typed_reference_rows_finish(statement_items), functions: function_items })
 }
 
-fn json_array_items(value: String) -> String {
-    let chars: Array[String] = string_chars(value)
-    if len(chars) < 2 { return "" }
-    let inner: Result[String, String] = substring(value, 1, len(chars) - 2)
-    return result_unwrap(inner)
-}
-
-fn build_document_text(path: String, target_os: String, target_arch: String, target_gui: Bool) -> Result[String, String] {
+fn build_source_arena(path: String, target_os: String, target_arch: String, target_gui: Bool) -> Result[KIRTypedArena, String] {
     let initial: SourceModules = SourceModules{ items: [], visiting: {}, loaded: {} }
     let loaded: Result[SourceModules, String] = load_source_modules(path, initial, source_directory(path))
     if is_err(loaded) { return err(unwrap_or(result_error(loaded), "module load failed")) }
@@ -2713,13 +3469,9 @@ fn build_document_text(path: String, target_os: String, target_arch: String, tar
         contexts = result_unwrap(replaced)
         index = index + 1
     }
-    let mut function_items: Array[String] = []
-    let mut struct_items: Array[String] = []
-    let mut enum_items: Array[String] = []
-    let mut source_items: Array[String] = []
-    let mut import_items: Array[String] = []
-    let mut import_record_items: Array[String] = []
-    let mut statements: String = "[]"
+    let mut function_items: Array[KIRIndexRef] = []
+    let mut statements: Array[KIRIndexRef] = []
+    let mut arena: KIRTypedArena = kir_typed_empty_source_arena()
     index = 0
     while index < len(modules) {
         let module: SourceModule = unwrap_or(array_get(modules, index), SourceModule{ path: "", tokens: [], imports: [], import_records: [] })
@@ -2728,38 +3480,48 @@ fn build_document_text(path: String, target_os: String, target_arch: String, tar
         if is_err(scope) { return err(unwrap_or(result_error(scope), "module scope error")) }
         let emission_type_scope: Result[Map[String, SourceStruct], String] = source_module_type_scope(modules, contexts, index)
         if is_err(emission_type_scope) { return err(unwrap_or(result_error(emission_type_scope), "module type scope error")) }
-        let parser: SourceParser = SourceParser{ tokens: module.tokens, position: 0, module_id: context.module_id, bindings: {}, functions: result_unwrap(scope), structs: result_unwrap(emission_type_scope), return_type: "" }
+        let parser: SourceParser = SourceParser{ arena: arena, tokens: module.tokens, position: 0, module_id: context.module_id, bindings: {}, functions: result_unwrap(scope), structs: result_unwrap(emission_type_scope), return_type: "" }
         let program: Result[ParsedProgram, String] = parse_program(parser, portable_source_name(module.path, source_directory(path)))
         if is_err(program) { return err("module '" + module.path + "': " + program_error(program)) }
         let parsed: ParsedProgram = result_unwrap(program)
-        if index != len(modules) - 1 && parsed.statements != "[]" { return err("module '" + module.path + "': imported modules cannot contain top-level statements") }
-        if parsed.functions != "[]" { function_items = array_push(function_items, json_array_items(parsed.functions)) }
-        if parsed.structs != "[]" { struct_items = array_push(struct_items, json_array_items(parsed.structs)) }
-        if parsed.enums != "[]" { enum_items = array_push(enum_items, json_array_items(parsed.enums)) }
-        source_items = array_push(source_items, json_quote(portable_source_name(module.path, source_directory(path))))
+        if index != len(modules) - 1 && len(parsed.statements) != 0 { return err("module '" + module.path + "': imported modules cannot contain top-level statements") }
+        function_items = array_concat(function_items, parsed.functions)
+        arena = parsed.parser.arena
+        arena = kir_typed_append_source(arena, portable_source_name(module.path, source_directory(path))).arena
         if index == len(modules) - 1 {
             statements = parsed.statements
             let mut import_index: Int = 0
             while import_index < len(module.imports) {
-                import_items = array_push(import_items, json_quote(unwrap_or(array_get(module.imports, import_index), "")))
-                import_record_items = array_push(import_record_items, unwrap_or(array_get(module.import_records, import_index), ""))
+                arena = kir_typed_append_import(arena, unwrap_or(array_get(module.imports, import_index), "")).arena
+                let record: SourceImport = unwrap_or(array_get(module.import_records, import_index), SourceImport{ path: "", token: current_token(parser) })
+                let import_span: KIRTypedAppendRef = kir_typed_append_span(arena, KIRTypedSourceSpan{ start: record.token.byte_start, end: record.token.byte_end })
+                let import_record: KIRTypedAppendRef = kir_typed_append_import_record(import_span.arena, KIRTypedImport{ path: record.path, source: record.token.source, line: record.token.line, column: record.token.column, span: import_span.reference })
+                arena = import_record.arena
                 import_index = import_index + 1
             }
         }
         index = index + 1
     }
-    let document_text: String = "{\"format\":\"kry-ir\",\"version\":6,\"language_version\":\"1.0.0\",\"module\":\"\",\"source\":" + json_quote(portable_source_name(path, source_directory(path))) + ",\"target\":{\"os\":" + json_quote(target_os) + ",\"arch\":" + json_quote(target_arch) + ",\"gui\":" + bool_text(target_gui) + "},\"imports\":[" + join_json_items(import_items, 0, len(import_items)) + "],\"import_records\":[" + join_json_items(import_record_items, 0, len(import_record_items)) + "],\"sources\":[" + join_json_items(source_items, 0, len(source_items)) + "],\"structs\":[" + join_json_items(struct_items, 0, len(struct_items)) + "],\"enums\":[" + join_json_items(enum_items, 0, len(enum_items)) + "],\"traits\":[],\"trait_impls\":[],\"functions\":[" + join_json_items(function_items, 0, len(function_items)) + "],\"statements\":" + statements + "}"
-    return ok(document_text)
+    let function_edges: KIRTypedAppendRange = kir_typed_append_edges(arena, function_items)
+    let statement_edges: KIRTypedAppendRange = kir_typed_append_edges(function_edges.arena, statements)
+    let header: KIRTypedDocumentHeader = KIRTypedDocumentHeader{ format: "kry-ir", version: 6, language_version: "1.0.0", module: "", source: portable_source_name(path, source_directory(path)), target: KIRTypedTarget{ os: target_os, arch: target_arch, gui: target_gui }, top_functions: function_edges.range, top_statements: statement_edges.range }
+    return ok(kir_typed_finish_source_build(kir_typed_append_document_ranges(statement_edges.arena, header)))
 }
 
-fn compile_path(path: String, target_os: String, target_arch: String, target_gui: Bool) -> Result[Bytes, String] {
-    let document_text: Result[String, String] = build_document_text(path, target_os, target_arch, target_gui)
-    if is_err(document_text) { return err(unwrap_or(result_error(document_text), "source frontend failed to build KIR")) }
-    let document: Result[Json, String] = json_parse(result_unwrap(document_text))
-    if is_err(document) { return err(unwrap_or(result_error(document), "source frontend produced invalid KIR")) }
-    let validated: Result[ValidatedKIR, String] = validate_generated_kir_document(result_unwrap(document))
-    if is_err(validated) { return err("source KIR validation failed: " + unwrap_or(result_error(validated), "invalid generated KIR")) }
+pub fn compile_path(path: String, target_os: String, target_arch: String, target_gui: Bool) -> Result[Bytes, String] {
+    let arena: Result[KIRTypedArena, String] = build_source_arena(path, target_os, target_arch, target_gui)
+    if is_err(arena) { return err(unwrap_or(result_error(arena), "source frontend failed to build KIR")) }
+    let validated: Result[ValidatedKIR, String] = validate_kir_typed_arena(result_unwrap(arena))
+    if is_err(validated) { return err("source KIR validation failed: " + unwrap_or(result_error(validated), "invalid typed KIR")) }
     return compile_validated_kir(result_unwrap(validated))
+}
+
+fn emit_source_kir(path: String, target_os: String, target_arch: String, target_gui: Bool) -> Result[String, String] {
+    let arena: Result[KIRTypedArena, String] = build_source_arena(path, target_os, target_arch, target_gui)
+    if is_err(arena) { return err(unwrap_or(result_error(arena), "source frontend failed to build KIR")) }
+    let validated: Result[ValidatedKIR, String] = validate_kir_typed_arena(result_unwrap(arena))
+    if is_err(validated) { return err("source KIR validation failed: " + unwrap_or(result_error(validated), "invalid typed KIR")) }
+    return kir_typed_arena_serialize(validated_kir_typed_arena(result_unwrap(validated)))
 }
 
 fn fail_compilation(message: String) -> Nil {
@@ -2796,7 +3558,7 @@ fn main() -> Nil {
         }
     }
     if emit_kir {
-        let document_text: Result[String, String] = build_document_text(source_path, target_os, target_arch, target_gui)
+        let document_text: Result[String, String] = emit_source_kir(source_path, target_os, target_arch, target_gui)
         if is_err(document_text) {
             return fail_compilation("source compiler KIR emission failed: " + unwrap_or(result_error(document_text), "unknown error"))
         }

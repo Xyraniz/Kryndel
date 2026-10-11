@@ -48,9 +48,20 @@ struct ChunkedCode {
     length: Int,
 }
 
+struct ChunkedLabelPositions {
+    pages: Array[Array[Array[Int]]],
+    length: Int,
+}
+
+struct ChunkedCodeChunks {
+    pages: Array[Array[Array[Array[UInt8]]]],
+    length: Int,
+    current: Array[UInt8],
+}
+
 struct AssemblerCode {
     code: Array[UInt8],
-    code_chunks: Array[Array[UInt8]],
+    code_chunks: ChunkedCodeChunks,
     code_length: Int,
 }
 
@@ -78,7 +89,7 @@ struct AssemblerCommon {
 
 struct Assembler {
     code_state: AssemblerCode,
-    labels: Map[String, Int],
+    labels: ChunkedLabelPositions,
     next_label: Int,
     jumps: ChunkedJumpPatches,
     common: AssemblerCommon,
@@ -170,7 +181,7 @@ fn dyn_u64_bytes(value: UInt64) -> Array[UInt8] {
 
 fn state_with_code(state: EmitState, code: Array[UInt8]) -> EmitState {
     return EmitState{
-        assembler: Assembler{ code_state: AssemblerCode{ code: code, code_chunks: [], code_length: len(code) }, labels: state.assembler.labels, next_label: state.assembler.next_label, jumps: state.assembler.jumps, common: state.assembler.common },
+        assembler: Assembler{ code_state: AssemblerCode{ code: code, code_chunks: ChunkedCodeChunks{ pages: [], length: 0, current: [] }, code_length: len(code) }, labels: state.assembler.labels, next_label: state.assembler.next_label, jumps: state.assembler.jumps, common: state.assembler.common },
         env: state.env,
         code_patches: state.code_patches,
         code_pages: ChunkedCode{ pages: [], chunk_count: 0, length: 0 },
@@ -477,9 +488,48 @@ fn state_with_function_ranges(state: EmitState, ranges: Array[Array[Int]]) -> Em
     return EmitState{ assembler: updated, env: state.env, code_patches: state.code_patches, code_pages: state.code_pages }
 }
 
-fn state_with_code_chunks(state: EmitState, chunks: Array[Array[UInt8]], length: Int) -> EmitState {
+// Keep the directory of emitted byte chunks paged too. array_set copies its
+// receiver, so two bounded directory levels avoid copying a growing flat list.
+fn chunked_code_chunks_get(values: ChunkedCodeChunks, index: Int) -> Option[Array[UInt8]] {
+    if index < 0 || index >= values.length { return none() }
+    let page_index: Int = index / 16384
+    let directory_index: Int = (index / 128) % 128
+    let item_index: Int = index % 128
+    let page: Array[Array[Array[UInt8]]] = unwrap_or(array_get(values.pages, page_index), [])
+    let directory: Array[Array[UInt8]] = unwrap_or(array_get(page, directory_index), [])
+    return array_get(directory, item_index)
+}
+
+fn chunked_code_chunks_push(values: ChunkedCodeChunks, value: Array[UInt8]) -> ChunkedCodeChunks {
+    if values.length == 0 {
+        let directory: Array[Array[UInt8]] = [value]
+        let page: Array[Array[Array[UInt8]]] = [directory]
+        return ChunkedCodeChunks{ pages: [page], length: 1, current: values.current }
+    }
+    let page_index: Int = (values.length - 1) / 16384
+    if values.length % 128 == 0 {
+        let directory: Array[Array[UInt8]] = [value]
+        if values.length % 16384 == 0 {
+            let page: Array[Array[Array[UInt8]]] = [directory]
+            return ChunkedCodeChunks{ pages: array_push(values.pages, page), length: values.length + 1, current: values.current }
+        }
+        let page: Array[Array[Array[UInt8]]] = unwrap_or(array_get(values.pages, page_index), [])
+        let updated_page: Array[Array[Array[UInt8]]] = array_push(page, directory)
+        let updated_pages: Result[Array[Array[Array[Array[UInt8]]]], String] = array_set(values.pages, page_index, updated_page)
+        return ChunkedCodeChunks{ pages: result_unwrap(updated_pages), length: values.length + 1, current: values.current }
+    }
+    let directory_index: Int = ((values.length - 1) / 128) % 128
+    let page: Array[Array[Array[UInt8]]] = unwrap_or(array_get(values.pages, page_index), [])
+    let directory: Array[Array[UInt8]] = unwrap_or(array_get(page, directory_index), [])
+    let updated_directory: Array[Array[UInt8]] = array_push(directory, value)
+    let updated_page: Result[Array[Array[Array[UInt8]]], String] = array_set(page, directory_index, updated_directory)
+    let updated_pages: Result[Array[Array[Array[Array[UInt8]]]], String] = array_set(values.pages, page_index, result_unwrap(updated_page))
+    return ChunkedCodeChunks{ pages: result_unwrap(updated_pages), length: values.length + 1, current: values.current }
+}
+
+fn state_with_code_chunks(state: EmitState, chunks: ChunkedCodeChunks, length: Int) -> EmitState {
     let mut code: Array[UInt8] = state.assembler.code_state.code
-    if len(chunks) == 0 { code = [] }
+    if chunks.length == 0 && len(chunks.current) == 0 { code = [] }
     return EmitState{
         assembler: Assembler{ code_state: AssemblerCode{ code: code, code_chunks: chunks, code_length: length }, labels: state.assembler.labels, next_label: state.assembler.next_label, jumps: state.assembler.jumps, common: state.assembler.common },
         env: state.env,
@@ -488,40 +538,44 @@ fn state_with_code_chunks(state: EmitState, chunks: Array[Array[UInt8]], length:
     }
 }
 
+fn join_code_chunk_range(chunks: ChunkedCodeChunks, start: Int, end: Int) -> Array[UInt8] {
+    if start >= end { return [] }
+    if end - start == 1 { return unwrap_or(chunked_code_chunks_get(chunks, start), []) }
+    let middle: Int = start + (end - start) / 2
+    return array_concat(join_code_chunk_range(chunks, start, middle), join_code_chunk_range(chunks, middle, end))
+}
+
 fn append_code(state: EmitState, bytes: Array[UInt8]) -> EmitState {
     if len(bytes) == 0 { return state }
-    let mut chunks: Array[Array[UInt8]] = state.assembler.code_state.code_chunks
+    let mut chunks: ChunkedCodeChunks = state.assembler.code_state.code_chunks
     let mut length: Int = state.assembler.code_state.code_length
-    if len(chunks) == 0 && len(state.assembler.code_state.code) > 0 {
-        chunks = [state.assembler.code_state.code]
+    if chunks.length == 0 && len(state.assembler.code_state.code) > 0 {
+        chunks = chunked_code_chunks_push(chunks, state.assembler.code_state.code)
         length = len(state.assembler.code_state.code)
     }
-    let chunk_count: Int = len(chunks)
-    if chunk_count == 0 {
-        return state_with_code_chunks(state, [bytes], length + len(bytes))
+    let mut current: Array[UInt8] = chunks.current
+    let mut offset: Int = 0
+    while offset < len(bytes) {
+        let mut take: Int = 256 - len(current)
+        let remaining: Int = len(bytes) - offset
+        if remaining < take { take = remaining }
+        current = array_concat(current, array_slice(bytes, offset, take))
+        offset = offset + take
+        if len(current) == 256 {
+            let committed: ChunkedCodeChunks = ChunkedCodeChunks{ pages: chunks.pages, length: chunks.length, current: [] }
+            chunks = chunked_code_chunks_push(committed, current)
+            current = []
+        }
     }
-    let last_index: Int = chunk_count - 1
-    let last: Array[UInt8] = unwrap_or(array_get(chunks, last_index), [])
-    if len(last) + len(bytes) <= 256 {
-        let combined: Array[UInt8] = array_concat(last, bytes)
-        let updated: Result[Array[Array[UInt8]], String] = array_set(chunks, last_index, combined)
-        if is_ok(updated) { return state_with_code_chunks(state, result_unwrap(updated), length + len(bytes)) }
-    }
-    return state_with_code_chunks(state, array_push(chunks, bytes), length + len(bytes))
+    chunks = ChunkedCodeChunks{ pages: chunks.pages, length: chunks.length, current: current }
+    return state_with_code_chunks(state, chunks, length + len(bytes))
 }
 
 fn materialize_code(state: EmitState) -> EmitState {
-    if len(state.assembler.code_state.code_chunks) == 0 { return state }
-    let mut code: Array[UInt8] = []
-    let mut batch: Array[UInt8] = []
-    for chunk in state.assembler.code_state.code_chunks {
-        if len(batch) > 0 && len(batch) + len(chunk) > 65536 {
-            code = array_concat(code, batch)
-            batch = []
-        }
-        batch = array_concat(batch, chunk)
-    }
-    code = array_concat(code, batch)
+    let chunks: ChunkedCodeChunks = state.assembler.code_state.code_chunks
+    if chunks.length == 0 && len(chunks.current) == 0 { return state }
+    let mut code: Array[UInt8] = join_code_chunk_range(chunks, 0, chunks.length)
+    if len(chunks.current) > 0 { code = array_concat(code, chunks.current) }
     return state_with_code(state, code)
 }
 
@@ -549,7 +603,7 @@ fn prepare_code_pages(state: EmitState) -> Result[EmitState, String] {
         }
         index = index + 1
     }
-    let empty_chunks: Array[Array[UInt8]] = []
+    let empty_chunks: ChunkedCodeChunks = ChunkedCodeChunks{ pages: [], length: 0, current: [] }
     let cleared: EmitState = state_with_code_chunks(flattened, empty_chunks, code_length)
     return ok(EmitState{
         assembler: cleared.assembler,
@@ -559,19 +613,21 @@ fn prepare_code_pages(state: EmitState) -> Result[EmitState, String] {
     })
 }
 
+fn code_page_chunk_get(pages: ChunkedCode, index: Int) -> Option[Array[UInt8]] {
+    if index < 0 || index >= pages.chunk_count { return none() }
+    let page: Array[Array[UInt8]] = unwrap_or(array_get(pages.pages, index / 128), [])
+    return array_get(page, index % 128)
+}
+
+fn join_code_page_range(pages: ChunkedCode, start: Int, end: Int) -> Array[UInt8] {
+    if start >= end { return [] }
+    if end - start == 1 { return unwrap_or(code_page_chunk_get(pages, start), []) }
+    let middle: Int = start + (end - start) / 2
+    return array_concat(join_code_page_range(pages, start, middle), join_code_page_range(pages, middle, end))
+}
+
 fn flatten_code_pages(state: EmitState) -> EmitState {
-    let mut code: Array[UInt8] = []
-    let mut batch: Array[UInt8] = []
-    for page in state.code_pages.pages {
-        for chunk in page {
-            if len(batch) > 0 && len(batch) + len(chunk) > 65536 {
-                code = array_concat(code, batch)
-                batch = []
-            }
-            batch = array_concat(batch, chunk)
-        }
-    }
-    code = array_concat(code, batch)
+    let code: Array[UInt8] = join_code_page_range(state.code_pages, 0, state.code_pages.chunk_count)
     let flattened: EmitState = state_with_code(state, code)
     return EmitState{
         assembler: flattened.assembler,
@@ -655,8 +711,9 @@ fn chunked_code_patch_push(values: ChunkedCodePatches, value: CodePatch) -> Chun
 
 fn new_label(state: EmitState) -> LabelState {
     let label: Int = state.assembler.next_label
+    let labels: ChunkedLabelPositions = chunked_label_position_append(state.assembler.labels, -1)
     let updated: EmitState = EmitState{
-        assembler: Assembler{ code_state: state.assembler.code_state, labels: state.assembler.labels, next_label: label + 1, jumps: state.assembler.jumps, common: state.assembler.common },
+        assembler: Assembler{ code_state: state.assembler.code_state, labels: labels, next_label: label + 1, jumps: state.assembler.jumps, common: state.assembler.common },
         env: state.env,
         code_patches: state.code_patches,
         code_pages: state.code_pages,
@@ -664,17 +721,71 @@ fn new_label(state: EmitState) -> LabelState {
     return LabelState{ state: updated, label: label }
 }
 
+// Label IDs are dense and sequential. Keep their positions in bounded pages:
+// native map_insert linearly scans and copies its immutable map on every insert.
+fn chunked_label_position_append(positions: ChunkedLabelPositions, value: Int) -> ChunkedLabelPositions {
+    if positions.length == 0 {
+        return ChunkedLabelPositions{ pages: [[[value]]], length: 1 }
+    }
+    let page_index: Int = (positions.length - 1) / 1024
+    if positions.length % 32 == 0 {
+        let leaf: Array[Int] = [value]
+        if positions.length % 1024 == 0 {
+            let page: Array[Array[Int]] = [leaf]
+            return ChunkedLabelPositions{ pages: array_push(positions.pages, page), length: positions.length + 1 }
+        }
+        let page: Array[Array[Int]] = unwrap_or(array_get(positions.pages, page_index), [])
+        let updated_page: Array[Array[Int]] = array_push(page, leaf)
+        let updated_pages: Result[Array[Array[Array[Int]]], String] = array_set(positions.pages, page_index, updated_page)
+        return ChunkedLabelPositions{ pages: result_unwrap(updated_pages), length: positions.length + 1 }
+    }
+    let leaf_index: Int = ((positions.length - 1) / 32) % 32
+    let page: Array[Array[Int]] = unwrap_or(array_get(positions.pages, page_index), [])
+    let leaf: Array[Int] = unwrap_or(array_get(page, leaf_index), [])
+    let updated_leaf: Array[Int] = array_push(leaf, value)
+    let updated_page: Result[Array[Array[Int]], String] = array_set(page, leaf_index, updated_leaf)
+    let updated_pages: Result[Array[Array[Array[Int]]], String] = array_set(positions.pages, page_index, result_unwrap(updated_page))
+    return ChunkedLabelPositions{ pages: result_unwrap(updated_pages), length: positions.length + 1 }
+}
+
+fn chunked_label_position_get(positions: ChunkedLabelPositions, index: Int) -> Option[Int] {
+    if index < 0 || index >= positions.length { return none() }
+    let page_index: Int = index / 1024
+    let leaf_index: Int = (index / 32) % 32
+    let page: Array[Array[Int]] = unwrap_or(array_get(positions.pages, page_index), [])
+    let leaf: Array[Int] = unwrap_or(array_get(page, leaf_index), [])
+    let value: Int = unwrap_or(array_get(leaf, index % 32), -1)
+    if value < 0 { return none() }
+    return some(value)
+}
+
+fn chunked_label_position_set(positions: ChunkedLabelPositions, index: Int, value: Int) -> Result[ChunkedLabelPositions, String] {
+    if index < 0 || index >= positions.length { return err("dynamic backend: label index is out of bounds") }
+    let page_index: Int = index / 1024
+    let leaf_index: Int = (index / 32) % 32
+    let page: Array[Array[Int]] = unwrap_or(array_get(positions.pages, page_index), [])
+    let leaf: Array[Int] = unwrap_or(array_get(page, leaf_index), [])
+    let updated_leaf: Result[Array[Int], String] = array_set(leaf, index % 32, value)
+    if is_err(updated_leaf) { return err("dynamic backend: label leaf index is out of bounds") }
+    let updated_page: Result[Array[Array[Int]], String] = array_set(page, leaf_index, result_unwrap(updated_leaf))
+    if is_err(updated_page) { return err("dynamic backend: label page index is out of bounds") }
+    let updated_pages: Result[Array[Array[Array[Int]]], String] = array_set(positions.pages, page_index, result_unwrap(updated_page))
+    if is_err(updated_pages) { return err("dynamic backend: label table page is out of bounds") }
+    return ok(ChunkedLabelPositions{ pages: result_unwrap(updated_pages), length: positions.length })
+}
+
 fn bind_label(state: EmitState, label: Int) -> Result[EmitState, String] {
-    let label_key: String = str(label)
-    let existing: Option[Int] = map_get(state.assembler.labels, label_key)
-    if label < 0 || label >= state.assembler.next_label {
+    if label < 0 || label >= state.assembler.next_label || label >= state.assembler.labels.length {
         return err("dynamic backend: label " + str(label) + " was already bound or does not exist (position -2, count " + str(state.assembler.next_label) + ", code " + str(state.assembler.code_state.code_length) + ", function '" + state.env.current_function + "')")
     }
+    let existing: Option[Int] = chunked_label_position_get(state.assembler.labels, label)
     if is_some(existing) {
         return err("dynamic backend: label " + str(label) + " was already bound or does not exist (position " + str(unwrap_or(existing, -1)) + ", count " + str(state.assembler.next_label) + ")")
     }
+    let updated_labels: Result[ChunkedLabelPositions, String] = chunked_label_position_set(state.assembler.labels, label, state.assembler.code_state.code_length)
+    if is_err(updated_labels) { return err(unwrap_or(result_error(updated_labels), "dynamic backend: cannot set label position")) }
     return ok(EmitState{
-        assembler: Assembler{ code_state: state.assembler.code_state, labels: map_insert(state.assembler.labels, label_key, state.assembler.code_state.code_length), next_label: state.assembler.next_label, jumps: state.assembler.jumps, common: state.assembler.common },
+        assembler: Assembler{ code_state: state.assembler.code_state, labels: result_unwrap(updated_labels), next_label: state.assembler.next_label, jumps: state.assembler.jumps, common: state.assembler.common },
         env: state.env,
         code_patches: state.code_patches,
         code_pages: state.code_pages,
@@ -1018,7 +1129,7 @@ fn parameter_slots(parameters: KIRTypedNodeView) -> Map[String, Int] {
     let mut slots: Map[String, Int] = {}
     while index < count {
         let parameter: KIRTypedNodeView = result_unwrap(kir_typed_array_get(parameters, index))
-        slots = map_insert(slots, text(field(parameter, "name")), (index + 1) * 8)
+        slots = map_insert(slots, kir_binding_key(parameter), (index + 1) * 8)
         index = index + 1
     }
     return slots
@@ -6432,7 +6543,7 @@ fn emit_expression(state: EmitState, expression: KIRTypedNodeView) -> Result[Emi
         return ok(emit_int(state, 0))
     }
     if kind == "var" {
-        let name: String = text(field(expression, "name"))
+        let name: String = kir_binding_key(expression)
         let slot: Option[Int] = map_get(state.env.slots, name)
         if is_none(slot) { return err("dynamic backend: unknown slot '" + name + "'") }
         return ok(emit_load_slot(state, unwrap_or(slot, -1)))
@@ -6540,7 +6651,7 @@ fn compile_error(value: Result[EmitState, String]) -> String {
 fn is_static_display_candidate(expression: KIRTypedNodeView, bindings: Map[String, String]) -> Bool {
     let kind: String = text(field(expression, "kind"))
     if kind == "int" || kind == "uint" || kind == "string" || kind == "bool" { return true }
-    if kind == "var" { return map_contains_key(bindings, text(field(expression, "name"))) }
+    if kind == "var" { return map_contains_key(bindings, kir_binding_key(expression)) }
     if kind == "binary" {
         return is_static_display_candidate(field(expression, "left"), bindings) && is_static_display_candidate(field(expression, "right"), bindings)
     }
@@ -6564,7 +6675,7 @@ fn allocate_slot(state: EmitState, name: String) -> Result[EmitState, String] {
 fn compile_statement(state: EmitState, statement: KIRTypedNodeView) -> Result[EmitState, String] {
     let kind: String = text(field(statement, "kind"))
     if kind == "let" || kind == "const" {
-        let name: String = text(field(statement, "name"))
+        let name: String = kir_binding_key(statement)
         let allocated: Result[EmitState, String] = allocate_slot(state, name)
         if is_err(allocated) { return err(compile_error(allocated)) }
         let updated: EmitState = result_unwrap(allocated)
@@ -6578,7 +6689,7 @@ fn compile_statement(state: EmitState, statement: KIRTypedNodeView) -> Result[Em
         let mutable: Bool = result_unwrap(kir_typed_bool(field(statement, "mutable")))
         if !mutable {
             let mut display_value: Result[String, String] = err("dynamic backend: initializer is not static display data")
-            if type_name == "String" || type_name == "Int" || type_name == "Bool" || starts_with(type_name, "UInt") {
+            if (type_name == "String" || type_name == "Int" || type_name == "Bool" || starts_with(type_name, "UInt")) && is_static_display_candidate(init, stored.env.static_values) {
                 display_value = eval_display(init, stored.env.static_values)
             }
             if is_ok(display_value) {
@@ -6590,7 +6701,7 @@ fn compile_statement(state: EmitState, statement: KIRTypedNodeView) -> Result[Em
     }
     if kind == "assign" {
         let target: KIRTypedNodeView = field(statement, "target")
-        let name: String = text(field(target, "name"))
+        let name: String = kir_binding_key(target)
         let slot: Option[Int] = map_get(state.env.slots, name)
         if is_none(slot) { return err("dynamic backend: assignment uses unknown slot '" + name + "'") }
         let value: Result[EmitState, String] = emit_expression(state, field(statement, "value"))
@@ -6723,7 +6834,7 @@ fn compile_statement(state: EmitState, statement: KIRTypedNodeView) -> Result[Em
         current = emit_jump(current, end_label.label, true, u8(131))
         current = append_code(current, [u8(72), u8(139), u8(68), u8(200), u8(8)])
         current = emit_store_slot(current, item_slot)
-        let loop_env: CompileEnv = CompileEnv{ slots: map_insert(current.env.slots, text(field(statement, "name")), item_slot), static_values: current.env.static_values, struct_fields: current.env.struct_fields, function_labels: current.env.function_labels, function_returns: current.env.function_returns, next_slot: item_slot, breaks: array_push(current.env.breaks, end_label.label), continues: array_push(current.env.continues, increment_label.label), end_label: current.env.end_label, trap_label: current.env.trap_label, buffer_offset: current.env.buffer_offset, in_function: current.env.in_function, current_function: current.env.current_function }
+        let loop_env: CompileEnv = CompileEnv{ slots: map_insert(current.env.slots, kir_binding_key(statement), item_slot), static_values: current.env.static_values, struct_fields: current.env.struct_fields, function_labels: current.env.function_labels, function_returns: current.env.function_returns, next_slot: item_slot, breaks: array_push(current.env.breaks, end_label.label), continues: array_push(current.env.continues, increment_label.label), end_label: current.env.end_label, trap_label: current.env.trap_label, buffer_offset: current.env.buffer_offset, in_function: current.env.in_function, current_function: current.env.current_function }
         let body: Result[EmitState, String] = compile_statements(state_with_env(current, loop_env), field(statement, "body"))
         if is_err(body) { return err(compile_error(body)) }
         let body_state: EmitState = result_unwrap(body)
@@ -6868,7 +6979,7 @@ fn finalize_jumps(state: EmitState) -> Result[EmitState, String] {
     let mut index: Int = 0
     while index < jump_count {
         let patch: JumpPatch = unwrap_or(chunked_jump_get(current.assembler.jumps, index), JumpPatch{ label: -1, position: -1, function: "" })
-        let target: Option[Int] = map_get(current.assembler.labels, str(patch.label))
+        let target: Option[Int] = chunked_label_position_get(current.assembler.labels, patch.label)
         if is_none(target) || unwrap_or(target, -1) < 0 { return err("dynamic backend: unresolved label " + str(patch.label) + " at patch " + str(patch.position) + " in function '" + patch.function + "' (label count " + str(current.assembler.next_label) + ")") }
         let target_position: Int = unwrap_or(target, -1)
         let updated: Result[EmitState, String] = patch_code(current, patch.position, i32_bytes(target_position - patch.position - 4))
@@ -6899,7 +7010,7 @@ fn align_frame(value: Int) -> Int {
 }
 
 fn new_dynamic_state() -> EmitState {
-    let assembler: Assembler = Assembler{ code_state: AssemblerCode{ code: [], code_chunks: [], code_length: 0 }, labels: {}, next_label: 0, jumps: ChunkedJumpPatches{ pages: [], length: 0 }, common: AssemblerCommon{ data: [], data_by_text: {}, string_data_by_text: {}, data_patches: [], frame_patch: -1, string_concat_label: -1, string_concat_used: false, array_alloc_label: -1, array_push_label: -1, array_concat_label: -1, array_runtime_used: false, box_alloc_label: -1, box_runtime_used: false, host_runtime_used: false, ffi_runtime_used: false, windows_abi: false, windows_stack_depth: 0, import_patches: [], function_ranges: [] } }
+    let assembler: Assembler = Assembler{ code_state: AssemblerCode{ code: [], code_chunks: ChunkedCodeChunks{ pages: [], length: 0, current: [] }, code_length: 0 }, labels: ChunkedLabelPositions{ pages: [], length: 0 }, next_label: 0, jumps: ChunkedJumpPatches{ pages: [], length: 0 }, common: AssemblerCommon{ data: [], data_by_text: {}, string_data_by_text: {}, data_patches: [], frame_patch: -1, string_concat_label: -1, string_concat_used: false, array_alloc_label: -1, array_push_label: -1, array_concat_label: -1, array_runtime_used: false, box_alloc_label: -1, box_runtime_used: false, host_runtime_used: false, ffi_runtime_used: false, windows_abi: false, windows_stack_depth: 0, import_patches: [], function_ranges: [] } }
     let env: CompileEnv = CompileEnv{ slots: {}, static_values: {}, struct_fields: {}, function_labels: {}, function_returns: {}, next_slot: 0, breaks: [], continues: [], end_label: -1, trap_label: -1, buffer_offset: 1, in_function: false, current_function: "" }
     return EmitState{ assembler: assembler, env: env, code_patches: ChunkedCodePatches{ pages: [], length: 0 }, code_pages: ChunkedCode{ pages: [], chunk_count: 0, length: 0 } }
 }
@@ -7214,7 +7325,7 @@ fn emit_function_bodies(state: EmitState, functions: KIRTypedNodeView, index: In
             let mut parameter_index: Int = 0
             while parameter_index < parameter_count {
                 let parameter: KIRTypedNodeView = result_unwrap(kir_typed_array_get(parameters, parameter_index))
-                let slot: Int = unwrap_or(map_get(function_env.slots, text(field(parameter, "name"))), -1)
+                let slot: Int = unwrap_or(map_get(function_env.slots, kir_binding_key(parameter)), -1)
                 let next: Result[EmitState, String] = emit_store_arg(result_unwrap(stored), parameter_index, slot)
                 if is_err(next) { return err(unwrap_or(result_error(next), "dynamic backend: parameter storage failed")) }
                 stored = next

@@ -10,6 +10,13 @@ import (
 	"testing"
 )
 
+func astReferencedName(node ast.Node) string {
+	if identifier, ok := node.(*ast.Ident); ok {
+		return identifier.Name
+	}
+	return ""
+}
+
 func TestProductionLoweringEntrypointsUseValidatedMIR(t *testing.T) {
 	checkCalls := func(fileName, functionName string, required ...string) {
 		t.Helper()
@@ -100,19 +107,9 @@ func TestInterpreterRuntimeUsesTypedArenaEdges(t *testing.T) {
 					}
 				}
 			}
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			name := ""
-			switch callee := call.Fun.(type) {
-			case *ast.Ident:
-				name = callee.Name
-			case *ast.SelectorExpr:
-				name = callee.Sel.Name
-			}
+			name := astReferencedName(node)
 			if forbidden[name] {
-				t.Errorf("%s calls recursive or decoder-only helper %s", functionName, name)
+				t.Errorf("%s references recursive or decoder-only helper %s", functionName, name)
 			}
 			return true
 		})
@@ -140,13 +137,49 @@ func TestInterpreterRuntimeUsesTypedArenaEdges(t *testing.T) {
 			"resolveKIRCall": "expression", "resolveKIRTraitCall": "expression",
 			"evalKIRCall": "expression", "evalKIRTailCall": "expression", "debugKIRStatement": "statement",
 		}[functionName]
+		aliases := map[string]bool{base: true}
+		if functionName == "invokeKIR" {
+			aliases["parameter"] = true
+		}
+		var isAlias func(ast.Expr) bool
+		isAlias = func(value ast.Expr) bool {
+			switch value := value.(type) {
+			case *ast.Ident:
+				return aliases[value.Name]
+			case *ast.ParenExpr:
+				return isAlias(value.X)
+			case *ast.StarExpr:
+				return isAlias(value.X)
+			case *ast.UnaryExpr:
+				return isAlias(value.X)
+			default:
+				return false
+			}
+		}
 		ast.Inspect(function.Body, func(node ast.Node) bool {
-			selector, ok := node.(*ast.SelectorExpr)
-			if ok {
-				object, isIdentifier := selector.X.(*ast.Ident)
-				if isIdentifier && object.Name == base && forbidden[selector.Sel.Name] {
-					t.Errorf("%s reads recursive child field %s.%s instead of resolving its arena reference", functionName, base, selector.Sel.Name)
+			assignAlias := func(left, right ast.Expr) {
+				leftName, leftOK := left.(*ast.Ident)
+				if leftOK {
+					aliases[leftName.Name] = isAlias(right)
 				}
+			}
+			switch statement := node.(type) {
+			case *ast.AssignStmt:
+				if len(statement.Lhs) == len(statement.Rhs) {
+					for index := range statement.Lhs {
+						assignAlias(statement.Lhs[index], statement.Rhs[index])
+					}
+				}
+			case *ast.ValueSpec:
+				if len(statement.Names) == len(statement.Values) {
+					for index, name := range statement.Names {
+						assignAlias(name, statement.Values[index])
+					}
+				}
+			}
+			selector, ok := node.(*ast.SelectorExpr)
+			if ok && isAlias(selector.X) && forbidden[selector.Sel.Name] {
+				t.Errorf("%s reads recursive child field through an alias of %s.%s instead of resolving its arena reference", functionName, base, selector.Sel.Name)
 			}
 			return true
 		})
@@ -193,20 +226,10 @@ func TestDirectELFLoweringConsumesOnlyValidatedArenaEdges(t *testing.T) {
 			return true
 		})
 		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			name := ""
-			switch callee := call.Fun.(type) {
-			case *ast.Ident:
-				name = callee.Name
-			case *ast.SelectorExpr:
-				name = callee.Sel.Name
-			}
+			name := astReferencedName(node)
 			switch name {
 			case "documentView", "toKIRDocument", "validatedMIRDocument", "DecodeKIR", "MarshalKIR":
-				t.Errorf("%s lowering calls recursive KIR or wire helper %s", fileName, name)
+				t.Errorf("%s lowering references recursive KIR or wire helper %s", fileName, name)
 			}
 			return true
 		})
@@ -214,7 +237,7 @@ func TestDirectELFLoweringConsumesOnlyValidatedArenaEdges(t *testing.T) {
 }
 
 func TestInterpreterArenaAdaptersKeepEdgesOutsideRecursiveKIRNodes(t *testing.T) {
-	program, checker := testProgram(t, "fn main() -> Nil { let value: Int = 1; println(value); return nil }\n")
+	program, checker := testProgram(t, "fn choose(value: Int = 7) -> Int { return value }\nfn main() -> Nil { let value: Int = choose(); match value { 7 => { println(\"seven\") } _ => { println(\"other\") } }; return nil }\n")
 	mir, err := CompileMIR(program, checker, NativeTarget{OS: "linux", Arch: "amd64"})
 	if err != nil {
 		t.Fatal(err)
@@ -260,16 +283,49 @@ func TestInterpreterArenaAdaptersKeepEdgesOutsideRecursiveKIRNodes(t *testing.T)
 		if parameter == nil || !parameter.arenaRef.Present || parameter.arenaRef.Index != MIRIndex(index) {
 			t.Fatalf("arena parameter adapter %d has reference %+v", index, parameter)
 		}
+		if parameter.Default != nil {
+			t.Fatalf("arena parameter adapter %d contains recursive default data", index)
+		}
+	}
+	if len(view.parameters) == 0 {
+		t.Fatal("test KIR must exercise at least one parameter adapter")
+	}
+	var foundDefault bool
+	for _, function := range view.functions {
+		if function == nil || len(function.Params) == 0 {
+			continue
+		}
+		if expression := view.parameterDefault(function.Params[0]); expression != nil {
+			foundDefault = true
+			if !expression.arenaRef.Present {
+				t.Fatal("default expression adapter is missing its arena reference")
+			}
+		}
+	}
+	if !foundDefault {
+		t.Fatal("test KIR did not retain a default expression through its arena reference")
 	}
 	for index, pattern := range view.patterns {
 		if pattern == nil || !pattern.arenaRef.Present || pattern.arenaRef.Index != MIRIndex(index) {
 			t.Fatalf("arena pattern adapter %d has reference %+v", index, pattern)
 		}
+		if pattern.ResolvedBinding != nil {
+			t.Fatalf("arena pattern adapter %d contains recursive binding data", index)
+		}
+	}
+	if len(view.patterns) == 0 {
+		t.Fatal("test KIR must exercise at least one pattern adapter")
 	}
 	for index, arm := range view.arms {
 		if arm == nil || !arm.arenaRef.Present || arm.arenaRef.Index != MIRIndex(index) {
 			t.Fatalf("arena match-arm adapter %d has reference %+v", index, arm)
 		}
+		if arm.Pattern == nil || arm.Body != nil {
+			t.Fatalf("arena match-arm adapter %d must keep children in the validated arena", index)
+		}
+	}
+	if len(view.arms) == 0 {
+		t.Fatal("test KIR must exercise at least one match-arm adapter")
 	}
 }
 
@@ -304,9 +360,12 @@ func TestCompileMIRBuildsFlatArenaWithoutRecursiveKIRDocument(t *testing.T) {
 		t.Fatal("CompileMIR does not build the arena directly from checked source")
 	}
 	for _, forbidden := range []string{"buildKIRDocument", "validateKIRDocument", "newKIRArena", "documentView", "toKIRDocument"} {
-		if compileCalls[forbidden] {
-			t.Errorf("CompileMIR constructs or validates through recursive KIR helper %s", forbidden)
-		}
+		ast.Inspect(compile.Body, func(node ast.Node) bool {
+			if astReferencedName(node) == forbidden {
+				t.Errorf("CompileMIR references recursive KIR helper %s", forbidden)
+			}
+			return true
+		})
 	}
 
 	file, err = parser.ParseFile(token.NewFileSet(), "kir_arena_builder.go", nil, parser.AllErrors)
@@ -315,19 +374,8 @@ func TestCompileMIRBuildsFlatArenaWithoutRecursiveKIRDocument(t *testing.T) {
 	}
 	for _, forbidden := range []string{"buildKIRDocument", "validateKIRDocument", "newKIRArena", "documentView", "toKIRDocument", "kirExpr", "kirStmt", "kirStmts", "kirLambda"} {
 		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			name := ""
-			switch callee := call.Fun.(type) {
-			case *ast.Ident:
-				name = callee.Name
-			case *ast.SelectorExpr:
-				name = callee.Sel.Name
-			}
-			if name == forbidden {
-				t.Errorf("direct source arena builder calls recursive KIR helper %s", forbidden)
+			if astReferencedName(node) == forbidden {
+				t.Errorf("direct source arena builder references recursive KIR helper %s", forbidden)
 			}
 			return true
 		})
@@ -360,12 +408,9 @@ func TestCompileMIRBuildsFlatArenaWithoutRecursiveKIRDocument(t *testing.T) {
 			continue
 		}
 		ast.Inspect(function.Body, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if identifier, ok := call.Fun.(*ast.Ident); ok && (identifier.Name == "kirExpr" || identifier.Name == "kirLambda" || identifier.Name == "kirValue") {
-				t.Errorf("scalar expression lowering calls recursive tree builder %s", identifier.Name)
+			name := astReferencedName(node)
+			if name == "kirExpr" || name == "kirLambda" || name == "kirValue" {
+				t.Errorf("scalar expression lowering references recursive tree builder %s", name)
 			}
 			return true
 		})
@@ -385,20 +430,10 @@ func TestRuntimePreparationDoesNotMaterializeRecursiveKIR(t *testing.T) {
 			continue
 		}
 		ast.Inspect(function.Body, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			name := ""
-			switch callee := call.Fun.(type) {
-			case *ast.Ident:
-				name = callee.Name
-			case *ast.SelectorExpr:
-				name = callee.Sel.Name
-			}
+			name := astReferencedName(node)
 			switch name {
 			case "documentView", "toKIRDocument", "validateKIRDocument":
-				t.Errorf("runtime preparation calls %s after MIR validation", name)
+				t.Errorf("runtime preparation references %s after MIR validation", name)
 			}
 			return true
 		})
@@ -414,13 +449,12 @@ func TestCAOTLoweringUsesFlatValidatedMIRRows(t *testing.T) {
 			t.Fatalf("parse %s: %v", fileName, err)
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			identifier, ok := call.Fun.(*ast.Ident)
+			// Inspect every reference, not only bare function calls: method
+			// selectors and aliases such as view := mir.documentView would
+			// otherwise bypass the lowering boundary guard.
+			identifier, ok := node.(*ast.Ident)
 			if ok && (identifier.Name == "documentView" || identifier.Name == "toKIRDocument") {
-				t.Errorf("C AOT lowering in %s reconstructs a recursive KIR document", fileName)
+				t.Errorf("C AOT lowering in %s reconstructs or aliases a recursive KIR document", fileName)
 			}
 			return true
 		})
@@ -558,27 +592,15 @@ func TestNativeCapabilityPreflightTraversesValidatedArena(t *testing.T) {
 				t.Fatalf("%s does not declare %s", fileName, functionName)
 			}
 			ast.Inspect(function.Body, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				name := ""
-				switch callee := call.Fun.(type) {
-				case *ast.Ident:
-					name = callee.Name
-				case *ast.SelectorExpr:
-					name = callee.Sel.Name
-				}
-				switch name {
-				case "documentView", "toKIRDocument", "DecodeKIR":
-					t.Errorf("%s.%s uses recursive wire view %s during capability preflight", fileName, functionName, name)
+				switch name := astReferencedName(node); name {
+				case "documentView", "toKIRDocument", "DecodeKIR", "DecodeMIR":
+					t.Errorf("%s.%s references recursive wire view %s during capability preflight", fileName, functionName, name)
 				}
 				return true
 			})
 		}
 	}
 }
-
 func TestDirectPECapabilitiesAreCheckedBeforeAnyEmissionPath(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "kir_machine_pe.go", nil, parser.AllErrors)
 	if err != nil {
@@ -613,8 +635,12 @@ func TestDirectPECapabilitiesAreCheckedBeforeAnyEmissionPath(t *testing.T) {
 			preflight = call.Pos()
 		case "directStaticOutputMIR":
 			staticLowering = call.Pos()
-		case "documentView":
-			recursiveView = call.Pos()
+		}
+		return true
+	})
+	ast.Inspect(lowerer.Body, func(node ast.Node) bool {
+		if astReferencedName(node) == "documentView" {
+			recursiveView = node.Pos()
 		}
 		return true
 	})
@@ -650,20 +676,10 @@ func TestDirectPEStaticLowererConsumesOnlyTheValidatedArena(t *testing.T) {
 			return true
 		})
 		ast.Inspect(function.Body, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			name := ""
-			switch callee := call.Fun.(type) {
-			case *ast.Ident:
-				name = callee.Name
-			case *ast.SelectorExpr:
-				name = callee.Sel.Name
-			}
+			name := astReferencedName(node)
 			switch name {
 			case "documentView", "toKIRDocument", "DecodeKIR":
-				t.Errorf("%s reconstructs a recursive KIR document through %s", function.Name.Name, name)
+				t.Errorf("%s references a recursive KIR document helper %s", function.Name.Name, name)
 			}
 			return true
 		})
@@ -695,14 +711,15 @@ func TestDirectPEStaticLowererConsumesOnlyTheValidatedArena(t *testing.T) {
 		if !ok {
 			return true
 		}
-		selector, ok := call.Fun.(*ast.SelectorExpr)
-		if ok && selector.Sel.Name == "documentView" {
-			recursiveViewPos = call.Pos()
-			return true
-		}
 		identifier, ok := call.Fun.(*ast.Ident)
 		if ok && identifier.Name == "directStaticOutputMIR" {
 			staticPos = call.Pos()
+		}
+		return true
+	})
+	ast.Inspect(lowerer.Body, func(node ast.Node) bool {
+		if astReferencedName(node) == "documentView" {
+			recursiveViewPos = node.Pos()
 		}
 		return true
 	})
@@ -741,19 +758,9 @@ func TestDirectPEDynamicLoweringFollowsValidatedArenaReferences(t *testing.T) {
 		}
 		if function.Body != nil {
 			ast.Inspect(function.Body, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				name := ""
-				switch callee := call.Fun.(type) {
-				case *ast.Ident:
-					name = callee.Name
-				case *ast.SelectorExpr:
-					name = callee.Sel.Name
-				}
+				name := astReferencedName(node)
 				if name == "documentView" || name == "toKIRDocument" || name == "validateKIRDocument" {
-					t.Errorf("PE dynamic lowerer %s reconstructs or revalidates recursive KIR via %s", function.Name.Name, name)
+					t.Errorf("PE dynamic lowerer %s references a recursive KIR helper %s", function.Name.Name, name)
 				}
 				return true
 			})
@@ -809,13 +816,9 @@ func TestDirectELFStaticLowererConsumesOnlyTheValidatedArena(t *testing.T) {
 		return true
 	})
 	ast.Inspect(staticLowerer.Body, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		selector, ok := call.Fun.(*ast.SelectorExpr)
-		if ok && selector.Sel.Name == "documentView" {
-			t.Error("directStaticKIROutput reconstructs the recursive KIR document")
+		switch astReferencedName(node) {
+		case "documentView", "toKIRDocument", "DecodeKIR", "DecodeMIR":
+			t.Errorf("directStaticKIROutput references recursive KIR conversion %s", astReferencedName(node))
 		}
 		return true
 	})

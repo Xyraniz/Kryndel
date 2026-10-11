@@ -1,13 +1,21 @@
 import "dynamic_backend"
+import "validated_kir"
+
+fn read_validated_kir(input: String) -> Result[ValidatedKIR, String] {
+    let source: String = result_unwrap(fs_read_text(input))
+    let document: Json = result_unwrap(json_parse(source))
+    let validated: Result[ValidatedKIR, String] = validate_kir_document(document)
+    if is_err(validated) { return err("KIR validation failed: " + unwrap_or(result_error(validated), "invalid document")) }
+    return validated
+}
 
 fn main() -> Nil {
     let args: Array[String] = process_args()
     assert_eq(len(args), 2)
     let input: String = args[0]
     let output: String = args[1]
-    let source: String = result_unwrap(fs_read_text(input))
-    let document: Json = result_unwrap(json_parse(source))
-    let executable: Bytes = result_unwrap(compile_document(document))
+    let kir: ValidatedKIR = result_unwrap(read_validated_kir(input))
+    let executable: Bytes = result_unwrap(compile_validated_kir(kir))
     result_unwrap(fs_write_bytes(output, executable))
     return nil
 }

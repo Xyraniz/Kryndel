@@ -124,13 +124,13 @@ func TestSelfhostValidatorContractsMatchSupportedKIRWireFields(t *testing.T) {
 		t.Fatalf("read selfhost KIR validator: %v", err)
 	}
 	validatorText := string(validator)
-	documentValidator := selfhostFunctionSection(validatorText, "validate_kir_document_mode")
-	traitReject := `if result_unwrap(json_array_len(result_unwrap(traits))) != 0 || result_unwrap(json_array_len(result_unwrap(trait_impls))) != 0 { return err("selfhost backends do not support KIR trait declarations") }`
+	documentValidator := selfhostFunctionSection(validatorText, "validate_kir_typed_arena")
+	traitReject := `if result_unwrap(kir_typed_array_len(result_unwrap(traits))) != 0 || result_unwrap(kir_typed_array_len(result_unwrap(trait_impls))) != 0 { return err("selfhost backends do not support KIR trait declarations") }`
 	if rejectAt := strings.Index(documentValidator, traitReject); rejectAt < 0 || rejectAt > strings.Index(documentValidator, "validate_structs(") {
 		t.Fatal("selfhost KIR validator must reject non-empty trait arrays before declaration validation")
 	}
 	functionValidator := selfhostFunctionSection(validatorText, "validate_functions")
-	captureReject := `if result_unwrap(json_array_len(result_unwrap(captures))) != 0 { return err("selfhost backends reject captured functions") }`
+	captureReject := `if result_unwrap(kir_typed_array_len(result_unwrap(captures))) != 0 { return err("selfhost backends reject captured functions") }`
 	if rejectAt := strings.Index(functionValidator, captureReject); rejectAt < 0 || rejectAt > strings.Index(functionValidator, "validate_binding(") {
 		t.Fatal("selfhost KIR validator must reject captured functions before validating capture entries")
 	}
@@ -217,7 +217,7 @@ func selfhostKIRAllowedFields() map[string]string {
 
 func selfhostKIRValidatorOwners() map[string]string {
 	return map[string]string{
-		"KIRTarget": "validate_kir_document_mode", "KIRDocument": "validate_kir_document_mode",
+		"KIRTarget": "validate_kir_typed_arena", "KIRDocument": "validate_kir_typed_arena",
 		"KIRSourceSpan": "validate_v6_span", "KIRImport": "validate_v6_metadata",
 		"KIRStruct": "validate_structs", "KIRField": "validate_structs", "KIRTypeParam": "validate_structs",
 		"KIREnum": "validate_enums", "KIRParam": "validate_functions", "KIRBinding": "validate_binding",

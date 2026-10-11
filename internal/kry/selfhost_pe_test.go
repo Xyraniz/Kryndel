@@ -13,6 +13,11 @@ import (
 
 func runSelfhostPEBackend(t *testing.T, source string) ([]byte, error) {
 	t.Helper()
+	return runSelfhostPEBackendWithBudget(t, source, DefaultLimits().MaxInstructions)
+}
+
+func runSelfhostPEBackendWithBudget(t *testing.T, source string, maxInstructions uint64) ([]byte, error) {
+	t.Helper()
 	program, d := Parse(&Source{Name: "selfhost-pe-stage38.kry", Text: source}, DefaultLimits())
 	if d != nil {
 		t.Fatal(d.Message)
@@ -45,19 +50,42 @@ func runSelfhostPEBackend(t *testing.T, source string) ([]byte, error) {
 		t.Fatal(err)
 	}
 	limits := DefaultLimits()
+	limits.MaxInstructions = maxInstructions
 	limits.MaxWallTimeMS = 180_000
 	r, d := NewRuntimeWithArgs(backendProgram, backendChecker, limits, Sandbox{}, []string{kirPath, outputPath})
 	if d != nil {
 		t.Fatal(d.Message)
 	}
 	if d = r.run(); d != nil {
+		t.Logf("selfhost portable PE backend stopped after %d/%d instructions", r.Ctx.Instructions, limits.MaxInstructions)
 		return nil, d
 	}
+	t.Logf("selfhost portable PE backend used %d instructions", r.Ctx.Instructions)
 	image, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return image, nil
+}
+
+func TestSelfhostDynamicBackendCompilesFunctionLocalDerivedFromParameter(t *testing.T) {
+	const source = `
+fn add_one(value: Int) -> Int {
+    let result: Int = value + 1
+    return result
+}
+
+fn main() -> Nil {
+    println(str(add_one(41)))
+}
+`
+	image, err := runSelfhostPEBackend(t, source)
+	if err != nil {
+		t.Fatalf("selfhost dynamic backend failed on a local derived from a parameter: %v", err)
+	}
+	if _, err := pe.NewFile(bytes.NewReader(image)); err != nil {
+		t.Fatalf("Go PE parser rejected generated image: %v", err)
+	}
 }
 
 func TestSelfhostPEBackendProcessArgsWindows(t *testing.T) {
@@ -309,7 +337,9 @@ fn main() -> Nil {
     println(words_with_second[1])
 }
 `
-	image, d := runSelfhostPEBackend(t, source)
+	// Portable decoding and typed semantic validation precede native lowering.
+	// This fixture used 5,704,824 instructions; allow less than 10% headroom.
+	image, d := runSelfhostPEBackendWithBudget(t, source, 6_250_000)
 	if d != nil {
 		t.Fatalf("selfhost PE backend rejected array_push: %v", d)
 	}
@@ -385,7 +415,9 @@ fn main() -> Nil {
     println(modes[1])
 }
 `
-	image, d := runSelfhostPEBackend(t, source)
+	// Portable decoding and typed semantic validation precede native lowering.
+	// This fixture used 6,632,291 instructions; allow less than 10% headroom.
+	image, d := runSelfhostPEBackendWithBudget(t, source, 7_250_000)
 	if d != nil {
 		t.Fatalf("selfhost PE backend rejected array_concat: %v", d)
 	}
@@ -1294,9 +1326,9 @@ fn main() -> Nil {
 	}
 	limits := DefaultLimits()
 	// The source compiler now validates and traverses the schema-shaped typed
-	// KIR tables as well as parsing the compiler module graph. Keep a measured,
-	// finite budget for this larger self-hosted compile path.
-	limits.MaxInstructions = 8_000_000
+	// KIR tables as well as parsing the compiler module graph. This fixture used
+	// 8,529,362 instructions; retain about 5% headroom without changing CLI limits.
+	limits.MaxInstructions = 9_000_000
 	limits.MaxWallTimeMS = 180_000
 	r, d := NewRuntimeWithArgs(compilerProgram, compilerChecker, limits, Sandbox{}, []string{sourcePath, outputPath, "windows-amd64"})
 	if d != nil {

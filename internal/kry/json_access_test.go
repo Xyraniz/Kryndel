@@ -112,8 +112,8 @@ fn main() -> Nil { return nil }
 	if diagnostic != nil {
 		t.Fatal(diagnostic.Message)
 	}
-	if _, diagnostic = Check(program, DefaultLimits()); diagnostic == nil || !strings.Contains(diagnostic.Message, "json_object_keys expects Json") {
-		t.Fatalf("expected Json parameter diagnostic, got %#v", diagnostic)
+	if _, diagnostic = Check(program, DefaultLimits()); diagnostic == nil || !strings.Contains(diagnostic.Message, "builtin 'json_object_keys' argument 1 expected Json, found String") {
+		t.Fatalf("expected Json argument type mismatch diagnostic, got %#v", diagnostic)
 	}
 }
 func TestJSONObjectKeysRespectArrayElementLimit(t *testing.T) {
@@ -174,8 +174,8 @@ fn main() -> Nil { return nil }
 	if diagnostic != nil {
 		t.Fatal(diagnostic.Message)
 	}
-	if _, diagnostic = Check(program, DefaultLimits()); diagnostic == nil || !strings.Contains(diagnostic.Message, "json_object_keys_allowed expects Json and String") {
-		t.Fatalf("expected Json parameter diagnostic, got %#v", diagnostic)
+	if _, diagnostic = Check(program, DefaultLimits()); diagnostic == nil || !strings.Contains(diagnostic.Message, "builtin 'json_object_keys_allowed' argument 1 expected Json, found String") {
+		t.Fatalf("expected Json argument type mismatch diagnostic, got %#v", diagnostic)
 	}
 }
 

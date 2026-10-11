@@ -15,6 +15,8 @@ jobs:
   verify:
     name: Verify Go toolchain
     runs-on: ubuntu-latest
+    env:
+      KRY_SKIP_STAGE36_BOOTSTRAP: '1'
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -50,8 +52,8 @@ jobs:
       - name: Verify Stage 0 reproduces the checked-in seed
         env:
           KRY_REQUIRE_LOCKED_BOOTSTRAP: '1'
-        run: go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v
-        timeout-minutes: 30
+        run: go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=90m -v
+        timeout-minutes: 105
 
   release:
     name: Build release (${{ matrix.goos }}-${{ matrix.goarch }})

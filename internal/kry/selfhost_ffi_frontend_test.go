@@ -46,42 +46,15 @@ func loadSelfhostFFIFrontend(t *testing.T) selfhostFFIFrontend {
 		t.Fatal(err)
 	}
 	selfhostDir := filepath.Join(root, "..", "..", "selfhost")
-	source, err := os.ReadFile(filepath.Join(selfhostDir, "source_kir_compiler.kry"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// In this test-only copy, return the parsed KIR document instead of invoking
-	// the dynamic backend. FFI parsing/serialization can then be tested before
-	// backend lowering, which does not implement these builtins yet.
-	const backendCall = "    return compile_validated_kir(result_unwrap(validated))"
-	const rawKIRReturn = "    return ok(string_to_bytes(json_stringify(result_unwrap(document))))"
-	frontendSource := strings.ReplaceAll(string(source), "\r\n", "\n")
-	if count := strings.Count(frontendSource, backendCall); count != 1 {
-		t.Fatalf("source compiler backend call appears %d times, want exactly one instrumentation point", count)
-	}
-	frontendSource = strings.Replace(frontendSource, backendCall, rawKIRReturn, 1)
-
-	modulesDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(modulesDir, "source_kir_compiler.kry"), []byte(frontendSource), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, module := range []string{"dynamic_backend.kry", "elf_backend.kry", "native_image.kry", "pe_backend.kry", "validated_kir.kry", "kir_typed_arena.kry", "kir_arena.kry"} {
-		contents, err := os.ReadFile(filepath.Join(selfhostDir, module))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(modulesDir, module), contents, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	program, diagnostic := LoadProgram(filepath.Join(modulesDir, "source_kir_compiler.kry"), DefaultLimits(), "")
+	// --emit-kir now serializes the shared validated arena after source parsing;
+	// exercise that production path without rewriting a compiler return site.
+	program, diagnostic := LoadProgram(filepath.Join(selfhostDir, "source_kir_compiler.kry"), DefaultLimits(), "")
 	if diagnostic != nil {
-		t.Fatalf("load instrumented selfhost source frontend: %s", diagnostic.Message)
+		t.Fatalf("load selfhost source frontend: %s", diagnostic.Message)
 	}
 	checker, diagnostic := Check(program, DefaultLimits())
 	if diagnostic != nil {
-		t.Fatalf("check instrumented selfhost source frontend: %s", diagnostic.Message)
+		t.Fatalf("check selfhost source frontend: %s", diagnostic.Message)
 	}
 	limits := DefaultLimits()
 	limits.MaxWallTimeMS = 180_000
@@ -96,7 +69,7 @@ func (frontend selfhostFFIFrontend) compile(t *testing.T, source string) ([]byte
 	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runtime, diagnostic := NewRuntimeWithArgs(frontend.program, frontend.checker, frontend.limits, Sandbox{}, []string{sourcePath, outputPath})
+	runtime, diagnostic := NewRuntimeWithArgs(frontend.program, frontend.checker, frontend.limits, Sandbox{}, []string{"--emit-kir", sourcePath, outputPath})
 	if diagnostic != nil {
 		return nil, diagnostic
 	}

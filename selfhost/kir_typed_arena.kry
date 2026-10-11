@@ -82,20 +82,20 @@ pub struct KIRTypedTarget {
 }
 
 pub struct KIRTypedImport {
-    private path: String,
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
+    path: String,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
 }
 
 pub struct KIRTypedTypeParam {
-    private name: String,
-    private constraint: String,
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
+    name: String,
+    constraint: String,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
 }
 
 pub struct KIRTypedBinding {
@@ -110,78 +110,78 @@ pub struct KIRTypedBinding {
 }
 
 pub struct KIRTypedField {
-    private name: String,
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
-    private public: Bool,
-    private type_name: String,
+    name: String,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
+    public: Bool,
+    type_name: String,
 }
 
 pub struct KIRTypedStruct {
-    private name: String,
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
-    private public: Bool,
-    private module: String,
-    private type_params: KIRIndexRange,
-    private fields: KIRIndexRange,
+    name: String,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
+    public: Bool,
+    module: String,
+    type_params: KIRIndexRange,
+    fields: KIRIndexRange,
 }
 
 pub struct KIRTypedEnum {
-    private name: String,
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
-    private public: Bool,
-    private module: String,
-    private variants: Array[String],
-    private variant_spans: KIRIndexRange,
+    name: String,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
+    public: Bool,
+    module: String,
+    variants: Array[String],
+    variant_spans: KIRIndexRange,
 }
 
 pub struct KIRTypedTraitMethod {
-    private name: String,
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
-    private params: KIRIndexRange,
-    private return_type: String,
+    name: String,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
+    params: KIRIndexRange,
+    return_type: String,
 }
 
 pub struct KIRTypedTrait {
-    private name: String,
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
-    private public: Bool,
-    private module: String,
-    private methods: KIRIndexRange,
+    name: String,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
+    public: Bool,
+    module: String,
+    methods: KIRIndexRange,
 }
 
 pub struct KIRTypedTraitImplMethod {
-    private name: String,
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
-    private target: String,
+    name: String,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
+    target: String,
 }
 
 pub struct KIRTypedTraitImpl {
-    private trait_name: String,
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
-    private for_type: String,
-    private module: String,
-    private methods: KIRIndexRange,
+    trait_name: String,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
+    for_type: String,
+    module: String,
+    methods: KIRIndexRange,
 }
 
 pub struct KIRTypedParameter {
@@ -196,7 +196,7 @@ pub struct KIRTypedParameter {
 }
 
 pub struct KIRTypedCapture {
-    private binding: KIRIndexRef,
+    binding: KIRIndexRef,
 }
 
 pub struct KIRTypedFunction {
@@ -229,7 +229,6 @@ pub struct KIRTypedExpression {
     int_value: Int,
     uint_value: UInt64,
     uint_bits: UInt8,
-    float_value: Float,
     float_text: String,
     bool_value: Bool,
     string_value: String,
@@ -307,29 +306,29 @@ pub struct KIRTypedDocumentHeader {
 }
 
 pub struct KIRTypedArm {
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
-    private pattern: KIRIndexRef,
-    private body: KIRIndexRange,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
+    pattern: KIRIndexRef,
+    body: KIRIndexRange,
 }
 
 pub struct KIRTypedPattern {
-    private kind: String,
-    private source: String,
-    private line: Int,
-    private column: Int,
-    private span: KIRIndexRef,
-    private bool_value: Bool,
-    private int_value: Int,
-    private string_value: String,
-    private type_name: String,
-    private variant: String,
-    private binding_name: String,
-    private present: Bool,
-    private ok: Bool,
-    private resolved_binding: KIRIndexRef,
+    kind: String,
+    source: String,
+    line: Int,
+    column: Int,
+    span: KIRIndexRef,
+    bool_value: Bool,
+    int_value: Int,
+    string_value: String,
+    type_name: String,
+    variant: String,
+    binding_name: String,
+    present: Bool,
+    ok: Bool,
+    resolved_binding: KIRIndexRef,
 }
 
 pub struct KIRTypedValue {
@@ -337,7 +336,6 @@ pub struct KIRTypedValue {
     int_value: Int,
     uint_value: UInt64,
     uint_bits: UInt8,
-    float_value: Float,
     float_text: String,
     bool_value: Bool,
     string_value: String,
@@ -378,6 +376,56 @@ pub struct KIRTypedReferences {
     private edges: Array[KIRIndexRef],
 }
 
+// Source parsing appends rows incrementally. Native Array is immutable, so a
+// direct append to a flat table would copy the entire table for every row.
+// Keep bounded chunks while building and flatten once before validation.
+pub struct KIRTypedSourceSpanRows {
+    private chunks: Array[Array[KIRTypedSourceSpan]],
+    private current: Array[KIRTypedSourceSpan],
+}
+
+pub struct KIRTypedIndexRefRows {
+    private chunks: Array[Array[KIRIndexRef]],
+    private current: Array[KIRIndexRef],
+}
+
+pub struct KIRTypedBindingRows {
+    private chunks: Array[Array[KIRTypedBinding]],
+    private current: Array[KIRTypedBinding],
+}
+
+pub struct KIRTypedValueRows {
+    private chunks: Array[Array[KIRTypedValue]],
+    private current: Array[KIRTypedValue],
+}
+
+pub struct KIRTypedExpressionRows {
+    private chunks: Array[Array[KIRTypedExpression]],
+    private current: Array[KIRTypedExpression],
+}
+
+pub struct KIRTypedStatementRows {
+    private chunks: Array[Array[KIRTypedStatement]],
+    private current: Array[KIRTypedStatement],
+}
+
+pub struct KIRTypedSourceBuildReferences {
+    private spans: KIRTypedSourceSpanRows,
+    private edges: KIRTypedIndexRefRows,
+}
+
+pub struct KIRTypedSourceBuildExecutable {
+    private bindings: KIRTypedBindingRows,
+    private expressions: KIRTypedExpressionRows,
+    private statements: KIRTypedStatementRows,
+}
+
+pub struct KIRTypedSourceBuilder {
+    private references: KIRTypedSourceBuildReferences,
+    private executable: KIRTypedSourceBuildExecutable,
+    private values: KIRTypedValueRows,
+}
+
 pub struct KIRTypedArena {
     private format: String,
     private version: Int,
@@ -389,22 +437,9 @@ pub struct KIRTypedArena {
     private executable: KIRTypedExecutable,
     private values: Array[KIRTypedValue],
     private references: KIRTypedReferences,
+    private source_builder: Option[KIRTypedSourceBuilder],
     private top_functions: KIRIndexRange,
     private top_statements: KIRIndexRange,
-}
-
-struct KIRTypedViewShape {
-    mode: KIRTypedViewMode,
-    reference: KIRIndexRef,
-    range: KIRIndexRange,
-    direct_table: KIRTypedTable,
-    direct_start: Int,
-    direct_count: Int,
-    strings: Array[String],
-    bytes: Array[UInt8],
-    text: String,
-    number_text: String,
-    boolean: Bool,
 }
 
 pub fn kir_typed_empty_arena() -> KIRTypedArena {
@@ -422,8 +457,32 @@ pub fn kir_typed_empty_arena() -> KIRTypedArena {
             arms: [], patterns: [],
         },
         values: [], references: KIRTypedReferences{ spans: [], edges: [] },
+        source_builder: none(),
         top_functions: empty_functions, top_statements: empty_statements,
     }
+}
+
+fn kir_typed_empty_source_builder() -> KIRTypedSourceBuilder {
+    return KIRTypedSourceBuilder{
+        references: KIRTypedSourceBuildReferences{
+            spans: KIRTypedSourceSpanRows{ chunks: [], current: [] },
+            edges: KIRTypedIndexRefRows{ chunks: [], current: [] },
+        },
+        executable: KIRTypedSourceBuildExecutable{
+            bindings: KIRTypedBindingRows{ chunks: [], current: [] },
+            expressions: KIRTypedExpressionRows{ chunks: [], current: [] },
+            statements: KIRTypedStatementRows{ chunks: [], current: [] },
+        },
+        values: KIRTypedValueRows{ chunks: [], current: [] },
+    }
+}
+
+fn typed_with_source_builder(arena: KIRTypedArena, builder: Option[KIRTypedSourceBuilder]) -> KIRTypedArena {
+    return KIRTypedArena{ format: arena.format, version: arena.version, language_version: arena.language_version, module: arena.module, source: arena.source, target: arena.target, declarations: arena.declarations, executable: arena.executable, values: arena.values, references: arena.references, source_builder: builder, top_functions: arena.top_functions, top_statements: arena.top_statements }
+}
+
+pub fn kir_typed_empty_source_arena() -> KIRTypedArena {
+    return typed_with_source_builder(kir_typed_empty_arena(), some(kir_typed_empty_source_builder()))
 }
 
 pub fn kir_typed_arena_table_counts(arena: KIRTypedArena) -> Array[Int] {
@@ -468,10 +527,42 @@ fn kir_typed_table_len(arena: KIRTypedArena, table: KIRTypedTable) -> Result[Int
 }
 
 pub fn kir_typed_reference_valid(arena: KIRTypedArena, reference: KIRIndexRef) -> Bool {
-    if !reference.present { return true }
+    if !reference.present { return reference.index == 0 }
     let count: Result[Int, String] = kir_typed_table_len(arena, reference.table)
     if is_err(count) { return false }
     return reference.index >= 0 && reference.index < result_unwrap(count)
+}
+
+pub fn kir_typed_span_count(arena: KIRTypedArena) -> Int {
+    return len(arena.references.spans)
+}
+
+pub fn kir_typed_span_at(arena: KIRTypedArena, reference: KIRIndexRef) -> Result[KIRTypedSourceSpan, String] {
+    if !reference.present || reference.table != KIRTypedTable::KIRTableSpans || !kir_typed_reference_valid(arena, reference) {
+        return err("typed KIR source span reference is out of bounds")
+    }
+    let spans: Array[KIRTypedSourceSpan] = arena.references.spans
+    let value: Option[KIRTypedSourceSpan] = array_get(spans, reference.index)
+    if is_none(value) { return err("typed KIR source span reference is out of bounds") }
+    return ok(spans[reference.index])
+}
+
+pub fn kir_typed_span_row_at(arena: KIRTypedArena, index: Int) -> Result[KIRTypedSourceSpan, String] {
+    let spans: Array[KIRTypedSourceSpan] = arena.references.spans
+    let value: Option[KIRTypedSourceSpan] = array_get(spans, index)
+    if is_none(value) { return err("typed KIR source span index is out of bounds") }
+    return ok(spans[index])
+}
+
+pub fn kir_typed_binding_count(arena: KIRTypedArena) -> Int {
+    return len(arena.executable.bindings)
+}
+
+pub fn kir_typed_binding_at(arena: KIRTypedArena, index: Int) -> Result[KIRTypedBinding, String] {
+    let bindings: Array[KIRTypedBinding] = arena.executable.bindings
+    let value: Option[KIRTypedBinding] = array_get(bindings, index)
+    if is_none(value) { return err("typed KIR binding index is out of bounds") }
+    return ok(bindings[index])
 }
 
 pub fn kir_typed_range_valid(arena: KIRTypedArena, range: KIRIndexRange) -> Bool {
@@ -494,7 +585,7 @@ fn kir_typed_range_is(arena: KIRTypedArena, range: KIRIndexRange, table: KIRType
     let end: Int = range.start + range.count
     while index < end {
         let reference: KIRIndexRef = unwrap_or(array_get(references.edges, index), KIRIndexRef{ table: KIRTypedTable::KIRTableEdges, index: 0, present: false })
-        if reference.table != table || !kir_typed_reference_valid(arena, reference) { return false }
+        if !reference.present || reference.table != table || !kir_typed_reference_valid(arena, reference) { return false }
         index = index + 1
     }
     return true
@@ -509,109 +600,109 @@ pub fn kir_typed_arena_references_valid(arena: KIRTypedArena) -> Bool {
 
     let mut index: Int = 0
     while index < len(declarations.import_records) {
-        let row: KIRTypedImport = unwrap_or(array_get(declarations.import_records, index), KIRTypedImport{ path: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false } })
+        let row: KIRTypedImport = declarations.import_records[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) { return false }
         index = index + 1
     }
     index = 0
     while index < len(declarations.type_params) {
-        let row: KIRTypedTypeParam = unwrap_or(array_get(declarations.type_params, index), KIRTypedTypeParam{ name: "", constraint: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false } })
+        let row: KIRTypedTypeParam = declarations.type_params[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) { return false }
         index = index + 1
     }
     index = 0
     while index < len(executable.bindings) {
-        let row: KIRTypedBinding = unwrap_or(array_get(executable.bindings, index), KIRTypedBinding{ id: "", name: "", type_name: "", mutable: false, source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false } })
+        let row: KIRTypedBinding = executable.bindings[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) { return false }
         index = index + 1
     }
     index = 0
     while index < len(declarations.fields) {
-        let row: KIRTypedField = unwrap_or(array_get(declarations.fields, index), KIRTypedField{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, public: false, type_name: "" })
+        let row: KIRTypedField = declarations.fields[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) { return false }
         index = index + 1
     }
     index = 0
     while index < len(declarations.structs) {
-        let row: KIRTypedStruct = unwrap_or(array_get(declarations.structs, index), KIRTypedStruct{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, public: false, module: "", type_params: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, fields: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 } })
+        let row: KIRTypedStruct = declarations.structs[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_range_is(arena, row.type_params, KIRTypedTable::KIRTableTypeParams) || !kir_typed_range_is(arena, row.fields, KIRTypedTable::KIRTableFields) { return false }
         index = index + 1
     }
     index = 0
     while index < len(declarations.enums) {
-        let row: KIRTypedEnum = unwrap_or(array_get(declarations.enums, index), KIRTypedEnum{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, public: false, module: "", variants: [], variant_spans: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 } })
+        let row: KIRTypedEnum = declarations.enums[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_range_is(arena, row.variant_spans, KIRTypedTable::KIRTableSpans) || row.variant_spans.count != len(row.variants) { return false }
         index = index + 1
     }
     index = 0
     while index < len(declarations.trait_methods) {
-        let row: KIRTypedTraitMethod = unwrap_or(array_get(declarations.trait_methods, index), KIRTypedTraitMethod{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, params: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, return_type: "" })
+        let row: KIRTypedTraitMethod = declarations.trait_methods[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_range_is(arena, row.params, KIRTypedTable::KIRTableParameters) { return false }
         index = index + 1
     }
     index = 0
     while index < len(declarations.traits) {
-        let row: KIRTypedTrait = unwrap_or(array_get(declarations.traits, index), KIRTypedTrait{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, public: false, module: "", methods: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 } })
+        let row: KIRTypedTrait = declarations.traits[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_range_is(arena, row.methods, KIRTypedTable::KIRTableTraitMethods) { return false }
         index = index + 1
     }
     index = 0
     while index < len(declarations.trait_impl_methods) {
-        let row: KIRTypedTraitImplMethod = unwrap_or(array_get(declarations.trait_impl_methods, index), KIRTypedTraitImplMethod{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, target: "" })
+        let row: KIRTypedTraitImplMethod = declarations.trait_impl_methods[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) { return false }
         index = index + 1
     }
     index = 0
     while index < len(declarations.trait_impls) {
-        let row: KIRTypedTraitImpl = unwrap_or(array_get(declarations.trait_impls, index), KIRTypedTraitImpl{ trait_name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, for_type: "", module: "", methods: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 } })
+        let row: KIRTypedTraitImpl = declarations.trait_impls[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_range_is(arena, row.methods, KIRTypedTable::KIRTableTraitImplMethods) { return false }
         index = index + 1
     }
     index = 0
     while index < len(executable.parameters) {
-        let row: KIRTypedParameter = unwrap_or(array_get(executable.parameters, index), KIRTypedParameter{ name: "", type_name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, default_value: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false } })
+        let row: KIRTypedParameter = executable.parameters[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_ref_is(arena, row.default_value, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.binding, KIRTypedTable::KIRTableBindings) { return false }
         index = index + 1
     }
     index = 0
     while index < len(executable.captures) {
-        let row: KIRTypedCapture = unwrap_or(array_get(executable.captures, index), KIRTypedCapture{ binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false } })
+        let row: KIRTypedCapture = executable.captures[index]
         if !kir_typed_ref_is(arena, row.binding, KIRTypedTable::KIRTableBindings) { return false }
         index = index + 1
     }
     index = 0
     while index < len(executable.functions) {
-        let row: KIRTypedFunction = unwrap_or(array_get(executable.functions, index), KIRTypedFunction{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, public: false, worker: false, is_unsafe: false, trait_name: "", module: "", receiver: "", return_type: "", type_params: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, params: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, captures: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, body: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 } })
+        let row: KIRTypedFunction = executable.functions[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_range_is(arena, row.type_params, KIRTypedTable::KIRTableTypeParams) || !kir_typed_range_is(arena, row.params, KIRTypedTable::KIRTableParameters) || !kir_typed_range_is(arena, row.captures, KIRTypedTable::KIRTableCaptures) || !kir_typed_range_is(arena, row.body, KIRTypedTable::KIRTableStatements) { return false }
         index = index + 1
     }
     index = 0
     while index < len(executable.expressions) {
-        let row: KIRTypedExpression = unwrap_or(array_get(executable.expressions, index), KIRTypedExpression{ kind: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, type_name: "", constant: KIRIndexRef{ table: KIRTypedTable::KIRTableValues, index: 0, present: false }, int_value: 0, uint_value: u64(0), uint_bits: u8(0), float_value: 0.0, float_text: "", bool_value: false, string_value: "", name: "", operator: "", call_target: "", trait_name: "", builtin_id: "", left: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, right: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, operand: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, args: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, items: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, base: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, field: "", receiver: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, map_keys: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, struct_name: "", struct_type: "", generic_arguments: [], fields: [], values: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, enum_type: "", enum_variant: "", tail: false, callee: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, lambda: KIRIndexRef{ table: KIRTypedTable::KIRTableFunctions, index: 0, present: false }, binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false } })
+        let row: KIRTypedExpression = executable.expressions[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_ref_is(arena, row.constant, KIRTypedTable::KIRTableValues) || !kir_typed_ref_is(arena, row.left, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.right, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.operand, KIRTypedTable::KIRTableExpressions) || !kir_typed_range_is(arena, row.args, KIRTypedTable::KIRTableExpressions) || !kir_typed_range_is(arena, row.items, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.base, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.receiver, KIRTypedTable::KIRTableExpressions) || !kir_typed_range_is(arena, row.map_keys, KIRTypedTable::KIRTableExpressions) || !kir_typed_range_is(arena, row.values, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.callee, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.lambda, KIRTypedTable::KIRTableFunctions) || !kir_typed_ref_is(arena, row.binding, KIRTypedTable::KIRTableBindings) { return false }
         index = index + 1
     }
     index = 0
     while index < len(executable.statements) {
-        let row: KIRTypedStatement = unwrap_or(array_get(executable.statements, index), KIRTypedStatement{ kind: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, name: "", binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false }, mutable: false, is_const: false, annotation: "", init: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, expr: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, target: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, value: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, cond: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, then_body: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, else_body: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, body: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, iter: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, return_value: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, scrutinee: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, arms: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 } })
+        let row: KIRTypedStatement = executable.statements[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_ref_is(arena, row.binding, KIRTypedTable::KIRTableBindings) || !kir_typed_ref_is(arena, row.init, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.expr, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.target, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.value, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.cond, KIRTypedTable::KIRTableExpressions) || !kir_typed_range_is(arena, row.then_body, KIRTypedTable::KIRTableStatements) || !kir_typed_range_is(arena, row.else_body, KIRTypedTable::KIRTableStatements) || !kir_typed_range_is(arena, row.body, KIRTypedTable::KIRTableStatements) || !kir_typed_ref_is(arena, row.iter, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.return_value, KIRTypedTable::KIRTableExpressions) || !kir_typed_ref_is(arena, row.scrutinee, KIRTypedTable::KIRTableExpressions) || !kir_typed_range_is(arena, row.arms, KIRTypedTable::KIRTableArms) { return false }
         index = index + 1
     }
     index = 0
     while index < len(executable.arms) {
-        let row: KIRTypedArm = unwrap_or(array_get(executable.arms, index), KIRTypedArm{ source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, pattern: KIRIndexRef{ table: KIRTypedTable::KIRTablePatterns, index: 0, present: false }, body: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 } })
+        let row: KIRTypedArm = executable.arms[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_ref_is(arena, row.pattern, KIRTypedTable::KIRTablePatterns) || !kir_typed_range_is(arena, row.body, KIRTypedTable::KIRTableStatements) { return false }
         index = index + 1
     }
     index = 0
     while index < len(executable.patterns) {
-        let row: KIRTypedPattern = unwrap_or(array_get(executable.patterns, index), KIRTypedPattern{ kind: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, bool_value: false, int_value: 0, string_value: "", type_name: "", variant: "", binding_name: "", present: false, ok: false, resolved_binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false } })
+        let row: KIRTypedPattern = executable.patterns[index]
         if !kir_typed_ref_is(arena, row.span, KIRTypedTable::KIRTableSpans) || !kir_typed_ref_is(arena, row.resolved_binding, KIRTypedTable::KIRTableBindings) { return false }
         index = index + 1
     }
     index = 0
     while index < len(arena.values) {
-        let row: KIRTypedValue = unwrap_or(array_get(arena.values, index), KIRTypedValue{ kind: "", int_value: 0, uint_value: u64(0), uint_bits: u8(0), float_value: 0.0, float_text: "", bool_value: false, string_value: "", bytes: [], array: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }, inner: KIRIndexRef{ table: KIRTypedTable::KIRTableValues, index: 0, present: false }, present: false, ok: false })
+        let row: KIRTypedValue = arena.values[index]
         if !kir_typed_range_is(arena, row.array, KIRTypedTable::KIRTableValues) || !kir_typed_ref_is(arena, row.inner, KIRTypedTable::KIRTableValues) { return false }
         index = index + 1
     }
@@ -634,19 +725,31 @@ struct KIRTypedBuildRange {
 }
 
 fn typed_with_references(arena: KIRTypedArena, references: KIRTypedReferences) -> KIRTypedArena {
-    return KIRTypedArena{ format: arena.format, version: arena.version, language_version: arena.language_version, module: arena.module, source: arena.source, target: arena.target, declarations: arena.declarations, executable: arena.executable, values: arena.values, references: references, top_functions: arena.top_functions, top_statements: arena.top_statements }
+    return KIRTypedArena{ format: arena.format, version: arena.version, language_version: arena.language_version, module: arena.module, source: arena.source, target: arena.target, declarations: arena.declarations, executable: arena.executable, values: arena.values, references: references, source_builder: arena.source_builder, top_functions: arena.top_functions, top_statements: arena.top_statements }
 }
 
 fn typed_with_declarations(arena: KIRTypedArena, declarations: KIRTypedDeclarations) -> KIRTypedArena {
-    return KIRTypedArena{ format: arena.format, version: arena.version, language_version: arena.language_version, module: arena.module, source: arena.source, target: arena.target, declarations: declarations, executable: arena.executable, values: arena.values, references: arena.references, top_functions: arena.top_functions, top_statements: arena.top_statements }
+    return KIRTypedArena{ format: arena.format, version: arena.version, language_version: arena.language_version, module: arena.module, source: arena.source, target: arena.target, declarations: declarations, executable: arena.executable, values: arena.values, references: arena.references, source_builder: arena.source_builder, top_functions: arena.top_functions, top_statements: arena.top_statements }
 }
 
 fn typed_with_executable(arena: KIRTypedArena, executable: KIRTypedExecutable) -> KIRTypedArena {
-    return KIRTypedArena{ format: arena.format, version: arena.version, language_version: arena.language_version, module: arena.module, source: arena.source, target: arena.target, declarations: arena.declarations, executable: executable, values: arena.values, references: arena.references, top_functions: arena.top_functions, top_statements: arena.top_statements }
+    return KIRTypedArena{ format: arena.format, version: arena.version, language_version: arena.language_version, module: arena.module, source: arena.source, target: arena.target, declarations: arena.declarations, executable: executable, values: arena.values, references: arena.references, source_builder: arena.source_builder, top_functions: arena.top_functions, top_statements: arena.top_statements }
 }
 
 fn typed_with_values(arena: KIRTypedArena, values: Array[KIRTypedValue]) -> KIRTypedArena {
-    return KIRTypedArena{ format: arena.format, version: arena.version, language_version: arena.language_version, module: arena.module, source: arena.source, target: arena.target, declarations: arena.declarations, executable: arena.executable, values: values, references: arena.references, top_functions: arena.top_functions, top_statements: arena.top_statements }
+    return KIRTypedArena{ format: arena.format, version: arena.version, language_version: arena.language_version, module: arena.module, source: arena.source, target: arena.target, declarations: arena.declarations, executable: arena.executable, values: values, references: arena.references, source_builder: arena.source_builder, top_functions: arena.top_functions, top_statements: arena.top_statements }
+}
+
+pub fn kir_typed_finish_source_build(arena: KIRTypedArena) -> KIRTypedArena {
+    if is_none(arena.source_builder) { return arena }
+    let builder: KIRTypedSourceBuilder = unwrap_or(arena.source_builder, kir_typed_empty_source_builder())
+    let references: KIRTypedReferences = KIRTypedReferences{ spans: typed_source_span_rows_finish(builder.references.spans), edges: typed_index_ref_rows_finish(builder.references.edges) }
+    let executable: KIRTypedExecutable = KIRTypedExecutable{
+        functions: arena.executable.functions, parameters: arena.executable.parameters, captures: arena.executable.captures,
+        bindings: typed_binding_rows_finish(builder.executable.bindings), expressions: typed_expression_rows_finish(builder.executable.expressions),
+        statements: typed_statement_rows_finish(builder.executable.statements), arms: arena.executable.arms, patterns: arena.executable.patterns,
+    }
+    return KIRTypedArena{ format: arena.format, version: arena.version, language_version: arena.language_version, module: arena.module, source: arena.source, target: arena.target, declarations: arena.declarations, executable: executable, values: typed_value_rows_finish(builder.values), references: references, source_builder: none(), top_functions: arena.top_functions, top_statements: arena.top_statements }
 }
 
 // Source compilation builds typed rows through these append-only operations.
@@ -664,7 +767,194 @@ pub fn kir_typed_empty_edges() -> KIRIndexRange {
     return KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }
 }
 
+fn typed_source_span_rows_len(rows: KIRTypedSourceSpanRows) -> Int { return len(rows.chunks) * 512 + len(rows.current) }
+fn typed_source_span_rows_append(rows: KIRTypedSourceSpanRows, row: KIRTypedSourceSpan) -> KIRTypedSourceSpanRows {
+    let mut chunks: Array[Array[KIRTypedSourceSpan]] = rows.chunks
+    let mut current: Array[KIRTypedSourceSpan] = rows.current
+    if len(current) >= 512 { chunks = array_push(chunks, current); current = [] }
+    return KIRTypedSourceSpanRows{ chunks: chunks, current: array_push(current, row) }
+}
+fn typed_source_span_rows_finish(rows: KIRTypedSourceSpanRows) -> Array[KIRTypedSourceSpan] {
+    let mut chunks: Array[Array[KIRTypedSourceSpan]] = rows.chunks
+    if len(rows.current) > 0 { chunks = array_push(chunks, rows.current) }
+    while len(chunks) > 1 {
+        let mut merged: Array[Array[KIRTypedSourceSpan]] = []
+        let mut index: Int = 0
+        while index < len(chunks) {
+            let left: Array[KIRTypedSourceSpan] = unwrap_or(array_get(chunks, index), [])
+            if index + 1 < len(chunks) {
+                let right: Array[KIRTypedSourceSpan] = unwrap_or(array_get(chunks, index + 1), [])
+                merged = array_push(merged, array_concat(left, right))
+                index = index + 2
+            } else { merged = array_push(merged, left); index = index + 1 }
+        }
+        chunks = merged
+    }
+    return unwrap_or(array_get(chunks, 0), [])
+}
+
+fn typed_index_ref_rows_len(rows: KIRTypedIndexRefRows) -> Int { return len(rows.chunks) * 512 + len(rows.current) }
+fn typed_index_ref_rows_append(rows: KIRTypedIndexRefRows, row: KIRIndexRef) -> KIRTypedIndexRefRows {
+    let mut chunks: Array[Array[KIRIndexRef]] = rows.chunks
+    let mut current: Array[KIRIndexRef] = rows.current
+    if len(current) >= 512 { chunks = array_push(chunks, current); current = [] }
+    return KIRTypedIndexRefRows{ chunks: chunks, current: array_push(current, row) }
+}
+fn typed_index_ref_rows_finish(rows: KIRTypedIndexRefRows) -> Array[KIRIndexRef] {
+    let mut chunks: Array[Array[KIRIndexRef]] = rows.chunks
+    if len(rows.current) > 0 { chunks = array_push(chunks, rows.current) }
+    while len(chunks) > 1 {
+        let mut merged: Array[Array[KIRIndexRef]] = []
+        let mut index: Int = 0
+        while index < len(chunks) {
+            let left: Array[KIRIndexRef] = unwrap_or(array_get(chunks, index), [])
+            if index + 1 < len(chunks) {
+                let right: Array[KIRIndexRef] = unwrap_or(array_get(chunks, index + 1), [])
+                merged = array_push(merged, array_concat(left, right))
+                index = index + 2
+            } else { merged = array_push(merged, left); index = index + 1 }
+        }
+        chunks = merged
+    }
+    return unwrap_or(array_get(chunks, 0), [])
+}
+pub fn kir_typed_reference_rows_empty() -> KIRTypedIndexRefRows { return KIRTypedIndexRefRows{ chunks: [], current: [] } }
+pub fn kir_typed_reference_rows_append(rows: KIRTypedIndexRefRows, reference: KIRIndexRef) -> KIRTypedIndexRefRows { return typed_index_ref_rows_append(rows, reference) }
+pub fn kir_typed_reference_rows_append_all(rows: KIRTypedIndexRefRows, references: Array[KIRIndexRef]) -> KIRTypedIndexRefRows {
+    let mut updated: KIRTypedIndexRefRows = rows
+    let mut index: Int = 0
+    while index < len(references) { updated = typed_index_ref_rows_append(updated, unwrap_or(array_get(references, index), KIRIndexRef{ table: KIRTypedTable::KIRTableEdges, index: 0, present: false })); index = index + 1 }
+    return updated
+}
+pub fn kir_typed_reference_rows_finish(rows: KIRTypedIndexRefRows) -> Array[KIRIndexRef] { return typed_index_ref_rows_finish(rows) }
+
+fn typed_binding_rows_len(rows: KIRTypedBindingRows) -> Int { return len(rows.chunks) * 512 + len(rows.current) }
+fn typed_binding_rows_append(rows: KIRTypedBindingRows, row: KIRTypedBinding) -> KIRTypedBindingRows {
+    let mut chunks: Array[Array[KIRTypedBinding]] = rows.chunks
+    let mut current: Array[KIRTypedBinding] = rows.current
+    if len(current) >= 512 { chunks = array_push(chunks, current); current = [] }
+    return KIRTypedBindingRows{ chunks: chunks, current: array_push(current, row) }
+}
+fn typed_binding_rows_finish(rows: KIRTypedBindingRows) -> Array[KIRTypedBinding] {
+    let mut chunks: Array[Array[KIRTypedBinding]] = rows.chunks
+    if len(rows.current) > 0 { chunks = array_push(chunks, rows.current) }
+    while len(chunks) > 1 {
+        let mut merged: Array[Array[KIRTypedBinding]] = []
+        let mut index: Int = 0
+        while index < len(chunks) {
+            let left: Array[KIRTypedBinding] = unwrap_or(array_get(chunks, index), [])
+            if index + 1 < len(chunks) {
+                let right: Array[KIRTypedBinding] = unwrap_or(array_get(chunks, index + 1), [])
+                merged = array_push(merged, array_concat(left, right))
+                index = index + 2
+            } else { merged = array_push(merged, left); index = index + 1 }
+        }
+        chunks = merged
+    }
+    return unwrap_or(array_get(chunks, 0), [])
+}
+
+fn typed_value_rows_len(rows: KIRTypedValueRows) -> Int { return len(rows.chunks) * 512 + len(rows.current) }
+fn typed_value_rows_append(rows: KIRTypedValueRows, row: KIRTypedValue) -> KIRTypedValueRows {
+    let mut chunks: Array[Array[KIRTypedValue]] = rows.chunks
+    let mut current: Array[KIRTypedValue] = rows.current
+    if len(current) >= 512 { chunks = array_push(chunks, current); current = [] }
+    return KIRTypedValueRows{ chunks: chunks, current: array_push(current, row) }
+}
+fn typed_value_rows_finish(rows: KIRTypedValueRows) -> Array[KIRTypedValue] {
+    let mut chunks: Array[Array[KIRTypedValue]] = rows.chunks
+    if len(rows.current) > 0 { chunks = array_push(chunks, rows.current) }
+    while len(chunks) > 1 {
+        let mut merged: Array[Array[KIRTypedValue]] = []
+        let mut index: Int = 0
+        while index < len(chunks) {
+            let left: Array[KIRTypedValue] = unwrap_or(array_get(chunks, index), [])
+            if index + 1 < len(chunks) {
+                let right: Array[KIRTypedValue] = unwrap_or(array_get(chunks, index + 1), [])
+                merged = array_push(merged, array_concat(left, right))
+                index = index + 2
+            } else { merged = array_push(merged, left); index = index + 1 }
+        }
+        chunks = merged
+    }
+    return unwrap_or(array_get(chunks, 0), [])
+}
+
+fn typed_expression_rows_len(rows: KIRTypedExpressionRows) -> Int { return len(rows.chunks) * 512 + len(rows.current) }
+fn typed_expression_rows_append(rows: KIRTypedExpressionRows, row: KIRTypedExpression) -> KIRTypedExpressionRows {
+    let mut chunks: Array[Array[KIRTypedExpression]] = rows.chunks
+    let mut current: Array[KIRTypedExpression] = rows.current
+    if len(current) >= 512 { chunks = array_push(chunks, current); current = [] }
+    return KIRTypedExpressionRows{ chunks: chunks, current: array_push(current, row) }
+}
+fn typed_expression_rows_finish(rows: KIRTypedExpressionRows) -> Array[KIRTypedExpression] {
+    let mut chunks: Array[Array[KIRTypedExpression]] = rows.chunks
+    if len(rows.current) > 0 { chunks = array_push(chunks, rows.current) }
+    while len(chunks) > 1 {
+        let mut merged: Array[Array[KIRTypedExpression]] = []
+        let mut index: Int = 0
+        while index < len(chunks) {
+            let left: Array[KIRTypedExpression] = unwrap_or(array_get(chunks, index), [])
+            if index + 1 < len(chunks) {
+                let right: Array[KIRTypedExpression] = unwrap_or(array_get(chunks, index + 1), [])
+                merged = array_push(merged, array_concat(left, right))
+                index = index + 2
+            } else { merged = array_push(merged, left); index = index + 1 }
+        }
+        chunks = merged
+    }
+    return unwrap_or(array_get(chunks, 0), [])
+}
+fn typed_expression_rows_set(rows: KIRTypedExpressionRows, index: Int, row: KIRTypedExpression) -> Result[KIRTypedExpressionRows, String] {
+    if index < 0 || index >= typed_expression_rows_len(rows) { return err("typed source expression index is out of bounds") }
+    let chunk_index: Int = index / 512
+    if chunk_index < len(rows.chunks) {
+        let chunk: Array[KIRTypedExpression] = unwrap_or(array_get(rows.chunks, chunk_index), [])
+        let changed_chunk: Result[Array[KIRTypedExpression], String] = array_set(chunk, index - chunk_index * 512, row)
+        if is_err(changed_chunk) { return err("typed source expression chunk index is out of bounds") }
+        let changed_chunks: Result[Array[Array[KIRTypedExpression]], String] = array_set(rows.chunks, chunk_index, result_unwrap(changed_chunk))
+        if is_err(changed_chunks) { return err("typed source expression table index is out of bounds") }
+        return ok(KIRTypedExpressionRows{ chunks: result_unwrap(changed_chunks), current: rows.current })
+    }
+    let changed_current: Result[Array[KIRTypedExpression], String] = array_set(rows.current, index - len(rows.chunks) * 512, row)
+    if is_err(changed_current) { return err("typed source expression table index is out of bounds") }
+    return ok(KIRTypedExpressionRows{ chunks: rows.chunks, current: result_unwrap(changed_current) })
+}
+
+fn typed_statement_rows_len(rows: KIRTypedStatementRows) -> Int { return len(rows.chunks) * 512 + len(rows.current) }
+fn typed_statement_rows_append(rows: KIRTypedStatementRows, row: KIRTypedStatement) -> KIRTypedStatementRows {
+    let mut chunks: Array[Array[KIRTypedStatement]] = rows.chunks
+    let mut current: Array[KIRTypedStatement] = rows.current
+    if len(current) >= 512 { chunks = array_push(chunks, current); current = [] }
+    return KIRTypedStatementRows{ chunks: chunks, current: array_push(current, row) }
+}
+fn typed_statement_rows_finish(rows: KIRTypedStatementRows) -> Array[KIRTypedStatement] {
+    let mut chunks: Array[Array[KIRTypedStatement]] = rows.chunks
+    if len(rows.current) > 0 { chunks = array_push(chunks, rows.current) }
+    while len(chunks) > 1 {
+        let mut merged: Array[Array[KIRTypedStatement]] = []
+        let mut index: Int = 0
+        while index < len(chunks) {
+            let left: Array[KIRTypedStatement] = unwrap_or(array_get(chunks, index), [])
+            if index + 1 < len(chunks) {
+                let right: Array[KIRTypedStatement] = unwrap_or(array_get(chunks, index + 1), [])
+                merged = array_push(merged, array_concat(left, right))
+                index = index + 2
+            } else { merged = array_push(merged, left); index = index + 1 }
+        }
+        chunks = merged
+    }
+    return unwrap_or(array_get(chunks, 0), [])
+}
+
 pub fn kir_typed_append_span(arena: KIRTypedArena, span: KIRTypedSourceSpan) -> KIRTypedAppendRef {
+    if !is_none(arena.source_builder) {
+        let builder: KIRTypedSourceBuilder = unwrap_or(arena.source_builder, kir_typed_empty_source_builder())
+        let index: Int = typed_source_span_rows_len(builder.references.spans)
+        let references: KIRTypedSourceBuildReferences = KIRTypedSourceBuildReferences{ spans: typed_source_span_rows_append(builder.references.spans, span), edges: builder.references.edges }
+        let updated_builder: KIRTypedSourceBuilder = KIRTypedSourceBuilder{ references: references, executable: builder.executable, values: builder.values }
+        return KIRTypedAppendRef{ arena: typed_with_source_builder(arena, some(updated_builder)), reference: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: index, present: true } }
+    }
     let references: KIRTypedReferences = arena.references
     let index: Int = len(references.spans)
     let updated: KIRTypedReferences = KIRTypedReferences{ spans: array_push(references.spans, span), edges: references.edges }
@@ -672,6 +962,19 @@ pub fn kir_typed_append_span(arena: KIRTypedArena, span: KIRTypedSourceSpan) -> 
 }
 
 pub fn kir_typed_append_edges(arena: KIRTypedArena, references_to_append: Array[KIRIndexRef]) -> KIRTypedAppendRange {
+    if !is_none(arena.source_builder) {
+        let builder: KIRTypedSourceBuilder = unwrap_or(arena.source_builder, kir_typed_empty_source_builder())
+        let start: Int = typed_index_ref_rows_len(builder.references.edges)
+        let mut rows: KIRTypedIndexRefRows = builder.references.edges
+        let mut edge_index: Int = 0
+        while edge_index < len(references_to_append) {
+            rows = typed_index_ref_rows_append(rows, unwrap_or(array_get(references_to_append, edge_index), KIRIndexRef{ table: KIRTypedTable::KIRTableEdges, index: 0, present: false }))
+            edge_index = edge_index + 1
+        }
+        let references: KIRTypedSourceBuildReferences = KIRTypedSourceBuildReferences{ spans: builder.references.spans, edges: rows }
+        let updated_builder: KIRTypedSourceBuilder = KIRTypedSourceBuilder{ references: references, executable: builder.executable, values: builder.values }
+        return KIRTypedAppendRange{ arena: typed_with_source_builder(arena, some(updated_builder)), range: KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: start, count: len(references_to_append) } }
+    }
     let references: KIRTypedReferences = arena.references
     let start: Int = len(references.edges)
     let mut edges: Array[KIRIndexRef] = references.edges
@@ -685,6 +988,13 @@ pub fn kir_typed_append_edges(arena: KIRTypedArena, references_to_append: Array[
 }
 
 pub fn kir_typed_append_binding(arena: KIRTypedArena, row: KIRTypedBinding) -> KIRTypedAppendRef {
+    if !is_none(arena.source_builder) {
+        let builder: KIRTypedSourceBuilder = unwrap_or(arena.source_builder, kir_typed_empty_source_builder())
+        let index: Int = typed_binding_rows_len(builder.executable.bindings)
+        let executable: KIRTypedSourceBuildExecutable = KIRTypedSourceBuildExecutable{ bindings: typed_binding_rows_append(builder.executable.bindings, row), expressions: builder.executable.expressions, statements: builder.executable.statements }
+        let updated_builder: KIRTypedSourceBuilder = KIRTypedSourceBuilder{ references: builder.references, executable: executable, values: builder.values }
+        return KIRTypedAppendRef{ arena: typed_with_source_builder(arena, some(updated_builder)), reference: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: index, present: true } }
+    }
     let executable: KIRTypedExecutable = arena.executable
     let index: Int = len(executable.bindings)
     let updated: KIRTypedExecutable = KIRTypedExecutable{ functions: executable.functions, parameters: executable.parameters, captures: executable.captures, bindings: array_push(executable.bindings, row), expressions: executable.expressions, statements: executable.statements, arms: executable.arms, patterns: executable.patterns }
@@ -692,11 +1002,24 @@ pub fn kir_typed_append_binding(arena: KIRTypedArena, row: KIRTypedBinding) -> K
 }
 
 pub fn kir_typed_append_value(arena: KIRTypedArena, row: KIRTypedValue) -> KIRTypedAppendRef {
+    if !is_none(arena.source_builder) {
+        let builder: KIRTypedSourceBuilder = unwrap_or(arena.source_builder, kir_typed_empty_source_builder())
+        let index: Int = typed_value_rows_len(builder.values)
+        let updated_builder: KIRTypedSourceBuilder = KIRTypedSourceBuilder{ references: builder.references, executable: builder.executable, values: typed_value_rows_append(builder.values, row) }
+        return KIRTypedAppendRef{ arena: typed_with_source_builder(arena, some(updated_builder)), reference: KIRIndexRef{ table: KIRTypedTable::KIRTableValues, index: index, present: true } }
+    }
     let index: Int = len(arena.values)
     return KIRTypedAppendRef{ arena: typed_with_values(arena, array_push(arena.values, row)), reference: KIRIndexRef{ table: KIRTypedTable::KIRTableValues, index: index, present: true } }
 }
 
 pub fn kir_typed_append_expression(arena: KIRTypedArena, row: KIRTypedExpression) -> KIRTypedAppendRef {
+    if !is_none(arena.source_builder) {
+        let builder: KIRTypedSourceBuilder = unwrap_or(arena.source_builder, kir_typed_empty_source_builder())
+        let index: Int = typed_expression_rows_len(builder.executable.expressions)
+        let executable: KIRTypedSourceBuildExecutable = KIRTypedSourceBuildExecutable{ bindings: builder.executable.bindings, expressions: typed_expression_rows_append(builder.executable.expressions, row), statements: builder.executable.statements }
+        let updated_builder: KIRTypedSourceBuilder = KIRTypedSourceBuilder{ references: builder.references, executable: executable, values: builder.values }
+        return KIRTypedAppendRef{ arena: typed_with_source_builder(arena, some(updated_builder)), reference: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: index, present: true } }
+    }
     let executable: KIRTypedExecutable = arena.executable
     let index: Int = len(executable.expressions)
     let updated: KIRTypedExecutable = KIRTypedExecutable{ functions: executable.functions, parameters: executable.parameters, captures: executable.captures, bindings: executable.bindings, expressions: array_push(executable.expressions, row), statements: executable.statements, arms: executable.arms, patterns: executable.patterns }
@@ -704,6 +1027,14 @@ pub fn kir_typed_append_expression(arena: KIRTypedArena, row: KIRTypedExpression
 }
 
 pub fn kir_typed_replace_expression(arena: KIRTypedArena, index: Int, row: KIRTypedExpression) -> Result[KIRTypedArena, String] {
+    if !is_none(arena.source_builder) {
+        let builder: KIRTypedSourceBuilder = unwrap_or(arena.source_builder, kir_typed_empty_source_builder())
+        let changed_rows: Result[KIRTypedExpressionRows, String] = typed_expression_rows_set(builder.executable.expressions, index, row)
+        if is_err(changed_rows) { return err(unwrap_or(result_error(changed_rows), "typed source expression index is out of bounds")) }
+        let executable: KIRTypedSourceBuildExecutable = KIRTypedSourceBuildExecutable{ bindings: builder.executable.bindings, expressions: result_unwrap(changed_rows), statements: builder.executable.statements }
+        let updated_builder: KIRTypedSourceBuilder = KIRTypedSourceBuilder{ references: builder.references, executable: executable, values: builder.values }
+        return ok(typed_with_source_builder(arena, some(updated_builder)))
+    }
     let executable: KIRTypedExecutable = arena.executable
     let updated_rows: Result[Array[KIRTypedExpression], String] = array_set(executable.expressions, index, row)
     if is_err(updated_rows) { return err("typed source expression index is out of bounds") }
@@ -712,6 +1043,13 @@ pub fn kir_typed_replace_expression(arena: KIRTypedArena, index: Int, row: KIRTy
 }
 
 pub fn kir_typed_append_statement(arena: KIRTypedArena, row: KIRTypedStatement) -> KIRTypedAppendRef {
+    if !is_none(arena.source_builder) {
+        let builder: KIRTypedSourceBuilder = unwrap_or(arena.source_builder, kir_typed_empty_source_builder())
+        let index: Int = typed_statement_rows_len(builder.executable.statements)
+        let executable: KIRTypedSourceBuildExecutable = KIRTypedSourceBuildExecutable{ bindings: builder.executable.bindings, expressions: builder.executable.expressions, statements: typed_statement_rows_append(builder.executable.statements, row) }
+        let updated_builder: KIRTypedSourceBuilder = KIRTypedSourceBuilder{ references: builder.references, executable: executable, values: builder.values }
+        return KIRTypedAppendRef{ arena: typed_with_source_builder(arena, some(updated_builder)), reference: KIRIndexRef{ table: KIRTypedTable::KIRTableStatements, index: index, present: true } }
+    }
     let executable: KIRTypedExecutable = arena.executable
     let index: Int = len(executable.statements)
     let updated: KIRTypedExecutable = KIRTypedExecutable{ functions: executable.functions, parameters: executable.parameters, captures: executable.captures, bindings: executable.bindings, expressions: executable.expressions, statements: array_push(executable.statements, row), arms: executable.arms, patterns: executable.patterns }
@@ -739,6 +1077,116 @@ pub fn kir_typed_append_document_ranges(arena: KIRTypedArena, header: KIRTypedDo
 pub fn kir_typed_source_arena_references_valid(arena: KIRTypedArena) -> Result[KIRTypedArena, String] {
     if !kir_typed_arena_references_valid(arena) { return err("source compiler built invalid typed KIR references") }
     return ok(arena)
+}
+
+pub fn kir_typed_append_import(arena: KIRTypedArena, row: String) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.imports)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: array_push(declarations.imports, row), import_records: declarations.import_records, sources: declarations.sources, structs: declarations.structs, fields: declarations.fields, enums: declarations.enums, traits: declarations.traits, trait_methods: declarations.trait_methods, trait_impls: declarations.trait_impls, trait_impl_methods: declarations.trait_impl_methods, type_params: declarations.type_params }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableImports, index) }
+}
+
+pub fn kir_typed_append_source(arena: KIRTypedArena, row: String) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.sources)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: declarations.imports, import_records: declarations.import_records, sources: array_push(declarations.sources, row), structs: declarations.structs, fields: declarations.fields, enums: declarations.enums, traits: declarations.traits, trait_methods: declarations.trait_methods, trait_impls: declarations.trait_impls, trait_impl_methods: declarations.trait_impl_methods, type_params: declarations.type_params }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableSources, index) }
+}
+
+pub fn kir_typed_append_import_record(arena: KIRTypedArena, row: KIRTypedImport) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.import_records)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: declarations.imports, import_records: array_push(declarations.import_records, row), sources: declarations.sources, structs: declarations.structs, fields: declarations.fields, enums: declarations.enums, traits: declarations.traits, trait_methods: declarations.trait_methods, trait_impls: declarations.trait_impls, trait_impl_methods: declarations.trait_impl_methods, type_params: declarations.type_params }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableImportRecords, index) }
+}
+
+pub fn kir_typed_append_type_param(arena: KIRTypedArena, row: KIRTypedTypeParam) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.type_params)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: declarations.imports, import_records: declarations.import_records, sources: declarations.sources, structs: declarations.structs, fields: declarations.fields, enums: declarations.enums, traits: declarations.traits, trait_methods: declarations.trait_methods, trait_impls: declarations.trait_impls, trait_impl_methods: declarations.trait_impl_methods, type_params: array_push(declarations.type_params, row) }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableTypeParams, index) }
+}
+
+pub fn kir_typed_append_field(arena: KIRTypedArena, row: KIRTypedField) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.fields)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: declarations.imports, import_records: declarations.import_records, sources: declarations.sources, structs: declarations.structs, fields: array_push(declarations.fields, row), enums: declarations.enums, traits: declarations.traits, trait_methods: declarations.trait_methods, trait_impls: declarations.trait_impls, trait_impl_methods: declarations.trait_impl_methods, type_params: declarations.type_params }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableFields, index) }
+}
+
+pub fn kir_typed_append_struct(arena: KIRTypedArena, row: KIRTypedStruct) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.structs)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: declarations.imports, import_records: declarations.import_records, sources: declarations.sources, structs: array_push(declarations.structs, row), fields: declarations.fields, enums: declarations.enums, traits: declarations.traits, trait_methods: declarations.trait_methods, trait_impls: declarations.trait_impls, trait_impl_methods: declarations.trait_impl_methods, type_params: declarations.type_params }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableStructs, index) }
+}
+
+pub fn kir_typed_append_enum(arena: KIRTypedArena, row: KIRTypedEnum) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.enums)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: declarations.imports, import_records: declarations.import_records, sources: declarations.sources, structs: declarations.structs, fields: declarations.fields, enums: array_push(declarations.enums, row), traits: declarations.traits, trait_methods: declarations.trait_methods, trait_impls: declarations.trait_impls, trait_impl_methods: declarations.trait_impl_methods, type_params: declarations.type_params }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableEnums, index) }
+}
+
+pub fn kir_typed_append_trait_method(arena: KIRTypedArena, row: KIRTypedTraitMethod) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.trait_methods)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: declarations.imports, import_records: declarations.import_records, sources: declarations.sources, structs: declarations.structs, fields: declarations.fields, enums: declarations.enums, traits: declarations.traits, trait_methods: array_push(declarations.trait_methods, row), trait_impls: declarations.trait_impls, trait_impl_methods: declarations.trait_impl_methods, type_params: declarations.type_params }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableTraitMethods, index) }
+}
+
+pub fn kir_typed_append_trait(arena: KIRTypedArena, row: KIRTypedTrait) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.traits)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: declarations.imports, import_records: declarations.import_records, sources: declarations.sources, structs: declarations.structs, fields: declarations.fields, enums: declarations.enums, traits: array_push(declarations.traits, row), trait_methods: declarations.trait_methods, trait_impls: declarations.trait_impls, trait_impl_methods: declarations.trait_impl_methods, type_params: declarations.type_params }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableTraits, index) }
+}
+
+pub fn kir_typed_append_trait_impl_method(arena: KIRTypedArena, row: KIRTypedTraitImplMethod) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.trait_impl_methods)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: declarations.imports, import_records: declarations.import_records, sources: declarations.sources, structs: declarations.structs, fields: declarations.fields, enums: declarations.enums, traits: declarations.traits, trait_methods: declarations.trait_methods, trait_impls: declarations.trait_impls, trait_impl_methods: array_push(declarations.trait_impl_methods, row), type_params: declarations.type_params }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableTraitImplMethods, index) }
+}
+
+pub fn kir_typed_append_trait_impl(arena: KIRTypedArena, row: KIRTypedTraitImpl) -> KIRTypedAppendRef {
+    let declarations: KIRTypedDeclarations = arena.declarations
+    let index: Int = len(declarations.trait_impls)
+    let updated: KIRTypedDeclarations = KIRTypedDeclarations{ imports: declarations.imports, import_records: declarations.import_records, sources: declarations.sources, structs: declarations.structs, fields: declarations.fields, enums: declarations.enums, traits: declarations.traits, trait_methods: declarations.trait_methods, trait_impls: array_push(declarations.trait_impls, row), trait_impl_methods: declarations.trait_impl_methods, type_params: declarations.type_params }
+    return KIRTypedAppendRef{ arena: typed_with_declarations(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableTraitImpls, index) }
+}
+
+pub fn kir_typed_append_capture(arena: KIRTypedArena, row: KIRTypedCapture) -> KIRTypedAppendRef {
+    let executable: KIRTypedExecutable = arena.executable
+    let index: Int = len(executable.captures)
+    let updated: KIRTypedExecutable = KIRTypedExecutable{ functions: executable.functions, parameters: executable.parameters, captures: array_push(executable.captures, row), bindings: executable.bindings, expressions: executable.expressions, statements: executable.statements, arms: executable.arms, patterns: executable.patterns }
+    return KIRTypedAppendRef{ arena: typed_with_executable(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableCaptures, index) }
+}
+
+pub fn kir_typed_append_arm(arena: KIRTypedArena, row: KIRTypedArm) -> KIRTypedAppendRef {
+    let executable: KIRTypedExecutable = arena.executable
+    let index: Int = len(executable.arms)
+    let updated: KIRTypedExecutable = KIRTypedExecutable{ functions: executable.functions, parameters: executable.parameters, captures: executable.captures, bindings: executable.bindings, expressions: executable.expressions, statements: executable.statements, arms: array_push(executable.arms, row), patterns: executable.patterns }
+    return KIRTypedAppendRef{ arena: typed_with_executable(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTableArms, index) }
+}
+
+pub fn kir_typed_append_pattern(arena: KIRTypedArena, row: KIRTypedPattern) -> KIRTypedAppendRef {
+    let executable: KIRTypedExecutable = arena.executable
+    let index: Int = len(executable.patterns)
+    let updated: KIRTypedExecutable = KIRTypedExecutable{ functions: executable.functions, parameters: executable.parameters, captures: executable.captures, bindings: executable.bindings, expressions: executable.expressions, statements: executable.statements, arms: executable.arms, patterns: array_push(executable.patterns, row) }
+    return KIRTypedAppendRef{ arena: typed_with_executable(arena, updated), reference: kir_typed_ref(KIRTypedTable::KIRTablePatterns, index) }
+}
+
+pub fn kir_typed_empty_expression() -> KIRTypedExpression {
+    return KIRTypedExpression{ kind: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, type_name: "", constant: KIRIndexRef{ table: KIRTypedTable::KIRTableValues, index: 0, present: false }, int_value: 0, uint_value: u64(0), uint_bits: u8(0), float_text: "", bool_value: false, string_value: "", name: "", operator: "", call_target: "", trait_name: "", builtin_id: "", left: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, right: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, operand: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, args: kir_typed_empty_edges(), items: kir_typed_empty_edges(), base: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, field: "", receiver: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, map_keys: kir_typed_empty_edges(), struct_name: "", struct_type: "", generic_arguments: [], fields: [], values: kir_typed_empty_edges(), enum_type: "", enum_variant: "", tail: false, callee: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, lambda: KIRIndexRef{ table: KIRTypedTable::KIRTableFunctions, index: 0, present: false }, binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false } }
+}
+
+pub fn kir_typed_empty_statement() -> KIRTypedStatement {
+    return KIRTypedStatement{ kind: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, name: "", binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false }, mutable: false, is_const: false, annotation: "", init: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, expr: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, target: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, value: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, cond: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, then_body: kir_typed_empty_edges(), else_body: kir_typed_empty_edges(), body: kir_typed_empty_edges(), iter: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, return_value: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, scrutinee: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, arms: kir_typed_empty_edges() }
+}
+
+pub fn kir_typed_empty_value() -> KIRTypedValue {
+    return KIRTypedValue{ kind: "", int_value: 0, uint_value: u64(0), uint_bits: u8(0), float_text: "", bool_value: false, string_value: "", bytes: [], array: kir_typed_empty_edges(), inner: KIRIndexRef{ table: KIRTypedTable::KIRTableValues, index: 0, present: false }, present: false, ok: false }
 }
 
 fn typed_json_optional_field(value: Json, key: String) -> Result[Json, String] {
@@ -769,14 +1217,15 @@ fn typed_json_uint_field(value: Json, key: String, fallback: UInt64) -> Result[U
     return json_uint(item)
 }
 
-fn typed_json_float_field(value: Json, key: String, fallback: Float) -> Result[Float, String] {
+// JSON numbers are retained exactly as portable text. This avoids depending on
+// floating-point execution in the selfhost compiler while preserving Float IR.
+fn typed_json_float_field(value: Json, key: String) -> Result[String, String] {
     let field: Result[Json, String] = typed_json_optional_field(value, key)
-    if is_err(field) { return ok(fallback) }
-    let item: Json = result_unwrap(field)
-    if json_kind(item) == "null" { return ok(fallback) }
-    // Go encodes integral float64 values as integer-shaped JSON tokens. Parse
-    // the JSON number text so both 1 and 1.25 preserve their Float value.
-    return ok(float(json_stringify(item)))
+    if is_err(field) || json_kind(result_unwrap(field)) == "null" { return ok("") }
+    if json_kind(result_unwrap(field)) != "number" { return err("typed KIR Float payload must be a number") }
+    let text: String = json_stringify(result_unwrap(field))
+    if !kir_typed_float_text_valid(text) { return err("typed KIR Float payload has invalid or non-finite numeric text") }
+    return ok(text)
 }
 
 fn typed_json_bool_field(value: Json, key: String, fallback: Bool) -> Result[Bool, String] {
@@ -928,11 +1377,6 @@ fn typed_json_value_range(arena: KIRTypedArena, node: Json, key: String) -> Resu
     return ok(typed_append_edge_range(current, edges))
 }
 
-fn typed_json_float_text(node: Json, key: String) -> String {
-    let field: Result[Json, String] = typed_json_optional_field(node, key)
-    if is_err(field) || json_kind(result_unwrap(field)) == "null" { return "" }
-    return json_stringify(result_unwrap(field))
-}
 
 fn typed_json_bytes(node: Json, key: String) -> Result[Array[UInt8], String] {
     let field: Result[Json, String] = typed_json_optional_field(node, key)
@@ -941,7 +1385,8 @@ fn typed_json_bytes(node: Json, key: String) -> Result[Array[UInt8], String] {
         return ok(empty)
     }
     let list: Json = result_unwrap(field)
-    if json_kind(list) != "array" { return err("validated KIR byte list is not an array") }
+    if json_kind(list) == "string" { return typed_decode_base64(result_unwrap(json_string(list))) }
+    if json_kind(list) != "array" { return err("portable KIR bytes must be base64 text or a byte array") }
     let count: Result[Int, String] = json_array_len(list)
     if is_err(count) { return err("validated KIR byte list cannot be read") }
     let mut values: Array[UInt8] = []
@@ -963,12 +1408,13 @@ fn typed_json_value(arena: KIRTypedArena, node: Json) -> Result[KIRTypedBuildRef
     let int_value: Result[Int, String] = typed_json_int_field(node, "int", 0)
     let uint_value: Result[UInt64, String] = typed_json_uint_field(node, "uint", u64(0))
     let uint_bits_value: Result[Int, String] = typed_json_int_field(node, "uint_bits", 0)
-    let float_value: Result[Float, String] = typed_json_float_field(node, "float", 0.0)
+    if is_err(uint_bits_value) || result_unwrap(uint_bits_value) < 0 || result_unwrap(uint_bits_value) > 255 { return err("portable KIR UInt width is outside the UInt8 storage range") }
+    let float_text: Result[String, String] = typed_json_float_field(node, "float")
     let bool_value: Result[Bool, String] = typed_json_bool_field(node, "bool", false)
     let string_value: Result[String, String] = typed_json_string_field(node, "string", "")
     let present: Result[Bool, String] = typed_json_bool_field(node, "present", false)
     let ok_value: Result[Bool, String] = typed_json_bool_field(node, "ok", false)
-    if is_err(kind) || is_err(int_value) || is_err(uint_value) || is_err(uint_bits_value) || is_err(float_value) || is_err(bool_value) || is_err(string_value) || is_err(present) || is_err(ok_value) { return err("validated KIR value has an invalid scalar field") }
+    if is_err(kind) || is_err(int_value) || is_err(uint_value) || is_err(uint_bits_value) || is_err(float_text) || is_err(bool_value) || is_err(string_value) || is_err(present) || is_err(ok_value) { return err("validated KIR value has an invalid scalar field") }
     let bytes: Result[Array[UInt8], String] = typed_json_bytes(node, "bytes")
     if is_err(bytes) { return err(unwrap_or(result_error(bytes), "invalid KIR bytes")) }
     let array: Result[KIRTypedBuildRange, String] = typed_json_value_range(arena, node, "array")
@@ -977,7 +1423,7 @@ fn typed_json_value(arena: KIRTypedArena, node: Json) -> Result[KIRTypedBuildRef
     let inner: Result[KIRTypedBuildRef, String] = typed_json_value_ref(array_value.arena, node, "inner")
     if is_err(inner) { return err(unwrap_or(result_error(inner), "invalid KIR inner value")) }
     let after_inner: KIRTypedBuildRef = result_unwrap(inner)
-    let row: KIRTypedValue = KIRTypedValue{ kind: result_unwrap(kind), int_value: result_unwrap(int_value), uint_value: result_unwrap(uint_value), uint_bits: u8(result_unwrap(uint_bits_value)), float_value: result_unwrap(float_value), float_text: typed_json_float_text(node, "float"), bool_value: result_unwrap(bool_value), string_value: result_unwrap(string_value), bytes: result_unwrap(bytes), array: array_value.range, inner: after_inner.reference, present: result_unwrap(present), ok: result_unwrap(ok_value) }
+    let row: KIRTypedValue = KIRTypedValue{ kind: result_unwrap(kind), int_value: result_unwrap(int_value), uint_value: result_unwrap(uint_value), uint_bits: u8(result_unwrap(uint_bits_value)), float_text: result_unwrap(float_text), bool_value: result_unwrap(bool_value), string_value: result_unwrap(string_value), bytes: result_unwrap(bytes), array: array_value.range, inner: after_inner.reference, present: result_unwrap(present), ok: result_unwrap(ok_value) }
     let index: Int = len(after_inner.arena.values)
     let updated: KIRTypedArena = typed_with_values(after_inner.arena, array_push(after_inner.arena.values, row))
     return ok(KIRTypedBuildRef{ arena: updated, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableValues, index: index, present: true } })
@@ -993,7 +1439,8 @@ fn typed_json_expression(arena: KIRTypedArena, node: Json) -> Result[KIRTypedBui
     let int_value: Result[Int, String] = typed_json_int_field(node, "int", 0)
     let uint_value: Result[UInt64, String] = typed_json_uint_field(node, "uint", u64(0))
     let uint_bits_value: Result[Int, String] = typed_json_int_field(node, "uint_bits", 0)
-    let float_value: Result[Float, String] = typed_json_float_field(node, "float", 0.0)
+    if is_err(uint_bits_value) || result_unwrap(uint_bits_value) < 0 || result_unwrap(uint_bits_value) > 255 { return err("portable KIR UInt width is outside the UInt8 storage range") }
+    let float_text: Result[String, String] = typed_json_float_field(node, "float")
     let bool_value: Result[Bool, String] = typed_json_bool_field(node, "bool", false)
     let string_value: Result[String, String] = typed_json_string_field(node, "string", "")
     let name: Result[String, String] = typed_json_string_field(node, "name", "")
@@ -1015,7 +1462,7 @@ fn typed_json_expression(arena: KIRTypedArena, node: Json) -> Result[KIRTypedBui
     if is_err(int_value) { return err("validated KIR expression.int is not an Int") }
     if is_err(uint_value) { return err("validated KIR expression.uint is not a UInt64") }
     if is_err(uint_bits_value) { return err("validated KIR expression.uint_bits is not an Int") }
-    if is_err(float_value) { return err("validated KIR expression.float is not a Float") }
+    if is_err(float_text) { return err("validated KIR expression.float is not a Float") }
     if is_err(bool_value) { return err("validated KIR expression.bool is not a Bool") }
     if is_err(string_value) { return err("validated KIR expression.string is not a String") }
     if is_err(name) { return err("validated KIR expression.name is not a String") }
@@ -1087,7 +1534,7 @@ fn typed_json_expression(arena: KIRTypedArena, node: Json) -> Result[KIRTypedBui
     let after_binding: KIRTypedBuildRef = result_unwrap(binding)
     let executable: KIRTypedExecutable = after_binding.arena.executable
     let index: Int = len(executable.expressions)
-    let row: KIRTypedExpression = KIRTypedExpression{ kind: result_unwrap(kind), source: result_unwrap(source), line: result_unwrap(line), column: result_unwrap(column), span: after_span.reference, type_name: result_unwrap(type_name), constant: after_constant.reference, int_value: result_unwrap(int_value), uint_value: result_unwrap(uint_value), uint_bits: u8(result_unwrap(uint_bits_value)), float_value: result_unwrap(float_value), float_text: typed_json_float_text(node, "float"), bool_value: result_unwrap(bool_value), string_value: result_unwrap(string_value), name: result_unwrap(name), operator: result_unwrap(operator), call_target: result_unwrap(call_target), trait_name: result_unwrap(trait_name), builtin_id: result_unwrap(builtin_id), left: after_left.reference, right: after_right.reference, operand: after_operand.reference, args: after_args.range, items: after_items.range, base: after_base.reference, field: result_unwrap(field_name), receiver: after_receiver.reference, map_keys: after_map_keys.range, struct_name: result_unwrap(struct_name), struct_type: result_unwrap(struct_type), generic_arguments: result_unwrap(generic_arguments), fields: result_unwrap(fields), values: after_values.range, enum_type: result_unwrap(enum_type), enum_variant: result_unwrap(enum_variant), tail: result_unwrap(tail), callee: after_callee.reference, lambda: after_lambda.reference, binding: after_binding.reference }
+    let row: KIRTypedExpression = KIRTypedExpression{ kind: result_unwrap(kind), source: result_unwrap(source), line: result_unwrap(line), column: result_unwrap(column), span: after_span.reference, type_name: result_unwrap(type_name), constant: after_constant.reference, int_value: result_unwrap(int_value), uint_value: result_unwrap(uint_value), uint_bits: u8(result_unwrap(uint_bits_value)), float_text: result_unwrap(float_text), bool_value: result_unwrap(bool_value), string_value: result_unwrap(string_value), name: result_unwrap(name), operator: result_unwrap(operator), call_target: result_unwrap(call_target), trait_name: result_unwrap(trait_name), builtin_id: result_unwrap(builtin_id), left: after_left.reference, right: after_right.reference, operand: after_operand.reference, args: after_args.range, items: after_items.range, base: after_base.reference, field: result_unwrap(field_name), receiver: after_receiver.reference, map_keys: after_map_keys.range, struct_name: result_unwrap(struct_name), struct_type: result_unwrap(struct_type), generic_arguments: result_unwrap(generic_arguments), fields: result_unwrap(fields), values: after_values.range, enum_type: result_unwrap(enum_type), enum_variant: result_unwrap(enum_variant), tail: result_unwrap(tail), callee: after_callee.reference, lambda: after_lambda.reference, binding: after_binding.reference }
     let updated: KIRTypedExecutable = KIRTypedExecutable{ functions: executable.functions, parameters: executable.parameters, captures: executable.captures, bindings: executable.bindings, expressions: array_push(executable.expressions, row), statements: executable.statements, arms: executable.arms, patterns: executable.patterns }
     return ok(KIRTypedBuildRef{ arena: typed_with_executable(after_binding.arena, updated), reference: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: index, present: true } })
 }
@@ -1794,7 +2241,7 @@ fn typed_json_optional_import_range(arena: KIRTypedArena, node: Json, key: Strin
 }
 
 fn typed_with_document(arena: KIRTypedArena, header: KIRTypedDocumentHeader) -> KIRTypedArena {
-    return KIRTypedArena{ format: header.format, version: header.version, language_version: header.language_version, module: header.module, source: header.source, target: header.target, declarations: arena.declarations, executable: arena.executable, values: arena.values, references: arena.references, top_functions: header.top_functions, top_statements: header.top_statements }
+    return KIRTypedArena{ format: header.format, version: header.version, language_version: header.language_version, module: header.module, source: header.source, target: header.target, declarations: arena.declarations, executable: arena.executable, values: arena.values, references: arena.references, source_builder: arena.source_builder, top_functions: header.top_functions, top_statements: header.top_statements }
 }
 
 pub fn kir_typed_arena_from_validated_json(document: Json) -> Result[KIRTypedArena, String] {
@@ -1855,55 +2302,51 @@ pub fn kir_typed_arena_from_validated_json(document: Json) -> Result[KIRTypedAre
     return ok(completed)
 }
 
-fn typed_view_make(arena: KIRTypedArena, shape: KIRTypedViewShape) -> KIRTypedNodeView {
-    return KIRTypedNodeView{ arena: arena, mode: shape.mode, reference: shape.reference, range: shape.range, direct_table: shape.direct_table, direct_start: shape.direct_start, direct_count: shape.direct_count, strings: shape.strings, bytes: shape.bytes, text: shape.text, number_text: shape.number_text, boolean: shape.boolean }
-}
-
 fn typed_view_empty_range(arena: KIRTypedArena) -> KIRIndexRange {
     return KIRIndexRange{ table: KIRTypedTable::KIRTableEdges, start: 0, count: 0 }
 }
 
 fn typed_view_null(arena: KIRTypedArena) -> KIRTypedNodeView {
-    return typed_view_make(arena, KIRTypedViewShape{ mode: KIRTypedViewMode::KIRViewNull, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: "", boolean: false })
+    return KIRTypedNodeView{ arena: arena, mode: KIRTypedViewMode::KIRViewNull, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: "", boolean: false }
 }
 
 fn typed_view_string(arena: KIRTypedArena, value: String) -> KIRTypedNodeView {
-    return typed_view_make(arena, KIRTypedViewShape{ mode: KIRTypedViewMode::KIRViewString, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: value, number_text: "", boolean: false })
+    return KIRTypedNodeView{ arena: arena, mode: KIRTypedViewMode::KIRViewString, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: value, number_text: "", boolean: false }
 }
 
 fn typed_view_number(arena: KIRTypedArena, value: String) -> KIRTypedNodeView {
-    return typed_view_make(arena, KIRTypedViewShape{ mode: KIRTypedViewMode::KIRViewNumber, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: value, boolean: false })
+    return KIRTypedNodeView{ arena: arena, mode: KIRTypedViewMode::KIRViewNumber, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: value, boolean: false }
 }
 
 fn typed_view_bool(arena: KIRTypedArena, value: Bool) -> KIRTypedNodeView {
-    return typed_view_make(arena, KIRTypedViewShape{ mode: KIRTypedViewMode::KIRViewBool, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: "", boolean: value })
+    return KIRTypedNodeView{ arena: arena, mode: KIRTypedViewMode::KIRViewBool, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: "", boolean: value }
 }
 
 fn typed_view_row(arena: KIRTypedArena, reference: KIRIndexRef) -> Result[KIRTypedNodeView, String] {
     if !reference.present { return ok(typed_view_null(arena)) }
     if !kir_typed_reference_valid(arena, reference) { return err("typed KIR view row reference is out of bounds") }
-    return ok(typed_view_make(arena, KIRTypedViewShape{ mode: KIRTypedViewMode::KIRViewRow, reference: reference, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: "", boolean: false }))
+    return ok(KIRTypedNodeView{ arena: arena, mode: KIRTypedViewMode::KIRViewRow, reference: reference, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: "", boolean: false })
 }
 
 fn typed_view_direct_rows(arena: KIRTypedArena, table: KIRTypedTable, count: Int) -> KIRTypedNodeView {
-    return typed_view_make(arena, KIRTypedViewShape{ mode: KIRTypedViewMode::KIRViewTableRange, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: table, direct_start: 0, direct_count: count, strings: [], bytes: [], text: "", number_text: "", boolean: false })
+    return KIRTypedNodeView{ arena: arena, mode: KIRTypedViewMode::KIRViewTableRange, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: table, direct_start: 0, direct_count: count, strings: [], bytes: [], text: "", number_text: "", boolean: false }
 }
 
 fn typed_view_edges(arena: KIRTypedArena, range: KIRIndexRange, table: KIRTypedTable) -> Result[KIRTypedNodeView, String] {
     if !kir_typed_range_is(arena, range, table) { return err("typed KIR view edge range is invalid") }
-    return ok(typed_view_make(arena, KIRTypedViewShape{ mode: KIRTypedViewMode::KIRViewEdgeRange, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: range, direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: "", boolean: false }))
+    return ok(KIRTypedNodeView{ arena: arena, mode: KIRTypedViewMode::KIRViewEdgeRange, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: range, direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: "", boolean: false })
 }
 
 fn typed_view_strings(arena: KIRTypedArena, values: Array[String]) -> KIRTypedNodeView {
-    return typed_view_make(arena, KIRTypedViewShape{ mode: KIRTypedViewMode::KIRViewStrings, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: values, bytes: [], text: "", number_text: "", boolean: false })
+    return KIRTypedNodeView{ arena: arena, mode: KIRTypedViewMode::KIRViewStrings, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: values, bytes: [], text: "", number_text: "", boolean: false }
 }
 
 fn typed_view_bytes(arena: KIRTypedArena, values: Array[UInt8]) -> KIRTypedNodeView {
-    return typed_view_make(arena, KIRTypedViewShape{ mode: KIRTypedViewMode::KIRViewBytes, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: values, text: "", number_text: "", boolean: false })
+    return KIRTypedNodeView{ arena: arena, mode: KIRTypedViewMode::KIRViewBytes, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: false }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: values, text: "", number_text: "", boolean: false }
 }
 
 pub fn kir_typed_root_view(arena: KIRTypedArena) -> KIRTypedNodeView {
-    return typed_view_make(arena, KIRTypedViewShape{ mode: KIRTypedViewMode::KIRViewRow, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: true }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: "", boolean: false })
+    return KIRTypedNodeView{ arena: arena, mode: KIRTypedViewMode::KIRViewRow, reference: KIRIndexRef{ table: KIRTypedTable::KIRTableDocument, index: 0, present: true }, range: typed_view_empty_range(arena), direct_table: KIRTypedTable::KIRTableDocument, direct_start: 0, direct_count: 0, strings: [], bytes: [], text: "", number_text: "", boolean: false }
 }
 
 pub fn kir_typed_empty_array() -> KIRTypedNodeView {
@@ -1961,9 +2404,7 @@ pub fn kir_typed_int(value: KIRTypedNodeView) -> Result[Int, String] {
 
 pub fn kir_typed_uint(value: KIRTypedNodeView) -> Result[UInt64, String] {
     if value.mode != KIRTypedViewMode::KIRViewNumber { return err("typed KIR view value is not a number") }
-    let parsed: Result[Json, String] = json_parse(value.number_text)
-    if is_err(parsed) { return err("typed KIR view unsigned integer is malformed") }
-    return json_uint(result_unwrap(parsed))
+    return typed_parse_uint_text(value.number_text)
 }
 
 pub fn kir_typed_bool(value: KIRTypedNodeView) -> Result[Bool, String] {
@@ -1979,10 +2420,12 @@ pub fn kir_typed_number_text(value: KIRTypedNodeView) -> String {
 fn typed_view_string_field(arena: KIRTypedArena, value: String) -> Result[KIRTypedNodeView, String] { return ok(typed_view_string(arena, value)) }
 fn typed_view_int_field(arena: KIRTypedArena, value: Int) -> Result[KIRTypedNodeView, String] { return ok(typed_view_number(arena, str(value))) }
 fn typed_view_uint_field(arena: KIRTypedArena, value: UInt64) -> Result[KIRTypedNodeView, String] { return ok(typed_view_number(arena, str(value))) }
-fn typed_view_float_field(arena: KIRTypedArena, value: Float, number_text: String) -> Result[KIRTypedNodeView, String] {
-    if number_text != "" { return ok(typed_view_number(arena, number_text)) }
-    return ok(typed_view_number(arena, str(value)))
+fn typed_view_float_field(arena: KIRTypedArena, number_text: String) -> Result[KIRTypedNodeView, String] {
+    if number_text == "" { return ok(typed_view_number(arena, "0")) }
+    if !kir_typed_float_text_valid(number_text) { return err("typed KIR Float payload has invalid or non-finite numeric text") }
+    return ok(typed_view_number(arena, number_text))
 }
+
 fn typed_view_bool_field(arena: KIRTypedArena, value: Bool) -> Result[KIRTypedNodeView, String] { return ok(typed_view_bool(arena, value)) }
 fn typed_view_reference_field(arena: KIRTypedArena, reference: KIRIndexRef) -> Result[KIRTypedNodeView, String] { return typed_view_row(arena, reference) }
 fn typed_view_edge_field(arena: KIRTypedArena, range: KIRIndexRange, table: KIRTypedTable) -> Result[KIRTypedNodeView, String] { return typed_view_edges(arena, range, table) }
@@ -2017,7 +2460,7 @@ fn typed_view_target_field(arena: KIRTypedArena, key: String) -> Result[KIRTyped
 fn typed_view_span_field(arena: KIRTypedArena, row_index: Int, key: String) -> Result[KIRTypedNodeView, String] {
     let row_option: Option[KIRTypedSourceSpan] = array_get(arena.references.spans, row_index)
     if is_none(row_option) { return err("typed KIR source span row is out of bounds") }
-    let row: KIRTypedSourceSpan = unwrap_or(row_option, KIRTypedSourceSpan{ start: 0, end: 0 })
+    let row: KIRTypedSourceSpan = arena.references.spans[row_index]
     if key == "start" { return typed_view_int_field(arena, row.start) }
     if key == "end" { return typed_view_int_field(arena, row.end) }
     return err("typed KIR source span has no field " + key)
@@ -2027,7 +2470,7 @@ fn typed_view_import_field(arena: KIRTypedArena, row_index: Int, key: String) ->
     let rows: Array[KIRTypedImport] = arena.declarations.import_records
     let row_option: Option[KIRTypedImport] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR import row is out of bounds") }
-    let row: KIRTypedImport = unwrap_or(row_option, KIRTypedImport{ path: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false } })
+    let row: KIRTypedImport = rows[row_index]
     if key == "path" { return typed_view_string_field(arena, row.path) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2040,7 +2483,7 @@ fn typed_view_type_param_field(arena: KIRTypedArena, row_index: Int, key: String
     let rows: Array[KIRTypedTypeParam] = arena.declarations.type_params
     let row_option: Option[KIRTypedTypeParam] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR type parameter row is out of bounds") }
-    let row: KIRTypedTypeParam = unwrap_or(row_option, KIRTypedTypeParam{ name: "", constraint: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false } })
+    let row: KIRTypedTypeParam = rows[row_index]
     if key == "name" { return typed_view_string_field(arena, row.name) }
     if key == "constraint" { return typed_view_string_field(arena, row.constraint) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
@@ -2054,7 +2497,7 @@ fn typed_view_binding_field(arena: KIRTypedArena, row_index: Int, key: String) -
     let rows: Array[KIRTypedBinding] = arena.executable.bindings
     let row_option: Option[KIRTypedBinding] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR binding row is out of bounds") }
-    let row: KIRTypedBinding = unwrap_or(row_option, KIRTypedBinding{ id: "", name: "", type_name: "", mutable: false, source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false } })
+    let row: KIRTypedBinding = rows[row_index]
     if key == "id" { return typed_view_string_field(arena, row.id) }
     if key == "name" { return typed_view_string_field(arena, row.name) }
     if key == "type" { return typed_view_string_field(arena, row.type_name) }
@@ -2070,7 +2513,7 @@ fn typed_view_field_field(arena: KIRTypedArena, row_index: Int, key: String) -> 
     let rows: Array[KIRTypedField] = arena.declarations.fields
     let row_option: Option[KIRTypedField] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR field row is out of bounds") }
-    let row: KIRTypedField = unwrap_or(row_option, KIRTypedField{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, public: false, type_name: "" })
+    let row: KIRTypedField = rows[row_index]
     if key == "name" { return typed_view_string_field(arena, row.name) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2085,7 +2528,7 @@ fn typed_view_struct_field(arena: KIRTypedArena, row_index: Int, key: String) ->
     let rows: Array[KIRTypedStruct] = arena.declarations.structs
     let row_option: Option[KIRTypedStruct] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR struct row is out of bounds") }
-    let row: KIRTypedStruct = unwrap_or(row_option, KIRTypedStruct{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, public: false, module: "", type_params: typed_view_empty_range(arena), fields: typed_view_empty_range(arena) })
+    let row: KIRTypedStruct = rows[row_index]
     if key == "name" { return typed_view_string_field(arena, row.name) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2102,7 +2545,7 @@ fn typed_view_enum_field(arena: KIRTypedArena, row_index: Int, key: String) -> R
     let rows: Array[KIRTypedEnum] = arena.declarations.enums
     let row_option: Option[KIRTypedEnum] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR enum row is out of bounds") }
-    let row: KIRTypedEnum = unwrap_or(row_option, KIRTypedEnum{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, public: false, module: "", variants: [], variant_spans: typed_view_empty_range(arena) })
+    let row: KIRTypedEnum = rows[row_index]
     if key == "name" { return typed_view_string_field(arena, row.name) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2119,7 +2562,7 @@ fn typed_view_trait_method_field(arena: KIRTypedArena, row_index: Int, key: Stri
     let rows: Array[KIRTypedTraitMethod] = arena.declarations.trait_methods
     let row_option: Option[KIRTypedTraitMethod] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR trait method row is out of bounds") }
-    let row: KIRTypedTraitMethod = unwrap_or(row_option, KIRTypedTraitMethod{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, params: typed_view_empty_range(arena), return_type: "" })
+    let row: KIRTypedTraitMethod = rows[row_index]
     if key == "name" { return typed_view_string_field(arena, row.name) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2134,7 +2577,7 @@ fn typed_view_trait_field(arena: KIRTypedArena, row_index: Int, key: String) -> 
     let rows: Array[KIRTypedTrait] = arena.declarations.traits
     let row_option: Option[KIRTypedTrait] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR trait row is out of bounds") }
-    let row: KIRTypedTrait = unwrap_or(row_option, KIRTypedTrait{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, public: false, module: "", methods: typed_view_empty_range(arena) })
+    let row: KIRTypedTrait = rows[row_index]
     if key == "name" { return typed_view_string_field(arena, row.name) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2150,7 +2593,7 @@ fn typed_view_trait_impl_method_field(arena: KIRTypedArena, row_index: Int, key:
     let rows: Array[KIRTypedTraitImplMethod] = arena.declarations.trait_impl_methods
     let row_option: Option[KIRTypedTraitImplMethod] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR trait implementation method row is out of bounds") }
-    let row: KIRTypedTraitImplMethod = unwrap_or(row_option, KIRTypedTraitImplMethod{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, target: "" })
+    let row: KIRTypedTraitImplMethod = rows[row_index]
     if key == "name" { return typed_view_string_field(arena, row.name) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2164,7 +2607,7 @@ fn typed_view_trait_impl_field(arena: KIRTypedArena, row_index: Int, key: String
     let rows: Array[KIRTypedTraitImpl] = arena.declarations.trait_impls
     let row_option: Option[KIRTypedTraitImpl] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR trait implementation row is out of bounds") }
-    let row: KIRTypedTraitImpl = unwrap_or(row_option, KIRTypedTraitImpl{ trait_name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, for_type: "", module: "", methods: typed_view_empty_range(arena) })
+    let row: KIRTypedTraitImpl = rows[row_index]
     if key == "trait" { return typed_view_string_field(arena, row.trait_name) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2180,7 +2623,7 @@ fn typed_view_parameter_field(arena: KIRTypedArena, row_index: Int, key: String)
     let rows: Array[KIRTypedParameter] = arena.executable.parameters
     let row_option: Option[KIRTypedParameter] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR parameter row is out of bounds") }
-    let row: KIRTypedParameter = unwrap_or(row_option, KIRTypedParameter{ name: "", type_name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, default_value: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false } })
+    let row: KIRTypedParameter = rows[row_index]
     if key == "name" { return typed_view_string_field(arena, row.name) }
     if key == "type" { return typed_view_string_field(arena, row.type_name) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
@@ -2196,7 +2639,7 @@ fn typed_view_capture_field(arena: KIRTypedArena, row_index: Int, key: String) -
     let rows: Array[KIRTypedCapture] = arena.executable.captures
     let row_option: Option[KIRTypedCapture] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR capture row is out of bounds") }
-    let row: KIRTypedCapture = unwrap_or(row_option, KIRTypedCapture{ binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false } })
+    let row: KIRTypedCapture = rows[row_index]
     if key == "binding" { return typed_view_reference_field(arena, row.binding) }
     return err("typed KIR capture has no field " + key)
 }
@@ -2205,7 +2648,7 @@ fn typed_view_function_field(arena: KIRTypedArena, row_index: Int, key: String) 
     let rows: Array[KIRTypedFunction] = arena.executable.functions
     let row_option: Option[KIRTypedFunction] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR function row is out of bounds") }
-    let row: KIRTypedFunction = unwrap_or(row_option, KIRTypedFunction{ name: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, public: false, worker: false, is_unsafe: false, trait_name: "", module: "", receiver: "", return_type: "", type_params: typed_view_empty_range(arena), params: typed_view_empty_range(arena), captures: typed_view_empty_range(arena), body: typed_view_empty_range(arena) })
+    let row: KIRTypedFunction = rows[row_index]
     if key == "name" { return typed_view_string_field(arena, row.name) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2229,7 +2672,7 @@ fn typed_view_expression_field(arena: KIRTypedArena, row_index: Int, key: String
     let rows: Array[KIRTypedExpression] = arena.executable.expressions
     let row_option: Option[KIRTypedExpression] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR expression row is out of bounds") }
-    let row: KIRTypedExpression = unwrap_or(row_option, KIRTypedExpression{ kind: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, type_name: "", constant: KIRIndexRef{ table: KIRTypedTable::KIRTableValues, index: 0, present: false }, int_value: 0, uint_value: u64(0), uint_bits: u8(0), float_value: 0.0, float_text: "", bool_value: false, string_value: "", name: "", operator: "", call_target: "", trait_name: "", builtin_id: "", left: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, right: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, operand: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, args: typed_view_empty_range(arena), items: typed_view_empty_range(arena), base: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, field: "", receiver: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, map_keys: typed_view_empty_range(arena), struct_name: "", struct_type: "", generic_arguments: [], fields: [], values: typed_view_empty_range(arena), enum_type: "", enum_variant: "", tail: false, callee: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, lambda: KIRIndexRef{ table: KIRTypedTable::KIRTableFunctions, index: 0, present: false }, binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false } })
+    let row: KIRTypedExpression = rows[row_index]
     if key == "kind" { return typed_view_string_field(arena, row.kind) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2240,7 +2683,7 @@ fn typed_view_expression_field(arena: KIRTypedArena, row_index: Int, key: String
     if key == "int" { return typed_view_int_field(arena, row.int_value) }
     if key == "uint" { return typed_view_uint_field(arena, row.uint_value) }
     if key == "uint_bits" { return typed_view_int_field(arena, int(row.uint_bits)) }
-    if key == "float" { return typed_view_float_field(arena, row.float_value, row.float_text) }
+    if key == "float" { return typed_view_float_field(arena, row.float_text) }
     if key == "bool" { return typed_view_bool_field(arena, row.bool_value) }
     if key == "string" { return typed_view_string_field(arena, row.string_value) }
     if key == "name" { return typed_view_string_field(arena, row.name) }
@@ -2275,7 +2718,7 @@ fn typed_view_statement_field(arena: KIRTypedArena, row_index: Int, key: String)
     let rows: Array[KIRTypedStatement] = arena.executable.statements
     let row_option: Option[KIRTypedStatement] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR statement row is out of bounds") }
-    let row: KIRTypedStatement = unwrap_or(row_option, KIRTypedStatement{ kind: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, name: "", binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false }, mutable: false, is_const: false, annotation: "", init: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, expr: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, target: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, value: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, cond: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, then_body: typed_view_empty_range(arena), else_body: typed_view_empty_range(arena), body: typed_view_empty_range(arena), iter: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, return_value: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, scrutinee: KIRIndexRef{ table: KIRTypedTable::KIRTableExpressions, index: 0, present: false }, arms: typed_view_empty_range(arena) })
+    let row: KIRTypedStatement = rows[row_index]
     if key == "kind" { return typed_view_string_field(arena, row.kind) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2305,7 +2748,7 @@ fn typed_view_arm_field(arena: KIRTypedArena, row_index: Int, key: String) -> Re
     let rows: Array[KIRTypedArm] = arena.executable.arms
     let row_option: Option[KIRTypedArm] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR match arm row is out of bounds") }
-    let row: KIRTypedArm = unwrap_or(row_option, KIRTypedArm{ source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, pattern: KIRIndexRef{ table: KIRTypedTable::KIRTablePatterns, index: 0, present: false }, body: typed_view_empty_range(arena) })
+    let row: KIRTypedArm = rows[row_index]
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
     if key == "column" { return typed_view_int_field(arena, row.column) }
@@ -2319,7 +2762,7 @@ fn typed_view_pattern_field(arena: KIRTypedArena, row_index: Int, key: String) -
     let rows: Array[KIRTypedPattern] = arena.executable.patterns
     let row_option: Option[KIRTypedPattern] = array_get(rows, row_index)
     if is_none(row_option) { return err("typed KIR pattern row is out of bounds") }
-    let row: KIRTypedPattern = unwrap_or(row_option, KIRTypedPattern{ kind: "", source: "", line: 0, column: 0, span: KIRIndexRef{ table: KIRTypedTable::KIRTableSpans, index: 0, present: false }, bool_value: false, int_value: 0, string_value: "", type_name: "", variant: "", binding_name: "", present: false, ok: false, resolved_binding: KIRIndexRef{ table: KIRTypedTable::KIRTableBindings, index: 0, present: false } })
+    let row: KIRTypedPattern = rows[row_index]
     if key == "kind" { return typed_view_string_field(arena, row.kind) }
     if key == "source" { return typed_view_string_field(arena, row.source) }
     if key == "line" { return typed_view_int_field(arena, row.line) }
@@ -2340,12 +2783,12 @@ fn typed_view_pattern_field(arena: KIRTypedArena, row_index: Int, key: String) -
 fn typed_view_value_field(arena: KIRTypedArena, row_index: Int, key: String) -> Result[KIRTypedNodeView, String] {
     let row_option: Option[KIRTypedValue] = array_get(arena.values, row_index)
     if is_none(row_option) { return err("typed KIR value row is out of bounds") }
-    let row: KIRTypedValue = unwrap_or(row_option, KIRTypedValue{ kind: "", int_value: 0, uint_value: u64(0), uint_bits: u8(0), float_value: 0.0, float_text: "", bool_value: false, string_value: "", bytes: [], array: typed_view_empty_range(arena), inner: KIRIndexRef{ table: KIRTypedTable::KIRTableValues, index: 0, present: false }, present: false, ok: false })
+    let row: KIRTypedValue = arena.values[row_index]
     if key == "kind" { return typed_view_string_field(arena, row.kind) }
     if key == "int" { return typed_view_int_field(arena, row.int_value) }
     if key == "uint" { return typed_view_uint_field(arena, row.uint_value) }
     if key == "uint_bits" { return typed_view_int_field(arena, int(row.uint_bits)) }
-    if key == "float" { return typed_view_float_field(arena, row.float_value, row.float_text) }
+    if key == "float" { return typed_view_float_field(arena, row.float_text) }
     if key == "bool" { return typed_view_bool_field(arena, row.bool_value) }
     if key == "string" { return typed_view_string_field(arena, row.string_value) }
     if key == "bytes" { return ok(typed_view_bytes(arena, row.bytes)) }
@@ -2385,4 +2828,619 @@ fn typed_view_row_field(arena: KIRTypedArena, reference: KIRIndexRef, key: Strin
 pub fn kir_typed_object_get(value: KIRTypedNodeView, key: String) -> Result[KIRTypedNodeView, String] {
     if value.mode != KIRTypedViewMode::KIRViewRow { return err("typed KIR view value is not an object") }
     return typed_view_row_field(value.arena, value.reference, key)
+}
+
+// Object member names are fixed by row schemas; no recursive wire object is stored.
+pub fn kir_typed_object_keys(value: KIRTypedNodeView) -> Result[Array[String], String] {
+    if value.mode != KIRTypedViewMode::KIRViewRow { return err("typed KIR value is not an object") }
+    if value.reference.table == KIRTypedTable::KIRTableDocument { return ok(["format", "version", "language_version", "module", "source", "target", "imports", "import_records", "sources", "structs", "enums", "traits", "trait_impls", "functions", "statements"]) }
+    if value.reference.table == KIRTypedTable::KIRTableTarget { return ok(["os", "arch", "gui"]) }
+    if value.reference.table == KIRTypedTable::KIRTableSpans { return ok(["start", "end"]) }
+    if value.reference.table == KIRTypedTable::KIRTableImportRecords { return ok(["path", "source", "line", "column", "span"]) }
+    if value.reference.table == KIRTypedTable::KIRTableTypeParams { return ok(["name", "constraint", "source", "line", "column", "span"]) }
+    if value.reference.table == KIRTypedTable::KIRTableBindings { return ok(["id", "name", "type", "mutable", "source", "line", "column", "span"]) }
+    if value.reference.table == KIRTypedTable::KIRTableFields { return ok(["name", "source", "line", "column", "span", "public", "type"]) }
+    if value.reference.table == KIRTypedTable::KIRTableStructs { return ok(["name", "source", "line", "column", "span", "public", "module", "type_params", "fields"]) }
+    if value.reference.table == KIRTypedTable::KIRTableEnums { return ok(["name", "source", "line", "column", "span", "public", "module", "variants", "variant_spans"]) }
+    if value.reference.table == KIRTypedTable::KIRTableTraitMethods { return ok(["name", "source", "line", "column", "span", "params", "return"]) }
+    if value.reference.table == KIRTypedTable::KIRTableTraits { return ok(["name", "source", "line", "column", "span", "public", "module", "methods"]) }
+    if value.reference.table == KIRTypedTable::KIRTableTraitImplMethods { return ok(["name", "source", "line", "column", "span", "target"]) }
+    if value.reference.table == KIRTypedTable::KIRTableTraitImpls { return ok(["trait", "source", "line", "column", "span", "for", "module", "methods"]) }
+    if value.reference.table == KIRTypedTable::KIRTableParameters { return ok(["name", "type", "source", "line", "column", "span", "default", "binding"]) }
+    if value.reference.table == KIRTypedTable::KIRTableCaptures { return ok(["binding"]) }
+    if value.reference.table == KIRTypedTable::KIRTableFunctions { return ok(["name", "source", "line", "column", "span", "public", "worker", "unsafe", "trait", "module", "receiver", "return", "type_params", "params", "captures", "body"]) }
+    if value.reference.table == KIRTypedTable::KIRTableExpressions { return ok(["kind", "source", "line", "column", "span", "type", "const", "int", "uint", "uint_bits", "float", "bool", "string", "name", "operator", "call_target", "trait_name", "builtin_id", "left", "right", "operand", "args", "items", "base", "field", "receiver", "map_keys", "struct_name", "struct_type", "generic_arguments", "fields", "values", "enum_type", "enum_variant", "tail", "callee", "lambda", "binding"]) }
+    if value.reference.table == KIRTypedTable::KIRTableStatements { return ok(["kind", "source", "line", "column", "span", "name", "binding", "mutable", "const", "annotation", "init", "expr", "target", "value", "cond", "then", "else", "body", "iter", "return", "scrutinee", "arms"]) }
+    if value.reference.table == KIRTypedTable::KIRTableArms { return ok(["source", "line", "column", "span", "pattern", "body"]) }
+    if value.reference.table == KIRTypedTable::KIRTablePatterns { return ok(["kind", "source", "line", "column", "span", "bool", "int", "string", "type", "variant", "binding", "present", "ok", "resolved_binding"]) }
+    if value.reference.table == KIRTypedTable::KIRTableValues { return ok(["kind", "int", "uint", "uint_bits", "float", "bool", "string", "bytes", "array", "inner", "present", "ok"]) }
+    return err("typed KIR row has no object schema")
+}
+
+pub fn kir_typed_object_keys_allowed(value: KIRTypedNodeView, allowed: String) -> Bool {
+    let keys: Result[Array[String], String] = kir_typed_object_keys(value)
+    if is_err(keys) { return false }
+    let names: Array[String] = result_unwrap(keys)
+    let mut index: Int = 0
+    while index < len(names) {
+        let key: String = unwrap_or(array_get(names, index), "")
+        if !contains(allowed, "|" + key + "|") { return false }
+        index = index + 1
+    }
+    return true
+}
+
+pub fn kir_typed_object_fields_empty_except(value: KIRTypedNodeView, candidates: String, allowed: String, empty_arrays: String) -> Bool {
+    if value.mode == KIRTypedViewMode::KIRViewRow && value.reference.table == KIRTypedTable::KIRTableExpressions {
+        let row: KIRTypedExpression = value.arena.executable.expressions[value.reference.index]
+        if contains(candidates, "|left|") && !contains(allowed, "|left|") && row.left.present { return false }
+        if contains(candidates, "|right|") && !contains(allowed, "|right|") && row.right.present { return false }
+        if contains(candidates, "|operand|") && !contains(allowed, "|operand|") && row.operand.present { return false }
+        if contains(candidates, "|base|") && !contains(allowed, "|base|") && row.base.present { return false }
+        if contains(candidates, "|receiver|") && !contains(allowed, "|receiver|") && row.receiver.present { return false }
+        if contains(candidates, "|callee|") && !contains(allowed, "|callee|") && row.callee.present { return false }
+        if contains(candidates, "|lambda|") && !contains(allowed, "|lambda|") && row.lambda.present { return false }
+        if contains(candidates, "|args|") && !contains(allowed, "|args|") && (row.args.count > 0 || !contains(empty_arrays, "|args|")) { return false }
+        if contains(candidates, "|items|") && !contains(allowed, "|items|") && (row.items.count > 0 || !contains(empty_arrays, "|items|")) { return false }
+        if contains(candidates, "|map_keys|") && !contains(allowed, "|map_keys|") && (row.map_keys.count > 0 || !contains(empty_arrays, "|map_keys|")) { return false }
+        if contains(candidates, "|values|") && !contains(allowed, "|values|") && (row.values.count > 0 || !contains(empty_arrays, "|values|")) { return false }
+        return true
+    }
+
+    let keys: Result[Array[String], String] = kir_typed_object_keys(value)
+    if is_err(keys) { return false }
+    let names: Array[String] = result_unwrap(keys)
+    let mut index: Int = 0
+    while index < len(names) {
+        let key: String = unwrap_or(array_get(names, index), "")
+        let marker: String = "|" + key + "|"
+        if contains(candidates, marker) && !contains(allowed, marker) {
+            let field: Result[KIRTypedNodeView, String] = kir_typed_object_get(value, key)
+            if is_err(field) { return false }
+            let child: KIRTypedNodeView = result_unwrap(field)
+            if kir_typed_kind(child) != "null" {
+                if !contains(empty_arrays, marker) || kir_typed_kind(child) != "array" || result_unwrap(kir_typed_array_len(child)) != 0 { return false }
+            }
+        }
+        index = index + 1
+    }
+    return true
+}
+
+// Check the whole structural graph, including rows that are not root-reachable.
+// Call targets are symbolic links, so legal recursive functions are unaffected.
+fn typed_cycle_keys(value: KIRTypedNodeView) -> Array[String] {
+    if value.reference.table == KIRTypedTable::KIRTableDocument { return ["functions", "statements"] }
+    if value.reference.table == KIRTypedTable::KIRTableExpressions {
+        let row: KIRTypedExpression = value.arena.executable.expressions[value.reference.index]
+        if row.kind == "binary" { return ["const", "left", "right"] }
+        if row.kind == "index" { return ["const", "base", "left"] }
+        if row.kind == "field" { return ["const", "base"] }
+        if row.kind == "unary" || row.kind == "propagate" { return ["const", "operand"] }
+        if row.kind == "call" { return ["const", "args", "receiver", "callee"] }
+        if row.kind == "array" || row.kind == "set" { return ["const", "items"] }
+        if row.kind == "map" { return ["const", "map_keys", "values"] }
+        if row.kind == "struct" { return ["const", "values"] }
+        if row.kind == "lambda" { return ["const", "lambda"] }
+        return ["const"]
+    }
+    if value.reference.table == KIRTypedTable::KIRTableStatements {
+        let row: KIRTypedStatement = value.arena.executable.statements[value.reference.index]
+        if row.kind == "let" || row.kind == "const" { return ["init"] }
+        if row.kind == "expr" { return ["expr"] }
+        if row.kind == "assign" { return ["target", "value"] }
+        if row.kind == "if" { return ["cond", "then", "else"] }
+        if row.kind == "while" { return ["cond", "body"] }
+        if row.kind == "for" { return ["iter", "body"] }
+        if row.kind == "return" { return ["return"] }
+        if row.kind == "match" { return ["scrutinee", "arms"] }
+        return []
+    }
+    if value.reference.table == KIRTypedTable::KIRTableFunctions { return ["params", "captures", "body"] }
+    if value.reference.table == KIRTypedTable::KIRTableParameters { return ["default"] }
+    if value.reference.table == KIRTypedTable::KIRTableArms { return ["pattern", "body"] }
+    if value.reference.table == KIRTypedTable::KIRTableValues {
+        let row: KIRTypedValue = value.arena.values[value.reference.index]
+        if row.kind == "array" || row.kind == "set" { return ["array"] }
+        if row.kind == "option" || row.kind == "result" { return ["inner"] }
+    }
+    return []
+}
+
+// Each row has one numeric color slot. A bounded hierarchy keeps immutable
+// array updates from copying a directory that grows with the whole KIR.
+struct KIRTypedColors {
+    pages: Array[Array[Array[Array[UInt8]]]],
+    offsets: Array[Int],
+}
+
+fn typed_color_table_index(table: KIRTypedTable) -> Int {
+    if table == KIRTypedTable::KIRTableExpressions { return 0 }
+    if table == KIRTypedTable::KIRTableStatements { return 1 }
+    if table == KIRTypedTable::KIRTableValues { return 2 }
+    if table == KIRTypedTable::KIRTableFunctions { return 3 }
+    if table == KIRTypedTable::KIRTableParameters { return 4 }
+    if table == KIRTypedTable::KIRTableArms { return 5 }
+    if table == KIRTypedTable::KIRTablePatterns { return 6 }
+    if table == KIRTypedTable::KIRTableCaptures { return 7 }
+    if table == KIRTypedTable::KIRTableDocument { return 8 }
+    return -1
+}
+
+fn typed_new_colors(arena: KIRTypedArena) -> KIRTypedColors {
+    let counts: Array[Int] = [len(arena.executable.expressions), len(arena.executable.statements), len(arena.values), len(arena.executable.functions), len(arena.executable.parameters), len(arena.executable.arms), len(arena.executable.patterns), len(arena.executable.captures), 1]
+    let mut offsets: Array[Int] = []
+    let mut count: Int = 0
+    let mut index: Int = 0
+    while index < len(counts) {
+        offsets = array_push(offsets, count)
+        count = count + counts[index]
+        index = index + 1
+    }
+    let mut leaf: Array[UInt8] = []
+    index = 0
+    while index < 32 {
+        leaf = array_push(leaf, u8(0))
+        index = index + 1
+    }
+    let mut pages: Array[Array[Array[Array[UInt8]]]] = []
+    let mut group: Array[Array[Array[UInt8]]] = []
+    let mut page: Array[Array[UInt8]] = []
+    index = 0
+    while index < count {
+        page = array_push(page, leaf)
+        if len(page) == 32 {
+            group = array_push(group, page)
+            page = []
+            if len(group) == 32 {
+                pages = array_push(pages, group)
+                group = []
+            }
+        }
+        index = index + 32
+    }
+    if len(page) != 0 { group = array_push(group, page) }
+    if len(group) != 0 { pages = array_push(pages, group) }
+    return KIRTypedColors{ pages: pages, offsets: offsets }
+}
+
+fn typed_color_position(colors: KIRTypedColors, reference: KIRIndexRef) -> Int {
+    let table: Int = typed_color_table_index(reference.table)
+    if table < 0 { return -1 }
+    return colors.offsets[table] + reference.index
+}
+
+fn typed_color_get(colors: KIRTypedColors, position: Int) -> UInt8 {
+    let group_index: Int = position / 32768
+    let page_index: Int = (position / 1024) % 32
+    let leaf_index: Int = (position / 32) % 32
+    return colors.pages[group_index][page_index][leaf_index][position % 32]
+}
+
+fn typed_color_set(colors: KIRTypedColors, position: Int, color: UInt8) -> KIRTypedColors {
+    let group_index: Int = position / 32768
+    let page_index: Int = (position / 1024) % 32
+    let leaf_index: Int = (position / 32) % 32
+    let group: Array[Array[Array[UInt8]]] = colors.pages[group_index]
+    let page: Array[Array[UInt8]] = group[page_index]
+    let leaf: Array[UInt8] = result_unwrap(array_set(page[leaf_index], position % 32, color))
+    let updated_page: Array[Array[UInt8]] = result_unwrap(array_set(page, leaf_index, leaf))
+    let updated_group: Array[Array[Array[UInt8]]] = result_unwrap(array_set(group, page_index, updated_page))
+    return KIRTypedColors{ pages: result_unwrap(array_set(colors.pages, group_index, updated_group)), offsets: colors.offsets }
+}
+
+fn typed_validate_acyclic_view(value: KIRTypedNodeView, states: KIRTypedColors, depth: Int) -> Result[KIRTypedColors, String] {
+    if depth > 4096 { return err("typed KIR structural nesting exceeds the validation limit") }
+    let kind: String = kir_typed_kind(value)
+    let mut visited: KIRTypedColors = states
+    if kind == "array" {
+        let count: Int = result_unwrap(kir_typed_array_len(value))
+        let mut index: Int = 0
+        while index < count {
+            let child: Result[KIRTypedNodeView, String] = kir_typed_array_get(value, index)
+            if is_err(child) { return err("typed KIR array contains an invalid reference") }
+            let checked: Result[KIRTypedColors, String] = typed_validate_acyclic_view(result_unwrap(child), visited, depth + 1)
+            if is_err(checked) { return checked }
+            visited = result_unwrap(checked)
+            index = index + 1
+        }
+        return ok(visited)
+    }
+    if kind != "object" { return ok(visited) }
+    let position: Int = typed_color_position(visited, value.reference)
+    if position < 0 { return err("typed KIR structural graph references an unexpected table") }
+    let state: UInt8 = typed_color_get(visited, position)
+    if state == u8(1) { return err("typed KIR structural reference cycle at row " + str(value.reference.index)) }
+    if state == u8(2) { return ok(visited) }
+    visited = typed_color_set(visited, position, u8(1))
+    let names: Array[String] = typed_cycle_keys(value)
+    let mut index: Int = 0
+    while index < len(names) {
+        let child: Result[KIRTypedNodeView, String] = kir_typed_object_get(value, names[index])
+        if is_err(child) { return err("typed KIR row contains an invalid field reference") }
+        let checked: Result[KIRTypedColors, String] = typed_validate_acyclic_view(result_unwrap(child), visited, depth + 1)
+        if is_err(checked) { return checked }
+        visited = result_unwrap(checked)
+        index = index + 1
+    }
+    return ok(typed_color_set(visited, position, u8(2)))
+}
+
+pub fn kir_typed_arena_structure_valid(arena: KIRTypedArena) -> Result[Bool, String] {
+    if !kir_typed_arena_references_valid(arena) { return err("typed KIR arena has invalid table references or edge ranges") }
+    let reachable: Result[KIRTypedColors, String] = typed_validate_acyclic_view(kir_typed_root_view(arena), typed_new_colors(arena), 0)
+    if is_err(reachable) { return err(unwrap_or(result_error(reachable), "typed KIR structural graph is invalid")) }
+    let states: KIRTypedColors = result_unwrap(reachable)
+    let tables: Array[KIRTypedTable] = [KIRTypedTable::KIRTableFunctions, KIRTypedTable::KIRTableParameters, KIRTypedTable::KIRTableExpressions, KIRTypedTable::KIRTableStatements, KIRTypedTable::KIRTableArms, KIRTypedTable::KIRTablePatterns, KIRTypedTable::KIRTableValues]
+    let mut table_index: Int = 0
+    while table_index < len(tables) {
+        let table: KIRTypedTable = tables[table_index]
+        let count: Int = result_unwrap(kir_typed_table_len(arena, table))
+        let offset: Int = states.offsets[typed_color_table_index(table)]
+        let mut index: Int = 0
+        while index < count {
+            if typed_color_get(states, offset + index) != u8(2) { return err("typed KIR arena contains an unreachable executable row") }
+            index = index + 1
+        }
+        table_index = table_index + 1
+    }
+    return ok(true)
+}
+
+fn typed_number_digit(character: String) -> Bool {
+    return character == "0" || character == "1" || character == "2" || character == "3" || character == "4" || character == "5" || character == "6" || character == "7" || character == "8" || character == "9"
+}
+
+// Strict JSON-number grammar, including exponent forms and negative zero.
+pub fn kir_typed_number_text_valid(text: String) -> Bool {
+    let characters: Array[String] = string_chars(text)
+    let count: Int = len(characters)
+    if count == 0 { return false }
+    let mut index: Int = 0
+    if unwrap_or(array_get(characters, index), "") == "-" { index = index + 1 }
+    if index >= count { return false }
+    let first: String = unwrap_or(array_get(characters, index), "")
+    if first == "0" { index = index + 1 }
+    else {
+        if !typed_number_digit(first) { return false }
+        while index < count && typed_number_digit(unwrap_or(array_get(characters, index), "")) { index = index + 1 }
+    }
+    if unwrap_or(array_get(characters, index), "") == "." {
+        index = index + 1
+        let start: Int = index
+        while index < count && typed_number_digit(unwrap_or(array_get(characters, index), "")) { index = index + 1 }
+        if index == start { return false }
+    }
+    let exponent: String = unwrap_or(array_get(characters, index), "")
+    if exponent == "e" || exponent == "E" {
+        index = index + 1
+        let sign: String = unwrap_or(array_get(characters, index), "")
+        if sign == "+" || sign == "-" { index = index + 1 }
+        let start: Int = index
+        while index < count && typed_number_digit(unwrap_or(array_get(characters, index), "")) { index = index + 1 }
+        if index == start { return false }
+    }
+    return index == count
+}
+
+fn typed_quote_text(text: String) -> String {
+    let characters: Array[String] = string_chars(text)
+    let hex: Array[String] = string_chars("0123456789abcdef")
+    let mut result: String = "\""
+    let mut index: Int = 0
+    while index < len(characters) {
+        let character: String = unwrap_or(array_get(characters, index), "")
+        let point: Int = int(unwrap_or(array_get(u8_array(string_to_bytes(character)), 0), u8(0)))
+        if character == "\"" { result = result + "\\\"" }
+        else if character == "\\" { result = result + "\\\\" }
+        else if point < 32 { result = result + "\\u00" + unwrap_or(array_get(hex, point / 16), "0") + unwrap_or(array_get(hex, point % 16), "0") }
+        else { result = result + character }
+        index = index + 1
+    }
+    return result + "\""
+}
+
+fn typed_base64_bytes(values: Array[UInt8]) -> String {
+    let alphabet: Array[String] = string_chars("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+    let mut text: String = ""
+    let mut index: Int = 0
+    while index < len(values) {
+        let first: Int = int(unwrap_or(array_get(values, index), u8(0)))
+        let second: Int = int(unwrap_or(array_get(values, index + 1), u8(0)))
+        let third: Int = int(unwrap_or(array_get(values, index + 2), u8(0)))
+        text = text + unwrap_or(array_get(alphabet, first / 4), "") + unwrap_or(array_get(alphabet, (first % 4) * 16 + second / 16), "")
+        if index + 1 < len(values) { text = text + unwrap_or(array_get(alphabet, (second % 16) * 4 + third / 64), "") }
+        else { text = text + "=" }
+        if index + 2 < len(values) { text = text + unwrap_or(array_get(alphabet, third % 64), "") }
+        else { text = text + "=" }
+        index = index + 3
+    }
+    return text
+}
+
+fn typed_serialize_view(value: KIRTypedNodeView, quotes: Map[String, String]) -> Result[String, String] {
+    let kind: String = kir_typed_kind(value)
+    if kind == "null" { return ok("null") }
+    if kind == "string" {
+        let text: String = result_unwrap(kir_typed_string(value))
+        let quoted: Option[String] = map_get(quotes, text)
+        if is_some(quoted) { return ok(unwrap_or(quoted, "")) }
+        return ok(typed_quote_text(text))
+    }
+    if kind == "number" {
+        let text: String = kir_typed_number_text(value)
+        if !kir_typed_number_text_valid(text) { return err("typed KIR contains invalid portable numeric text") }
+        return ok(text)
+    }
+    if kind == "bool" {
+        if result_unwrap(kir_typed_bool(value)) { return ok("true") }
+        return ok("false")
+    }
+    if value.mode == KIRTypedViewMode::KIRViewBytes { return ok(typed_quote_text(typed_base64_bytes(value.bytes))) }
+    if kind == "array" {
+        let count: Int = result_unwrap(kir_typed_array_len(value))
+        let mut text: String = "["
+        let mut index: Int = 0
+        while index < count {
+            let child: Result[String, String] = typed_serialize_view(result_unwrap(kir_typed_array_get(value, index)), quotes)
+            if is_err(child) { return child }
+            if index > 0 { text = text + "," }
+            text = text + result_unwrap(child)
+            index = index + 1
+        }
+        return ok(text + "]")
+    }
+    if kind == "object" {
+        let names: Array[String] = typed_portable_keys(value)
+        let mut text: String = "{"
+        let mut index: Int = 0
+        while index < len(names) {
+            let key: String = unwrap_or(array_get(names, index), "")
+            let child: Result[String, String] = typed_serialize_view(result_unwrap(kir_typed_object_get(value, key)), quotes)
+            if is_err(child) { return child }
+            if index > 0 { text = text + "," }
+            text = text + "\"" + key + "\":" + result_unwrap(child)
+            index = index + 1
+        }
+        return ok(text + "}")
+    }
+    return err("typed KIR contains an unsupported portable value")
+}
+
+// Serialization is the final portable-output operation. No serializer output
+// is parsed or used as a lowering input by source compilation.
+pub fn kir_typed_arena_serialize(arena: KIRTypedArena) -> Result[String, String] {
+    let structure: Result[Bool, String] = kir_typed_arena_structure_valid(arena)
+    if is_err(structure) { return err(unwrap_or(result_error(structure), "invalid typed KIR structure")) }
+    let mut quotes: Map[String, String] = {}
+    let common: Array[String] = ["", "Int", "Bool", "Nil", "String", "Bytes", "Float", "UInt8", "UInt16", "UInt32", "UInt64", "linux", "windows", "amd64", "kry-ir", "1.0.0"]
+    let mut index: Int = 0
+    while index < len(common) {
+        let text: String = unwrap_or(array_get(common, index), "")
+        quotes = map_insert(quotes, text, typed_quote_text(text))
+        index = index + 1
+    }
+    index = 0
+    while index < len(arena.declarations.sources) {
+        let text: String = unwrap_or(array_get(arena.declarations.sources, index), "")
+        quotes = map_insert(quotes, text, typed_quote_text(text))
+        index = index + 1
+    }
+    index = 0
+    while index < len(arena.executable.bindings) {
+        let binding: KIRTypedBinding = unwrap_or(array_get(arena.executable.bindings, index), KIRTypedBinding{ id: "", name: "", type_name: "", mutable: false, source: "", line: 0, column: 0, span: kir_typed_absent_ref(KIRTypedTable::KIRTableSpans) })
+        let texts: Array[String] = [binding.id, binding.name, binding.type_name]
+        let mut text_index: Int = 0
+        while text_index < len(texts) {
+            let text: String = unwrap_or(array_get(texts, text_index), "")
+            if !map_contains_key(quotes, text) { quotes = map_insert(quotes, text, typed_quote_text(text)) }
+            text_index = text_index + 1
+        }
+        index = index + 1
+    }
+    return typed_serialize_view(kir_typed_root_view(arena), quotes)
+}
+
+pub fn kir_typed_table_view(arena: KIRTypedArena, table: KIRTypedTable) -> Result[KIRTypedNodeView, String] {
+    let count: Result[Int, String] = kir_typed_table_len(arena, table)
+    if is_err(count) { return err("invalid typed KIR table") }
+    return ok(typed_view_direct_rows(arena, table, result_unwrap(count)))
+}
+
+fn typed_parse_uint_text(number_text: String) -> Result[UInt64, String] {
+    if number_text == "" || starts_with(number_text, "-") || contains(number_text, ".") || contains(number_text, "e") || contains(number_text, "E") { return err("typed KIR number is not an unsigned integer") }
+    let characters: Array[String] = string_chars(number_text)
+    if len(characters) == 0 { return err("typed KIR number is empty") }
+    let maximum: UInt64 = u64(0) - u64(1)
+    let threshold: UInt64 = maximum / u64(10)
+    let final_digit: UInt64 = maximum % u64(10)
+    let mut result: UInt64 = u64(0)
+    let mut index: Int = 0
+    while index < len(characters) {
+        let character: String = unwrap_or(array_get(characters, index), "")
+        if character != "0" && character != "1" && character != "2" && character != "3" && character != "4" && character != "5" && character != "6" && character != "7" && character != "8" && character != "9" { return err("typed KIR number contains a non-digit") }
+        let digit: Int = int(character)
+        let digit_value: UInt64 = u64(digit)
+        if result > threshold || (result == threshold && digit_value > final_digit) { return err("typed KIR integer is outside the UInt64 range") }
+        result = result * u64(10) + digit_value
+        index = index + 1
+    }
+    return ok(result)
+}
+
+
+pub fn kir_typed_view_arena(value: KIRTypedNodeView) -> KIRTypedArena { return value.arena }
+
+// The portable schema permits omitted inactive fields. Emission retains active
+// payloads and metadata rather than filling every union alternative with zeros.
+fn typed_portable_keys(value: KIRTypedNodeView) -> Array[String] {
+    let table: KIRTypedTable = value.reference.table
+    if table != KIRTypedTable::KIRTableExpressions && table != KIRTypedTable::KIRTableStatements && table != KIRTypedTable::KIRTableValues { return result_unwrap(kir_typed_object_keys(value)) }
+    let kind: String = result_unwrap(kir_typed_string(result_unwrap(kir_typed_object_get(value, "kind"))))
+    let mut keys: Array[String] = ["kind"]
+    if table != KIRTypedTable::KIRTableValues { keys = ["kind", "source", "line", "column", "span"] }
+    if table == KIRTypedTable::KIRTableExpressions { keys = array_concat(keys, ["type", "const"]) }
+    if table == KIRTypedTable::KIRTableValues || table == KIRTypedTable::KIRTableExpressions {
+        if kind == "int" || kind == "float" || kind == "bool" || kind == "string" { keys = array_push(keys, kind) }
+        if kind == "uint" { keys = array_concat(keys, ["uint", "uint_bits"]) }
+    }
+    if table == KIRTypedTable::KIRTableValues {
+        if kind == "bytes" { keys = array_push(keys, "bytes") }
+        if kind == "array" || kind == "set" { keys = array_push(keys, "array") }
+        if kind == "option" { keys = array_concat(keys, ["inner", "present"]) }
+        if kind == "result" { keys = array_concat(keys, ["inner", "ok"]) }
+        return keys
+    }
+    if table == KIRTypedTable::KIRTableExpressions {
+        if kind == "var" { keys = array_concat(keys, ["name", "binding"]) }
+        if kind == "unary" { keys = array_concat(keys, ["operator", "operand"]) }
+        if kind == "binary" { keys = array_concat(keys, ["operator", "left", "right"]) }
+        if kind == "call" {
+            keys = array_concat(keys, ["name", "call_target", "args"])
+            let target: String = result_unwrap(kir_typed_string(result_unwrap(kir_typed_object_get(value, "call_target"))))
+            if starts_with(target, "builtin:") { keys = array_push(keys, "builtin_id") }
+        }
+        if kind == "array" || kind == "set" { keys = array_push(keys, "items") }
+        if kind == "index" { keys = array_concat(keys, ["base", "left"]) }
+        if kind == "field" { keys = array_concat(keys, ["base", "field"]) }
+        if kind == "struct" { keys = array_concat(keys, ["struct_name", "struct_type", "fields", "values"]) }
+        if kind == "enum" { keys = array_concat(keys, ["enum_type", "enum_variant"]) }
+        if kind == "map" { keys = array_concat(keys, ["map_keys", "values"]) }
+        if kind == "propagate" { keys = array_push(keys, "operand") }
+        return keys
+    }
+    if kind == "let" || kind == "const" { keys = array_concat(keys, ["name", "binding", "mutable", "const", "annotation", "init"]) }
+    if kind == "expr" { keys = array_push(keys, "expr") }
+    if kind == "assign" { keys = array_concat(keys, ["target", "value"]) }
+    if kind == "if" { keys = array_concat(keys, ["cond", "then", "else"]) }
+    if kind == "while" { keys = array_concat(keys, ["cond", "body"]) }
+    if kind == "for" { keys = array_concat(keys, ["name", "binding", "iter", "body"]) }
+    if kind == "return" { keys = array_push(keys, "return") }
+    if kind == "match" { keys = array_concat(keys, ["scrutinee", "arms"]) }
+    return keys
+}
+
+// Reject non-finite Float64 magnitudes without executing Float arithmetic.
+// The overflow midpoint is (2^1024 - 2^970); ties overflow as in Go's decoder.
+pub fn kir_typed_float_text_valid(text: String) -> Bool {
+    if !kir_typed_number_text_valid(text) { return false }
+    let characters: Array[String] = string_chars(text)
+    let count: Int = len(characters)
+    let mut index: Int = 0
+    if unwrap_or(array_get(characters, index), "") == "-" { index = index + 1 }
+    let mut before_decimal: Int = 0
+    let mut decimal: Bool = false
+    let mut digits: Int = 0
+    let mut first_nonzero: Int = -1
+    let mut significant: Array[String] = []
+    while index < count {
+        let character: String = unwrap_or(array_get(characters, index), "")
+        if character == "e" || character == "E" { break }
+        if character == "." { decimal = true }
+        else {
+            if !decimal { before_decimal = before_decimal + 1 }
+            if character != "0" && first_nonzero < 0 { first_nonzero = digits }
+            if first_nonzero >= 0 { significant = array_push(significant, character) }
+            digits = digits + 1
+        }
+        index = index + 1
+    }
+    if first_nonzero < 0 { return true }
+    let mut exponent: Int = 0
+    let mut negative_exponent: Bool = false
+    if index < count {
+        index = index + 1
+        let sign: String = unwrap_or(array_get(characters, index), "")
+        if sign == "-" || sign == "+" { negative_exponent = sign == "-"; index = index + 1 }
+        while index < count {
+            if exponent < 10000 { exponent = exponent * 10 + int(unwrap_or(array_get(characters, index), "0")) }
+            index = index + 1
+        }
+    }
+    if negative_exponent { exponent = -exponent }
+    let magnitude: Int = exponent + before_decimal - first_nonzero - 1
+    if magnitude < 308 { return true }
+    if magnitude > 308 { return false }
+    let midpoint: Array[String] = string_chars("179769313486231580793728971405303415079934132710037826936173778980444968292764750946649017977587207096330286416692887910946555547851940402630657488671505820681908902000708383676273854845817711531764475730270069855571366959622842914819860834936475292719074168444365510704342711559699508093042880177904174497792")
+    index = 0
+    while index < len(midpoint) {
+        let actual: Int = int(unwrap_or(array_get(significant, index), "0"))
+        let maximum: Int = int(unwrap_or(array_get(midpoint, index), "0"))
+        if actual < maximum { return true }
+        if actual > maximum { return false }
+        index = index + 1
+    }
+    return false
+}
+
+pub fn kir_typed_float_payload_present(value: KIRTypedNodeView) -> Bool {
+    if value.mode != KIRTypedViewMode::KIRViewRow { return false }
+    if value.reference.table == KIRTypedTable::KIRTableExpressions {
+        let row: KIRTypedExpression = unwrap_or(array_get(value.arena.executable.expressions, value.reference.index), kir_typed_empty_expression())
+        return row.float_text != "" && kir_typed_float_text_valid(row.float_text)
+    }
+    if value.reference.table == KIRTypedTable::KIRTableValues {
+        let row: KIRTypedValue = unwrap_or(array_get(value.arena.values, value.reference.index), kir_typed_empty_value())
+        return row.float_text != "" && kir_typed_float_text_valid(row.float_text)
+    }
+    return false
+}
+
+fn typed_base64_digit(character: String) -> Int {
+    let alphabet: Array[String] = string_chars("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+    let mut index: Int = 0
+    while index < 64 {
+        if character == unwrap_or(array_get(alphabet, index), "") { return index }
+        index = index + 1
+    }
+    return -1
+}
+
+fn typed_decode_base64(text: String) -> Result[Array[UInt8], String] {
+    let characters: Array[String] = string_chars(text)
+    let count: Int = len(characters)
+    if count % 4 != 0 { return err("portable KIR bytes have malformed base64 length") }
+    let mut values: Array[UInt8] = []
+    let mut index: Int = 0
+    while index < count {
+        let first: Int = typed_base64_digit(unwrap_or(array_get(characters, index), ""))
+        let second: Int = typed_base64_digit(unwrap_or(array_get(characters, index + 1), ""))
+        let third_text: String = unwrap_or(array_get(characters, index + 2), "")
+        let fourth_text: String = unwrap_or(array_get(characters, index + 3), "")
+        let third: Int = typed_base64_digit(third_text)
+        let fourth: Int = typed_base64_digit(fourth_text)
+        if first < 0 || second < 0 { return err("portable KIR bytes have malformed base64 digits") }
+        values = array_push(values, u8(first * 4 + second / 16))
+        if third_text == "=" {
+            if fourth_text != "=" || index + 4 != count { return err("portable KIR bytes have malformed base64 padding") }
+        } else {
+            if third < 0 { return err("portable KIR bytes have malformed base64 digits") }
+            values = array_push(values, u8((second % 16) * 16 + third / 4))
+            if fourth_text == "=" {
+                if index + 4 != count { return err("portable KIR bytes have malformed base64 padding") }
+            } else {
+                if fourth < 0 { return err("portable KIR bytes have malformed base64 digits") }
+                values = array_push(values, u8((third % 4) * 64 + fourth))
+            }
+        }
+        index = index + 4
+    }
+    return ok(values)
+}
+
+pub fn kir_typed_statement_children_valid(value: KIRTypedNodeView) -> Bool {
+    if value.mode != KIRTypedViewMode::KIRViewRow || value.reference.table != KIRTypedTable::KIRTableStatements { return false }
+    let row: KIRTypedStatement = value.arena.executable.statements[value.reference.index]
+    let kind: String = row.kind
+    if row.init.present && kind != "let" && kind != "const" { return false }
+    if row.expr.present && kind != "expr" { return false }
+    if (row.target.present || row.value.present) && kind != "assign" { return false }
+    if row.cond.present && kind != "if" && kind != "while" { return false }
+    if (row.then_body.count > 0 || row.else_body.count > 0) && kind != "if" { return false }
+    if row.body.count > 0 && kind != "while" && kind != "for" { return false }
+    if row.iter.present && kind != "for" { return false }
+    if row.return_value.present && kind != "return" { return false }
+    if (row.scrutinee.present || row.arms.count > 0) && kind != "match" { return false }
+    if row.binding.present && kind != "let" && kind != "const" && kind != "for" { return false }
+    return true
 }

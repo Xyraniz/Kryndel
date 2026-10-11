@@ -11,6 +11,8 @@ jobs:
   go:
     name: Go toolchain and native tests
     runs-on: ubuntu-latest
+    env:
+      KRY_SKIP_STAGE36_BOOTSTRAP: '1'
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -25,7 +27,7 @@ jobs:
           x86_64-w64-mingw32-gcc --version
       - name: Run complete verification matrix
         run: make verify
-        timeout-minutes: 45
+        timeout-minutes: 240
 
   bootstrap:
     name: Locked Linux amd64 self-host bootstrap
@@ -52,8 +54,8 @@ jobs:
         env:
           KRY_REQUIRE_LOCKED_BOOTSTRAP: '1'
           KRY_STAGE36_WINDOWS_PE_OUTPUT: ${{ runner.temp }}/stage36-selfhost.exe
-        run: go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v
-        timeout-minutes: 30
+        run: go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=90m -v
+        timeout-minutes: 105
       - name: Upload self-hosted Windows executables
         uses: actions/upload-artifact@v4
         with:

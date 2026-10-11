@@ -479,7 +479,7 @@ func selfHostedKindInventories(filename string) (map[string][]string, error) {
 	exprKindNames := map[string]string{
 		"array": "ExArray", "binary": "ExBinary", "bool": "ExBool", "call": "ExCall",
 		"enum": "ExEnum", "field": "ExField", "float": "ExFloat", "index": "ExIndex",
-		"int": "ExInt", "map": "ExMap", "nil": "ExNil", "propagate": "ExPropagate",
+		"int": "ExInt", "uint": "ExInt", "map": "ExMap", "nil": "ExNil", "propagate": "ExPropagate",
 		"set": "ExSet", "string": "ExString", "struct": "ExStruct", "unary": "ExUnary", "var": "ExVar",
 	}
 	stmtKindNames := map[string]string{
@@ -487,8 +487,10 @@ func selfHostedKindInventories(filename string) (map[string][]string, error) {
 		"defer": "StDefer", "expr": "StExpr", "for": "StFor", "if": "StIf", "let": "StLet",
 		"match": "StMatch", "return": "StReturn", "unsafe": "StUnsafe", "while": "StWhile",
 	}
-	kindPattern := regexp.MustCompile(`\\"kind\\":\\"([a-z_]+)\\"`)
-	statementPattern := regexp.MustCompile(`statement_json\("([a-z_]+)"`)
+	// The source frontend constructs schema-shaped rows directly. JSON spelling
+	// belongs only to the portable serializer and cannot describe parser support.
+	kindPattern := regexp.MustCompile(`KIRTypedExpression\s*\{\s*kind:\s*"([a-z_]+)"`)
+	statementPattern := regexp.MustCompile(`KIRTypedStatement\s*\{\s*kind:\s*"([a-z_]+)"`)
 	operatorPattern := regexp.MustCompile(`current_token\(parsed\.parser\)\.text == "([!%&()*+\-./<=>^|]+)"`)
 	unaryPattern := regexp.MustCompile(`token\.text != "([!~+\-])"`)
 	exprs := map[string]bool{}
@@ -503,8 +505,13 @@ func selfHostedKindInventories(filename string) (map[string][]string, error) {
 			statements[name] = true
 		}
 	}
-	if strings.Contains(text, `keyword == "const"`) {
-		statements["StConst"] = true
+	if strings.Contains(text, "KIRTypedStatement{ kind: keyword,") {
+		if strings.Contains(text, `token.text == "let"`) {
+			statements["StLet"] = true
+		}
+		if strings.Contains(text, `keyword == "const"`) {
+			statements["StConst"] = true
+		}
 	}
 	if strings.Contains(text, `token.text == "break"`) {
 		statements["StBreak"] = true
@@ -528,7 +535,10 @@ func selfHostedKindInventories(filename string) (map[string][]string, error) {
 	}
 	// The Stage 3 parser recognizes only a deliberately small language slice.
 	// Its source type predicates are the authoritative subset for these rows.
-	types := map[string]bool{"TyNil": strings.Contains(text, `"kind":"nil"`)}
+	types := map[string]bool{}
+	if exprs["ExNil"] {
+		types["TyNil"] = true
+	}
 	typeSourceStart := strings.Index(text, "fn source_is_scalar_type(")
 	typeSourceEnd := strings.Index(text[typeSourceStart+1:], "\nfn ")
 	if typeSourceStart >= 0 && typeSourceEnd >= 0 {

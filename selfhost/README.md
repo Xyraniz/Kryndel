@@ -4,11 +4,39 @@ The bootstrap stage names and completion evidence are defined in the
 [bootstrap contract](bootstrap-contract.md). The Stage 14–39 entries below are
 feature milestones and must not be mistaken for complete bootstrap stages.
 
-`elf_backend.kry` is the reusable lowering component of the first executable compiler written in Kryndel. `dynamic_backend.kry` adds the second lowering slice, and `kir_backend.kry` provides their command-line entrypoint. Together they accept the checked frontend's KIR v5/v6 JSON at the decoder boundary and write a Linux x86-64 ELF64 file without invoking C, Go, or an external assembler. `validated_kir.kry` validates declarations, node shape, source coordinates, resolved bindings, and function-call signatures, then converts the document once into the schema-shaped typed tables in `kir_typed_arena.kry`, with checked integer references and edge ranges. External KIR also receives an allowed-field scan. Source-generated KIR uses the frontend's fixed serializer and skips only that repeated unknown-key scan; malformed declarations, bindings, and calls still fail validation. The ELF and dynamic ELF/PE lowerers consume checked typed arena views; no lowerer traverses or retains recursive KIR JSON, and no partial ELF projection remains. The dynamic lowerer returns typed code, data, target, imports, relocations, and function ranges through `LoweredNativeImage`; `native_image.kry` is the platform writer boundary and does not inspect KIR. `kir_arena.kry` remains a standalone generic JSON arena utility used by its own tests, not by production lowerers. Source compilation still serializes generated KIR and parses it before validation, so direct construction of the validated arena from the source frontend remains unfinished.
+`elf_backend.kry` is the reusable lowering component of the first executable
+compiler written in Kryndel. `dynamic_backend.kry` adds the second lowering
+slice, and `kir_backend.kry` provides the portable KIR command-line entrypoint.
+That entrypoint accepts KIR v5/v6 JSON at the decoder boundary. External input
+receives an allowed-field scan and is converted once into the schema-shaped
+tables in `kir_typed_arena.kry`. `validated_kir.kry` then validates the typed
+arena's references, edge ranges, declarations, node shapes, types, source
+metadata, lexical bindings, mutability, and function-call signatures.
 
-`source_compiler.kry` is the next bootstrap stage. It contains a bounded but real source lexer and recursive-descent expression parser written in Kryndel itself. It handles comments, line separators, escaped strings, static `let`/`const` bindings, `print`/`println`, `str(...)`, parentheses, and the arithmetic precedence levels `* / %` above `+ -`. It evaluates that static subset and sends the resulting bytes through the same Kryndel ELF emitter.
+The source frontend builds these same tables directly while parsing and
+checking its supported subset. Expressions and statements carry arena
+references, imported modules share the builder, and `compile_path` calls
+`validate_kir_typed_arena` before `compile_validated_kir`. Normal source
+compilation does not serialize or parse KIR JSON; `--emit-kir` serializes the
+validated arena only when portable output is requested.
 
-`source_kir_compiler.kry` is the following frontend slice. It lexes and parses typed functions (including `pub fn`), parameters, `return`, mutable bindings, assignment, Boolean conditions, `if`/`else`, `while`, `for` over arrays, `break`/`continue`, struct declarations and literals, field access, multiline array literals and indexing, array concatenation, `len`, `array_push`, `array_get`, `array_concat`, `array_indices`, scalar conversion calls, generic `Option[...]`/`Result[...]` annotations (including nested array payloads), opaque `Json`/`Map[...]` ABI values, their constructors/predicates/unwrapping operations, and output calls. It emits KIR v6 JSON with binding IDs and source spans, parses that text once, validates it, and converts it to the arena consumed by `dynamic_backend.kry`. Source compilation still passes through serialized KIR text. It is tested against the Go direct backend as a byte-level oracle.
+Both entry paths return `ValidatedKIR`, which retains only the typed arena.
+The ELF and dynamic ELF/PE lowerers consume indexed typed views. The dynamic
+lowerer returns code, data, target, imports, relocations, and function ranges
+through `LoweredNativeImage`; `native_image.kry` selects the platform writer
+and `pe_backend.kry` serializes already lowered machine code. Neither writer
+inspects KIR. `kir_arena.kry` remains a standalone generic JSON arena utility
+used by its own tests. The source migration changes compiler inputs and
+artifacts, so its current Stage 0 provenance and Stage 1–3 bootstrap must be
+measured again before prior locked hashes establish reproducibility.
+
+`source_compiler.kry` retains the legacy two-argument source CLI as a wrapper
+around `source_kir_compiler.kry`'s `compile_path`. It uses the same parser,
+typed arena, validator, and backend as normal source compilation. It no longer
+has a separate parser that evaluates source expressions into a static output
+payload.
+
+`source_kir_compiler.kry` is the bounded source frontend. It resolves imported modules and builds typed rows for the declarations, functions, expressions, statements, patterns, bindings, values, spans, and references it supports. The parser preserves checked types, binding IDs, mutability, source locations, and resolved call targets in the arena. `compile_path` validates that arena and passes its `ValidatedKIR` to the selected backend. Regression tests cover representative Go/selfhost parity, including imports, builtins, references, and native output; this is not full language or target parity.
 
 The source frontend recognizes `FFILibrary`, `FFISymbol`, and `FFIBuffer` annotations, serializes typed KIR calls for the `ffi_*` builtins, and lowers postfix `?` for supported `Option[T]` and `Result[T,E]` values. Stage 39 adds a tested C-free Windows PE path for the documented FFI subset and native Windows execution from a Stage 2 compiler.
 
@@ -23,7 +51,7 @@ The dynamic KIR stage additionally accepts top-level and nested `let`/`const`, m
 
 Unsupported arbitrary calls, dynamic String operations other than `+`, collection and resource values outside the documented Array/Map/JSON/struct/Option/Result slices, unsupported array builtins, and general heap values outside the documented slices are rejected with explicit errors. The dynamic KIR backend's ELF target remains Linux amd64.
 
-The original source stage has the static output subset and performs its own lexical and syntactic validation instead of recognizing complete source lines by prefix. `source_kir_compiler.kry` owns the dynamic scalar source subset; both frontends reject unsupported constructs explicitly rather than guessing.
+The earlier static-output and dynamic-KIR entries below document historical bootstrap slices. The current source CLI routes through `source_kir_compiler.kry`; it does not keep a second productive parser or lowerer. Unsupported source constructs and backend capabilities are rejected explicitly.
 
 An end-to-end run from the repository root is:
 
@@ -47,7 +75,7 @@ kry emit selfhost/fixtures/option_result_runtime_stage7.kry --target=linux-x64 -
 kry run selfhost/kir_backend.kry option-result.kir option-result-stage7
 ```
 
-The Go direct backend is kept as a byte-level oracle for these stages. Regression tests execute both Kryndel programs under the interpreter and require byte-identical ELF output before a change can pass. This is bootstrap progress, not yet a complete self-hosting compiler: the source frontend has a bounded same-directory function-module resolver, while full module/type parity, general heap values, linker/object-file support, and broad Windows target parity remain ahead of this subset.
+The Go direct backend is kept as a byte-level oracle for these historical slices. Regression tests execute both Kryndel programs under the interpreter and require byte-identical ELF output before a change can pass. These are bounded bootstrap features, not full-language selfhosting: complete checker parity, general heap values, linker/object-file support, and broad Windows target parity remain outside the verified subset.
 
 Stage 14 extends the direct ELF oracle with boxed struct values (literals, field loads, function parameters and returns), scoped shadowing, `for` lowering over `Array[T]`, and `array_indices`. It is covered by an executable Linux regression fixture. Stage 17 mirrors this ABI in `dynamic_backend.kry`; the self-hosted emitter now produces byte-identical ELF and the Linux regression executes the generated `48\n` result.
 
@@ -81,7 +109,7 @@ Stage 28 fixes the native `u8_array` runtime's loop bound, which previously comp
 
 Stage 34 fixes KIR emission for unary Boolean negation: `!` is now serialized as `!` instead of the fallback operator text `?`. Its regression lowers a small KIR program through `kir_backend.kry`, checks byte parity with the Go direct backend, and executes the ELF on Linux amd64. KIR documents also have a separate `MaxJSONBytes` limit (64 MiB by default); this is distinct from the 16 MiB limit for ordinary Kryndel strings.
 
-Stage 35 generates the first native source compiler from KIR emitted by the locked Stage 0 Go CLI. The CLI runs `kir_backend.kry` to produce a Linux amd64 ELF; that compiler then compiles and runs a fixture. This stage is exercised as the first half of the Stage 36 bootstrap regression. The current KIR is 168,377,923 bytes (about 160.6 MiB); the lock allows 201,326,592 bytes (`192 MiB`), leaving 32,948,669 bytes of headroom. Stage 0 emitted it with a measured 697,904 KB peak RSS. The subsequent Stage 0 dynamic lowering was still running at a measured 1,546,468 KB RSS during the latest attempt; its completed time and peak are not yet known. Every growth consumes the measured bootstrap budget and must be reviewed. Project-relative paths keep the artifact independent of its checkout location. `.gitattributes` keeps Kryndel sources in LF form across Windows/WSL and Linux checkouts.
+Stage 35 generates the first native source compiler from KIR emitted by the locked Stage 0 Go CLI. The CLI runs `kir_backend.kry` to produce a Linux amd64 ELF; that compiler then compiles and runs a fixture. This stage is exercised as the first half of the Stage 36 bootstrap regression. Compiler KIR size, resource budgets, source hashes, and artifact hashes belong in `bootstrap.lock.json` and must be measured after a successful bootstrap of the current sources. Earlier measurements describe earlier compiler inputs and are not evidence for the arena source migration. Project-relative paths keep the artifact independent of its checkout location. `.gitattributes` keeps Kryndel sources in LF form across Windows/WSL and Linux checkouts.
 
 Stage 36 verifies a second compiler level. The generated Stage 35 compiler uses its own module resolver to compile the checked-in graph `source_kir_compiler.kry` → `dynamic_backend.kry` → `elf_backend.kry` and `pe_backend.kry` into a second Linux amd64 compiler ELF. That compiler compiles and runs the fixture, rejects invalid source with the expected diagnostic, emits a Windows amd64 PE32+ executable that imports public struct and enum modules, passes and returns the struct through a function, and prints the imported enum using its source name. The CI bootstrap job uploads this exact Stage 2-produced PE, and the Windows job runs it and checks the output. This proves the tested frontend/backend module graph can rebuild without invoking the Go backend during second-level compilation and that its Windows PE output runs under the native loader. It does not complete all self-hosting goals: unsupported language features, full PE language parity, and linker/object-file support remain outstanding. Reproduce both levels on Linux amd64 with:
 
@@ -94,7 +122,7 @@ Stage 39 adds a C-free Stage 2-to-PE Windows route for named FFI library/symbol 
 The self-hosted source compiler accepts `windows-amd64-gui` and writes `target.gui=true` in KIR. The dynamic PE backend then selects the GUI writer, which preserves the console image layout but sets the Optional Header subsystem to Windows GUI (`2`); `windows-amd64` still selects console (`3`). The regression compiles both targets through `source_kir_compiler.kry`, checks the subsystem and executable `.text` entrypoint, and runs both generated images on Windows amd64. This verifies a GUI-subsystem process that exits through `ExitProcess`; no window or GUI framework runtime is implemented yet.
 
 ```text
-go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v
+go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=90m -v
 ```
 
 The standalone Stage 1–3 bootstrap command is `./scripts/bootstrap-stage3.sh`.
@@ -104,9 +132,13 @@ from the Kryndel source modules, runs the smoke fixture at each stage and the
 enum-match fixture at all three stages, verifies the
 locked hashes, and requires byte-identical Stage 2 and Stage 3 compiler ELFs.
 
-To regenerate the Stage 1 seed from source and verify its provenance, run
-`go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=20m -v`
-with the locked Go version. The normal bootstrap does not need Go. The
+To rebuild the Stage 1 seed from source and verify it against the checked-in
+seed and lock, run
+`go test ./internal/kry -run '^TestStage36KryndelSecondCompilerBootstrap$' -count=1 -timeout=90m -v`
+with the locked Go version. That test verifies provenance; it does not replace
+the seed or update the lock. Regeneration must record a successful Stage 0
+build and Stage 1–3 execution before replacing those checked-in artifacts.
+The normal bootstrap does not need Go. The
 self-hosted compiler still supports a bounded language subset rather than the
 complete published language.
 

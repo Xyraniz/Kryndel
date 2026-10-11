@@ -472,13 +472,9 @@ func TestDirectKIRPreflightRejectsAlteredUnsignedCastType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	modifiedMIR, err := DecodeMIR(modified, checker.Env.Lim)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = validateKIRDirectELFValueSubset(modifiedMIR)
-	if !errors.Is(err, errKIRSubsetUnsupported) || !strings.Contains(err.Error(), `builtin "u8"`) {
-		t.Fatalf("altered u8 return type should be rejected by direct lowering preflight, got %v", err)
+	_, err = DecodeMIR(modified, checker.Env.Lim)
+	if err == nil || !strings.Contains(err.Error(), `builtin "u8"`) || !strings.Contains(err.Error(), "checked argument or result types") {
+		t.Fatalf("altered u8 return type should be rejected at typed KIR admission, got %v", err)
 	}
 }
 

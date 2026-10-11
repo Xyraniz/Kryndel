@@ -639,6 +639,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 					if (expression.BuiltinID != "" && expression.BuiltinID != builtin.ID) || (document.Version >= 5 && expression.BuiltinID == "") {
 						return fmt.Errorf("call to builtin %q has a mismatched builtin id", name)
 					}
+					if !kirCoreBuiltinTypesValid(name, expression.Args, expression.Type, genericConstraints) || !kirBuiltinContextualTypesValid(name, expression.Args, expression.Type, genericConstraints, structs, enums, document) {
+						return fmt.Errorf("call to builtin %q has mismatched checked argument or result types", name)
+					}
 				} else if prefix == "trait" {
 					traitName, methodName, ok := strings.Cut(name, "::")
 					trait := traits[traitName]
@@ -956,6 +959,9 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 		if err := validateValue(expression.Const, depth+1); err != nil {
 			return err
 		}
+		if expression.Const != nil && !kirConstantMatchesType(expression.Const, expression.Type, structs, enums, 0) {
+			return fmt.Errorf("constant value does not match its expression checked type %q", expression.Type)
+		}
 		return nil
 	}
 	validatePattern = func(pattern *KIRPattern, depth int) error {
@@ -1224,6 +1230,11 @@ func validateKIRDocument(document *KIRDocument, limits Limits) error {
 			return err
 		}
 	}
+	if document.Version >= 3 {
+		if err := validateKIRLexicalScopes(document); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1371,6 +1382,15 @@ func kirValidateTypeInstantiationConstraints(encoded string, structs map[string]
 						return fmt.Errorf("generic struct %q type argument %d (%q) does not satisfy constraint %q", declaration.Name, index+1, argument, constraint)
 					}
 				}
+			} else if len(current.Params) == 0 {
+				if !kirExecTypeInDocument(current.Name, document) {
+					return fmt.Errorf("unknown checked type %q", current.Name)
+				}
+			} else {
+				arities := map[string]int{"Array": 1, "Option": 1, "Result": 2, "Channel": 1, "Thread": 1, "Map": 2, "Set": 1, "Actor": 1, "Shared": 1}
+				if arities[current.Name] == 0 || len(current.Params) != arities[current.Name] {
+					return fmt.Errorf("unknown or malformed checked type %q", TypeSpecString(current))
+				}
 			}
 		}
 		for _, parameter := range current.Params {
@@ -1387,8 +1407,25 @@ func compatibleKIRTypes(binding, initializer string) bool {
 	if binding == initializer {
 		return true
 	}
-	return isKIRUnspecifiedArray(binding) && isKIRArrayType(initializer) ||
-		isKIRUnspecifiedArray(initializer) && isKIRArrayType(binding)
+	if isKIRUnspecifiedArray(binding) && isKIRArrayType(initializer) ||
+		isKIRUnspecifiedArray(initializer) && isKIRArrayType(binding) {
+		return true
+	}
+	return equivalentKIRTypes(binding, initializer)
+}
+
+func equivalentKIRTypes(left, right string) bool {
+	if left == right {
+		return true
+	}
+	a, leftOK := parseKIRTypeExpression(left)
+	b, rightOK := parseKIRTypeExpression(right)
+	if !leftOK || !rightOK {
+		return false
+	}
+	// TypeSpecString preserves parsed names, parameters, and function returns
+	// while normalizing the optional whitespace in portable type encodings.
+	return TypeSpecString(a) == TypeSpecString(b)
 }
 
 func isKIRUIntType(encoded string) bool {
@@ -2238,6 +2275,372 @@ func validateKIRLambdaCaptures(function *KIRFunction) error {
 		}
 		if uses[identity] == nil {
 			return fmt.Errorf("lambda has unused capture %q", capture.Name)
+		}
+	}
+	return nil
+}
+
+// Constant payloads have no independent type field. Validate them against the
+// checked expression, including the active payload of nested containers.
+func kirConstantMatchesType(value *KIRValue, encoded string, structs map[string]*KIRStruct, enums map[string]*KIREnum, depth int) bool {
+	if value == nil || depth > 4096 {
+		return false
+	}
+	if encoded == "<unknown>" {
+		return true
+	}
+	switch value.Kind {
+	case "nil":
+		return encoded == "Nil"
+	case "int":
+		return encoded == "Int"
+	case "uint":
+		return encoded == fmt.Sprintf("UInt%d", value.UIntBits) && (value.UIntBits == 64 || value.UInt < uint64(1)<<value.UIntBits)
+	case "float":
+		return encoded == "Float"
+	case "bool":
+		return encoded == "Bool"
+	case "string":
+		return encoded == "String"
+	case "bytes":
+		return encoded == "Bytes"
+	}
+	if value.Kind == "array" && isKIRUnspecifiedArray(encoded) {
+		return true
+	}
+	spec, valid := parseKIRTypeExpression(encoded)
+	if !valid {
+		return false
+	}
+	switch value.Kind {
+	case "array", "set":
+		name := "Array"
+		if value.Kind == "set" {
+			name = "Set"
+		}
+		if spec.Name != name || len(spec.Params) != 1 {
+			return false
+		}
+		for _, item := range value.Array {
+			if !kirConstantMatchesType(item, typeSpecString(spec.Params[0]), structs, enums, depth+1) {
+				return false
+			}
+		}
+		return true
+	case "option":
+		return spec.Name == "Option" && len(spec.Params) == 1 && ((!value.Present && value.Inner == nil) || value.Present && kirConstantMatchesType(value.Inner, typeSpecString(spec.Params[0]), structs, enums, depth+1))
+	case "result":
+		if spec.Name != "Result" || len(spec.Params) != 2 {
+			return false
+		}
+		index := 1
+		if value.OK {
+			index = 0
+		}
+		return kirConstantMatchesType(value.Inner, typeSpecString(spec.Params[index]), structs, enums, depth+1)
+	case "struct":
+		return structs[spec.Name] != nil
+	case "enum":
+		return enums[spec.Name] != nil
+	}
+	names := map[string]string{"channel": "Channel", "thread": "Thread", "map": "Map", "json": "Json", "websocket": "WebSocket", "actor": "Actor", "shared": "Shared", "task_group": "TaskGroup", "regex": "Regex", "random": "Random", "sqlite": "SQLite", "tcp": "TcpSocket", "tcp_listener": "TcpListener", "udp": "UdpSocket", "ffi_library": "FFILibrary", "ffi_symbol": "FFISymbol", "ffi_buffer": "FFIBuffer"}
+	return names[value.Kind] != "" && spec.Name == names[value.Kind]
+}
+
+// These core contracts also apply to the selfhost supported builtin subset.
+// They verify types already checked in KIR, without reconstructing source AST.
+func kirCoreBuiltinTypesValid(name string, args []*KIRExpr, result string, genericConstraints map[string]string) bool {
+	arg := func(index int) string {
+		if index >= len(args) || args[index] == nil {
+			return ""
+		}
+		return args[index].Type
+	}
+	builtin, ok := lookupBuiltin(name)
+	if !ok {
+		return false
+	}
+	argumentTypes := make([]string, len(args))
+	for index := range args {
+		argumentTypes[index] = arg(index)
+	}
+	if err := validateBuiltinSignatureWithConstraints(builtin, argumentTypes, result, genericConstraints); err != nil {
+		return false
+	}
+	switch name {
+	case "print", "println":
+		return result == "Nil"
+	case "str":
+		return result == "String"
+	case "assert":
+		return arg(0) == "Bool" && result == "Nil"
+	case "assert_eq":
+		return compatibleKIRTypes(arg(0), arg(1)) && result == "Nil"
+	case "int":
+		return (arg(0) == "Int" || isKIRUIntType(arg(0)) || arg(0) == "Float" || arg(0) == "Bool" || arg(0) == "String") && result == "Int"
+	case "u8", "u16", "u32", "u64":
+		return (arg(0) == "Int" || isKIRUIntType(arg(0))) && result == "UInt"+strings.TrimPrefix(name, "u")
+	case "len":
+		return (arg(0) == "String" || arg(0) == "Bytes" || isKIRArrayType(arg(0)) || strings.HasPrefix(arg(0), "Map[") || strings.HasPrefix(arg(0), "Set[")) && result == "Int"
+	case "bytes":
+		return equivalentKIRTypes(arg(0), "Array[Int]") && result == "Bytes"
+	case "bytes_from_u8":
+		return equivalentKIRTypes(arg(0), "Array[UInt8]") && result == "Bytes"
+	case "u8_array":
+		return arg(0) == "Bytes" && equivalentKIRTypes(result, "Array[UInt8]")
+	case "string_to_bytes":
+		return arg(0) == "String" && result == "Bytes"
+	case "contains", "starts_with", "ends_with":
+		return arg(0) == "String" && arg(1) == "String" && result == "Bool"
+	case "string_chars":
+		return arg(0) == "String" && equivalentKIRTypes(result, "Array[String]")
+	case "codepoints":
+		return arg(0) == "String" && equivalentKIRTypes(result, "Array[Int]")
+	case "substring":
+		return arg(0) == "String" && arg(1) == "Int" && arg(2) == "Int" && equivalentKIRTypes(result, "Result[String,String]")
+	case "array_push":
+		if isKIRUnspecifiedArray(arg(0)) {
+			return equivalentKIRTypes(result, "Array["+arg(1)+"]")
+		}
+		spec, valid := parseKIRTypeExpression(arg(0))
+		return valid && !spec.Function && spec.Name == "Array" && len(spec.Params) == 1 && compatibleKIRTypes(arg(1), TypeSpecString(spec.Params[0])) && equivalentKIRTypes(result, arg(0))
+	case "array_concat":
+		if isKIRUnspecifiedArray(arg(0)) {
+			return isKIRArrayType(arg(1)) && equivalentKIRTypes(result, arg(1))
+		}
+		return isKIRArrayType(arg(0)) && compatibleKIRTypes(arg(0), arg(1)) && equivalentKIRTypes(result, arg(0))
+	case "array_indices":
+		return isKIRArrayType(arg(0)) && equivalentKIRTypes(result, "Array[Int]")
+	case "array_slice":
+		return isKIRArrayType(arg(0)) && arg(1) == "Int" && arg(2) == "Int" && equivalentKIRTypes(result, arg(0))
+	case "array_get", "array_set":
+		spec, valid := parseKIRTypeExpression(arg(0))
+		if !valid || spec.Function || spec.Name != "Array" || len(spec.Params) != 1 || arg(1) != "Int" {
+			return false
+		}
+		if name == "array_get" {
+			return equivalentKIRTypes(result, "Option["+TypeSpecString(spec.Params[0])+"]")
+		}
+		return compatibleKIRTypes(arg(2), TypeSpecString(spec.Params[0])) && equivalentKIRTypes(result, "Result["+arg(0)+",String]")
+	case "map_get", "map_insert", "map_contains_key", "map_remove":
+		spec, valid := parseKIRTypeExpression(arg(0))
+		if !valid || spec.Function || spec.Name != "Map" || len(spec.Params) != 2 || !compatibleKIRTypes(arg(1), TypeSpecString(spec.Params[0])) {
+			return false
+		}
+		if name == "map_get" {
+			return equivalentKIRTypes(result, "Option["+TypeSpecString(spec.Params[1])+"]")
+		}
+		if name == "map_contains_key" {
+			return result == "Bool"
+		}
+		return equivalentKIRTypes(result, arg(0)) && (name != "map_insert" || compatibleKIRTypes(arg(2), TypeSpecString(spec.Params[1])))
+	case "none", "some", "ok", "err":
+		spec, valid := parseKIRTypeExpression(result)
+		if !valid || spec.Function {
+			return false
+		}
+		if name == "none" || name == "some" {
+			return spec.Name == "Option" && len(spec.Params) == 1 && (name == "none" || equivalentKIRTypes(arg(0), TypeSpecString(spec.Params[0])))
+		}
+		if spec.Name != "Result" || len(spec.Params) != 2 {
+			return false
+		}
+		index := 0
+		if name == "err" {
+			index = 1
+		}
+		return equivalentKIRTypes(arg(0), TypeSpecString(spec.Params[index]))
+	case "is_some", "is_none", "is_ok", "is_err", "unwrap_or", "result_unwrap", "result_error":
+		spec, valid := parseKIRTypeExpression(arg(0))
+		if !valid || spec.Function {
+			return false
+		}
+		if name == "is_some" || name == "is_none" || name == "unwrap_or" {
+			if spec.Name != "Option" || len(spec.Params) != 1 {
+				return false
+			}
+			if name != "unwrap_or" {
+				return result == "Bool"
+			}
+			inner := TypeSpecString(spec.Params[0])
+			return equivalentKIRTypes(arg(1), inner) && equivalentKIRTypes(result, inner)
+		}
+		if spec.Name != "Result" || len(spec.Params) != 2 {
+			return false
+		}
+		if name == "is_ok" || name == "is_err" {
+			return result == "Bool"
+		}
+		if name == "result_unwrap" {
+			return equivalentKIRTypes(result, TypeSpecString(spec.Params[0]))
+		}
+		return equivalentKIRTypes(result, "Option["+TypeSpecString(spec.Params[1])+"]")
+	}
+	return true
+}
+
+// Lexical validation is independent of backend slot allocation. A matching
+// binding row is insufficient unless that declaration is active by name here.
+type kirLexicalScope struct {
+	parent   *kirLexicalScope
+	bindings map[string]*KIRBinding
+}
+
+func newKIRLexicalScope(parent *kirLexicalScope) *kirLexicalScope {
+	return &kirLexicalScope{parent: parent, bindings: map[string]*KIRBinding{}}
+}
+
+func (scope *kirLexicalScope) declare(binding *KIRBinding) error {
+	if binding == nil {
+		return fmt.Errorf("KIR declaration has no resolved binding")
+	}
+	if scope.bindings[binding.Name] != nil {
+		return fmt.Errorf("duplicate KIR binding declaration %q in the same scope", binding.Name)
+	}
+	scope.bindings[binding.Name] = binding
+	return nil
+}
+
+func (scope *kirLexicalScope) use(binding *KIRBinding) error {
+	if binding == nil {
+		return fmt.Errorf("KIR variable has no resolved binding")
+	}
+	for frame := scope; frame != nil; frame = frame.parent {
+		if declared := frame.bindings[binding.Name]; declared != nil {
+			if kirBindingIdentity(declared) != kirBindingIdentity(binding) || declared.Type != binding.Type || declared.Mutable != binding.Mutable {
+				return fmt.Errorf("KIR variable binding %q does not match the active declaration in its scope", binding.Name)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("KIR variable binding %q is not declared in its scope", binding.Name)
+}
+
+func validateKIRLexicalScopes(document *KIRDocument) error {
+	globals := newKIRLexicalScope(nil)
+	var expression func(*KIRExpr, *kirLexicalScope) error
+	var statements func([]*KIRStmt, *kirLexicalScope) error
+	var function func(*KIRFunction, *kirLexicalScope) error
+	function = func(fn *KIRFunction, parent *kirLexicalScope) error {
+		scope := newKIRLexicalScope(parent)
+		if fn.Receiver != "" {
+			receiver := &KIRBinding{Name: "self", Type: fn.Receiver, Source: fn.Source, Line: fn.Line, Column: fn.Column}
+			if fn.Span != nil {
+				receiver.ID = kirBindingIDFromParts(receiver.Name, receiver.Source, fn.Span.Start, receiver.Line, receiver.Column)
+			} else {
+				receiver.ID = kirLegacyBindingID(receiver)
+			}
+			if err := scope.declare(receiver); err != nil {
+				return err
+			}
+		}
+		for _, capture := range fn.Captures {
+			if capture == nil {
+				return fmt.Errorf("KIR function has an incomplete capture")
+			}
+			if err := scope.declare(capture.Binding); err != nil {
+				return err
+			}
+		}
+		for _, parameter := range fn.Params {
+			if err := expression(parameter.Default, scope); err != nil {
+				return err
+			}
+			if err := scope.declare(parameter.Binding); err != nil {
+				return err
+			}
+		}
+		return statements(fn.Body, scope)
+	}
+	expression = func(expr *KIRExpr, scope *kirLexicalScope) error {
+		if expr == nil {
+			return nil
+		}
+		if expr.Kind == "var" && expr.CallTarget == "" {
+			if err := scope.use(expr.Binding); err != nil {
+				return err
+			}
+		}
+		if expr.Lambda != nil {
+			for _, capture := range expr.Lambda.Captures {
+				if capture == nil {
+					return fmt.Errorf("KIR lambda has an incomplete capture")
+				}
+				if err := scope.use(capture.Binding); err != nil {
+					return err
+				}
+			}
+			if err := function(expr.Lambda, globals); err != nil {
+				return err
+			}
+		}
+		for _, child := range []*KIRExpr{expr.Left, expr.Right, expr.Operand, expr.Base, expr.Receiver, expr.Callee} {
+			if err := expression(child, scope); err != nil {
+				return err
+			}
+		}
+		for _, children := range [][]*KIRExpr{expr.Args, expr.Items, expr.MapKeys, expr.Values} {
+			for _, child := range children {
+				if err := expression(child, scope); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	statements = func(body []*KIRStmt, scope *kirLexicalScope) error {
+		for _, statement := range body {
+			for _, expr := range []*KIRExpr{statement.Init, statement.Expr, statement.Target, statement.Value, statement.Cond, statement.Iter, statement.Return, statement.Scrutinee} {
+				if err := expression(expr, scope); err != nil {
+					return err
+				}
+			}
+			if statement.Kind == "let" || statement.Kind == "const" {
+				if err := scope.declare(statement.Binding); err != nil {
+					return err
+				}
+			}
+			if len(statement.Then) > 0 {
+				if err := statements(statement.Then, newKIRLexicalScope(scope)); err != nil {
+					return err
+				}
+			}
+			if len(statement.Else) > 0 {
+				if err := statements(statement.Else, newKIRLexicalScope(scope)); err != nil {
+					return err
+				}
+			}
+			if len(statement.Body) > 0 {
+				child := newKIRLexicalScope(scope)
+				if statement.Kind == "for" {
+					if err := child.declare(statement.Binding); err != nil {
+						return err
+					}
+				}
+				if err := statements(statement.Body, child); err != nil {
+					return err
+				}
+			}
+			for _, arm := range statement.Arms {
+				child := newKIRLexicalScope(scope)
+				if arm.Pattern.Binding != "" {
+					if err := child.declare(arm.Pattern.ResolvedBinding); err != nil {
+						return err
+					}
+				}
+				if err := statements(arm.Body, child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := statements(document.Statements, globals); err != nil {
+		return err
+	}
+	for _, fn := range document.Functions {
+		if err := function(fn, globals); err != nil {
+			return fmt.Errorf("function %q binding scope: %w", fn.Name, err)
 		}
 	}
 	return nil

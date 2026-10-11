@@ -650,8 +650,18 @@ func (executor *kirExecutor) invokeKIR(call *KIRExpr, function *KIRFunction, env
 	}
 	executor.context.Calls++
 	defer func() { executor.context.Calls-- }()
-	executor.typeArgs = append(executor.typeArgs, typeArguments)
-	defer func() { executor.typeArgs = executor.typeArgs[:len(executor.typeArgs)-1] }()
+	// Concrete calls do not add an empty substitution frame. Besides avoiding
+	// allocations, this keeps type lookup independent of ordinary call depth.
+	typeFrame := -1
+	if len(typeArguments) != 0 {
+		typeFrame = len(executor.typeArgs)
+		executor.typeArgs = append(executor.typeArgs, typeArguments)
+	}
+	defer func() {
+		if typeFrame >= 0 {
+			executor.typeArgs = executor.typeArgs[:typeFrame]
+		}
+	}()
 	for {
 		if function.Receiver != "" {
 			if receiver == nil || !executor.valueMatchesType(*receiver, function.Receiver) {
@@ -717,7 +727,12 @@ func (executor *kirExecutor) invokeKIR(call *KIRExpr, function *KIRFunction, env
 			if !valid {
 				return nilVal(), executor.fail(CatArtifact, call.Source, call.Line, call.Column, "KIR tail call has invalid generic arguments for %q", function.Name)
 			}
-			executor.typeArgs[len(executor.typeArgs)-1] = typeArguments
+			if typeFrame >= 0 {
+				executor.typeArgs[typeFrame] = typeArguments
+			} else if len(typeArguments) != 0 {
+				typeFrame = len(executor.typeArgs)
+				executor.typeArgs = append(executor.typeArgs, typeArguments)
+			}
 			continue
 		}
 		if flow.returned {
@@ -754,8 +769,11 @@ func (executor *kirExecutor) instantiateKIRType(encoded string) string {
 	if len(executor.typeArgs) == 0 {
 		return encoded
 	}
-	merged := make(map[string]string)
+	var merged map[string]string
 	for _, arguments := range executor.typeArgs {
+		if len(arguments) != 0 && merged == nil {
+			merged = make(map[string]string)
+		}
 		for name, value := range arguments {
 			merged[name] = value
 		}

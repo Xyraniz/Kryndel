@@ -2,7 +2,65 @@ import "kir_arena"
 import "kir_typed_arena"
 import "validated_kir"
 
+
+fn portable_float_probe(number_text: String) -> Result[ValidatedKIR, String] {
+    let text: String = "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"source\":\"float.kry\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[\"float.kry\"],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":[{\"kind\":\"expr\",\"source\":\"float.kry\",\"line\":1,\"column\":1,\"expr\":{\"kind\":\"float\",\"type\":\"Float\",\"source\":\"float.kry\",\"line\":1,\"column\":1,\"float\":" + number_text + "}}]}"
+    let document: Result[Json, String] = json_parse(text)
+    if is_err(document) { return err("invalid probe JSON") }
+    return validate_kir_document(result_unwrap(document))
+}
+
+
+fn portable_uint_probe(width: String, constant: Bool) -> Result[ValidatedKIR, String] {
+    let mut expression_width: String = width
+    let mut constant_value: String = "null"
+    if constant {
+        expression_width = "8"
+        constant_value = "{\"kind\":\"uint\",\"uint\":1,\"uint_bits\":" + width + "}"
+    }
+    let text: String = "{\"format\":\"kry-ir\",\"version\":5,\"language_version\":\"1.0.0\",\"source\":\"uint.kry\",\"target\":{\"os\":\"linux\",\"arch\":\"amd64\",\"gui\":false},\"imports\":[],\"sources\":[\"uint.kry\"],\"structs\":[],\"enums\":[],\"traits\":[],\"trait_impls\":[],\"functions\":[],\"statements\":[{\"kind\":\"expr\",\"source\":\"uint.kry\",\"line\":1,\"column\":1,\"expr\":{\"kind\":\"uint\",\"type\":\"UInt8\",\"source\":\"uint.kry\",\"line\":1,\"column\":1,\"uint\":1,\"uint_bits\":" + expression_width + ",\"const\":" + constant_value + "}}]}"
+    return validate_kir_document(result_unwrap(json_parse(text)))
+}
+
+
 fn main() -> Nil {
+    assert(is_ok(portable_uint_probe("8", false)))
+    assert(is_ok(portable_uint_probe("8", true)))
+    assert(is_err(portable_uint_probe("264", false)))
+    assert(is_err(portable_uint_probe("-1", false)))
+    assert(is_err(portable_uint_probe("264", true)))
+    assert(is_err(portable_uint_probe("-1", true)))
+
+    assert(kir_typed_number_text_valid("-0"))
+    assert(kir_typed_number_text_valid("1.25e+3"))
+    assert(!kir_typed_number_text_valid("01"))
+    assert(!kir_typed_number_text_valid("1e"))
+    assert(!kir_typed_number_text_valid("NaN"))
+    assert(kir_typed_float_text_valid("1.7976931348623158e308"))
+    assert(!kir_typed_float_text_valid("1.7976931348623159e308"))
+    assert(!kir_typed_float_text_valid("1e309"))
+    assert(kir_typed_float_text_valid("1e-999999"))
+    assert(kir_typed_float_text_valid("0e999999"))
+    let numbers: Array[String] = ["1", "1.25", "-0", "1e+3", "-2.5e-4", "1.7976931348623158e308", "5e-324"]
+    let mut float_index: Int = 0
+    while float_index < len(numbers) {
+        let number: String = unwrap_or(array_get(numbers, float_index), "0")
+        let checked: Result[ValidatedKIR, String] = portable_float_probe(number)
+        assert(is_ok(checked))
+        let arena: KIRTypedArena = validated_kir_typed_arena(result_unwrap(checked))
+        let statements: KIRTypedNodeView = result_unwrap(kir_typed_object_get(kir_typed_root_view(arena), "statements"))
+        let expression: KIRTypedNodeView = result_unwrap(kir_typed_object_get(result_unwrap(kir_typed_array_get(statements, 0)), "expr"))
+        let normalized: String = json_stringify(result_unwrap(json_parse(number)))
+        assert_eq(kir_typed_number_text(result_unwrap(kir_typed_object_get(expression, "float"))), normalized)
+        let emitted: Result[String, String] = kir_typed_arena_serialize(arena)
+        assert(is_ok(emitted))
+        assert(contains(result_unwrap(emitted), "\"float\":" + normalized))
+        assert(is_ok(validate_kir_document(result_unwrap(json_parse(result_unwrap(emitted))))))
+        float_index = float_index + 1
+    }
+    assert(is_err(portable_float_probe("1e309")))
+
+
     let typed_arena: KIRTypedArena = kir_typed_empty_arena()
     let typed_counts: Array[Int] = kir_typed_arena_table_counts(typed_arena)
     assert_eq(len(typed_counts), 22)
